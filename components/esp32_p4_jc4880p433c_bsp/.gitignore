@@ -1,0 +1,39 @@
+# ESP-IDF specific files
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# VS Code specific files
+.vscode/
+*.code-workspace
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Dependencies
+managed_components/
+dependencies.lock

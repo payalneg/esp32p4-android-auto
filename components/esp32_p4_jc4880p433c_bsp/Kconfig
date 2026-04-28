@@ -1,0 +1,139 @@
+menu "JC4880P443C BSP Configuration"
+
+    menu "Display Configuration"
+        config BSP_JC4880P443C_LCD_H_RES
+            int "Horizontal resolution"
+            default 480
+            help
+                Horizontal resolution of the LCD panel in pixels.
+
+        config BSP_JC4880P443C_LCD_V_RES
+            int "Vertical resolution"
+            default 800
+            help
+                Vertical resolution of the LCD panel in pixels.
+
+        config BSP_JC4880P443C_DSI_LANE_BITRATE
+            int "DSI lane bitrate (Mbps)"
+            default 500
+            range 200 1000
+            help
+                MIPI DSI lane bitrate in Mbps. Higher values support faster refresh rates
+                but may cause signal integrity issues. 500 Mbps is recommended for this panel.
+
+        config BSP_JC4880P443C_DPI_CLOCK_MHZ
+            int "DPI clock frequency (MHz)"
+            default 34
+            range 20 100
+            help
+                DPI (Display Pixel Interface) clock frequency in MHz.
+                This affects the refresh rate. 34 MHz gives ~60Hz refresh rate.
+
+        config BSP_JC4880P443C_NUM_FB
+            int "Number of frame buffers"
+            default 2
+            range 1 3
+            help
+                Number of frame buffers for display. 2 buffers enable double buffering
+                for smoother animations, but use more memory.
+    endmenu
+
+    menu "Backlight Configuration"
+        config BSP_JC4880P443C_LCD_BL_GPIO
+            int "Backlight control GPIO"
+            default 23
+            help
+                GPIO pin connected to the backlight control (PWM).
+
+        config BSP_JC4880P443C_BACKLIGHT_PWM_FREQ
+            int "Backlight PWM frequency (Hz)"
+            default 20000
+            range 1000 50000
+            help
+                PWM frequency for backlight control. Higher frequencies reduce
+                visible flicker but may increase power consumption.
+
+        config BSP_JC4880P443C_BACKLIGHT_TIMER
+            int "LEDC timer number for backlight"
+            default 1
+            range 0 3
+            help
+                LEDC timer number used for backlight PWM control.
+
+        config BSP_JC4880P443C_BACKLIGHT_CHANNEL
+            int "LEDC channel number for backlight"
+            default 1
+            range 0 7
+            help
+                LEDC channel number used for backlight PWM control.
+    endmenu
+
+    menu "Touch Configuration"
+        config BSP_JC4880P443C_I2C_SCL_GPIO
+            int "I2C SCL GPIO"
+            default 8
+            help
+                GPIO pin for I2C clock signal (SCL) connected to touch controller.
+
+        config BSP_JC4880P443C_I2C_SDA_GPIO
+            int "I2C SDA GPIO"
+            default 7
+            help
+                GPIO pin for I2C data signal (SDA) connected to touch controller.
+
+        config BSP_JC4880P443C_I2C_FREQ_HZ
+            int "I2C frequency (Hz)"
+            default 400000
+            help
+                I2C bus frequency for touch controller communication.
+    endmenu
+
+    menu "LVGL Configuration"
+        config BSP_JC4880P443C_LVGL_BUFFER_SIZE
+            int "LVGL buffer size (pixels)"
+            default 76800
+            help
+                Size of LVGL display buffer in pixels. Recommended: 480*160 = 76800
+                for good performance/memory balance.
+
+        config BSP_JC4880P443C_LVGL_DOUBLE_BUFFER
+            bool "Use LVGL double buffering"
+            default y
+            help
+                Enable double buffering in LVGL for smoother display updates.
+                Requires more memory but provides better visual experience.
+
+        config BSP_JC4880P443C_LVGL_AVOID_TEAR
+            bool "Enable avoid tearing feature"
+            default n
+            help
+                Enable LVGL avoid tearing feature. May improve display quality
+                but can impact performance on some panels.
+    endmenu
+
+    menu "Power Management"
+        config BSP_JC4880P443C_DSI_PHY_LDO_CHANNEL
+            int "DSI PHY LDO channel"
+            default 3
+            range 1 4
+            help
+                LDO channel used to power the MIPI DSI PHY.
+
+        config BSP_JC4880P443C_DSI_PHY_VOLTAGE_MV
+            int "DSI PHY voltage (mV)"
+            default 2500
+            range 1800 3300
+            help
+                Voltage level for MIPI DSI PHY in millivolts. 2500mV (2.5V) is
+                the recommended voltage for this hardware.
+    endmenu
+
+    menu "Hardware Reset"
+        config BSP_JC4880P443C_LCD_RST_GPIO
+            int "LCD reset GPIO"
+            default 5
+            help
+                GPIO pin connected to LCD panel reset signal.
+    endmenu
+
+endmenu
