@@ -1,4 +1,15 @@
 build/
 managed_components/
+sdkconfig
 sdkconfig.old
 .DS_Store
+
+# tools/ are scratch ESP-IDF projects (slave fw build, OTA flasher).
+# Scaffolded with `idf.py create-project-from-example` — see CLAUDE.md
+# for how to regenerate them when slave fw needs a rebuild.
+tools/
+
+# research/_sources/ are clones of upstream reference repos
+# (aasdk, openauto, headunit, waveshare_p4_4_3, WirelessAndroidAutoDongle).
+# Not committed — see CLAUDE.md for the URLs.
+research/_sources/

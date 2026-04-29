@@ -1,0 +1,52 @@
+menu "Android Auto Head Unit"
+
+    choice AA_WIFI_ROLE
+        prompt "WiFi role"
+        default AA_WIFI_ROLE_AP
+        help
+            Real Android Auto head units run as the WiFi access point
+            (the phone joins the head unit's network). STA mode is only
+            useful for bench testing where both devices share an
+            existing WiFi network.
+
+        config AA_WIFI_ROLE_AP
+            bool "SoftAP (production)"
+
+        config AA_WIFI_ROLE_STA
+            bool "Station — connect to existing WiFi (bench test only)"
+    endchoice
+
+    config AA_AP_SSID_PREFIX
+        string "AP SSID prefix"
+        depends on AA_WIFI_ROLE_AP
+        default "AAHU"
+        help
+            Last 4 hex digits of the MAC are appended, e.g. "AAHU-1A2B".
+
+    config AA_AP_PASSWORD
+        string "AP password (WPA2-PSK, min 8 chars)"
+        depends on AA_WIFI_ROLE_AP
+        default "12345678"
+
+    config AA_AP_CHANNEL
+        int "AP channel (1-13)"
+        depends on AA_WIFI_ROLE_AP
+        default 6
+        range 1 13
+
+    config AA_WIFI_SSID
+        string "Bench WiFi SSID"
+        depends on AA_WIFI_ROLE_STA
+        default "myssid"
+
+    config AA_WIFI_PASSWORD
+        string "Bench WiFi password"
+        depends on AA_WIFI_ROLE_STA
+        default "mypassword"
+
+    config AA_WIFI_MAX_RETRY
+        int "Maximum STA connect retries"
+        depends on AA_WIFI_ROLE_STA
+        default 10
+
+endmenu

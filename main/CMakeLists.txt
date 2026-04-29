@@ -1,4 +1,20 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS
+        "main.c"
+        "wifi_manager.c"
+        "tcp_server.c"
+        "mdns_advertise.c"
+        "ota_screen.c"
+        "c6_ota.c"
     INCLUDE_DIRS "."
+    REQUIRES
+        nvs_flash
+        esp_event
+        esp_netif
+        esp_wifi
+        esp_hosted
+        lwip
+        mdns
+        c6_ota_partition
+        esp32_p4_wifi6_touch_lcd_4_3
 )

@@ -1,0 +1,17 @@
+menu "C6 Slave OTA (partition)"
+
+    config C6_OTA_ENABLED
+        bool "Run slave OTA on boot if version differs"
+        default y
+
+    config C6_OTA_DISPLAY_PROGRESS
+        bool "Show LVGL progress screen during OTA"
+        depends on C6_OTA_ENABLED
+        default n
+        help
+            Initializes BSP display and renders an OTA progress bar.
+            Disable if the LCD/MIPI-DSI panel is not wired or the BSP
+            driver hangs on initial readback (then OTA still runs,
+            progress shows up in the serial log only).
+
+endmenu

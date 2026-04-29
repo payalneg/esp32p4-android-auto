@@ -1,7 +1,7 @@
 {
     "idf.currentSetup": "/Users/alexey/.espressif/v5.5.3/esp-idf",
     "idf.flashType": "UART",
-    "idf.port": "/dev/tty.usbmodem1101",
+    "idf.port": "/dev/tty.usbmodem5B5E0700881",
     "idf.openOcdConfigs": [
         "board/esp32p4-builtin.cfg"
     ]
