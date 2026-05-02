@@ -88,6 +88,12 @@ void app_main(void)
      * AP mode only — STA bench builds skip this since the dev's existing
      * laptop network already has its own credentials/topology. */
     if (ap) {
+        /* The D1 Mini ESP32 BT agent's CH2104 USB-UART holds GPIO0 down
+         * for ~150-200 ms after we power it from P4's 5V — our UART1 going
+         * active during that window leaves the agent stuck in DOWNLOAD_BOOT
+         * (`boot:0x3`). 300 ms is enough headroom for CH2104 to release
+         * boot-strap lines before we start driving the UART. */
+        vTaskDelay(pdMS_TO_TICKS(300));
         bt_link_init();
         esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
         esp_netif_ip_info_t ap_ip = {0};

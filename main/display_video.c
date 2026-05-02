@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ota_screen.h"
 
@@ -39,7 +40,17 @@ static size_t              s_cache_line;
 static void               *s_fb[3];
 static int                 s_fb_count;
 static int                 s_fb_idx;
-static bool                s_dummy_draw_on;
+static bool                s_adapter_paused;
+static SemaphoreHandle_t   s_refresh_sem;
+
+static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
+                                      esp_lcd_dpi_panel_event_data_t *edata,
+                                      void *user_ctx)
+{
+    BaseType_t hp = pdFALSE;
+    if (s_refresh_sem) xSemaphoreGiveFromISR(s_refresh_sem, &hp);
+    return hp == pdTRUE;
+}
 
 esp_err_t display_video_init(void)
 {
@@ -57,26 +68,27 @@ esp_err_t display_video_init(void)
         return ESP_FAIL;
     }
 
-    /* Pull whatever number of LCD framebuffers BSP allocated. We don't
-     * own these — they're panel-attached SPIRAM buffers wired to DMA. */
-    s_fb_count = CONFIG_BSP_LCD_DPI_BUFFER_NUMS;
-    if (s_fb_count > 3) s_fb_count = 3;
-    esp_err_t err = ESP_FAIL;
-    if (s_fb_count == 3) {
-        err = esp_lcd_dpi_panel_get_frame_buffer(s_panel, 3,
-                                                 &s_fb[0], &s_fb[1], &s_fb[2]);
-    } else if (s_fb_count == 2) {
-        err = esp_lcd_dpi_panel_get_frame_buffer(s_panel, 2,
-                                                 &s_fb[0], &s_fb[1]);
-    } else {
-        err = esp_lcd_dpi_panel_get_frame_buffer(s_panel, 1, &s_fb[0]);
+    esp_err_t err = esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &s_cache_line);
+    if (err != ESP_OK) s_cache_line = 64;
+
+    /* Allocate two private RGB565 framebuffers in PSRAM, panel-native
+     * 480×800 each. Bypassing the LCD's own DPI framebuffer pool while we
+     * sort out why dummy_draw_blit-into-LCD-FB tiled the output 3× across
+     * the panel — a private buffer + direct draw_bitmap takes the LVGL
+     * adapter completely out of the loop. */
+    size_t fb_bytes = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
+                               s_cache_line);
+    s_fb_count = 2;
+    for (int i = 0; i < s_fb_count; i++) {
+        s_fb[i] = heap_caps_aligned_calloc(s_cache_line, 1, fb_bytes,
+                                           MALLOC_CAP_SPIRAM);
+        if (!s_fb[i]) {
+            ESP_LOGE(TAG, "fb[%d] alloc %u failed", i, (unsigned)fb_bytes);
+            return ESP_ERR_NO_MEM;
+        }
     }
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "get_frame_buffer: %s", esp_err_to_name(err));
-        return err;
-    }
-    ESP_LOGI(TAG, "got %d LCD framebuffers (%p, %p, %p)",
-             s_fb_count, s_fb[0], s_fb[1], s_fb[2]);
+    ESP_LOGI(TAG, "allocated %d private framebuffers @%p,%p (%u bytes each)",
+             s_fb_count, s_fb[0], s_fb[1], (unsigned)fb_bytes);
 
     ppa_client_config_t ppa_cfg = { .oper_type = PPA_OPERATION_SRM };
     err = ppa_register_client(&ppa_cfg, &s_ppa);
@@ -85,13 +97,25 @@ esp_err_t display_video_init(void)
         return err;
     }
 
-    err = esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &s_cache_line);
-    if (err != ESP_OK) s_cache_line = 64;
-
     ESP_LOGI(TAG, "ready (panel %dx%d native, user %dx%d landscape)",
              PANEL_NATIVE_W, PANEL_NATIVE_H, USER_W, USER_H);
     return ESP_OK;
 }
+
+/* When non-zero, skip PPA and instead fill s_fb[0] with a hard-coded
+ * R/G/B horizontal-band pattern in panel-native (480 wide × 800 tall)
+ * so we can isolate display-path bugs from PPA bugs. Verified the
+ * panel pipeline with this — pattern shows clean R|G|B bands when held
+ * landscape, so panel + draw_bitmap is fine. Disable now. */
+#define DISPLAY_TEST_PATTERN 0
+
+/* When non-zero, skip PPA entirely and CPU-convert the decoder's Y plane
+ * into a grayscale RGB565 panel-native (480×800) buffer with a 90° CCW
+ * rotation done in the same loop. Slow (~5-10 ms per frame on P4) but
+ * straightforward — if this shows the AA UI without tiling, the PPA
+ * configuration is the culprit and we go fix that path. If it ALSO
+ * tiles, something further upstream (decoder buffer stride) is wrong. */
+#define DISPLAY_CPU_YUV_BYPASS 1
 
 esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                                     uint16_t src_w, uint16_t src_h)
@@ -99,22 +123,128 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
     if (!s_panel || !s_ppa || !s_disp) return ESP_ERR_INVALID_STATE;
     if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
 
-    /* Lazy switch to dummy-draw on first frame so the OTA UI stays visible
-     * until video actually arrives. */
-    if (!s_dummy_draw_on) {
-        if (esp_lv_adapter_set_dummy_draw(s_disp, true) == ESP_OK) {
-            s_dummy_draw_on = true;
-            ESP_LOGI(TAG, "switched LVGL adapter to dummy-draw");
+    /* On first frame: pause the LVGL worker entirely so it stops fighting
+     * us for the panel, install an on_refresh_done semaphore so we can
+     * gate consecutive draw_bitmap calls on completion (mirrors the
+     * sample-10 mp4_player pipeline), and create the sync sem. */
+    if (!s_adapter_paused) {
+        if (!s_refresh_sem) {
+            s_refresh_sem = xSemaphoreCreateBinary();
+        }
+        esp_lcd_dpi_panel_event_callbacks_t cbs = {
+            .on_refresh_done = refresh_done_cb,
+        };
+        esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL);
+        if (esp_lv_adapter_pause(2000) == ESP_OK) {
+            s_adapter_paused = true;
+            ESP_LOGI(TAG, "paused LVGL worker; panel ours");
+        } else {
+            ESP_LOGW(TAG, "esp_lv_adapter_pause timed out");
         }
     }
 
     int idx = s_fb_idx;
     s_fb_idx = (s_fb_idx + 1) % s_fb_count;
 
-    /* PPA: YUV420 source → RGB565 panel-native, rotated 90° so the user
-     * sees the source landscape upright on the physically-landscape panel.
-     * Source at 854×480 (or whatever phone really sends) is wider than the
-     * 800-tall rotated target — PPA scales to fit. */
+#if DISPLAY_TEST_PATTERN
+    /* Fill s_fb[idx] with three horizontal RGB565 bands (R/G/B), top-down,
+     * in panel-native 480 wide × 800 tall layout. If the panel shows three
+     * clean horizontal bands when held in landscape orientation (after our
+     * adapter rotation), the buffer-stride model is right. If we still
+     * see tiling, the panel hardware is wired up differently than we
+     * assume. */
+    uint16_t *fb = (uint16_t *)s_fb[idx];
+    const int W = PANEL_NATIVE_W;
+    const int H = PANEL_NATIVE_H;
+    const int third = H / 3;
+    static const uint16_t COLORS[3] = {
+        0xF800,  /* red   (5 bits R, 6 G, 5 B) */
+        0x07E0,  /* green */
+        0x001F,  /* blue  */
+    };
+    for (int y = 0; y < H; y++) {
+        int band = (y < third) ? 0 : (y < 2 * third) ? 1 : 2;
+        uint16_t c = COLORS[band];
+        for (int x = 0; x < W; x++) {
+            fb[y * W + x] = c;
+        }
+    }
+    /* Cache flush so the DPI DMA sees the fresh bytes. */
+    esp_cache_msync(fb, ALIGN_UP(W * H * 2, s_cache_line),
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, fb);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "panel_draw_bitmap (test pattern): %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+    if (s_refresh_sem) {
+        xSemaphoreTake(s_refresh_sem, 0);
+        xSemaphoreTake(s_refresh_sem, pdMS_TO_TICKS(100));
+    }
+    return ESP_OK;
+#elif DISPLAY_CPU_YUV_BYPASS
+    /* CPU path: take source Y plane (validated correct via dump) and
+     * transpose-with-vertical-flip into panel-native 480×800 RGB565
+     * grayscale.
+     *
+     * Empirically (test_pattern verified the panel side):
+     *   user-landscape horizontal axis (0..USER_W) = panel row dy
+     *   user-landscape vertical axis   (0..USER_H) = (W-1) - panel col dx
+     * So src(sx, sy) → dst(dy=sx, dx=H-1-sy), or inverted:
+     *   sx = dy, sy = (PANEL_NATIVE_W - 1) - dx
+     * (the simple `sy = dx` we tried first showed the picture flipped
+     * vertically). */
+    {
+        uint16_t *fb = (uint16_t *)s_fb[idx];
+        const int W = PANEL_NATIVE_W;
+        const int H = PANEL_NATIVE_H;
+        for (int dy = 0; dy < H; dy++) {
+            for (int dx = 0; dx < W; dx++) {
+                int sx = dy;
+                int sy = (W - 1) - dx;
+                uint8_t Y = (sx < src_w && sy < src_h)
+                                ? yuv[sy * src_w + sx]
+                                : 0;
+                uint16_t r5 = Y >> 3;
+                uint16_t g6 = Y >> 2;
+                uint16_t b5 = Y >> 3;
+                fb[dy * W + dx] = (r5 << 11) | (g6 << 5) | b5;
+            }
+        }
+        esp_cache_msync(fb, ALIGN_UP(W * H * 2, s_cache_line),
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, fb);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "panel_draw_bitmap (cpu): %s",
+                     esp_err_to_name(err));
+        }
+        return err;
+    }
+#else  /* DISPLAY_TEST_PATTERN */
+
+    /* PPA: YUV420 source → RGB565 in **panel-native** portrait layout
+     * (480×800). The LVGL adapter's dummy_draw_blit goes straight to
+     * esp_lcd_panel_draw_bitmap with no rotation applied (we read the
+     * adapter source: display_lcd_blit_area calls draw_bitmap directly),
+     * so PPA has to do the rotation that turns the landscape source into
+     * the panel's portrait orientation.
+     *
+     * Order in ppa_srm.c is scale then rotate, and for 90/270 rotations
+     * new_block_w = scale_y*in.block_h and new_block_h = scale_x*in.block_w.
+     * Solving for new_block_w=480, new_block_h=800 with whatever (src_w,
+     * src_h) the phone really sends gives:
+     *   scale_y = 480 / src_h
+     *   scale_x = 800 / src_w
+     */
+    static bool s_logged_src;
+    if (!s_logged_src) {
+        ESP_LOGI(TAG, "first frame to PPA: src %ux%u → panel %dx%d",
+                 (unsigned)src_w, (unsigned)src_h,
+                 PANEL_NATIVE_W, PANEL_NATIVE_H);
+        s_logged_src = true;
+    }
+
     size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
                                    s_cache_line);
     ppa_srm_oper_config_t op = {
@@ -139,15 +269,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             .block_offset_y = 0,
             .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
         },
-        /* 90° CW maps a landscape source onto the portrait-native panel so
-         * the user, holding the device in landscape, sees the image upright.
-         * scale_x is from-source-X to to-output-X-after-rotation. After
-         * rotation source W (854) becomes output H, and source H (480)
-         * becomes output W; scale to fit (800/854 vertically, 480/480 = 1
-         * horizontally). */
-        .rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
-        .scale_x = (float)PANEL_NATIVE_W / (float)src_h,
-        .scale_y = (float)PANEL_NATIVE_H / (float)src_w,
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+        .scale_x = (float)PANEL_NATIVE_H / (float)src_w,
+        .scale_y = (float)PANEL_NATIVE_W / (float)src_h,
         .mirror_x = false,
         .mirror_y = false,
         .rgb_swap = 0,
@@ -162,13 +286,23 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         return err;
     }
 
-    /* Coordinates are in user-facing landscape orientation; the LVGL
-     * adapter knows about its 90° config and translates to panel-native
-     * before the DMA blit. */
-    err = esp_lv_adapter_dummy_draw_blit(s_disp, 0, 0, USER_W, USER_H,
-                                         s_fb[idx], true);
+    /* Direct panel draw — LVGL worker is paused, panel is ours. Don't
+     * wait for the refresh callback: at 30 fps source the 33 ms DPI
+     * cycle plus our 100 ms wait cap throughput at ~10 fps, which makes
+     * the AAP ring overflow ("ring full, dropped N bytes" — observed)
+     * and the next decode lands on a corrupted bitstream. The DPI driver
+     * already back-pressures inside esp_lcd_panel_draw_bitmap when its
+     * previous transaction hasn't drained, so any necessary serialisation
+     * happens there with no per-frame extra wait. With multiple SPIRAM
+     * framebuffers the alternating write/scan-out is naturally
+     * pipelined. */
+    err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
+                                    PANEL_NATIVE_W, PANEL_NATIVE_H,
+                                    s_fb[idx]);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "dummy_draw_blit: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "panel_draw_bitmap: %s", esp_err_to_name(err));
+        return err;
     }
-    return err;
+    return ESP_OK;
+#endif  /* DISPLAY_TEST_PATTERN */
 }

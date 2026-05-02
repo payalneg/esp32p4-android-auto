@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "display_video.h"
+#include "driver/uart.h"
 #include "esp_h264_dec.h"
 #include "esp_h264_dec_param.h"
 #include "esp_h264_dec_sw.h"
@@ -15,16 +16,108 @@
 
 static const char *TAG = "h264_pipe";
 
+/* One-shot debug: dump the 10th decoded I420 frame as base64 to the console
+ * so we can extract it on the host and inspect/play it. The output is framed
+ * by sentinel lines so scripts/extract_yuv.py can pick it out of capture
+ * logs. Disabled now that the decoder has been verified — flip back to 1
+ * if we need another sample. */
+#define H264_DUMP_FIRST_FRAME 0
+
+#if H264_DUMP_FIRST_FRAME
+/* Base64 dump straight to UART0 (the IDF console). Going through printf /
+ * stdio caused silent byte loss past ~120 KiB even with fflush — VFS
+ * console driver has a finite TX buffer it doesn't backpressure on. The
+ * driver-API uart_write_bytes blocks until the bytes are queued in the
+ * UART TX ring, which is what we want for a one-shot frame dump.
+ *
+ * 64 base64 chars per line (= 48 raw bytes). Throttle every 256 lines so
+ * the TX ring drains — at 921600 baud the throughput is ~92 KiB/s, so
+ * 16 KiB of console output per 256 lines takes ~180 ms; 100 ms vTaskDelay
+ * has plenty of margin. */
+static void dump_i420_base64(const uint8_t *buf, size_t len,
+                             uint16_t w, uint16_t h)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /* IDF v5 console uses esp_rom_printf for UART0 by default and never
+     * installs the regular UART driver — uart_write_bytes returns
+     * "uart driver error" until we set it up ourselves. Install on first
+     * dump (idempotent), 16 KiB TX ring buffer is enough headroom. */
+    static bool s_uart_installed;
+    if (!s_uart_installed) {
+        if (!uart_is_driver_installed(UART_NUM_0)) {
+            esp_err_t e = uart_driver_install(UART_NUM_0,
+                                              256, 16 * 1024, 0, NULL, 0);
+            if (e != ESP_OK) {
+                ESP_LOGE(TAG, "uart_driver_install: %s", esp_err_to_name(e));
+                return;
+            }
+        }
+        s_uart_installed = true;
+    }
+
+    char hdr[80];
+    int hl = snprintf(hdr, sizeof(hdr),
+                      "\n=== I420_DUMP_BEGIN w=%u h=%u size=%u ===\n",
+                      (unsigned)w, (unsigned)h, (unsigned)len);
+    uart_write_bytes(UART_NUM_0, hdr, (size_t)hl);
+    uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(200));
+
+    char line[68];
+    size_t lp = 0;
+    size_t lines = 0;
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t v = (uint32_t)buf[i] << 16;
+        if (i + 1 < len) v |= (uint32_t)buf[i + 1] << 8;
+        if (i + 2 < len) v |= (uint32_t)buf[i + 2];
+        line[lp++] = alphabet[(v >> 18) & 0x3F];
+        line[lp++] = alphabet[(v >> 12) & 0x3F];
+        line[lp++] = (i + 1 < len) ? alphabet[(v >> 6) & 0x3F] : '=';
+        line[lp++] = (i + 2 < len) ? alphabet[v & 0x3F]        : '=';
+        if (lp >= 64) {
+            line[lp++] = '\n';
+            uart_write_bytes(UART_NUM_0, line, lp);
+            lp = 0;
+            /* Yield every 32 lines so IDLE can run and pet the IDLE-task
+             * watchdog (~10 s total dump vs 5 s WDT). uart_write_bytes
+             * already blocks on TX ring full, but its block path doesn't
+             * always give IDLE enough CPU. */
+            ++lines;
+            if (lines % 32 == 0) {
+                vTaskDelay(1);
+            }
+            if (lines % 256 == 0) {
+                uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(500));
+            }
+        }
+    }
+    if (lp > 0) {
+        line[lp++] = '\n';
+        uart_write_bytes(UART_NUM_0, line, lp);
+    }
+    uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(500));
+    static const char tail[] = "=== I420_DUMP_END ===\n";
+    uart_write_bytes(UART_NUM_0, tail, sizeof(tail) - 1);
+    uart_wait_tx_done(UART_NUM_0, pdMS_TO_TICKS(500));
+}
+#endif
+
 /* The ring is byte-stream — one xRingbufferReceive call returns whatever
  * contiguous bytes are available, which we then feed to the decoder which
  * does its own NAL framing via Annex B start codes. This decouples AAP
  * frame boundaries from decoder calls, so a phone-side fragmented frame
  * that we already reassembled into one push() can still be split across
- * several decode loops without losing bytes. 96 KiB headroom for ~1.6 s
- * at 480p worst-case (60 KiB/frame I-frame * 30 fps with hiccups). */
-#define H264_RING_SIZE_BYTES   (96 * 1024)
+ * several decode loops without losing bytes. 256 KiB headroom — observed
+ * "ring full, dropped 15 KiB" with a smaller ring when an I-frame burst
+ * arrives faster than the SW decoder can drain. */
+#define H264_RING_SIZE_BYTES   (256 * 1024)
 #define H264_TASK_STACK_BYTES  (8 * 1024)
 #define H264_TASK_PRIORITY     5
+/* No core pin: ESP_H264_DUAL_TASK is on so the decoder spawns its own
+ * worker on CPU1 internally. Our outer driver task can run wherever the
+ * scheduler puts it; that's plenty since esp_h264_dec_process is the
+ * heavy bit and it dispatches across both cores on its own. */
 
 static RingbufHandle_t       s_ring;
 static esp_h264_dec_handle_t s_dec;
@@ -105,6 +198,18 @@ static void decoder_task(void *arg)
                              res.width, res.height, (unsigned)out.out_size);
                     seen_resolution = true;
                 }
+#if H264_DUMP_FIRST_FRAME
+                /* 10th decoded frame, not the 1st: I-frame at start of a
+                 * stream can be partially-decoded or lossy until reference
+                 * frames build up — and the artefact we're chasing is more
+                 * obvious on a real picture than a freshly-keyed one. */
+                static uint32_t s_dump_seq;
+                s_dump_seq++;
+                if (s_dump_seq == 10 && have_res) {
+                    dump_i420_base64(out.outbuf, out.out_size,
+                                     res.width, res.height);
+                }
+#endif
                 if (have_res) {
                     /* Hand off to the display sink. PPA + dummy_draw_blit
                      * happen synchronously inside; if it stalls we'd see

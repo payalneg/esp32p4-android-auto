@@ -98,6 +98,14 @@ CONFIG_AA_WIFI_ROLE_STA=y
 CONFIG_C6_OTA_ENABLED=y
 CONFIG_C6_OTA_DISPLAY_PROGRESS=y
 
+# ===== Console UART baud =====
+# 921600 (8x of default 115200) so a single I420 frame dump (~768 KiB base64)
+# blasts out in under 10 seconds when we're debugging the video pipeline.
+# idf.py monitor handles arbitrary bauds via -b 921600 or sdkconfig.
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+CONFIG_CONSOLE_UART_BAUDRATE=921600
+CONFIG_ESPTOOLPY_MONITOR_BAUD=921600
+
 # ===== H.264 SW decoder =====
 # The default ESP_H264_DECODER_IRAM=y stuffs ~22 KiB of decoder hot-path code
 # into IRAM/L2 SRAM, which on this board (after BSP, ESP-Hosted, mbedTLS,
@@ -106,3 +114,10 @@ CONFIG_C6_OTA_DISPLAY_PROGRESS=y
 # "esp_startup_start_app: assert failed res == pdTRUE". Decoding from flash
 # is plenty fast for our 480p target.
 CONFIG_ESP_H264_DECODER_IRAM=n
+# Single-core SW decoder is ~35 ms/frame at 800x480 = 105 % of one core,
+# which means a 30 fps source overflows the AAP ring (observed). Dual-task
+# mode splits the work across both cores so each takes ~50 %, which leaves
+# real headroom for the AAP loop, WiFi/BT, LVGL etc.
+CONFIG_ESP_H264_DUAL_TASK=y
+CONFIG_ESP_H264_DUAL_TASK_CORE=1
+CONFIG_ESP_H264_DUAL_TASK_PRIORITY=17
