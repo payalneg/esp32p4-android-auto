@@ -108,12 +108,19 @@ static void dump_i420_base64(const uint8_t *buf, size_t len,
  * does its own NAL framing via Annex B start codes. This decouples AAP
  * frame boundaries from decoder calls, so a phone-side fragmented frame
  * that we already reassembled into one push() can still be split across
- * several decode loops without losing bytes. 256 KiB headroom — observed
- * "ring full, dropped 15 KiB" with a smaller ring when an I-frame burst
- * arrives faster than the SW decoder can drain. */
-#define H264_RING_SIZE_BYTES   (256 * 1024)
+ * several decode loops without losing bytes.
+ *
+ * 1 MiB sized for the BT-handover key-frame bursts: post-handover we've
+ * seen >100 KiB/s sustained for ~2 s while the decoder catches up, with
+ * 256 KiB the ring filled and started dropping 26 KiB AAP chunks (whole
+ * NAL groups), which corrupted P-frame references until the next IDR. */
+#define H264_RING_SIZE_BYTES   (1024 * 1024)
 #define H264_TASK_STACK_BYTES  (8 * 1024)
-#define H264_TASK_PRIORITY     5
+/* Higher than touch_input (5) so that during stress the outer task keeps
+ * pulling from the ring and feeding decode workers (which run at prio 17
+ * via CONFIG_ESP_H264_DUAL_TASK_PRIORITY). Without this, touch's 50 Hz
+ * polling can sit on the same priority and time-slice the feeder. */
+#define H264_TASK_PRIORITY     10
 /* No core pin: ESP_H264_DUAL_TASK is on so the decoder spawns its own
  * worker on CPU1 internally. Our outer driver task can run wherever the
  * scheduler puts it; that's plenty since esp_h264_dec_process is the
@@ -279,13 +286,55 @@ esp_err_t h264_pipe_init(void)
     return ESP_OK;
 }
 
+/* Once the ring overflows, the decoder has lost a NAL group somewhere in
+ * the middle of a GOP and every subsequent P-frame references missing
+ * data. Pushing more frames just queues garbage that the decoder will
+ * reject anyway, so we set a recovery flag and silently drop AAP chunks
+ * until we see a chunk containing an IDR (NAL type 5) or SPS (type 7) —
+ * that's a clean resync point. Without this we get pages of "ring full,
+ * dropped 440 bytes" and cascading "Decode slice data error" until the
+ * phone happens to send a key frame ~1-2 s later. */
+static bool s_recovery;
+
+/* Scan for Annex B start code + NAL header indicating IDR/SPS/PPS. AAP
+ * always uses Annex B; SPS+PPS+IDR usually arrive in one AVMediaIndication
+ * when the encoder emits a key frame, so any of these three NAL types in
+ * the chunk is a valid resync point. */
+static bool chunk_has_idr_or_sps(const uint8_t *d, size_t len)
+{
+    if (len < 4) return false;
+    for (size_t i = 0; i + 3 < len; i++) {
+        if (d[i] != 0 || d[i + 1] != 0) continue;
+        size_t hdr;
+        if (d[i + 2] == 1) hdr = i + 3;
+        else if (i + 4 < len && d[i + 2] == 0 && d[i + 3] == 1) hdr = i + 4;
+        else continue;
+        if (hdr >= len) return false;
+        uint8_t nal_type = d[hdr] & 0x1F;
+        if (nal_type == 5 || nal_type == 7 || nal_type == 8) return true;
+    }
+    return false;
+}
+
 void h264_pipe_push(const uint8_t *data, size_t len)
 {
     if (!s_ring || !data || len == 0) return;
+
+    if (s_recovery) {
+        if (!chunk_has_idr_or_sps(data, len)) return;
+        ESP_LOGI(TAG, "recovery: IDR/SPS found, resuming push (%u bytes)",
+                 (unsigned)len);
+        s_recovery = false;
+    }
+
     /* Non-blocking: if the ring is full we'd rather drop a frame than
      * stall the AAP receive loop and trigger phone ack timeouts. */
     BaseType_t ok = xRingbufferSend(s_ring, data, len, 0);
     if (ok != pdTRUE) {
-        ESP_LOGW(TAG, "ring full, dropped %u bytes", (unsigned)len);
+        if (!s_recovery) {
+            ESP_LOGW(TAG, "ring full (%u bytes) — entering recovery, "
+                          "skipping until next IDR", (unsigned)len);
+            s_recovery = true;
+        }
     }
 }

@@ -8,7 +8,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "h264_pipe.h"
+#include "touch_input.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
@@ -40,14 +42,20 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_SENSOR_START_REQ     0x8001
 #define AA_MSG_SENSOR_START_RESP    0x8002
 #define AA_MSG_SENSOR_EVENT         0x8003
+#define AA_MSG_INPUT_EVENT_IND      0x8001
 #define AA_MSG_INPUT_BINDING_REQ    0x8002
 #define AA_MSG_INPUT_BINDING_RESP   0x8003
 
 /* Buffer sizes — generous since these live on the heap, not the stack.
- * 32 KiB so that a single AA frame can fit even when phone bundles a full
- * H.264 I-frame in one shot; observed up to ~16 KB on the wire so far. */
-#define CIPHER_BUF_SIZE     32768
-#define PLAIN_BUF_SIZE      32768
+ * AA fragments any logical message bigger than ~16 KiB (TLS record size)
+ * across multiple AA frames with FIRST/MIDDLE/LAST flags; recv_decrypted
+ * accumulates them until LAST. After the BT-mode handover the phone tends
+ * to burst a full key-frame to re-sync video — observed 60+ KiB of video
+ * data in a single second, so 32 KiB plain_buf overflowed ("out_buf full
+ * (524)" → connection dropped). 96 KiB has room for a 80 KiB I-frame plus
+ * normal back-and-forth control traffic. */
+#define CIPHER_BUF_SIZE     (96 * 1024)
+#define PLAIN_BUF_SIZE      (96 * 1024)
 #define SCRATCH_SIZE        8192    /* protobuf scratch */
 
 /* ---------- Service Discovery response builder ---------- */
@@ -403,15 +411,41 @@ static esp_err_t build_sd_response(uint8_t *out, size_t cap, size_t *out_len)
 
 /* ---------- Encrypted send/recv helpers ---------- */
 
+/* mbedtls SSL state isn't thread-safe — both ssl_read (decrypt path) and
+ * ssl_write (encrypt path) mutate the same context (sequence counters,
+ * record-layer buffers). The touch poller sends InputEventIndications from
+ * its own task in parallel with the main rx loop, so every operation that
+ * touches t->ssl goes through this mutex.
+ *
+ * Without this, decrypt was reading garbage plaintext (manifest as
+ * "decrypt: out_buf full" once the 32 KiB plain_buf filled with junk) the
+ * moment the touch task issued its first encrypt while main was inside
+ * mbedtls_ssl_read. */
+static SemaphoreHandle_t s_ssl_mutex;
+
+static void ensure_ssl_mutex(void)
+{
+    if (!s_ssl_mutex) s_ssl_mutex = xSemaphoreCreateMutex();
+}
+
 static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                                 aa_channel_id_t channel,
                                 uint16_t msg_id,
                                 const uint8_t *body, size_t body_len,
                                 uint8_t *cipher_buf, size_t cipher_cap)
 {
+    ensure_ssl_mutex();
+    /* Hold the ssl mutex across encrypt + frame_send so we don't interleave
+     * AA frame bytes on the wire AND so we don't race the recv-loop's
+     * ssl_read inside mbedtls. */
+    if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+
     /* plaintext = [msg_id BE16][body] */
     uint8_t *plain = malloc(2 + body_len);
-    if (!plain) return ESP_ERR_NO_MEM;
+    if (!plain) {
+        xSemaphoreGive(s_ssl_mutex);
+        return ESP_ERR_NO_MEM;
+    }
     plain[0] = (uint8_t)(msg_id >> 8);
     plain[1] = (uint8_t)(msg_id & 0xFF);
     if (body_len) memcpy(plain + 2, body, body_len);
@@ -420,7 +454,10 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     esp_err_t err = aa_tls_encrypt(tls, plain, 2 + body_len,
                                    cipher_buf, cipher_cap, &cipher_len);
     free(plain);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        xSemaphoreGive(s_ssl_mutex);
+        return err;
+    }
 
     /* aasdk's "MessageType" field in the flag byte:
      *   - SPECIFIC (0): everything on the Control channel, AND data/focus/
@@ -443,21 +480,51 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
      * control channel. Everything else (setup, focus, open) is rare enough
      * to keep visible. */
     bool noisy = (msg_id == AA_MSG_AV_MEDIA_ACK) ||
+                 (msg_id == AA_MSG_INPUT_EVENT_IND) ||
                  (channel == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_RESPONSE);
     if (!noisy) {
         ESP_LOGI(TAG, "tx ch=%d msg=0x%04x plain=%u cipher=%u",
                  channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
     }
-    return aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
+    esp_err_t send_err = aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
+    xSemaphoreGive(s_ssl_mutex);
+    return send_err;
 }
 
-/* Decrypt one logical AA message — possibly spanning multiple FIRST/MIDDLE/LAST
- * fragments — and return the assembled inner [msg_id][body].
+/* Per-channel reassembly state. AAP can interleave fragments across channels:
+ * gearhead pushes a video FIRST on ch=3, then sends a small audio BULK on
+ * ch=4, then resumes ch=3 with MIDDLE/LAST. aasdk's MessageInStream rejects
+ * this as MESSENGER_INTERTWINED_CHANNELS, but real gearhead does it under
+ * load (post-BT-handover key-frame burst) — so we accept it and keep one
+ * partial buffer per channel. Lazily allocated on the first FIRST seen for
+ * that channel; freed in recv_partial_reset on session exit. */
+typedef struct {
+    bool     active;   /* set on FIRST, cleared on LAST/BULK */
+    uint8_t *buf;
+    size_t   len;
+    size_t   cap;
+} partial_msg_t;
+
+#define MAX_AA_CHANNELS 16
+static partial_msg_t s_partial[MAX_AA_CHANNELS];
+
+static void recv_partial_reset(void)
+{
+    for (int i = 0; i < MAX_AA_CHANNELS; i++) {
+        free(s_partial[i].buf);
+        s_partial[i].buf = NULL;
+        s_partial[i].len = 0;
+        s_partial[i].cap = 0;
+        s_partial[i].active = false;
+    }
+}
+
+/* Decrypt one logical AA message and return the assembled inner [msg_id][body].
  *
- * AAP fragments a message when its plaintext doesn't fit in a single TLS record
- * (~16 KB). aasdk decrypts each fragment as a standalone TLS record and
- * concatenates the resulting plaintext, so we mirror that: loop reading frames
- * on the same channel, decrypting each, until BULK or LAST is seen. */
+ * BULK frames decrypt straight into the caller's plain_buf and return.
+ * Fragmented messages (FIRST → 0..N MIDDLE → LAST) accumulate in the channel's
+ * partial buffer; on LAST we copy out to plain_buf. Different channels can
+ * have partials in flight simultaneously. */
 static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
                                 aa_channel_id_t *out_ch,
                                 uint8_t *cipher_buf, size_t cipher_cap,
@@ -465,8 +532,6 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
                                 size_t *plain_len)
 {
     *plain_len = 0;
-    aa_channel_id_t first_ch = 0;
-    bool have_first = false;
 
     while (true) {
         aa_channel_id_t ch;
@@ -479,26 +544,73 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             ESP_LOGW(TAG, "unexpected plaintext frame post-auth (flags 0x%02x)", flags);
             return ESP_ERR_INVALID_STATE;
         }
-        if (have_first && ch != first_ch) {
-            ESP_LOGE(TAG, "intertwined fragments: had ch=%d, got ch=%d",
-                     first_ch, ch);
+        if ((int)ch < 0 || (int)ch >= MAX_AA_CHANNELS) {
+            ESP_LOGE(TAG, "channel id %d out of range", (int)ch);
             return ESP_ERR_INVALID_STATE;
         }
-        first_ch = ch;
-        have_first = true;
+        bool is_first = (flags & AA_FRAME_FLAG_FIRST) != 0;
+        bool is_last  = (flags & AA_FRAME_FLAG_LAST)  != 0;
+        bool is_bulk  = is_first && is_last;
 
-        size_t got = 0;
-        err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
-                             plain_buf + *plain_len, plain_cap - *plain_len,
-                             &got);
-        if (err != ESP_OK) return err;
-        *plain_len += got;
+        /* Hold s_ssl_mutex across the decrypt — ssl_read mutates the same
+         * SSL context the touch task's ssl_write touches. aa_frame_recv
+         * (above) is intentionally outside the mutex so the touch sender
+         * can keep firing while we block waiting for the next frame. */
+        ensure_ssl_mutex();
+        if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
-        bool is_last = (flags & AA_FRAME_FLAG_LAST) != 0;
-        if (is_last) {
+        if (is_bulk) {
+            err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
+                                 plain_buf, plain_cap, plain_len);
+            xSemaphoreGive(s_ssl_mutex);
+            if (err != ESP_OK) return err;
             *out_ch = ch;
             return ESP_OK;
         }
+
+        partial_msg_t *p = &s_partial[(int)ch];
+        if (is_first) {
+            if (!p->buf) {
+                p->cap = plain_cap;
+                p->buf = malloc(p->cap);
+                if (!p->buf) {
+                    xSemaphoreGive(s_ssl_mutex);
+                    ESP_LOGE(TAG, "ch %d partial malloc %u failed",
+                             (int)ch, (unsigned)plain_cap);
+                    return ESP_ERR_NO_MEM;
+                }
+            }
+            p->len = 0;
+            p->active = true;
+        } else if (!p->active) {
+            xSemaphoreGive(s_ssl_mutex);
+            ESP_LOGE(TAG, "ch %d MIDDLE/LAST without prior FIRST", (int)ch);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        size_t got = 0;
+        err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
+                             p->buf + p->len, p->cap - p->len, &got);
+        xSemaphoreGive(s_ssl_mutex);
+        if (err != ESP_OK) return err;
+        p->len += got;
+
+        if (is_last) {
+            if (p->len > plain_cap) {
+                ESP_LOGE(TAG, "ch %d msg %u > plain_cap %u",
+                         (int)ch, (unsigned)p->len, (unsigned)plain_cap);
+                p->active = false;
+                p->len = 0;
+                return ESP_ERR_NO_MEM;
+            }
+            memcpy(plain_buf, p->buf, p->len);
+            *plain_len = p->len;
+            *out_ch = ch;
+            p->active = false;
+            p->len = 0;
+            return ESP_OK;
+        }
+        /* MIDDLE — keep reading next frame (which may be on any channel). */
     }
 }
 
@@ -933,6 +1045,60 @@ static esp_err_t handle_nav_focus(int sock, aa_tls_t *tls,
                           resp, rp, cipher_buf, cipher_cap);
 }
 
+/* ---------- Touch input bridge ---------- */
+
+/* Context shared with touch_input's polling task. Captured at the top of
+ * aa_service_run, cleared on exit. The cipher buffer is dedicated to the
+ * touch sender so encrypt scratch doesn't collide with the main loop's
+ * outgoing buffer; size only needs to fit a tiny InputEventIndication
+ * (≤ ~32 plaintext bytes), but we round up to a comfortable margin. */
+#define TOUCH_CIPHER_SIZE   256
+
+typedef struct {
+    int        sock;
+    aa_tls_t  *tls;
+    uint8_t   *cipher;
+} touch_send_ctx_t;
+
+static esp_err_t touch_send_event(uint64_t timestamp_us,
+                                  touch_action_t action,
+                                  uint16_t x, uint16_t y,
+                                  void *ctx_v)
+{
+    touch_send_ctx_t *ctx = (touch_send_ctx_t *)ctx_v;
+    if (!ctx || !ctx->tls || !ctx->cipher) return ESP_ERR_INVALID_STATE;
+
+    /* TouchEvent { repeated TouchLocation touch_location = 1;
+     *              uint32 action_index = 2;
+     *              TouchAction touch_action = 3; }
+     * TouchLocation { uint32 x = 1; uint32 y = 2; uint32 pointer_id = 3; } */
+    uint8_t loc[12];
+    size_t  lp = 0;
+    pb_w_uint32(loc, sizeof(loc), &lp, 1, x);
+    pb_w_uint32(loc, sizeof(loc), &lp, 2, y);
+    pb_w_uint32(loc, sizeof(loc), &lp, 3, 0 /* pointer_id */);
+
+    uint8_t te[24];
+    size_t  tp = 0;
+    pb_w_submsg(te, sizeof(te), &tp, 1, loc, lp);
+    pb_w_uint32(te, sizeof(te), &tp, 2, 0 /* action_index */);
+    pb_w_uint32(te, sizeof(te), &tp, 3, (uint32_t)action);
+
+    /* InputEventIndication { uint64 timestamp = 1;
+     *                         int32 disp_channel = 2;
+     *                         TouchEvent touch_event = 3; } */
+    uint8_t body[48];
+    size_t  bp = 0;
+    pb_w_uint64(body, sizeof(body), &bp, 1, timestamp_us);
+    pb_w_uint32(body, sizeof(body), &bp, 2, 0 /* disp_channel */);
+    pb_w_submsg(body, sizeof(body), &bp, 3, te, tp);
+
+    /* Channel id 1 = touch input, see channel_kind. */
+    return send_encrypted(ctx->sock, ctx->tls, (aa_channel_id_t)1,
+                          AA_MSG_INPUT_EVENT_IND,
+                          body, bp, ctx->cipher, TOUCH_CIPHER_SIZE);
+}
+
 /* ---------- Main loop ---------- */
 
 /* Send a PingRequest with current timestamp on the control channel. Used
@@ -954,11 +1120,21 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
     uint8_t *cipher  = malloc(CIPHER_BUF_SIZE);
     uint8_t *plain   = malloc(PLAIN_BUF_SIZE);
     uint8_t *scratch = malloc(SCRATCH_SIZE);
-    if (!cipher || !plain || !scratch) {
-        free(cipher); free(plain); free(scratch);
+    uint8_t *tx_cipher = malloc(TOUCH_CIPHER_SIZE);
+    if (!cipher || !plain || !scratch || !tx_cipher) {
+        free(cipher); free(plain); free(scratch); free(tx_cipher);
         return ESP_ERR_NO_MEM;
     }
     esp_err_t err = ESP_OK;
+
+    /* Drop any reassembly leftovers from a previous session — a TCP reconnect
+     * shouldn't carry over half-finished video fragments. */
+    recv_partial_reset();
+
+    touch_send_ctx_t touch_ctx = { .sock = sock, .tls = tls, .cipher = tx_cipher };
+    if (touch_input_start(touch_send_event, &touch_ctx) != ESP_OK) {
+        ESP_LOGW(TAG, "touch_input_start failed — input channel will be silent");
+    }
 
     while (true) {
         aa_channel_id_t ch;
@@ -1069,6 +1245,8 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
         }
     }
 
-    free(cipher); free(plain); free(scratch);
+    touch_input_stop();
+    recv_partial_reset();
+    free(cipher); free(plain); free(scratch); free(tx_cipher);
     return err;
 }

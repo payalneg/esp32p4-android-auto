@@ -15,6 +15,7 @@ idf_component_register(
         "bt_link.c"
         "h264_pipe.c"
         "display_video.c"
+        "touch_input.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

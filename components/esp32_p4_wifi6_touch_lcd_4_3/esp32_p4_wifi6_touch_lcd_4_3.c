@@ -738,6 +738,11 @@ esp_lcd_panel_handle_t bsp_display_get_panel_handle(void)
     return panel_handle;
 }
 
+esp_lcd_touch_handle_t bsp_display_get_touch_handle(void)
+{
+    return tp;
+}
+
 static void usb_lib_task(void *arg)
 {
     while (1)

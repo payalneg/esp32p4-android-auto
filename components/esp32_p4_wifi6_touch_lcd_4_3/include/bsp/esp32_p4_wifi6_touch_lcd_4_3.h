@@ -8,6 +8,7 @@
 #include "bsp/config.h"
 #include "bsp/display.h"
 #include "esp_codec_dev.h"
+#include "esp_lcd_touch.h"
 #include "sdkconfig.h"
 
 #include "lvgl.h"
@@ -297,6 +298,7 @@ esp_err_t bsp_display_lock(uint32_t timeout_ms);
  */
 void bsp_display_unlock(void);
 esp_lcd_panel_handle_t bsp_display_get_panel_handle(void);
+esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
 
 /**************************************************************************************************
  *
