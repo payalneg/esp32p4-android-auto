@@ -12,7 +12,11 @@ static const char *TAG = "aa_frame";
 /* Diagnostic: log every chunk of bytes coming off the wire so we can see
  * whether gearhead is sending anything at all when our parser is blocked
  * waiting for a full frame. */
-#define AA_FRAME_LOG_RAW 1
+/* Per-recv chunk logging + hex dump. Useful when bringing up TLS/framing,
+ * but at video rates each frame produces 3-5 log lines that take ~10 ms each
+ * over the 115200 console — that alone caps throughput at ~10 fps even when
+ * the protocol is fine. Flip to 1 only when actively debugging framing. */
+#define AA_FRAME_LOG_RAW 0
 
 static int recv_exact(int sock, uint8_t *buf, size_t len)
 {

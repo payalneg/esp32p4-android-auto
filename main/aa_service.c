@@ -432,8 +432,17 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     uint8_t flags = AA_FRAME_FLAG_BULK | AA_FRAME_FLAG_ENCRYPT;
     if (channel != AA_CHANNEL_CONTROL && msg_id == AA_MSG_CHANNEL_OPEN_RESP)
         flags |= AA_FRAME_FLAG_CONTROL;
-    ESP_LOGI(TAG, "tx ch=%d msg=0x%04x plain=%u cipher=%u",
-             channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
+    /* Per-frame UART logs at ~5-10 ms each are the difference between 30 fps
+     * and 10 fps once the video stream is up. Skip logging for the high-rate
+     * AV ack we emit on every received media frame, and for ping-pong on the
+     * control channel. Everything else (setup, focus, open) is rare enough
+     * to keep visible. */
+    bool noisy = (msg_id == AA_MSG_AV_MEDIA_ACK) ||
+                 (channel == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_RESPONSE);
+    if (!noisy) {
+        ESP_LOGI(TAG, "tx ch=%d msg=0x%04x plain=%u cipher=%u",
+                 channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
+    }
     return aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
 }
 
@@ -938,7 +947,15 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
         uint16_t msg_id = ((uint16_t)plain[0] << 8) | plain[1];
         const uint8_t *body = plain + 2;
         size_t body_len = plen - 2;
-        ESP_LOGI(TAG, "rx ch=%d msg=0x%04x len=%u", ch, msg_id, (unsigned)body_len);
+        /* Skip the rx log for the high-rate AV media flow and ping pings —
+         * see noisy gate in send_encrypted for the same reason. */
+        bool rx_noisy = (msg_id == AA_MSG_AV_MEDIA_DATA_TS) ||
+                        (msg_id == AA_MSG_AV_MEDIA_DATA) ||
+                        (ch == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_REQUEST);
+        if (!rx_noisy) {
+            ESP_LOGI(TAG, "rx ch=%d msg=0x%04x len=%u",
+                     ch, msg_id, (unsigned)body_len);
+        }
 
         if (ch == AA_CHANNEL_CONTROL) {
             switch (msg_id) {
