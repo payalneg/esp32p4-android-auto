@@ -42,6 +42,13 @@ static int                 s_fb_count;
 static int                 s_fb_idx;
 static bool                s_adapter_paused;
 static SemaphoreHandle_t   s_refresh_sem;
+/* Intermediate landscape RGB565 buffer for the split PPA+CPU rotate
+ * path. Allocated lazily in display_video_show_yuv420 once we know the
+ * source dimensions. */
+static uint16_t           *s_landscape_rgb;
+static size_t              s_landscape_rgb_bytes;
+static uint16_t            s_landscape_w;
+static uint16_t            s_landscape_h;
 
 static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
                                       esp_lcd_dpi_panel_event_data_t *edata,
@@ -112,10 +119,26 @@ esp_err_t display_video_init(void)
 /* When non-zero, skip PPA entirely and CPU-convert the decoder's Y plane
  * into a grayscale RGB565 panel-native (480×800) buffer with a 90° CCW
  * rotation done in the same loop. Slow (~5-10 ms per frame on P4) but
- * straightforward — if this shows the AA UI without tiling, the PPA
- * configuration is the culprit and we go fix that path. If it ALSO
- * tiles, something further upstream (decoder buffer stride) is wrong. */
-#define DISPLAY_CPU_YUV_BYPASS 1
+ * proved the decoder Y plane is fine and the panel draw_bitmap path is
+ * fine. */
+#define DISPLAY_CPU_YUV_BYPASS 0
+
+/* When non-zero, split the work: PPA does the heavy YUV→RGB565 colour
+ * conversion (and any scaling) into a landscape-oriented intermediate
+ * buffer, then a tight CPU loop transposes that 16-bpp buffer into the
+ * panel-native 480×800 framebuffer. PPA combined-rotate-and-convert
+ * tiled the output for unknown reasons; rotation alone on RGB565 is
+ * just an index swap and stays cheap (~3 ms on P4). Disabled — turned
+ * out PPA misreads our YUV420 input layout too, so we go full CPU. */
+#define DISPLAY_PPA_THEN_CPU_ROTATE 0
+
+/* Full CPU pipeline: per-pixel YUV→RGB565 (BT.601 limited range) with
+ * the 90° transpose folded into the output index. esp_h264 produces I420
+ * which is what we read directly. ~25-30 ms/frame on a single 360 MHz
+ * RISC-V core; with CONFIG_ESP_H264_DUAL_TASK=y the decoder uses both
+ * cores at ~50% each, leaving real headroom for this loop and for the
+ * AAP / WiFi / BT loops too. */
+#define DISPLAY_CPU_YUV_FULL 1
 
 esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                                     uint16_t src_w, uint16_t src_h)
@@ -183,6 +206,65 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         xSemaphoreTake(s_refresh_sem, pdMS_TO_TICKS(100));
     }
     return ESP_OK;
+#elif DISPLAY_CPU_YUV_FULL
+    /* Full I420 → RGB565 colour conversion + 90° transpose, one pass.
+     * Same dest-to-src mapping as the grayscale bypass: sx = dy,
+     * sy = (W-1) - dx. esp_h264's I420 layout is Y plane (src_w*src_h)
+     * then U plane (src_w/2 * src_h/2) then V plane (same).
+     *
+     * BT.601 limited-range integer math, fixed-point with 16-bit
+     * coefficients (lifted from the standard reference equations):
+     *   C = Y - 16; D = U - 128; E = V - 128
+     *   R = clip((298*C + 409*E + 128) >> 8)
+     *   G = clip((298*C - 100*D - 208*E + 128) >> 8)
+     *   B = clip((298*C + 516*D + 128) >> 8)
+     */
+    {
+        uint16_t *fb = (uint16_t *)s_fb[idx];
+        const int W = PANEL_NATIVE_W;
+        const int H = PANEL_NATIVE_H;
+        const uint8_t *Yp = yuv;
+        const uint8_t *Up = yuv + (size_t)src_w * src_h;
+        const uint8_t *Vp = Up   + ((size_t)src_w * src_h) / 4;
+        const int uv_w = src_w / 2;
+        for (int dy = 0; dy < H; dy++) {
+            int sx = dy;
+            if (sx >= src_w) {
+                memset(&fb[dy * W], 0, W * 2);
+                continue;
+            }
+            for (int dx = 0; dx < W; dx++) {
+                int sy = (W - 1) - dx;
+                if (sy >= src_h) {
+                    fb[dy * W + dx] = 0;
+                    continue;
+                }
+                int Y = Yp[sy * src_w + sx];
+                int U = Up[(sy / 2) * uv_w + (sx / 2)];
+                int V = Vp[(sy / 2) * uv_w + (sx / 2)];
+                int C = Y - 16;
+                int D = U - 128;
+                int E = V - 128;
+                int R = (298 * C + 409 * E + 128) >> 8;
+                int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
+                int B = (298 * C + 516 * D + 128) >> 8;
+                if (R < 0)   R = 0;   else if (R > 255) R = 255;
+                if (G < 0)   G = 0;   else if (G > 255) G = 255;
+                if (B < 0)   B = 0;   else if (B > 255) B = 255;
+                fb[dy * W + dx] = ((R & 0xF8) << 8) |
+                                  ((G & 0xFC) << 3) |
+                                  ((B & 0xF8) >> 3);
+            }
+        }
+        esp_cache_msync(fb, ALIGN_UP(W * H * 2, s_cache_line),
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, fb);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "panel_draw_bitmap (full cpu): %s",
+                     esp_err_to_name(err));
+        }
+        return err;
+    }
 #elif DISPLAY_CPU_YUV_BYPASS
     /* CPU path: take source Y plane (validated correct via dump) and
      * transpose-with-vertical-flip into panel-native 480×800 RGB565
@@ -217,6 +299,92 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, fb);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "panel_draw_bitmap (cpu): %s",
+                     esp_err_to_name(err));
+        }
+        return err;
+    }
+#elif DISPLAY_PPA_THEN_CPU_ROTATE
+    /* Split path: PPA does YUV→RGB565 (no rotation, no scaling that
+     * would require it). Result is landscape src_w × src_h RGB565. We
+     * then transpose into the panel-native 480×800 framebuffer with a
+     * cheap CPU loop. PPA's combined rotate-and-convert was tiling the
+     * output for reasons we couldn't pin down with the obvious config
+     * options; this split keeps the heavy colour math hardware-fast
+     * while the trivial index swap runs on the CPU. */
+    {
+        /* Lazy-allocate the landscape staging buffer matching src_w×src_h. */
+        size_t need = ALIGN_UP((size_t)src_w * src_h * 2, s_cache_line);
+        if (s_landscape_rgb == NULL || need > s_landscape_rgb_bytes ||
+            src_w != s_landscape_w || src_h != s_landscape_h) {
+            free(s_landscape_rgb);
+            s_landscape_rgb = heap_caps_aligned_calloc(s_cache_line, 1,
+                                                       need,
+                                                       MALLOC_CAP_SPIRAM);
+            if (!s_landscape_rgb) {
+                ESP_LOGE(TAG, "landscape_rgb alloc %u failed", (unsigned)need);
+                return ESP_ERR_NO_MEM;
+            }
+            s_landscape_rgb_bytes = need;
+            s_landscape_w = src_w;
+            s_landscape_h = src_h;
+        }
+
+        ppa_srm_oper_config_t op = {
+            .in = {
+                .buffer = yuv,
+                .pic_w = src_w,
+                .pic_h = src_h,
+                .block_w = src_w,
+                .block_h = src_h,
+                .srm_cm = PPA_SRM_COLOR_MODE_YUV420,
+                .yuv_range = COLOR_RANGE_LIMIT,
+                .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
+            },
+            .out = {
+                .buffer = s_landscape_rgb,
+                .buffer_size = s_landscape_rgb_bytes,
+                .pic_w = src_w,
+                .pic_h = src_h,
+                .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+            },
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
+            .mode = PPA_TRANS_MODE_BLOCKING,
+        };
+        esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "ppa convert: %s", esp_err_to_name(err));
+            return err;
+        }
+        esp_cache_msync(s_landscape_rgb, s_landscape_rgb_bytes,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+
+        /* CPU transpose: same mapping that worked in the YUV-bypass
+         * path (sx=dy, sy=W-1-dx) but now reading 16-bpp pixels. */
+        uint16_t *dst = (uint16_t *)s_fb[idx];
+        const int W = PANEL_NATIVE_W;
+        const int H = PANEL_NATIVE_H;
+        for (int dy = 0; dy < H; dy++) {
+            int sx = dy;
+            if (sx >= src_w) {
+                /* Past source width — leave row black. */
+                memset(&dst[dy * W], 0, W * 2);
+                continue;
+            }
+            for (int dx = 0; dx < W; dx++) {
+                int sy = (W - 1) - dx;
+                dst[dy * W + dx] = (sy < src_h)
+                    ? s_landscape_rgb[sy * src_w + sx]
+                    : 0;
+            }
+        }
+        esp_cache_msync(dst, ALIGN_UP(W * H * 2, s_cache_line),
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, dst);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "panel_draw_bitmap (split): %s",
                      esp_err_to_name(err));
         }
         return err;
@@ -285,6 +453,14 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                  (unsigned)src_w, (unsigned)src_h);
         return err;
     }
+
+    /* PPA writes via DMA, bypassing the cache. Make sure the CPU's view
+     * of this buffer matches what PPA just wrote before the DPI driver
+     * (also DMA) reads from it. Without this, M2C-stale lines were a
+     * plausible cause of the 3-copy tiling we kept seeing. */
+    esp_cache_msync(s_fb[idx], out_buf_size,
+                    ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                    ESP_CACHE_MSYNC_FLAG_INVALIDATE);
 
     /* Direct panel draw — LVGL worker is paused, panel is ours. Don't
      * wait for the refresh callback: at 30 fps source the 33 ms DPI
