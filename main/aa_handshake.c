@@ -10,11 +10,14 @@
 
 static const char *TAG = "aa_hs";
 
-/* aasdk Version.hpp uses 1.1, but modern gearhead negotiates 1.7 anyway.
- * Lower-bounding to 1.1 makes phone treat us like a legacy car and may
- * skip features needed to fully start the session. Advertise 1.7 directly. */
+/* AAP version negotiation. Tried 1.7 first (modern), but gearhead then
+ * classifies our HU as "Cakewalk-compatible" and routes setup through a
+ * new wireless flow we don't implement — FRX gets skipped, projection
+ * stalls at PROJECTION_WINDOW_MANAGER_STARTING. Drop to 1.1 (the aasdk
+ * legacy default) to opt out of Cakewalk and trigger the legacy FRX
+ * "Add this car" UI on the phone. */
 #define AA_VERSION_MAJOR 1
-#define AA_VERSION_MINOR 7
+#define AA_VERSION_MINOR 1
 
 /* AuthCompleteIndication{ status = Status::OK (0) } in protobuf wire format:
  *   field 1 (varint): tag = (1 << 3) | 0 = 0x08, value = 0x00. */

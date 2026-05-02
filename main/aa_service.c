@@ -25,6 +25,20 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_AUDIO_FOCUS_REQ     0x0012
 #define AA_MSG_AUDIO_FOCUS_RESP    0x0013
 
+/* Per-channel message ids (HU_*_CHANNEL_MESSAGE in headunit's hu_aap.h).
+ * The same numeric tag means different things on different channel kinds —
+ * dispatch must check the channel id first, then the message id. */
+#define AA_MSG_AV_MEDIA_SETUP_REQ   0x8000
+#define AA_MSG_AV_MEDIA_START_REQ   0x8001
+#define AA_MSG_AV_MEDIA_SETUP_RESP  0x8003
+#define AA_MSG_AV_VIDEO_FOCUS_REQ   0x8007
+#define AA_MSG_AV_VIDEO_FOCUS_IND   0x8008
+#define AA_MSG_SENSOR_START_REQ     0x8001
+#define AA_MSG_SENSOR_START_RESP    0x8002
+#define AA_MSG_SENSOR_EVENT         0x8003
+#define AA_MSG_INPUT_BINDING_REQ    0x8002
+#define AA_MSG_INPUT_BINDING_RESP   0x8003
+
 /* Buffer sizes — generous since these live on the heap, not the stack. */
 #define CIPHER_BUF_SIZE     16384   /* one TLS record max */
 #define PLAIN_BUF_SIZE      16384
@@ -33,18 +47,23 @@ static const char *TAG = "aa_svc";
 /* ---------- Service Discovery response builder ---------- */
 
 /* AVChannel{stream_type=VIDEO, available_while_in_call=true,
- *           video_configs=[{resolution=480p, fps=30, dpi=140, ...}]}
- * → bytes. */
+ *           video_configs=[{resolution=720p, fps=30, dpi=160}]}
+ * → bytes.
+ *
+ * Trying enum=2 (1280x720) on the off chance modern gearhead refuses to
+ * project to 480p heads — most certified wireless car units advertise
+ * 720p+, so this might be the "I'll talk to you" tier. We'll downscale
+ * the decoded frames to the 800x480 panel via the ESP32-P4 PPA. */
 static size_t build_video_av_channel(uint8_t *out, size_t cap)
 {
     /* Inner VideoConfig submessage. */
     uint8_t vcfg[32];
     size_t  vp = 0;
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 1);  /* VIDEO_RESOLUTION_800x480 */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);  /* VIDEO_FPS_30 */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, 0);  /* margin_width */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, 0);  /* margin_height */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 5, 140); /* dpi */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 2);   /* resolution = 1280x720 */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);   /* fps = 30 */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, 0);   /* margin_width */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, 0);   /* margin_height */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 5, 160); /* dpi — typical 720p car */
 
     size_t pos = 0;
     pb_w_uint32(out, cap, &pos, 1, 3);           /* stream_type = VIDEO */
@@ -342,6 +361,16 @@ static esp_err_t build_sd_response(uint8_t *out, size_t cap, size_t *out_len)
         pb_w_submsg(p, cap, &pos, 1, cd, cdp);
     }
 
+    /* System audio (id=6) — beeps, system sounds. openauto advertises this
+     * via SystemAudioService; without it gearhead may treat the head unit
+     * as audio-incomplete and stall before MediaStartIndication. */
+    sl = build_audio_av_channel(scratch, sizeof(scratch), 2 /* SYSTEM */);
+    {
+        uint8_t cd[256];
+        size_t cdp = build_channel_descriptor(cd, sizeof(cd), 6, 3, scratch, sl);
+        pb_w_submsg(p, cap, &pos, 1, cd, cdp);
+    }
+
     /* Microphone — InputStreamChannel sits at field 5 of ChannelDescriptor.
      * Headunit-revived assigns id=7 to MIC; we follow the same numbering so
      * that gearhead's expected channel layout matches. */
@@ -485,8 +514,26 @@ static esp_err_t handle_channel_open(int sock, aa_tls_t *tls,
     uint8_t resp[4];
     size_t  rp = 0;
     pb_w_uint32(resp, sizeof(resp), &rp, 1, 0 /* STATUS_OK */);
-    return send_encrypted(sock, tls, reply_channel, AA_MSG_CHANNEL_OPEN_RESP,
-                          resp, rp, cipher_buf, cipher_cap);
+    esp_err_t err = send_encrypted(sock, tls, reply_channel, AA_MSG_CHANNEL_OPEN_RESP,
+                                   resp, rp, cipher_buf, cipher_cap);
+    if (err != ESP_OK) return err;
+
+    /* Sensor channel: emit DRIVING_STATUS=UNRESTRICTED immediately, mirroring
+     * headunit-revived's hu_handle_ChannelOpenRequest behaviour. Some gearhead
+     * versions read this *before* sending SensorStartRequest and will stall
+     * if it isn't already there. */
+    if ((int)reply_channel == 2 /* sensor */) {
+        uint8_t evt[8];
+        size_t  ep = 0;
+        uint8_t inner[4];
+        size_t  ip = 0;
+        pb_w_uint32(inner, sizeof(inner), &ip, 1, 0 /* UNRESTRICTED */);
+        pb_w_submsg(evt, sizeof(evt), &ep, 13 /* driving_status */, inner, ip);
+        ESP_LOGI(TAG, "SensorEvent ch=2 DRIVING_STATUS=UNRESTRICTED (post-open)");
+        err = send_encrypted(sock, tls, reply_channel, AA_MSG_SENSOR_EVENT,
+                             evt, ep, cipher_buf, cipher_cap);
+    }
+    return err;
 }
 
 static esp_err_t handle_ping(int sock, aa_tls_t *tls,
@@ -527,6 +574,194 @@ static esp_err_t send_channel_open_request(int sock, aa_tls_t *tls,
                           body, bp, cipher_buf, cipher_cap);
 }
 
+/* Map channel id → channel kind. Tied to the channel layout in build_sd_response:
+ *   1 = touch input, 2 = sensor, 3 = video AV, 4 = audio media AV,
+ *   5 = audio speech AV, 6 = audio system AV, 7 = mic input-stream. */
+typedef enum {
+    CH_KIND_UNKNOWN = 0,
+    CH_KIND_TOUCH,
+    CH_KIND_SENSOR,
+    CH_KIND_AV_VIDEO,
+    CH_KIND_AV_AUDIO,
+    CH_KIND_MIC,
+} ch_kind_t;
+
+static ch_kind_t channel_kind(aa_channel_id_t ch)
+{
+    switch ((int)ch) {
+    case 1: return CH_KIND_TOUCH;
+    case 2: return CH_KIND_SENSOR;
+    case 3: return CH_KIND_AV_VIDEO;
+    case 4: return CH_KIND_AV_AUDIO;
+    case 5: return CH_KIND_AV_AUDIO;
+    case 6: return CH_KIND_AV_AUDIO;
+    case 7: return CH_KIND_MIC;
+    default: return CH_KIND_UNKNOWN;
+    }
+}
+
+/* SensorStartRequest{ type, refresh_interval } → SensorStartResponse{ status=OK }
+ * followed by an initial SensorEvent for the requested sensor type.
+ *
+ * The follow-up event mirrors openauto's SensorService::onSensorStartRequest:
+ * gearhead won't start projection until it has seen a baseline DRIVING_STATUS
+ * (=UNRESTRICTED) and NIGHT_MODE (=false). Without these the connection sits
+ * idle on keepalive pings — exactly what we observed before this fix. */
+static esp_err_t handle_sensor_start(int sock, aa_tls_t *tls,
+                                     aa_channel_id_t ch,
+                                     const uint8_t *body, size_t body_len,
+                                     uint8_t *cipher_buf, size_t cipher_cap)
+{
+    size_t pos = 0;
+    pb_field_t f;
+    uint32_t type = 0;
+    uint64_t interval = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.wire == 0 && f.field == 1) type = (uint32_t)f.varint;
+        else if (f.wire == 0 && f.field == 2) interval = f.varint;
+    }
+    ESP_LOGI(TAG, "SensorStartRequest ch=%d type=%u interval=%llu",
+             ch, (unsigned)type, (unsigned long long)interval);
+
+    uint8_t resp[4];
+    size_t  rp = 0;
+    pb_w_uint32(resp, sizeof(resp), &rp, 1, 0 /* STATUS_OK */);
+    esp_err_t err = send_encrypted(sock, tls, ch, AA_MSG_SENSOR_START_RESP,
+                                   resp, rp, cipher_buf, cipher_cap);
+    if (err != ESP_OK) return err;
+
+    /* SensorEvent for the type just started. Field numbers come from
+     * hu.proto: driving_status=13, night_mode=10. */
+    uint8_t evt[16];
+    size_t  ep = 0;
+    if (type == 13 /* DRIVING_STATUS */) {
+        uint8_t inner[4];
+        size_t  ip = 0;
+        pb_w_uint32(inner, sizeof(inner), &ip, 1, 0 /* UNRESTRICTED */);
+        pb_w_submsg(evt, sizeof(evt), &ep, 13, inner, ip);
+    } else if (type == 10 /* NIGHT_DATA */) {
+        uint8_t inner[4];
+        size_t  ip = 0;
+        pb_w_bool(inner, sizeof(inner), &ip, 1, false);
+        pb_w_submsg(evt, sizeof(evt), &ep, 10, inner, ip);
+    } else if (type == 1 /* LOCATION */) {
+        /* Initial dummy LocationData. openauto skips this (relies on real
+         * GPS), but our gearhead seems to wait ~2s after SensorStart(type=1)
+         * before continuing — likely it expects at least one location fix.
+         * Send accuracy=10000 m to mark "approximate / no real GPS yet". */
+        uint8_t loc[16];
+        size_t  lp = 0;
+        pb_w_uint32(loc, sizeof(loc), &lp, 4, 10000); /* accuracy in mm? mm-deg? phone ignores rough fixes */
+        pb_w_submsg(evt, sizeof(evt), &ep, 1 /* location_data */, loc, lp);
+    } else {
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "SensorEvent ch=%d type=%u (initial)", ch, (unsigned)type);
+    return send_encrypted(sock, tls, ch, AA_MSG_SENSOR_EVENT,
+                          evt, ep, cipher_buf, cipher_cap);
+}
+
+/* BindingRequest{ scan_codes[] } → BindingResponse{ status=OK }. */
+static esp_err_t handle_input_binding(int sock, aa_tls_t *tls,
+                                      aa_channel_id_t ch,
+                                      const uint8_t *body, size_t body_len,
+                                      uint8_t *cipher_buf, size_t cipher_cap)
+{
+    /* scan_codes is `repeated int32` — wire type 0 (one varint per code) or
+     * wire type 2 if packed. Just count for the log. */
+    size_t pos = 0;
+    pb_field_t f;
+    int n_codes = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.field != 1) continue;
+        if (f.wire == 0) n_codes++;
+        else if (f.wire == 2) n_codes += (int)f.len; /* upper bound for packed */
+    }
+    ESP_LOGI(TAG, "BindingRequest ch=%d scan_codes~%d", ch, n_codes);
+
+    uint8_t resp[4];
+    size_t  rp = 0;
+    pb_w_uint32(resp, sizeof(resp), &rp, 1, 0 /* STATUS_OK */);
+    return send_encrypted(sock, tls, ch, AA_MSG_INPUT_BINDING_RESP,
+                          resp, rp, cipher_buf, cipher_cap);
+}
+
+/* MediaSetupRequest{ type } → MediaSetupResponse{ media_status=MEDIA_STATUS_2,
+ * max_unacked=1, configs=[0] }.
+ *
+ * `configs` selects which of our advertised configs the channel will use —
+ * we only have one (index 0) so that's what we ack. openauto's VideoService
+ * AND every AudioService both add_configs(0) unconditionally; without it
+ * gearhead waits and just keepalive-pings.
+ *
+ * For the video channel we also follow openauto's flow: immediately after
+ * the setup response, push VideoFocusIndication{FOCUSED, unrequested=false}
+ * so gearhead knows the head unit has the screen ready. Without this push
+ * gearhead never sends MediaStartIndication and projection never begins. */
+static esp_err_t handle_av_setup(int sock, aa_tls_t *tls,
+                                 aa_channel_id_t ch,
+                                 const uint8_t *body, size_t body_len,
+                                 uint8_t *cipher_buf, size_t cipher_cap)
+{
+    size_t pos = 0;
+    pb_field_t f;
+    uint32_t type = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.wire == 0 && f.field == 1) type = (uint32_t)f.varint;
+    }
+    ESP_LOGI(TAG, "MediaSetupRequest ch=%d type=%u", ch, (unsigned)type);
+
+    uint8_t resp[12];
+    size_t  rp = 0;
+    pb_w_uint32(resp, sizeof(resp), &rp, 1, 2 /* MEDIA_STATUS_2 */);
+    pb_w_uint32(resp, sizeof(resp), &rp, 2, 1 /* max_unacked */);
+    pb_w_uint32(resp, sizeof(resp), &rp, 3, 0 /* configs[0] = use config 0 */);
+    esp_err_t err = send_encrypted(sock, tls, ch, AA_MSG_AV_MEDIA_SETUP_RESP,
+                                   resp, rp, cipher_buf, cipher_cap);
+    if (err != ESP_OK) return err;
+
+    /* Audio media channel (ch=4): right after MediaSetupResponse, push an
+     * UNSOLICITED AudioFocusResponse{state=GAIN} on the control channel.
+     *
+     * Phone-side gearhead log evidence: after the initial AudioFocusRequest
+     * type=RELEASE → state=LOSS exchange, gearhead logs
+     *   "CAR.AUDIO.CHANNEL: disabling stream: MEDIA, had focus: false"
+     * and the projection stalls at PROJECTION_WINDOW_MANAGER_STARTING.
+     *
+     * Mazda/openauto get away without this because their AudioManager
+     * actually grants focus asynchronously and the AudioFocusHappened
+     * callback then sends the GAIN response. We have no real audio manager,
+     * so we emit it ourselves once the audio media channel is configured —
+     * at that point the head unit is "ready to play media". gearhead checks
+     * `unsolicitedResponse=true` and re-enables the MEDIA stream. */
+    if ((int)ch == 4 /* audio media */) {
+        uint8_t af[4];
+        size_t  ap = 0;
+        pb_w_uint32(af, sizeof(af), &ap, 1, 1 /* AUDIO_FOCUS_STATE_GAIN */);
+        ESP_LOGI(TAG, "AudioFocusResponse GAIN (unsolicited, post-media-setup)");
+        err = send_encrypted(sock, tls, AA_CHANNEL_CONTROL,
+                             AA_MSG_AUDIO_FOCUS_RESP,
+                             af, ap, cipher_buf, cipher_cap);
+        if (err != ESP_OK) return err;
+    }
+
+    /* Video channel: push VideoFocus{mode=FOCUSED, unrequested=true}.
+     * `unrequested=true` because the HU is initiating focus on its own,
+     * not in response to a phone-side VideoFocusRequest — matches
+     * Mazda/Desktop's MediaSetupComplete→VideoFocusHappened(HEADUNIT) path. */
+    if (channel_kind(ch) == CH_KIND_AV_VIDEO) {
+        uint8_t vf[8];
+        size_t  vp = 0;
+        pb_w_uint32(vf, sizeof(vf), &vp, 1, 1 /* VIDEO_FOCUS_MODE_FOCUSED */);
+        pb_w_bool  (vf, sizeof(vf), &vp, 2, true);
+        ESP_LOGI(TAG, "VideoFocus ch=%d FOCUSED unrequested=true (proactive)", ch);
+        err = send_encrypted(sock, tls, ch, AA_MSG_AV_VIDEO_FOCUS_IND,
+                             vf, vp, cipher_buf, cipher_cap);
+        if (err != ESP_OK) return err;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t handle_audio_focus(int sock, aa_tls_t *tls,
                                     const uint8_t *body, size_t body_len,
                                     uint8_t *cipher_buf, size_t cipher_cap)
@@ -540,13 +775,10 @@ static esp_err_t handle_audio_focus(int sock, aa_tls_t *tls,
         if (f.wire == 0 && f.field == 1) type = (uint32_t)f.varint;
     }
 
-    /* Mirror openauto's behaviour exactly:
-     *   AudioFocusType::RELEASE (4) → AudioFocusState::LOSS (3)
-     *   anything else               → AudioFocusState::GAIN (1)
-     *
-     * On-the-wire field name differs between aasdk (`audio_focus_state`)
-     * and modern hu.proto (`focus_type`), but both use field tag 1 / varint
-     * for a same-valued enum — wire-compatible. */
+    /* RELEASE(4) → LOSS(3), else → GAIN(1). Confirmed by experiment:
+     * answering GAIN to a RELEASE makes gearhead spam AudioFocusRequest at
+     * ~30 ms intervals because the response contradicts the request's intent.
+     * LOSS keeps the phone quiet — that's the wire-correct mapping. */
     uint32_t state = (type == 4) ? 3 /* LOSS */ : 1 /* GAIN */;
     ESP_LOGI(TAG, "AudioFocusRequest type=%u → state=%u", (unsigned)type, (unsigned)state);
 
@@ -645,8 +877,28 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             err = handle_channel_open(sock, tls, ch, body, body_len,
                                       cipher, CIPHER_BUF_SIZE);
         } else {
-            ESP_LOGW(TAG, "ch %d msg 0x%04x — not handled yet", ch, msg_id);
-            ESP_LOG_BUFFER_HEXDUMP(TAG, body, body_len > 32 ? 32 : body_len, ESP_LOG_DEBUG);
+            /* Per-channel setup messages. The 0x80xx tag namespace overlaps
+             * across channel kinds, so we dispatch on (kind, msg_id). */
+            ch_kind_t kind = channel_kind(ch);
+            bool handled = false;
+            if (kind == CH_KIND_SENSOR && msg_id == AA_MSG_SENSOR_START_REQ) {
+                err = handle_sensor_start(sock, tls, ch, body, body_len,
+                                          cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            } else if (kind == CH_KIND_TOUCH && msg_id == AA_MSG_INPUT_BINDING_REQ) {
+                err = handle_input_binding(sock, tls, ch, body, body_len,
+                                           cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            } else if ((kind == CH_KIND_AV_VIDEO || kind == CH_KIND_AV_AUDIO) &&
+                       msg_id == AA_MSG_AV_MEDIA_SETUP_REQ) {
+                err = handle_av_setup(sock, tls, ch, body, body_len,
+                                      cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            }
+            if (!handled) {
+                ESP_LOGW(TAG, "ch %d msg 0x%04x — not handled yet", ch, msg_id);
+                ESP_LOG_BUFFER_HEXDUMP(TAG, body, body_len > 32 ? 32 : body_len, ESP_LOG_DEBUG);
+            }
         }
 
         if (err != ESP_OK) {

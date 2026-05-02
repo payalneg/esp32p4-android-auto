@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "bt_link.h"
 #include "c6_ota.h"
 #include "config.h"
 #include "mdns_advertise.h"
@@ -65,6 +66,24 @@ void app_main(void)
 
     ESP_ERROR_CHECK(mdns_advertise_start());
     ESP_ERROR_CHECK(tcp_server_start(AA_TCP_PORT));
+
+    /* Hand off the AP credentials + our IP to the external D1 Mini ESP32
+     * BT agent over UART1 (P4 GPIO 21/22 ↔ D1 Mini GPIO 16/17). The agent
+     * uses these in the AA Wireless setup protocol so the phone joins our
+     * SoftAP and connects back to TCP at the IP/port below.
+     *
+     * AP mode only — STA bench builds skip this since the dev's existing
+     * laptop network already has its own credentials/topology. */
+    if (ap) {
+        bt_link_init();
+        esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        esp_netif_ip_info_t ap_ip = {0};
+        if (ap_netif) esp_netif_get_ip_info(ap_netif, &ap_ip);
+        char ip_str[16];
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ap_ip.ip));
+        bt_link_publish_wifi(ap->ssid, ap->password, ap->bssid_str,
+                             ip_str, AA_TCP_PORT);
+    }
 
     /* Compose a one-line status with our IP for the idle screen.
      * AP mode shows the SSID; STA mode shows the joined network IP. */

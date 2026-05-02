@@ -4,10 +4,17 @@ sdkconfig
 sdkconfig.old
 .DS_Store
 
-# tools/ are scratch ESP-IDF projects (slave fw build, OTA flasher).
-# Scaffolded with `idf.py create-project-from-example` — see CLAUDE.md
-# for how to regenerate them when slave fw needs a rebuild.
-tools/
+# Scratch ESP-IDF projects under tools/ that were scaffolded from upstream
+# IDF examples — see CLAUDE.md for how to regenerate them when slave fw
+# needs a rebuild. Listed individually because git can't re-include a path
+# whose parent has been ignored.
+tools/c6_slave_fw/
+tools/c6_ota_flasher/
+# tools/bt_agent IS our own code — committed below — but its build output
+# and generated sdkconfig are still scratch.
+tools/bt_agent/build/
+tools/bt_agent/sdkconfig
+tools/bt_agent/sdkconfig.old
 
 # research/_sources/ are clones of upstream reference repos
 # (aasdk, openauto, headunit, waveshare_p4_4_3, WirelessAndroidAutoDongle).
@@ -16,5 +23,7 @@ research/_sources/
 
 # Local bench WiFi creds — present only on dev machines.
 # When the file exists, wifi_manager forces STA mode and joins this network
-# instead of running its own SoftAP.
-main/bench_wifi.h
+# instead of running its own SoftAP. Also catches the `.disabled` rename we
+# use to temporarily flip back to AP mode without losing the creds.
+main/bench_wifi.h*
+logs/

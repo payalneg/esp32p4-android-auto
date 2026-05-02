@@ -12,6 +12,7 @@ idf_component_register(
         "aa_proto.c"
         "aa_service.c"
         "aa_x509_patch.c"
+        "bt_link.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -23,6 +24,7 @@ idf_component_register(
         lwip
         mdns
         mbedtls
+        driver
         c6_ota_partition
         esp32_p4_wifi6_touch_lcd_4_3
 )
