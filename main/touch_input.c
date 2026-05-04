@@ -18,9 +18,9 @@ static const char *TAG = "touch_input";
 #define POLL_INTERVAL_MS  20
 
 /* Coordinate mapping: panel native is 480×800 portrait. The video pipeline
- * (display_video.c, DISPLAY_CPU_YUV_FULL path) writes panel pixel (dx, dy)
- * from AA pixel (sx=dy, sy=479-dx). Inverting: panel touch (tx, ty) shows AA
- * pixel (ax=ty, ay=479-tx). AA frame is 800×480 landscape, which matches the
+ * (display_video.c BYPASS path) writes panel pixel (dx, dy) from AA pixel
+ * (sx=dy, sy=479-dx). Inverting: panel touch (tx, ty) shows AA pixel
+ * (ax=ty, ay=479-tx). AA frame is 800×480 landscape, which matches the
  * touch_screen_config we advertise in InputChannel (width=800, height=480). */
 #define PANEL_NATIVE_W  480
 #define PANEL_NATIVE_H  800
@@ -112,7 +112,13 @@ esp_err_t touch_input_start(touch_send_fn cb, void *ctx)
     atomic_store(&s_stop_requested, false);
     s_cb = cb;
     s_cb_ctx = ctx;
-    BaseType_t ok = xTaskCreate(poll_task, "touch_input", 4096, NULL, 5, &s_task);
+    /* Priority 10 puts us above the AAP recv-loop (prio 5 in tcp_server.c) so
+     * we preempt it during the synchronous video decode + CPU YUV→RGB565
+     * transpose (~30 ms / frame). At equal priority touch only got CPU in
+     * the small gaps between frames, which on 30 fps source surfaced as a
+     * very laggy on-screen tap response. The poll loop is mostly vTaskDelay
+     * so it doesn't actually starve the recv-loop. */
+    BaseType_t ok = xTaskCreate(poll_task, "touch_input", 4096, NULL, 10, &s_task);
     if (ok != pdPASS) {
         s_cb = NULL;
         s_cb_ctx = NULL;

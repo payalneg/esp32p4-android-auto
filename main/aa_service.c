@@ -70,15 +70,17 @@ static const char *TAG = "aa_svc";
  * the decoded frames to the 800x480 panel via the ESP32-P4 PPA. */
 static size_t build_video_av_channel(uint8_t *out, size_t cap)
 {
-    /* Inner VideoConfig submessage. Resolution enum from aasdk's
-     * VideoResolutionEnum.proto: 1=_480p (854×480), 2=_720p (1280×720),
-     * 3=_1080p. We pick 480p so the SW esp_h264 decoder on P4 can keep up
-     * (Espressif benchmark: 31 fps @ 640×480 single-core); PPA upscales
-     * the decoded frames to the 800×480 panel. */
+    /* Inner VideoConfig submessage. VideoResolutionEnum.proto:
+     *   NONE=0, _480p=1, _720p=2, _1080p=3
+     * gearhead resolves _480p to 800×480 (and NONE/unknown to the same
+     * default; see openauto ServiceFactory.cpp). So _480p is effectively
+     * the smallest AA video size — esp_h264 SW on P4 caps out ~20 fps at
+     * 800×480 and the phone shoots 30. With max_unacked=1 the synchronous
+     * decode-then-ack path naturally throttles the phone to our rate. */
     uint8_t vcfg[32];
     size_t  vp = 0;
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 1);   /* resolution = 854×480 (_480p) */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);   /* fps = 30 */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 1);   /* resolution = _480p (800×480) */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);   /* fps = _30 (NONE/0 didn't help — phone ignored) */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, 0);   /* margin_width */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, 0);   /* margin_height */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 5, 140); /* dpi — typical 480p car */
@@ -178,6 +180,11 @@ static size_t build_input_channel(uint8_t *out, size_t cap)
         pb_w_uint32(out, cap, &pos, 1, INPUT_KEYCODES[i]);
     }
 
+    /* AA video resolution is determined by VideoResolutionEnum, not these
+     * dims. The enum has no value below _480p which gearhead resolves to
+     * 800×480 (see openauto ServiceFactory.cpp). So setting smaller numbers
+     * here only confuses touch — the video will still arrive at 800×480.
+     * Match the AA video size so touch coords stay consistent. */
     uint8_t ts[16];
     size_t  tp = 0;
     pb_w_uint32(ts, sizeof(ts), &tp, 1, 800);
@@ -817,6 +824,29 @@ static esp_err_t send_av_media_ack(int sock, aa_tls_t *tls,
                           body, bp, cipher_buf, cipher_cap);
 }
 
+/* Cross-task ack path: h264_pipe's decoder_task calls back here after the
+ * frame is on screen. We can't share the recv-loop's `cipher` scratch (race
+ * with the loop's own send_encrypted calls), so the ack path owns its own
+ * tiny cipher buffer. AVMediaAckIndication is < 32 plaintext bytes. */
+#define AV_ACK_CIPHER_SIZE   128
+
+typedef struct {
+    int             sock;
+    aa_tls_t       *tls;
+    aa_channel_id_t ch;
+} av_ack_ctx_t;
+
+static av_ack_ctx_t s_av_ack_ctx;
+static uint8_t      s_av_ack_cipher[AV_ACK_CIPHER_SIZE];
+
+static esp_err_t av_ack_callback(void *ctx_v)
+{
+    av_ack_ctx_t *ctx = (av_ack_ctx_t *)ctx_v;
+    if (!ctx || !ctx->tls) return ESP_ERR_INVALID_STATE;
+    return send_av_media_ack(ctx->sock, ctx->tls, ctx->ch,
+                             s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
+}
+
 /* Per-second video-rate counter — tracks AV media bytes/frames coming from
  * the phone so we can sanity-check that 30 fps is actually flowing without
  * leaving per-frame logs on. Called from the AV media path after the ack.
@@ -1099,6 +1129,73 @@ static esp_err_t touch_send_event(uint64_t timestamp_us,
                           body, bp, ctx->cipher, TOUCH_CIPHER_SIZE);
 }
 
+/* ---------- Periodic IDR request ----------
+ *
+ * Empirically gearhead almost never emits a key frame on its own: in one
+ * 5-min capture we saw exactly one IDR at session start and the next only
+ * after the phone screen idled for 2 min and resumed. That makes our ring-
+ * overflow recovery (drop until next IDR) impractical — recovery would
+ * stall for minutes. The known-working trick from openauto-land is to push
+ * an unsolicited VideoFocusIndication{FOCUSED, unrequested=true}: phone
+ * treats it as "head unit wants a fresh paint" and emits a new IDR. We do
+ * this on a 1 s timer to give recovery a tight resync window and to keep
+ * the stream "self-correcting" even without explicit overflow handling. */
+#define IDR_REQ_PERIOD_US   (1000 * 1000)
+#define IDR_CIPHER_SIZE     128
+#define IDR_VIDEO_CHANNEL   3   /* matches build_sd_response — video = ch 3 */
+
+static int                s_idr_sock = -1;
+static aa_tls_t          *s_idr_tls;
+static esp_timer_handle_t s_idr_timer;
+static uint8_t            s_idr_cipher[IDR_CIPHER_SIZE];
+
+static void idr_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_idr_sock < 0 || !s_idr_tls) return;
+    uint8_t vf[8];
+    size_t  vp = 0;
+    pb_w_uint32(vf, sizeof(vf), &vp, 1, 1 /* FOCUSED */);
+    /* unrequested=false matches the initial post-setup VideoFocus we send
+     * from handle_av_setup which did get phone to emit an IDR. With
+     * unrequested=true the periodic timer was silently ignored. */
+    pb_w_bool  (vf, sizeof(vf), &vp, 2, false);
+    esp_err_t e = send_encrypted(s_idr_sock, s_idr_tls,
+                                 (aa_channel_id_t)IDR_VIDEO_CHANNEL,
+                                 AA_MSG_AV_VIDEO_FOCUS_IND,
+                                 vf, vp, s_idr_cipher, IDR_CIPHER_SIZE);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "idr_request: send failed: %s", esp_err_to_name(e));
+    }
+}
+
+static void idr_timer_start(int sock, aa_tls_t *tls)
+{
+    s_idr_sock = sock;
+    s_idr_tls  = tls;
+    if (!s_idr_timer) {
+        const esp_timer_create_args_t args = {
+            .callback = idr_timer_cb,
+            .name = "aa_idr_req",
+        };
+        if (esp_timer_create(&args, &s_idr_timer) != ESP_OK) {
+            ESP_LOGW(TAG, "idr_request: timer create failed");
+            s_idr_timer = NULL;
+            return;
+        }
+    }
+    esp_timer_start_periodic(s_idr_timer, IDR_REQ_PERIOD_US);
+    ESP_LOGI(TAG, "idr_request: timer armed @ %u ms",
+             (unsigned)(IDR_REQ_PERIOD_US / 1000));
+}
+
+static void idr_timer_stop(void)
+{
+    if (s_idr_timer) esp_timer_stop(s_idr_timer);
+    s_idr_sock = -1;
+    s_idr_tls  = NULL;
+}
+
 /* ---------- Main loop ---------- */
 
 /* Send a PingRequest with current timestamp on the control channel. Used
@@ -1135,6 +1232,10 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
     if (touch_input_start(touch_send_event, &touch_ctx) != ESP_OK) {
         ESP_LOGW(TAG, "touch_input_start failed — input channel will be silent");
     }
+
+    /* idr_timer_start(sock, tls);  -- VideoFocusIndication doesn't trigger
+     * IDR on this phone (tested both unrequested=true and =false). Disabled
+     * until we find a different forced-keyframe path. */
 
     while (true) {
         aa_channel_id_t ch;
@@ -1215,12 +1316,17 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             } else if ((kind == CH_KIND_AV_VIDEO || kind == CH_KIND_AV_AUDIO) &&
                        (msg_id == AA_MSG_AV_MEDIA_DATA_TS ||
                         msg_id == AA_MSG_AV_MEDIA_DATA)) {
-                /* Ack first to keep the flow open, then push to the decoder
-                 * pipe. AVMediaWithTimestampIndication has an 8-byte big-
-                 * endian timestamp prefix before the H.264 NAL payload —
-                 * skip it. AVMediaIndication (no timestamp) feeds the bytes
-                 * directly; this is typically codec config (SPS/PPS). */
-                err = send_av_media_ack(sock, tls, ch, cipher, CIPHER_BUF_SIZE);
+                /* Hand the NAL bytes off to the async decoder pipe and move
+                 * on. The decoder task fires our ack callback after the
+                 * frame is on screen — that gates the next phone frame via
+                 * max_unacked=1. Critically: this recv path NEVER blocks on
+                 * decode/display, so TCP keeps draining and we don't hit
+                 * FRAMER_WRITER_STALL on the phone side.
+                 *
+                 * AVMediaWithTimestampIndication has an 8-byte big-endian
+                 * timestamp prefix before the H.264 NAL payload — skip it.
+                 * AVMediaIndication (no timestamp) feeds the bytes directly;
+                 * this is typically codec config (SPS/PPS). */
                 if (kind == CH_KIND_AV_VIDEO) {
                     video_stats_tick(body_len);
                     const uint8_t *nal = body;
@@ -1229,7 +1335,15 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
                         nal     = body + 8;
                         nal_len = body_len - 8;
                     }
-                    h264_pipe_push(nal, nal_len);
+                    s_av_ack_ctx.sock = sock;
+                    s_av_ack_ctx.tls  = tls;
+                    s_av_ack_ctx.ch   = ch;
+                    h264_pipe_push(nal, nal_len, av_ack_callback, &s_av_ack_ctx);
+                } else {
+                    /* Audio path stays synchronous for now — we don't have
+                     * an audio sink yet and the AV ack still has to fire so
+                     * the phone keeps streaming. */
+                    err = send_av_media_ack(sock, tls, ch, cipher, CIPHER_BUF_SIZE);
                 }
                 handled = true;
             }
@@ -1245,6 +1359,7 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
         }
     }
 
+    idr_timer_stop();
     touch_input_stop();
     recv_partial_reset();
     free(cipher); free(plain); free(scratch); free(tx_cipher);
