@@ -49,4 +49,15 @@ menu "Android Auto Head Unit"
         depends on AA_WIFI_ROLE_STA
         default 10
 
+    config AA_OVERCLOCK_400
+        bool "Overclock CPU to 400 MHz (unsupported on rev <3.0)"
+        default n
+        help
+            ESP32-P4 silicon ≤ rev 1.x is officially capped at 360 MHz in
+            ESP-IDF. The CPLL is physically capable of 400 MHz on most
+            engineering samples but Espressif provides no guarantees.
+            With this option enabled, app_main reprograms CPLL to 400 MHz
+            and switches CPU divider to 1 right after NVS init.
+            Disable this if the chip becomes unstable or refuses to boot.
+
 endmenu

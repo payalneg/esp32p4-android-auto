@@ -16,12 +16,15 @@ idf_component_register(
         "h264_pipe.c"
         "display_video.c"
         "touch_input.c"
+        "aa_overclock.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
         esp_event
         esp_netif
         esp_wifi
+        esp_hw_support
+        hal
         esp_hosted
         esp_timer
         esp_ringbuf

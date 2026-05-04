@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "aa_overclock.h"
 #include "bt_link.h"
 #include "c6_ota.h"
 #include "config.h"
@@ -34,6 +35,10 @@ void app_main(void)
     ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, mode=%d", CONNECTION_MODE);
 
     init_nvs();
+
+    /* Bump CPU to 400 MHz before any peripheral / WiFi init so APB ratio
+     * stays consistent. No-op unless CONFIG_AA_OVERCLOCK_400 is set. */
+    aa_overclock_400mhz_apply();
 
     if (ota_screen_init() != ESP_OK) {
         ESP_LOGW(TAG, "display unavailable — OTA progress will be log-only");
