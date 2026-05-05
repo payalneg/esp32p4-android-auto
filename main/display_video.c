@@ -19,6 +19,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ota_screen.h"
+#include "ui_mode.h"
 
 static const char *TAG = "display_video";
 
@@ -115,6 +116,15 @@ esp_err_t display_video_init(void)
     return ESP_OK;
 }
 
+void display_video_yield_panel(void)
+{
+    if (s_adapter_paused) {
+        esp_lv_adapter_resume();
+        s_adapter_paused = false;
+        ESP_LOGI(TAG, "yielded panel to LVGL");
+    }
+}
+
 /* When non-zero, skip PPA and instead fill s_fb[0] with a hard-coded
  * R/G/B horizontal-band pattern in panel-native (480 wide × 800 tall)
  * so we can isolate display-path bugs from PPA bugs. Verified the
@@ -162,10 +172,24 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
     if (!s_panel || !s_ppa || !s_disp) return ESP_ERR_INVALID_STATE;
     if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
 
-    /* On first frame: pause the LVGL worker entirely so it stops fighting
-     * us for the panel, install an on_refresh_done semaphore so we can
-     * gate consecutive draw_bitmap calls on completion (mirrors the
-     * sample-10 mp4_player pipeline), and create the sync sem. */
+    /* VESC dashboard owns the panel via LVGL — drop the frame and resume
+     * the LVGL worker if we'd previously paused it. The H.264 decoder keeps
+     * running (cheap to drop, expensive to tear down/restart), so frames
+     * are silently discarded until the user toggles back to AA. */
+    if (ui_mode_get() == UI_MODE_VESC) {
+        if (s_adapter_paused) {
+            esp_lv_adapter_resume();
+            s_adapter_paused = false;
+            ESP_LOGI(TAG, "VESC mode — resumed LVGL worker, frames dropped");
+        }
+        return ESP_OK;
+    }
+
+    /* On first frame (or after returning from VESC): pause the LVGL worker
+     * entirely so it stops fighting us for the panel, install an
+     * on_refresh_done semaphore so we can gate consecutive draw_bitmap
+     * calls on completion (mirrors the sample-10 mp4_player pipeline), and
+     * create the sync sem. */
     if (!s_adapter_paused) {
         if (!s_refresh_sem) {
             s_refresh_sem = xSemaphoreCreateBinary();

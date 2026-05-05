@@ -27,3 +27,10 @@ esp_err_t display_video_init(void);
  * duration of the blit. */
 esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                                     uint16_t src_w, uint16_t src_h);
+
+/* Yield the panel back to LVGL — resumes the adapter worker if we'd
+ * paused it on the first video frame. Called from ui_mode_set when
+ * switching to the VESC dashboard so the user doesn't have to wait for
+ * the next decoded frame to trigger the resume. No-op if the adapter
+ * isn't paused. */
+void display_video_yield_panel(void);
