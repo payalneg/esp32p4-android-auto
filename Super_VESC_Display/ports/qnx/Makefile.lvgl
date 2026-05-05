@@ -1,0 +1,68 @@
+ARTIFACT = liblvgl.so
+
+#Build architecture/variant string, possible values: x86, armv7le, etc...
+PLATFORM ?= aarch64le
+
+#Build profile, possible values: release, debug, profile, coverage
+BUILD_PROFILE ?= release
+
+CONFIG_NAME ?= $(PLATFORM)-$(BUILD_PROFILE)
+OUTPUT_DIR = build/$(CONFIG_NAME)
+TARGET = $(OUTPUT_DIR)/$(ARTIFACT)
+
+#Compiler definitions
+
+CC = qcc -Vgcc_nto$(PLATFORM)
+CXX = q++ -Vgcc_nto$(PLATFORM)_cxx
+LD = $(CC)
+
+#Compiler flags for build profiles
+CCFLAGS_release += -O2
+CCFLAGS_debug += -g -O0 -fno-builtin
+CCFLAGS_coverage += -g -O0 -ftest-coverage -fprofile-arcs -nopipe -Wc,-auxbase-strip,$@
+LDFLAGS_coverage += -ftest-coverage -fprofile-arcs
+CCFLAGS_profile += -g -O0 -finstrument-functions
+LIBS_profile += -lprofilingS
+
+#Generic compiler flags (which include build type flags)
+CCFLAGS_all += -Wall -fmessage-length=0 -DLV_CONF_INCLUDE_SIMPLE
+CCFLAGS_all += $(CCFLAGS_$(BUILD_PROFILE))
+#Shared library has to be compiled with -fPIC
+CCFLAGS_all += -fPIC
+LDFLAGS_all += $(LDFLAGS_$(BUILD_PROFILE))
+LIBS_all += $(LIBS_$(BUILD_PROFILE))
+DEPS = -Wp,-MMD,$(@:%.o=%.d),-MT,$@
+
+LVGL_DIR_NAME ?= lvgl
+LVGL_DIR ?= ${shell pwd}
+
+include $(LVGL_DIR)/$(LVGL_DIR_NAME)/lvgl.mk
+
+#Include path for lvgl
+INCLUDES += -I$(LVGL_DIR)/$(LVGL_DIR_NAME)
+#Include path for lvgl
+INCLUDES += -I$(LVGL_DIR)/$(LVGL_DIR_NAME)/src
+
+#Object files list
+OBJS = $(addprefix $(OUTPUT_DIR)/lvgl/,$(addsuffix .o, $(basename $(CSRCS))))
+
+#Compiling rule
+$(OUTPUT_DIR)/lvgl/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) -c $(DEPS) -o $@ $(INCLUDES) $(CCFLAGS_all) $(CCFLAGS) $<
+
+#Linking rule
+$(TARGET):$(OBJS)
+	$(LD) -shared -o $(TARGET) $(LDFLAGS_all) $(LDFLAGS) $(OBJS) $(LIBS_all) $(LIBS)
+
+#Rules section for default compilation and linking
+all: $(TARGET)
+
+clean:
+	rm -fr $(OUTPUT_DIR)
+
+rebuild: clean all
+
+#Inclusion of dependencies (object files to source and includes)
+-include $(OBJS:%.o=%.d)
+
