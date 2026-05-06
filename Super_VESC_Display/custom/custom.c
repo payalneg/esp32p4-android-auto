@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "lvgl.h"
 #include "custom.h"
 #include "settings_wrapper.h"
@@ -94,10 +95,118 @@ static lv_obj_t *settings_limits_status_label = NULL;
  * Create a demo application
  */
 
+/* ============ Cockpit bars ============================================ */
+/* Repaints segments of a vertical bar (battery / power).
+ * segs[0] is the topmost segment, segs[count-1] is the bottommost;
+ * fill goes from bottom to top. `filled` is the number of lit segments. */
+#define COCKPIT_BG_2     lv_color_hex(0x161B1E)
+#define COCKPIT_ACCENT   lv_color_hex(0xB6FF2E)
+#define COCKPIT_WARN     lv_color_hex(0xFFB02E)
+#define COCKPIT_DANGER   lv_color_hex(0xFF3B30)
+#define COCKPIT_REGEN    lv_color_hex(0x2EB6FF)  /* cyan, regen / negative power */
+
+static lv_color_t cockpit_battery_color(int pct)
+{
+    if (pct > 50) return COCKPIT_ACCENT;
+    if (pct > 20) return COCKPIT_WARN;
+    return COCKPIT_DANGER;
+}
+
+static void cockpit_paint_v_bar(lv_obj_t **segs, int count, int filled, lv_color_t color)
+{
+    if (filled < 0) filled = 0;
+    if (filled > count) filled = count;
+    for (int i = 0; i < count; i++) {
+        bool on = (count - 1 - i) < filled;
+        lv_obj_set_style_bg_color(segs[i], on ? color : COCKPIT_BG_2, LV_PART_MAIN);
+    }
+}
+
+static void cockpit_paint_battery_bar(int pct)
+{
+    lv_obj_t *segs[14] = {
+        guider_ui.dashboard_batt_seg_00, guider_ui.dashboard_batt_seg_01,
+        guider_ui.dashboard_batt_seg_02, guider_ui.dashboard_batt_seg_03,
+        guider_ui.dashboard_batt_seg_04, guider_ui.dashboard_batt_seg_05,
+        guider_ui.dashboard_batt_seg_06, guider_ui.dashboard_batt_seg_07,
+        guider_ui.dashboard_batt_seg_08, guider_ui.dashboard_batt_seg_09,
+        guider_ui.dashboard_batt_seg_10, guider_ui.dashboard_batt_seg_11,
+        guider_ui.dashboard_batt_seg_12, guider_ui.dashboard_batt_seg_13,
+    };
+    int filled = (pct * 14 + 50) / 100;
+    cockpit_paint_v_bar(segs, 14, filled, cockpit_battery_color(pct));
+}
+
+static void cockpit_paint_power_bar(float power_kw, float power_max_kw)
+{
+    lv_obj_t *segs[14] = {
+        guider_ui.dashboard_power_seg_00, guider_ui.dashboard_power_seg_01,
+        guider_ui.dashboard_power_seg_02, guider_ui.dashboard_power_seg_03,
+        guider_ui.dashboard_power_seg_04, guider_ui.dashboard_power_seg_05,
+        guider_ui.dashboard_power_seg_06, guider_ui.dashboard_power_seg_07,
+        guider_ui.dashboard_power_seg_08, guider_ui.dashboard_power_seg_09,
+        guider_ui.dashboard_power_seg_10, guider_ui.dashboard_power_seg_11,
+        guider_ui.dashboard_power_seg_12, guider_ui.dashboard_power_seg_13,
+    };
+    if (power_max_kw <= 0.0f) power_max_kw = 4.5f;
+    /* Use the absolute value to size the fill, and pick the colour by sign:
+     * positive power (drive) → accent green, negative (regen) → cyan. */
+    float ratio = fabsf(power_kw) / power_max_kw;
+    if (ratio > 1.0f) ratio = 1.0f;
+    int filled = (int)(ratio * 14.0f + 0.5f);
+    lv_color_t color = (power_kw < 0.0f) ? COCKPIT_REGEN : COCKPIT_ACCENT;
+    cockpit_paint_v_bar(segs, 14, filled, color);
+}
+
+/* Speed bar is horizontal, filled left to right. */
+static void cockpit_paint_speed_bar(int speed_kmh, int speed_max_kmh)
+{
+    lv_obj_t *segs[12] = {
+        guider_ui.dashboard_speed_seg_00, guider_ui.dashboard_speed_seg_01,
+        guider_ui.dashboard_speed_seg_02, guider_ui.dashboard_speed_seg_03,
+        guider_ui.dashboard_speed_seg_04, guider_ui.dashboard_speed_seg_05,
+        guider_ui.dashboard_speed_seg_06, guider_ui.dashboard_speed_seg_07,
+        guider_ui.dashboard_speed_seg_08, guider_ui.dashboard_speed_seg_09,
+        guider_ui.dashboard_speed_seg_10, guider_ui.dashboard_speed_seg_11,
+    };
+    if (speed_max_kmh <= 0) speed_max_kmh = 60;
+    int filled = (speed_kmh * 12 + speed_max_kmh / 2) / speed_max_kmh;
+    if (filled < 0) filled = 0;
+    if (filled > 12) filled = 12;
+    for (int i = 0; i < 12; i++) {
+        bool on = i < filled;
+        lv_obj_set_style_bg_color(segs[i], on ? COCKPIT_ACCENT : COCKPIT_BG_2, LV_PART_MAIN);
+    }
+}
+
+/* Current power_kW is current * voltage / 1000.
+ * update_current() and update_battery_voltage() cache the latest values and
+ * call this helper to refresh the Power panel digit and bar. */
+static float s_cockpit_last_current_a = 0.0f;
+static float s_cockpit_last_voltage_v = 0.0f;
+static const float COCKPIT_POWER_MAX_KW = 4.5f;
+
+static void cockpit_update_power(void)
+{
+    float power_kw = s_cockpit_last_current_a * s_cockpit_last_voltage_v / 1000.0f;
+    if (guider_ui.dashboard_power_value) {
+        char text[16];
+        snprintf(text, sizeof(text), "%.1f", power_kw);
+        lv_textarea_set_text(guider_ui.dashboard_power_value, text);
+        /* Match the digit colour to the bar — cyan during regen. */
+        lv_obj_set_style_text_color(
+            guider_ui.dashboard_power_value,
+            (power_kw < 0.0f) ? COCKPIT_REGEN : COCKPIT_ACCENT,
+            LV_PART_MAIN);
+    }
+    cockpit_paint_power_bar(power_kw, COCKPIT_POWER_MAX_KW);
+}
+/* ====================================================================== */
+
 /* set the digital label and steering lamp image style. */
 static void set_position_x(void * gui, int32_t temp)
 {
-    
+
 }
 
 static void set_position_y(void * gui, int32_t temp)
@@ -109,28 +218,107 @@ void custom_init(lv_ui *ui)
 {
     /* Add your codes here */
     
-    // Initialize BLE icon as hidden (will be shown when BLE connects)
-    if (ui->dashboard_ble_connected_img != NULL) {
-        lv_obj_add_flag(ui->dashboard_ble_connected_img, LV_OBJ_FLAG_HIDDEN);
-    }
-    
+    // BLE status is shown via dashboard_status_bt text — the
+    // ble_connected_img icon has been removed from the project.
+
     // Initialize ESC not connected text as hidden (will be shown and blink if ESC disconnects)
     if (ui->dashboard_esc_not_connected_text != NULL) {
         lv_obj_add_flag(ui->dashboard_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Initialize cruise-active label as hidden (will be shown when cruise-active is true)
+    // Initialize cruise-active widgets as hidden (shown when CC engages).
     if (ui->dashboard_cruise_control_img != NULL) {
         lv_obj_add_flag(ui->dashboard_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
     }
+    if (ui->dashboard_Speed_cc_text != NULL) {
+        lv_obj_add_flag(ui->dashboard_Speed_cc_text, LV_OBJ_FLAG_HIDDEN);
+    }
 
     // Initialize cruise-rpm label as hidden (will be shown when cruise-rpm is true)
-    if (ui->dashboard_Speed_meter_scale_1_ndline_0 != NULL) {
-        lv_meter_set_indicator_value(ui->dashboard_Speed_meter, ui->dashboard_Speed_meter_scale_1_ndline_0, -1);
-        lv_meter_set_indicator_value(ui->dashboard_Speed_meter, ui->dashboard_Speed_meter_scale_2_ndline_0, -1);  
-    }
-    
+    // Cockpit: Speed_meter removed — cruise/RPM needles are no longer needed.
+    // if (ui->dashboard_Speed_meter_scale_1_ndline_0 != NULL) {
+    //     lv_meter_set_indicator_value(ui->dashboard_Speed_meter, ui->dashboard_Speed_meter_scale_1_ndline_0, -1);
+    //     lv_meter_set_indicator_value(ui->dashboard_Speed_meter, ui->dashboard_Speed_meter_scale_2_ndline_0, -1);
+    // }
+
+#ifndef LV_REALDEVICE
+    /* Simulator: feed live-looking VESC data through the same update_*
+     * setters the firmware uses, so the Cockpit reacts identically to a
+     * real run. On hardware (LV_REALDEVICE) data comes from CAN/UART and
+     * the demo is not compiled. */
+    extern void cockpit_demo_tick(lv_timer_t * t);
+    lv_timer_create(cockpit_demo_tick, 250 /* ms */, NULL);
+#endif
 }
+
+#ifndef LV_REALDEVICE
+/* 4 Hz tick (~250 ms). sinf() drives smooth value sweeps; every change goes
+ * through update_speed() and friends, the same path used on real hardware. */
+void cockpit_demo_tick(lv_timer_t * t)
+{
+    (void)t;
+    static uint32_t tick = 0;
+    tick++;
+    float ts = tick * 0.25f;  /* seconds */
+
+    /* Speed: smooth sweep 0..60 km/h (full cycle ~30 s). */
+    float speed = (sinf(ts * 0.21f) * 0.5f + 0.5f) * 60.0f;
+    update_speed(speed);
+
+    /* Battery: slow discharge 100..0 (full cycle ~5 min), then loops. */
+    int batt = 100 - ((int)(tick / 6)) % 101;
+    update_battery_proc((float)batt);
+
+    /* Voltage swings around 52 V depending on current load. */
+    float current = sinf(ts * 0.5f) * 30.0f;          /* -30..+30 A   */
+    float voltage = 52.0f - current * 0.05f;           /* sag/recovery */
+    update_battery_voltage(voltage);
+    update_current(current);
+    /* power_kW is refreshed automatically by cockpit_update_power(),
+     * called from update_battery_voltage/update_current.
+     * P = U * I / 1000. */
+
+    /* Temperatures: 35..70 °C motor, 30..60 °C controller. */
+    update_temp_motor(50.0f + sinf(ts * 0.13f) * 18.0f);
+    update_temp_fet  (45.0f + sinf(ts * 0.17f) * 15.0f);
+
+    /* Trip and odo grow monotonically. */
+    static float trip_km = 0.0f;
+    trip_km += 0.01f;
+    update_trip(trip_km);
+    update_odometer(4128.0f + trip_km);
+
+    /* Amp-hours = integral of |I| over time (Ah = A·h). 250 ms = 1/14400 h. */
+    static float ah_consumed = 0.0f;
+    ah_consumed += fabsf(current) * (0.25f / 3600.0f);
+    update_amp_hours(ah_consumed);
+
+    /* Range estimate ~ (batt% * 0.6) km. */
+    update_range((float)batt * 0.6f);
+
+    /* Uptime. */
+    update_uptime(tick * 250U);
+
+    /* Mode flips every ~30 s. */
+    update_mode_text((tick / 120) % 3);
+
+    /* BLE toggles every ~10 s to exercise status_bt. */
+    update_ble_status((tick / 40) % 2);
+
+    /* ESC link: 20 s connected, 5 s disconnected (25 s cycle). When
+     * disconnected, esc_not_connected_text appears and (per existing logic)
+     * starts blinking. */
+    update_esc_connection_status((tick % 100) < 80);
+
+    /* Cruise control: 15 s engaged, 15 s idle. When engaged, target speed
+     * follows a slow sine around 45 km/h. */
+    bool cc_on = (tick / 60) % 2;
+    update_cruise_control_status(cc_on);
+    if (cc_on) {
+        update_cruise_speed(45.0f + sinf(ts * 0.3f) * 5.0f);
+    }
+}
+#endif
 
 void speed_meter_timer_cb(lv_timer_t * t)
 {
@@ -179,23 +367,24 @@ void update_current(float current)
     old_value = current;
     
     int value = current;
-    int abs_value = abs(value);
-    
-    lv_meter_set_indicator_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_ndline_0, abs_value);
-    
-    if (value>0)
-    {
-        lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_1, abs_value);
-        lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_2, 0);
-    }
-    else
-    {
-        lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_1, 0);
-        lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_2, abs_value);
-    }
+    /* Cockpit: Current_meter removed, needle/arcs no longer needed. */
+    // int abs_value = abs(value);
+    // lv_meter_set_indicator_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_ndline_0, abs_value);
+    // if (value>0) {
+    //     lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_1, abs_value);
+    //     lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_2, 0);
+    // } else {
+    //     lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_1, 0);
+    //     lv_meter_set_indicator_end_value(guider_ui.dashboard_Current_meter, guider_ui.dashboard_Current_meter_scale_0_arc_2, abs_value);
+    // }
+    (void)value;
     char text[10];
-    sprintf(text,"%.1f", current);
+    sprintf(text,"%.1f A", current);
     lv_textarea_set_text(guider_ui.dashboard_Current_text,text);
+
+    /* Cockpit: recompute power using cached voltage. */
+    s_cockpit_last_current_a = current;
+    cockpit_update_power();
 }
 
 void update_speed(float speed)
@@ -207,13 +396,16 @@ void update_speed(float speed)
     old_value = speed;
     
     int value = speed;
-    
-    lv_meter_set_indicator_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_ndline_0, value);
-    lv_meter_set_indicator_end_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_arc_0, value);
-    
+
+    /* Cockpit: Speed_meter removed — needle/arc no longer needed. */
+    // lv_meter_set_indicator_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_ndline_0, value);
+    // lv_meter_set_indicator_end_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_arc_0, value);
+
+    /* Cockpit: zero-padded 2-digit format (32, 05) and horizontal bar fill. */
     char text[10];
-    sprintf(text,"%d", value);
-    lv_textarea_set_text(guider_ui.dashboard_Speed_text,text);
+    sprintf(text, "%02d", value < 0 ? 0 : value);
+    lv_textarea_set_text(guider_ui.dashboard_Speed_text, text);
+    cockpit_paint_speed_bar(value, 60);
 }
 
 void update_cruise_speed(float speed)
@@ -229,10 +421,16 @@ void update_cruise_speed(float speed)
         return;
     }
     old_value = speed;
-    
+
     int value = speed;
-    
-    lv_meter_set_indicator_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_1_ndline_0, value);
+    /* Cockpit: write cruise target speed into Speed_cc_text. The widget is
+     * shown/hidden by update_cruise_control_status(); here we only update
+     * the value so it is ready when CC engages. */
+    if (guider_ui.dashboard_Speed_cc_text) {
+        char text[8];
+        snprintf(text, sizeof(text), "%d", value);
+        lv_textarea_set_text(guider_ui.dashboard_Speed_cc_text, text);
+    }
 }
 
 
@@ -245,14 +443,20 @@ void update_battery_proc(float battery_proc)
     old_value = battery_proc;
     
     int value = battery_proc;
-    
-    lv_meter_set_indicator_value(guider_ui.dashboard_Battery_meter, guider_ui.dashboard_Battery_meter_scale_0_ndline_0, 100-value);
-    lv_meter_set_indicator_start_value(guider_ui.dashboard_Battery_meter, guider_ui.dashboard_Battery_meter_scale_0_arc_1, 100-value);
-    
+
+    /* Cockpit: Battery_meter removed — arc/needle no longer used. */
+    // lv_meter_set_indicator_value(guider_ui.dashboard_Battery_meter, guider_ui.dashboard_Battery_meter_scale_0_ndline_0, 100-value);
+    // lv_meter_set_indicator_start_value(guider_ui.dashboard_Battery_meter, guider_ui.dashboard_Battery_meter_scale_0_arc_1, 100-value);
+
     int v_clamped = value > 99 ? 99 : (value < 0 ? 0 : value);
     char text[10];
     snprintf(text, sizeof(text), "%d", v_clamped);
     lv_textarea_set_text(guider_ui.dashboard_Battery_proc_text,text);
+
+    /* Cockpit: digit color + vertical bar fill per the 50/20 rule. */
+    lv_color_t bcol = cockpit_battery_color(v_clamped);
+    lv_obj_set_style_text_color(guider_ui.dashboard_Battery_proc_text, bcol, LV_PART_MAIN);
+    cockpit_paint_battery_bar(v_clamped);
 }
 
 void update_trip(float trip_distance)
@@ -317,9 +521,9 @@ void update_amp_hours(float amp_hours)
     }
     old_value = amp_hours;
     
-    char text[10];
-    sprintf(text,"%.1f", amp_hours);
-    lv_textarea_set_text(guider_ui.dashboard_Ah_text,text);
+    char text[16];
+    sprintf(text, "%.1f Ah", amp_hours);
+    lv_textarea_set_text(guider_ui.dashboard_Ah_text, text);
 }
 
 void update_battery_temp(float battery_temp)
@@ -331,10 +535,11 @@ void update_battery_temp(float battery_temp)
     old_value = battery_temp;
     
     int value = battery_temp;
-    char text[10];
-    sprintf(text,"%d", value);
-
-    lv_textarea_set_text(guider_ui.dashboard_temp_bat_text,text);
+    /* Cockpit: temp_bat_text removed — battery temperature is not displayed. */
+    (void)value;
+    // char text[10];
+    // sprintf(text,"%d", value);
+    // lv_textarea_set_text(guider_ui.dashboard_temp_bat_text, text);
 }
 
 void update_battery_voltage(float battery_voltage)
@@ -346,9 +551,13 @@ void update_battery_voltage(float battery_voltage)
     old_value = battery_voltage;
     
     char text[10];
-    sprintf(text,"%.1f", battery_voltage);
+    sprintf(text,"%.1f V", battery_voltage);
 
     lv_textarea_set_text(guider_ui.dashboard_Voltage_text,text);
+
+    /* Cockpit: recompute power using cached current. */
+    s_cockpit_last_voltage_v = battery_voltage;
+    cockpit_update_power();
 }
 
 
@@ -369,34 +578,8 @@ void update_odometer(float odometer)
 
 void update_fps(int fps)
 {
-    static int old_value = -999;
-    static int min_fps = 400;
-    
-    // Check if FPS should be shown
-    bool show_fps = settings_wrapper_get_show_fps();
-    
-    // Hide or show FPS text based on setting
-    if (guider_ui.dashboard_fps_text) {
-        if (show_fps) {
-            lv_obj_clear_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
-            return; // Don't update if hidden
-        }
-    }
-    
-    if (fps == old_value) {
-        return;
-    }
-    old_value = fps;
-    if (lv_tick_get() > 8000) {
-        if (fps < min_fps) {
-            min_fps = fps;
-        }
-    }
-    char text[20];
-    sprintf(text,"FPS:%d, Min:%d", fps, min_fps);
-    lv_textarea_set_text(guider_ui.dashboard_fps_text,text);
+    /* Cockpit: fps_text removed — FPS counter is not displayed anymore. */
+    (void)fps;
 }
 
 void update_uptime(uint32_t uptime)
@@ -434,11 +617,16 @@ void update_ble_status(bool connected)
     }
     old_state = connected;
     
-    // Show/hide BLE icon based on connection status
-    if (connected) {
-        lv_obj_clear_flag(guider_ui.dashboard_ble_connected_img, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(guider_ui.dashboard_ble_connected_img, LV_OBJ_FLAG_HIDDEN);
+    /* Cockpit: status bar "BT" text — accent when connected, dim when not. */
+    if (guider_ui.dashboard_status_bt) {
+        lv_obj_set_style_text_color(
+            guider_ui.dashboard_status_bt,
+            connected ? COCKPIT_ACCENT : lv_color_hex(0x4A5358) /* TEXT_FAINT */,
+            LV_PART_MAIN);
+        lv_obj_set_style_text_opa(
+            guider_ui.dashboard_status_bt,
+            connected ? LV_OPA_COVER : LV_OPA_50,
+            LV_PART_MAIN);
     }
 }
 
@@ -450,13 +638,18 @@ void update_cruise_control_status(bool active)
     }
     old_state = active;
     
-    // Show/hide BLE icon based on connection status
+    // Show/hide cruise icon and target-speed text together.
     if (active) {
-        lv_obj_clear_flag(guider_ui.dashboard_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
+        if (guider_ui.dashboard_cruise_control_img)
+            lv_obj_clear_flag(guider_ui.dashboard_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
+        if (guider_ui.dashboard_Speed_cc_text)
+            lv_obj_clear_flag(guider_ui.dashboard_Speed_cc_text, LV_OBJ_FLAG_HIDDEN);
         cruise_active = 1;
     } else {
-        lv_meter_set_indicator_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_1_ndline_0, -1);       
-        lv_obj_add_flag(guider_ui.dashboard_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
+        if (guider_ui.dashboard_cruise_control_img)
+            lv_obj_add_flag(guider_ui.dashboard_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
+        if (guider_ui.dashboard_Speed_cc_text)
+            lv_obj_add_flag(guider_ui.dashboard_Speed_cc_text, LV_OBJ_FLAG_HIDDEN);
         cruise_active = 0;
     }
 }
@@ -512,102 +705,21 @@ void update_esc_connection_status(bool connected)
 
 void update_navigation_icon(const uint8_t *img_data, uint32_t data_size, uint16_t width, uint16_t height, lv_img_cf_t color_format)
 {
-    static lv_img_dsc_t *navigation_icon_dsc = NULL;
-    
-    // Free previous image data if exists
-    if (navigation_icon_dsc != NULL) {
-        if (navigation_icon_dsc->data != NULL) {
-            free((void *)navigation_icon_dsc->data);
-        }
-        free(navigation_icon_dsc);
-        navigation_icon_dsc = NULL;
-    }
-    
-    // Check if valid data provided
-    if (img_data == NULL || data_size == 0 || width == 0 || height == 0) {
-        // Clear icon if no data provided
-        if (guider_ui.dashboard_navigation_icon != NULL) {
-            lv_img_set_src(guider_ui.dashboard_navigation_icon, NULL);
-        }
-        return;
-    }
-    
-    // Allocate memory for image descriptor
-    navigation_icon_dsc = (lv_img_dsc_t *)malloc(sizeof(lv_img_dsc_t));
-    if (navigation_icon_dsc == NULL) {
-        return; // Memory allocation failed
-    }
-    
-    // Allocate memory for image data
-    uint8_t *data_copy = (uint8_t *)malloc(data_size);
-    if (data_copy == NULL) {
-        free(navigation_icon_dsc);
-        navigation_icon_dsc = NULL;
-        return; // Memory allocation failed
-    }
-    
-    // Copy image data
-    memcpy(data_copy, img_data, data_size);
-    
-    // Fill image descriptor
-    navigation_icon_dsc->header.cf = color_format;
-    navigation_icon_dsc->header.always_zero = 0;
-    navigation_icon_dsc->header.reserved = 0;
-    navigation_icon_dsc->header.w = width;
-    navigation_icon_dsc->header.h = height;
-    navigation_icon_dsc->data_size = data_size;
-    navigation_icon_dsc->data = data_copy;
-    
-    // Update icon
-    if (guider_ui.dashboard_navigation_icon != NULL) {
-        lv_img_set_src(guider_ui.dashboard_navigation_icon, navigation_icon_dsc);
-    }
+    /* Cockpit: navigation_icon removed — there is nowhere to render the
+     * navigation icon, so buffer allocations would be pointless. */
+    (void)img_data; (void)data_size; (void)width; (void)height; (void)color_format;
 }
 
 void update_navigation_text(const char *text)
 {
-    static char old_text[65] = {0}; // Max length is 64 according to setup
-    
-    if (text == NULL) {
-        text = "";
-    }
-    
-    // Check if text changed
-    if (strcmp(text, old_text) == 0) {
-        return;
-    }
-    
-    // Copy new text
-    strncpy(old_text, text, sizeof(old_text) - 1);
-    old_text[sizeof(old_text) - 1] = '\0';
-    
-    // Update UI
-    if (guider_ui.dashboard_navigation_text != NULL) {
-        lv_textarea_set_text(guider_ui.dashboard_navigation_text, text);
-    }
+    /* Cockpit: navigation_text removed from the project. */
+    (void)text;
 }
 
 void update_music_text(const char *text)
 {
-    static char old_text[65] = {0}; // Max length is 64 according to setup
-    
-    if (text == NULL) {
-        text = "";
-    }
-    
-    // Check if text changed
-    if (strcmp(text, old_text) == 0) {
-        return;
-    }
-    
-    // Copy new text
-    strncpy(old_text, text, sizeof(old_text) - 1);
-    old_text[sizeof(old_text) - 1] = '\0';
-    
-    // Update UI
-    if (guider_ui.dashboard_music_text != NULL) {
-        lv_textarea_set_text(guider_ui.dashboard_music_text, text);
-    }
+    /* Cockpit: music_text removed from the project. */
+    (void)text;
 }
 
 // ============================================================================
@@ -954,14 +1066,15 @@ static void show_fps_switch_event_cb(lv_event_t *e) {
         bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
         settings_wrapper_set_show_fps(checked);
         
-        // Apply immediately - show/hide FPS text
-        if (guider_ui.dashboard_fps_text) {
-            if (checked) {
-                lv_obj_clear_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
+        /* Cockpit: fps_text removed — the settings toggle still persists
+         * its value, but the widget is no longer shown anywhere. */
+        // if (guider_ui.dashboard_fps_text) {
+        //     if (checked) {
+        //         lv_obj_clear_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
+        //     } else {
+        //         lv_obj_add_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
+        //     }
+        // }
     }
 }
 
@@ -1067,10 +1180,10 @@ static void reset_button_event_cb(lv_event_t *e) {
             lv_spinbox_set_value(settings_motor_poles_spinbox, 7); // Standard for VESC
         }
 
-        // Apply FPS visibility
-        if (guider_ui.dashboard_fps_text) {
-            lv_obj_clear_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
-        }
+        /* Cockpit: fps_text removed — nothing to toggle visibility on. */
+        // if (guider_ui.dashboard_fps_text) {
+        //     lv_obj_clear_flag(guider_ui.dashboard_fps_text, LV_OBJ_FLAG_HIDDEN);
+        // }
 
         // Update info
         lv_label_set_text(settings_info_label, "Settings reset to defaults!");

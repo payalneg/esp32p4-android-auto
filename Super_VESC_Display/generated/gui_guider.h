@@ -20,75 +20,94 @@ typedef struct
   
 	lv_obj_t *dashboard;
 	bool dashboard_del;
-	lv_obj_t *dashboard_tileview_1;
-	lv_obj_t *dashboard_tileview_1_tile;
-	lv_obj_t *dashboard_Battery_meter;
-	lv_meter_scale_t *dashboard_Battery_meter_scale_0;
-	lv_meter_indicator_t *dashboard_Battery_meter_scale_0_ndline_0;
-	lv_meter_indicator_t *dashboard_Battery_meter_scale_0_arc_0;
-	lv_meter_indicator_t *dashboard_Battery_meter_scale_0_arc_1;
-	lv_obj_t *dashboard_reset_trip_img;
-	lv_obj_t *dashboard_img_3;
-	lv_obj_t *dashboard_Current_meter;
-	lv_meter_scale_t *dashboard_Current_meter_scale_0;
-	lv_meter_indicator_t *dashboard_Current_meter_scale_0_ndline_0;
-	lv_meter_indicator_t *dashboard_Current_meter_scale_0_arc_0;
-	lv_meter_indicator_t *dashboard_Current_meter_scale_0_arc_1;
-	lv_meter_indicator_t *dashboard_Current_meter_scale_0_arc_2;
-	lv_obj_t *dashboard_Speed_meter;
-	lv_meter_scale_t *dashboard_Speed_meter_scale_0;
-	lv_meter_indicator_t *dashboard_Speed_meter_scale_0_ndline_0;
-	lv_meter_indicator_t *dashboard_Speed_meter_scale_0_arc_0;
-	lv_meter_scale_t *dashboard_Speed_meter_scale_1;
-	lv_meter_indicator_t *dashboard_Speed_meter_scale_1_ndline_0;
-	lv_meter_scale_t *dashboard_Speed_meter_scale_2;
-	lv_meter_indicator_t *dashboard_Speed_meter_scale_2_ndline_0;
-	lv_obj_t *dashboard_img_1;
-	lv_obj_t *dashboard_Speed_text;
-	lv_obj_t *dashboard_odo_text;
-	lv_obj_t *dashboard_ta_1;
-	lv_obj_t *dashboard_ta_2;
-	lv_obj_t *dashboard_Battery_proc_text;
-	lv_obj_t *dashboard_ta_4;
-	lv_obj_t *dashboard_TRIP_text;
-	lv_obj_t *dashboard_ta_5;
-	lv_obj_t *dashboard_Voltage_text;
-	lv_obj_t *dashboard_ta_6;
-	lv_obj_t *dashboard_ta_7;
-	lv_obj_t *dashboard_ta_8;
-	lv_obj_t *dashboard_ta_9;
-	lv_obj_t *dashboard_ta_10;
-	lv_obj_t *dashboard_Current_text;
-	lv_obj_t *dashboard_ta_14;
-	lv_obj_t *dashboard_Range_text;
-	lv_obj_t *dashboard_ta_12;
-	lv_obj_t *dashboard_Ah_text;
-	lv_obj_t *dashboard_Ah_const_text;
-	lv_obj_t *dashboard_ta_17;
-	lv_obj_t *dashboard_ta_18;
-	lv_obj_t *dashboard_ta_20;
-	lv_obj_t *dashboard_temp_mot_text;
-	lv_obj_t *dashboard_temp_esc_text;
-	lv_obj_t *dashboard_ta_22;
-	lv_obj_t *dashboard_ta_23;
-	lv_obj_t *dashboard_temp_bat_text;
-	lv_obj_t *dashboard_ta_25;
-	lv_obj_t *dashboard_ta_26;
-	lv_obj_t *dashboard_uptime_text;
-	lv_obj_t *dashboard_ble_connected_img;
-	lv_obj_t *dashboard_esc_not_connected_text;
-	lv_obj_t *dashboard_cruise_control_img;
+	lv_obj_t *dashboard_statusbar_sep;
+	lv_obj_t *dashboard_status_vesc;
 	lv_obj_t *dashboard_mode_text;
-	lv_obj_t *dashboard_slider_1;
-	lv_obj_t *dashboard_slider_2;
-	lv_obj_t *dashboard_slider_3;
-	lv_obj_t *dashboard_fps_text;
-	lv_obj_t *dashboard_settings_button;
-	lv_obj_t *dashboard_navigation_icon;
-	lv_obj_t *dashboard_navigation_text;
-	lv_obj_t *dashboard_music_text;
-	lv_obj_t *dashboard_img_4;
-	lv_obj_t *dashboard_symbols;
+	lv_obj_t *dashboard_uptime_text;
+	lv_obj_t *dashboard_status_bt;
+	lv_obj_t *dashboard_battery_sep;
+	lv_obj_t *dashboard_battery_label;
+	lv_obj_t *dashboard_Battery_proc_text;
+	lv_obj_t *dashboard_battery_pct;
+	lv_obj_t *dashboard_Voltage_text;
+	lv_obj_t *dashboard_batt_seg_00;
+	lv_obj_t *dashboard_batt_seg_01;
+	lv_obj_t *dashboard_batt_seg_02;
+	lv_obj_t *dashboard_batt_seg_03;
+	lv_obj_t *dashboard_batt_seg_04;
+	lv_obj_t *dashboard_batt_seg_05;
+	lv_obj_t *dashboard_batt_seg_06;
+	lv_obj_t *dashboard_batt_seg_07;
+	lv_obj_t *dashboard_batt_seg_08;
+	lv_obj_t *dashboard_batt_seg_09;
+	lv_obj_t *dashboard_batt_seg_10;
+	lv_obj_t *dashboard_batt_seg_11;
+	lv_obj_t *dashboard_batt_seg_12;
+	lv_obj_t *dashboard_batt_seg_13;
+	lv_obj_t *dashboard_battery_range_label;
+	lv_obj_t *dashboard_Range_text;
+	lv_obj_t *dashboard_speed_label;
+	lv_obj_t *dashboard_Speed_text;
+	lv_obj_t *dashboard_speed_seg_00;
+	lv_obj_t *dashboard_speed_seg_01;
+	lv_obj_t *dashboard_speed_seg_02;
+	lv_obj_t *dashboard_speed_seg_03;
+	lv_obj_t *dashboard_speed_seg_04;
+	lv_obj_t *dashboard_speed_seg_05;
+	lv_obj_t *dashboard_speed_seg_06;
+	lv_obj_t *dashboard_speed_seg_07;
+	lv_obj_t *dashboard_speed_seg_08;
+	lv_obj_t *dashboard_speed_seg_09;
+	lv_obj_t *dashboard_speed_seg_10;
+	lv_obj_t *dashboard_speed_seg_11;
+	lv_obj_t *dashboard_speed_min;
+	lv_obj_t *dashboard_speed_max;
+	lv_obj_t *dashboard_power_sep;
+	lv_obj_t *dashboard_power_label;
+	lv_obj_t *dashboard_power_value;
+	lv_obj_t *dashboard_power_unit;
+	lv_obj_t *dashboard_Current_text;
+	lv_obj_t *dashboard_power_seg_00;
+	lv_obj_t *dashboard_power_seg_01;
+	lv_obj_t *dashboard_power_seg_02;
+	lv_obj_t *dashboard_power_seg_03;
+	lv_obj_t *dashboard_power_seg_04;
+	lv_obj_t *dashboard_power_seg_05;
+	lv_obj_t *dashboard_power_seg_06;
+	lv_obj_t *dashboard_power_seg_07;
+	lv_obj_t *dashboard_power_seg_08;
+	lv_obj_t *dashboard_power_seg_09;
+	lv_obj_t *dashboard_power_seg_10;
+	lv_obj_t *dashboard_power_seg_11;
+	lv_obj_t *dashboard_power_seg_12;
+	lv_obj_t *dashboard_power_seg_13;
+	lv_obj_t *dashboard_power_max_label;
+	lv_obj_t *dashboard_power_max_val;
+	lv_obj_t *dashboard_bottom_bg;
+	lv_obj_t *dashboard_bottom_top_sep;
+	lv_obj_t *dashboard_bottom_col_sep_0;
+	lv_obj_t *dashboard_bottom_col_sep_1;
+	lv_obj_t *dashboard_bottom_col_sep_2;
+	lv_obj_t *dashboard_bottom_col_sep_3;
+	lv_obj_t *dashboard_col_trip_label;
+	lv_obj_t *dashboard_TRIP_text;
+	lv_obj_t *dashboard_col_trip_unit;
+	lv_obj_t *dashboard_col_odo_label;
+	lv_obj_t *dashboard_odo_text;
+	lv_obj_t *dashboard_col_odo_unit;
+	lv_obj_t *dashboard_col_mtmp_label;
+	lv_obj_t *dashboard_temp_mot_text;
+	lv_obj_t *dashboard_col_mtmp_unit;
+	lv_obj_t *dashboard_col_ctmp_label;
+	lv_obj_t *dashboard_temp_esc_text;
+	lv_obj_t *dashboard_col_ctmp_unit;
+	lv_obj_t *dashboard_col_avg_label;
+	lv_obj_t *dashboard_col_avg_value;
+	lv_obj_t *dashboard_col_avg_unit;
+	lv_obj_t *dashboard_cruise_control_img;
+	lv_obj_t *dashboard_esc_not_connected_text;
+	lv_obj_t *dashboard_Ah_text;
+	lv_obj_t *dashboard_Speed_cc_text;
 	lv_obj_t *settings;
 	bool settings_del;
 	lv_obj_t *settings_exit_button;
@@ -118,26 +137,20 @@ extern lv_ui guider_ui;
 
 void setup_scr_dashboard(lv_ui *ui);
 void setup_scr_settings(lv_ui *ui);
-
-LV_IMG_DECLARE(_grid_480_800x480);
-LV_IMG_DECLARE(_trip_alpha_20x24);
-LV_IMG_DECLARE(_battery_alpha_30x35);
-LV_IMG_DECLARE(_speed_background_alpha_162x162);
-LV_IMG_DECLARE(_ble_con_alpha_43x30);
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
-LV_IMG_DECLARE(_settings2_alpha_30x30);
 
-LV_FONT_DECLARE(lv_font_montserratMedium_13)
-LV_FONT_DECLARE(lv_font_Montserrat_I_61)
-LV_FONT_DECLARE(lv_font_Montserrat_I_16)
-LV_FONT_DECLARE(lv_font_Montserrat_I_18)
-LV_FONT_DECLARE(lv_font_Montserrat_I_20)
-LV_FONT_DECLARE(lv_font_Montserrat_I_26)
-LV_FONT_DECLARE(lv_font_Montserrat_I_15)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_22)
-LV_FONT_DECLARE(lv_font_Montserrat_I_24)
+LV_FONT_DECLARE(lv_font_montserratMedium_16)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
+LV_FONT_DECLARE(lv_font_montserratMedium_22)
+LV_FONT_DECLARE(lv_font_montserratMedium_18)
+LV_FONT_DECLARE(lv_font_montserratMedium_14)
 LV_FONT_DECLARE(lv_font_montserratMedium_12)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_220)
 LV_FONT_DECLARE(lv_font_montserratMedium_20)
+LV_FONT_DECLARE(lv_font_montserratMedium_11)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_32)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_22)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_50)
 LV_FONT_DECLARE(lv_font_montserratMedium_24)
 
 

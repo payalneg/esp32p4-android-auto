@@ -87,14 +87,25 @@ OBJS = $(AOBJS) $(COBJS)
 GEN_SRCS = $(GEN_ASRCS) $(GEN_CSRCS)
 GEN_OBJS = $(GEN_AOBJS) $(GEN_COBJS)
 
-.PHONY: all env clean default cp_lib clean_gen run
+.PHONY: all env clean default cp_lib clean_gen run regen_fonts
 ifeq ($(OS),Windows_NT)
-all: env default cp_lib
+all: env regen_fonts default cp_lib
 else
-all: env default
+all: env regen_fonts default
 endif
 # monitor header files
 -include $(DEPS)
+
+# Prepare GUI Guider artefacts for Cockpit:
+#  1) regen_cockpit_fonts.py - trim Antonio_Regular@{220,64,32} to the range
+#     we actually need (otherwise Antonio@220 is ~10MB and bitmap_index
+#     overflows the LVGL bitfield).
+#  2) patch_cockpit_dashboard.py - inject calls into setup_scr_dashboard.c
+#     that hide the blue textarea cursor and disable widget dragging.
+# Both scripts are idempotent.
+regen_fonts:
+	@python3 $(PRJ_DIR)/tools/regen_cockpit_fonts.py
+	@python3 $(PRJ_DIR)/tools/patch_cockpit_dashboard.py
 
 env:
 	$(call MKDIR_P,build/bin)

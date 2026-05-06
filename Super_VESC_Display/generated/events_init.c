@@ -31,96 +31,9 @@ static void dashboard_event_handler (lv_event_t *e)
     }
 }
 
-static void dashboard_reset_trip_img_event_handler (lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
-    case LV_EVENT_CLICKED:
-    {
-        reset_icon_pressed();
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-static void dashboard_slider_1_event_handler (lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
-    case LV_EVENT_VALUE_CHANGED:
-    {
-        {
-            int val;
-            val = (int)lv_slider_get_value(guider_ui.dashboard_slider_1);
-            update_current(val);
-        }
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-static void dashboard_slider_2_event_handler (lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
-    case LV_EVENT_VALUE_CHANGED:
-    {
-        {
-            int val;
-            val = (int)lv_slider_get_value(guider_ui.dashboard_slider_2);
-            update_speed(val);
-        }
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-static void dashboard_slider_3_event_handler (lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
-    case LV_EVENT_VALUE_CHANGED:
-    {
-        {
-            int val;
-            val = (int)lv_slider_get_value(guider_ui.dashboard_slider_3);
-            update_battery_proc(val);
-        }
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-static void dashboard_settings_button_event_handler (lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
-    case LV_EVENT_CLICKED:
-    {
-        ui_load_scr_animation(&guider_ui, &guider_ui.settings, guider_ui.settings_del, &guider_ui.dashboard_del, setup_scr_settings, LV_SCR_LOAD_ANIM_NONE, 200, 200, false, false);
-        break;
-    }
-    default:
-        break;
-    }
-}
-
 void events_init_dashboard (lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->dashboard, dashboard_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->dashboard_reset_trip_img, dashboard_reset_trip_img_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->dashboard_slider_1, dashboard_slider_1_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->dashboard_slider_2, dashboard_slider_2_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->dashboard_slider_3, dashboard_slider_3_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->dashboard_settings_button, dashboard_settings_button_event_handler, LV_EVENT_ALL, ui);
 }
 
 static void settings_event_handler (lv_event_t *e)
