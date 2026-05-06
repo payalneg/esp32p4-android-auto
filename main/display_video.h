@@ -11,10 +11,9 @@
  * video we run PPA's own scale+rotate so what reaches the panel is already
  * native-orientation RGB565.
  *
- * Init sequence: BSP must be up first (ota_screen_init or whatever else
- * called bsp_display_start*). Calling display_video_init() flips the LVGL
- * adapter into dummy-draw mode and disables the OTA-screen widgets so the
- * frame buffers we write are what's actually shown. */
+ * Init sequence: display_init() must run first to bring the panel up.
+ * Calling display_video_init() flips the LVGL adapter into dummy-draw
+ * mode so the frame buffers we write are what's actually shown. */
 
 esp_err_t display_video_init(void);
 

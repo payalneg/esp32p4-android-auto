@@ -18,7 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "ota_screen.h"
+#include "display_init.h"
 #include "ui_mode.h"
 
 static const char *TAG = "display_video";
@@ -70,7 +70,7 @@ esp_err_t display_video_init(void)
 {
     if (s_panel) return ESP_OK;
 
-    s_disp = (lv_display_t *)ota_screen_get_display();
+    s_disp = (lv_display_t *)display_get();
     if (!s_disp) {
         ESP_LOGW(TAG, "no LVGL display — video will be silent");
         return ESP_ERR_INVALID_STATE;
@@ -192,18 +192,20 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
     }
 
     /* On first frame (or after returning from VESC): pause the LVGL worker
-     * entirely so it stops fighting us for the panel, install an
-     * on_refresh_done semaphore so we can gate consecutive draw_bitmap
-     * calls on completion (mirrors the sample-10 mp4_player pipeline), and
-     * create the sync sem. */
+     * entirely so it stops fighting us for the panel.
+     *
+     * NOTE: do NOT register our own on_refresh_done here. The LVGL adapter
+     * (lvgl_bridge_v8.c) already registered its on_refresh_done +
+     * on_color_trans_done at init, and esp_lcd_dpi_panel_register_event_callbacks
+     * REPLACES the registration — taking those over leaves the adapter's
+     * flush waiting forever for completion events on the next yield → resume.
+     * Production path doesn't wait on s_refresh_sem anyway (see comment at the
+     * draw_bitmap call below); DISPLAY_TEST_PATTERN's wait will just time out
+     * harmlessly. */
     if (!s_adapter_paused) {
         if (!s_refresh_sem) {
             s_refresh_sem = xSemaphoreCreateBinary();
         }
-        esp_lcd_dpi_panel_event_callbacks_t cbs = {
-            .on_refresh_done = refresh_done_cb,
-        };
-        esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL);
         if (esp_lv_adapter_pause(2000) == ESP_OK) {
             s_adapter_paused = true;
             ESP_LOGI(TAG, "paused LVGL worker; panel ours");

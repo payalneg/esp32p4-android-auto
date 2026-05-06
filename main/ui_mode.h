@@ -12,7 +12,7 @@ typedef enum {
     UI_MODE_VESC,      /* Super VESC dashboard */
 } ui_mode_t;
 
-esp_err_t ui_mode_init(void);   /* must be called after ota_screen_init() */
+esp_err_t ui_mode_init(void);   /* must be called after display_init() */
 
 ui_mode_t ui_mode_get(void);
 void      ui_mode_set(ui_mode_t mode);

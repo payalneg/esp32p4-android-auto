@@ -41,8 +41,10 @@ void port_start_app_hook(void)
 #include "bt_link.h"
 #include "c6_ota.h"
 #include "config.h"
+#include "display_init.h"
 #include "display_video.h"
 #include "h264_pipe.h"
+#include "idle_screen.h"
 #include "mdns_advertise.h"
 #include "ota_screen.h"
 #include "tcp_server.h"
@@ -145,9 +147,13 @@ void app_main(void)
      * stays consistent. No-op unless CONFIG_AA_OVERCLOCK_400 is set. */
     aa_overclock_400mhz_apply();
 
-    if (ota_screen_init() != ESP_OK) {
-        ESP_LOGW(TAG, "display unavailable — OTA progress will be log-only");
+    if (display_init() != ESP_OK) {
+        ESP_LOGW(TAG, "display init failed — UI disabled");
     }
+    /* idle first, ota second so the OTA overlay sits on top in z-order
+     * (children of lv_scr_act() are stacked in creation order). */
+    idle_screen_init();
+    ota_screen_init();
 
     /* Replace BSP's auto-installed LVGL touch indev with our own that reads
      * from touch_input's shared state. Single GT911 reader for both AA and
@@ -208,15 +214,17 @@ void app_main(void)
     } else if (ota == C6_OTA_STATUS_FAILED) {
         ESP_LOGE(TAG, "C6 OTA failed — proceeding with current slave fw");
     }
+    /* If OTA showed itself, drop it now that we're past the update phase. */
+    ota_screen_hide();
 #endif
 
-    ota_screen_show_idle("Android Auto", "Initialising Wi-Fi...");
+    idle_screen_show("Android Auto", "Initialising Wi-Fi...");
 
 #if CONNECTION_MODE == MODE_WIRELESS_HELPER
     ESP_ERROR_CHECK(wifi_manager_start());
     if (wifi_manager_wait_ready(30000) != ESP_OK) {
         ESP_LOGE(TAG, "wifi setup failed, halting");
-        ota_screen_show_idle("Android Auto", "Wi-Fi setup failed");
+        idle_screen_show("Android Auto", "Wi-Fi setup failed");
         return;
     }
 
@@ -281,7 +289,7 @@ void app_main(void)
                  "%d.%d.%d.%d | port %d",
                  IP2STR(&ip_info.ip), AA_TCP_PORT);
     }
-    ota_screen_show_idle("Waiting for phone", status_line);
+    idle_screen_show("Waiting for phone", status_line);
 
     ESP_LOGI(TAG, "head unit ready, waiting for Wireless Helper");
 #elif CONNECTION_MODE == MODE_BT_CLASSIC

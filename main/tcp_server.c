@@ -12,11 +12,11 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "idle_screen.h"
 #include "lvgl.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "lwip/tcp.h"
-#include "ota_screen.h"
 #include "ui_mode.h"
 
 static const char *TAG = "tcp";
@@ -119,7 +119,7 @@ static void accept_task(void *arg)
             /* First cycle: apply labels + invalidate while LVGL adapter
              * is still paused — same order as the working VESC mode-
              * switch path (queues dirty, processed on resume). */
-            ota_screen_refresh_idle();
+            idle_screen_refresh();
         }
         display_video_yield_panel();
 

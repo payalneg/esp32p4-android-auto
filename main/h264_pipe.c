@@ -163,9 +163,13 @@ esp_err_t h264_pipe_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    BaseType_t ok = xTaskCreate(decoder_task, "h264_dec",
-                                H264_TASK_STACK_BYTES, NULL,
-                                H264_TASK_PRIORITY, &s_task);
+    /* Pin to core 1 — same core the openh264 dual-task helper runs on
+     * (CONFIG_ESP_H264_DUAL_TASK_CORE=1, prio 17). Keeps both decode threads
+     * on one core so the LVGL adapter (pinned to core 0 in ota_screen.c) can
+     * render the dashboard without being preempted by decode work. */
+    BaseType_t ok = xTaskCreatePinnedToCore(decoder_task, "h264_dec",
+                                            H264_TASK_STACK_BYTES, NULL,
+                                            H264_TASK_PRIORITY, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate failed");
         return ESP_FAIL;
