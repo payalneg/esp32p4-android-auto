@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "driver/gpio.h"
 
 /* P4 ↔ D1 Mini BT-agent UART link.
@@ -7,7 +10,7 @@
  * Wiring (J3 header on the Waveshare board):
  *   P4 GPIO 22 (TX)   →  D1 Mini GPIO 16 (RX2)
  *   P4 GPIO 21 (RX)   ←  D1 Mini GPIO 17 (TX2)
- *   P4 GPIO 24 (RST)  →  D1 Mini EN/RST  (open-drain, CH2104 may also pull)
+ *   P4 GPIO 24 (RST)  →  D1 Mini EN/RST  (push-pull, no external pull-up on this board)
  *   P4 GPIO 25 (IO0)  →  D1 Mini GPIO 0  (push-pull, no external pull-up on this board)
  *
  * Bidirectional: P4 publishes WiFi-AP credentials over the BT agent for the
@@ -48,6 +51,13 @@ void bt_link_init(void);
  * Pair with bt_link_resume_after_flash() once flashing is done. */
 void bt_link_suspend_for_flash(void);
 void bt_link_resume_after_flash(void);
+
+/* Stop forwarding agent UART lines to the host console while a noisy boot
+ * loop is in progress (broken/unflashed agent reboots itself ~9× / sec
+ * and floods rx_task with [BT] forwards — enough printf load on core 0 to
+ * starve the FreeRTOS idle task and trip TWDT). Parsing for BT-VER: still
+ * runs so wait_version() works. */
+void bt_link_set_quiet(bool quiet);
 
 /* Send a single line to D1 Mini:
  *

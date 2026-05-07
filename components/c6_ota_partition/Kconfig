@@ -14,4 +14,13 @@ menu "C6 Slave OTA (partition)"
             driver hangs on initial readback (then OTA still runs,
             progress shows up in the serial log only).
 
+    config C6_OTA_FORCE
+        bool "Force C6 OTA every boot (debug)"
+        depends on C6_OTA_ENABLED
+        default n
+        help
+            Skip the version check and always run OTA on boot. For
+            verifying the OTA pipeline + progress UI without bumping
+            the slave firmware version. Leave OFF in production.
+
 endmenu

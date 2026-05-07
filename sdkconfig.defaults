@@ -72,6 +72,11 @@ CONFIG_ESP_WIFI_TX_BUFFER_TYPE=0
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 
+# esp_serial_flasher (used by bt_agent_ota): bump retries 3→10. Single-byte
+# UART drops under sustained load occasionally burned through 3 retries;
+# 10 absorbs the jitter without measurably hurting normal throughput.
+CONFIG_SERIAL_FLASHER_WRITE_BLOCK_RETRIES=10
+
 # lwIP — bigger socket count for AA TCP server
 CONFIG_LWIP_MAX_SOCKETS=12
 # Pin TCP/IP task (`tiT`, prio 18) to core 1 — same core as `aa_tcp` recv-loop

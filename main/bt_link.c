@@ -17,36 +17,30 @@
 
 static const char *TAG = "bt_link";
 
-/* RST stays open-drain — CH2104's auto-reset transistor on EN can pull it
- * low without warning, we'd burn pins fighting it. IO0 is push-pull because
- * this board's D1 Mini variant has no external pull-up on GPIO0; if we left
- * it floating during a release, the ESP32 would read whatever leakage gives
- * (often low → stuck in download mode). Driving both rails actively makes
- * the strap state deterministic. */
+/* Both RST and IO0 are push-pull: this board has no external pull-ups on
+ * either line, so an open-drain release would leave the ESP32 reading
+ * floating values — often low, which means stuck in download mode (IO0)
+ * or held in reset (RST). Driving the rails actively makes the strap state
+ * deterministic. The CH2104 USB-UART is unplugged in production; during
+ * dev with USB attached, keep the agent's USB cable disconnected while the
+ * P4 drives these lines to avoid driver contention. */
 static void bt_agent_strap_init(void)
 {
     static bool inited;
     if (inited) return;
 
-    gpio_config_t rst_cfg = {
-        .pin_bit_mask = (1ULL << BT_AGENT_RST_PIN),
-        .mode         = GPIO_MODE_OUTPUT_OD,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&rst_cfg);
-
-    gpio_config_t io0_cfg = {
-        .pin_bit_mask = (1ULL << BT_AGENT_IO0_PIN),
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << BT_AGENT_RST_PIN) |
+                        (1ULL << BT_AGENT_IO0_PIN),
         .mode         = GPIO_MODE_OUTPUT,           /* push-pull */
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&io0_cfg);
+    gpio_config(&cfg);
 
-    /* Idle: RST released, IO0 actively driven high (normal-boot strap). */
+    /* Idle: both actively driven high — IO0 high = normal-boot strap,
+     * RST high = chip running. */
     gpio_set_level(BT_AGENT_IO0_PIN, 1);
     gpio_set_level(BT_AGENT_RST_PIN, 1);
     inited = true;
@@ -95,6 +89,16 @@ void bt_agent_enter_bootloader(void)
  * wifi_resend_task (stops once acked). Definitions are further down. */
 static volatile bool s_wifi_acked;
 
+/* When true, rx_task drops all forwarding (printf/ESP_LOG) but keeps
+ * parsing for BT-VER:. Toggled by bt_link_set_quiet() during OTA flow
+ * to avoid hammering the console while the agent boot-loops. */
+static volatile bool s_quiet;
+
+void bt_link_set_quiet(bool quiet)
+{
+    s_quiet = quiet;
+}
+
 /* Last `BT-VER:<version>` value parsed from the agent's UART stream.
  * 64 bytes is plenty for semver + build tag + git short hash. The event
  * group below pulses VERSION_BIT when a new value lands so callers can
@@ -140,10 +144,10 @@ static void rx_task(void *arg)
                 if (pos > 0) {
                     line[pos] = '\0';
                     if (strncmp(line, "BT-LOG:", 7) == 0) {
-                        printf("[BT] %s\n", line + 7);
+                        if (!s_quiet) printf("[BT] %s\n", line + 7);
                     } else if (strncmp(line, "BT-HB:", 6) == 0) {
 #if BT_LINK_LOG_HEARTBEAT
-                        ESP_LOGI(TAG, "[heartbeat] %s", line + 6);
+                        if (!s_quiet) ESP_LOGI(TAG, "[heartbeat] %s", line + 6);
 #endif
                         /* else: silently drop, see BT_LINK_LOG_HEARTBEAT. */
                     } else if (strncmp(line, "BT:", 3) == 0) {
@@ -151,19 +155,21 @@ static void rx_task(void *arg)
                         if (strcmp(evt, "WIFI_RECEIVED") == 0) {
                             s_wifi_acked = true;  /* stop resend loop */
                         }
-                        ESP_LOGI(TAG, "agent event %s", evt);
+                        if (!s_quiet) ESP_LOGI(TAG, "agent event %s", evt);
                     } else if (strncmp(line, "BT-VER:", 7) == 0) {
+                        /* Always parse — wait_version() depends on this even
+                         * when forwarding is muted. */
                         strncpy(s_agent_ver, line + 7, sizeof(s_agent_ver) - 1);
                         s_agent_ver[sizeof(s_agent_ver) - 1] = '\0';
                         if (s_agent_ev) {
                             xEventGroupSetBits(s_agent_ev, AGENT_EV_VERSION_BIT);
                         }
-                        ESP_LOGI(TAG, "agent version: %s", s_agent_ver);
+                        if (!s_quiet) ESP_LOGI(TAG, "agent version: %s", s_agent_ver);
                     } else {
                         /* Anything else — most likely an ESP_LOG line that
                          * skipped our tee (vprintf hook didn't catch it).
                          * Treat as a log so the user still sees it. */
-                        printf("[BT] %s\n", line);
+                        if (!s_quiet) printf("[BT] %s\n", line);
                     }
                     pos = 0;
                 }
@@ -172,7 +178,7 @@ static void rx_task(void *arg)
             } else {
                 /* Overlong line — flush partial and reset. */
                 line[pos] = '\0';
-                printf("[BT?] %s...<truncated>\n", line);
+                if (!s_quiet) printf("[BT?] %s...<truncated>\n", line);
                 pos = 0;
             }
         }

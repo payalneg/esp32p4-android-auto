@@ -102,10 +102,11 @@ menu "Android Auto Head Unit"
             depends on BT_AGENT_OTA_ENABLED
             default 460800
             help
-                ROM bootloader sync at 115200, then renegotiate up to this
-                rate for the actual write. 460800 is the safe default for
-                ESP32 over short wires; 921600 usually works too but cuts
-                error margin.
+                ROM/stub bootloader sync is always at 115200, then renegotiates
+                up to this rate for the actual write. 460800 over short
+                direct UART wires is the usual sweet spot; 921600 also
+                works but cuts error margin. Drop to 115200 if you suspect
+                signal-integrity issues on a long noisy line.
 
     endmenu
 

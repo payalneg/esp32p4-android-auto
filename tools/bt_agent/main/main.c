@@ -40,7 +40,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.1.0"
+#define BT_AGENT_FW_VERSION "0.1.1"
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
