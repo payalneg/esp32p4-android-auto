@@ -146,7 +146,10 @@ esp_err_t tcp_server_start(uint16_t port)
     static server_ctx_t ctx;
     ctx.port = port;
 
-    /* mbedTLS handshake puts a few KiB of working state on the stack; 8 KiB is comfortable. */
-    BaseType_t ok = xTaskCreate(accept_task, "aa_tcp", 8192, &ctx, 5, NULL);
+    /* mbedTLS handshake puts a few KiB of working state on the stack; 8 KiB is comfortable.
+     * Pinned to core 1 so the recv → h264_pipe → display chain stays on the same core
+     * the decoder lives on (h264_dec + openh264 helper at prio 17). Cross-core wake-ups
+     * for every video packet were eating into AA throughput. */
+    BaseType_t ok = xTaskCreatePinnedToCore(accept_task, "aa_tcp", 8192, &ctx, 5, NULL, 1);
     return (ok == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
 }

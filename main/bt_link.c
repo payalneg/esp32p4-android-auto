@@ -98,7 +98,7 @@ void bt_link_init(void)
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     /* Mirror everything the BT agent sends on its side. See rx_task() for
      * how the inbound prefix protocol is decoded. */
-    xTaskCreate(rx_task, "bt_link_rx", 4096, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(rx_task, "bt_link_rx", 4096, NULL, 5, NULL, 0);
 
     ESP_LOGI(TAG, "UART1 to BT agent ready (TX=%d, RX=%d, %d baud)",
              UART_TX_PIN, UART_RX_PIN, UART_BAUD);
@@ -146,6 +146,6 @@ void bt_link_publish_wifi(const char *ssid, const char *password,
     static bool task_started;
     if (!task_started) {
         task_started = true;
-        xTaskCreate(wifi_resend_task, "bt_wifi_resend", 2048, NULL, 4, NULL);
+        xTaskCreatePinnedToCore(wifi_resend_task, "bt_wifi_resend", 2048, NULL, 4, NULL, 0);
     }
 }

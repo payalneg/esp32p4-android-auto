@@ -74,6 +74,12 @@ CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 
 # lwIP — bigger socket count for AA TCP server
 CONFIG_LWIP_MAX_SOCKETS=12
+# Pin TCP/IP task (`tiT`, prio 18) to core 1 — same core as `aa_tcp` recv-loop
+# and `h264_dec`. Without this, every incoming AA video packet bounces from
+# core 0 (where tiT happened to land) to core 1 (where the recv-loop sleeps),
+# burning an IPC per packet at 30 fps. Higher prio than the decoder (8) means
+# tiT still gets to drain the WiFi queue promptly.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
 
 # main_task stack must NOT land in the 8KB TCM region on ESP32-P4
 # (esp_ptr_in_dram() rejects TCM, breaking spi_flash_mmap during nvs_flash_init).
@@ -147,10 +153,11 @@ CONFIG_BT_NIMBLE_GATT_CLIENT=n
 # "esp_startup_start_app: assert failed res == pdTRUE". Decoding from flash
 # is plenty fast for our 480p target.
 CONFIG_ESP_H264_DECODER_IRAM=n
-# Single-core SW decoder is ~35 ms/frame at 800x480 = 105 % of one core,
-# which means a 30 fps source overflows the AAP ring (observed). Dual-task
-# mode splits the work across both cores so each takes ~50 %, which leaves
-# real headroom for the AAP loop, WiFi/BT, LVGL etc.
-CONFIG_ESP_H264_DUAL_TASK=y
-CONFIG_ESP_H264_DUAL_TASK_CORE=1
-CONFIG_ESP_H264_DUAL_TASK_PRIORITY=17
+# Single-thread decoder. Dual-task mode used to claim 2x speedup but only when
+# the helper sat on a different core than the main decoder; once we forced both
+# onto core 1 (so they wouldn't fight LVGL on core 0) the gain dropped to a few
+# percent and we paid a prio-17 task that preempted the AA recv-loop on every
+# frame. Backpressure is handled at the protocol layer instead: max_unacked=4
+# on the video channel + ack-on-display in h264_pipe means the phone slows to
+# our actual decode rate, no AAP ring overflow even if a frame takes 40 ms.
+CONFIG_ESP_H264_DUAL_TASK=n

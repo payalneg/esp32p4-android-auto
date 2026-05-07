@@ -242,6 +242,6 @@ static void rt_task(void *arg)
 esp_err_t vesc_rt_data_start_task(void)
 {
     if (s_task_handle) return ESP_OK;
-    BaseType_t r = xTaskCreate(rt_task, "vesc_rt", 3072, NULL, 5, &s_task_handle);
+    BaseType_t r = xTaskCreatePinnedToCore(rt_task, "vesc_rt", 3072, NULL, 5, &s_task_handle, 0);
     return r == pdPASS ? ESP_OK : ESP_FAIL;
 }

@@ -35,7 +35,6 @@ static TaskHandle_t      s_task;
 static touch_send_fn     s_aa_cb;
 static void             *s_aa_ctx;
 static touch_gesture_fn  s_gest_cb;
-static atomic_bool       s_stop_requested;
 
 /* Mode flag — default LVGL because the dashboard is the active screen at
  * boot. Flipped to AA by ui_mode_set when the user triple-taps. */
@@ -63,7 +62,11 @@ static void poll_task(void *arg)
     bool gesture_latched = false;   /* latched until all fingers lift */
     int64_t gesture_armed_us = 0;
 
-    while (!atomic_load(&s_stop_requested)) {
+    /* The polling task lives for the lifetime of the program. We used to
+     * tear it down on AA disconnect via touch_input_stop, but that left the
+     * VESC dashboard unresponsive (no LVGL touch + no 3-finger gesture)
+     * between AA sessions. Now stop only clears the AA cb. */
+    while (true) {
         if (esp_lcd_touch_read_data(tp) == ESP_OK) {
             uint16_t tx[MAX_POINTS], ty[MAX_POINTS], strength[MAX_POINTS];
             uint8_t  cnt = 0;
@@ -159,32 +162,29 @@ static void poll_task(void *arg)
 next:
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
-
-    s_task = NULL;
-    vTaskDelete(NULL);
 }
 
 esp_err_t touch_input_start(touch_send_fn cb, void *ctx)
 {
+    /* ctx must land before cb so a poll-task read that sees the new cb never
+     * pairs it with a stale/NULL ctx (touch_send_event would deref it). */
     if (s_task) {
-        s_aa_cb  = cb;
         s_aa_ctx = ctx;
+        s_aa_cb  = cb;
         return ESP_OK;
     }
     if (!bsp_display_get_touch_handle()) {
         ESP_LOGE(TAG, "BSP touch not initialised — call bsp_display_start first");
         return ESP_ERR_INVALID_STATE;
     }
-    atomic_store(&s_stop_requested, false);
-    s_aa_cb  = cb;
     s_aa_ctx = ctx;
-    /* Priority 10 puts us above the AAP recv-loop (prio 5 in tcp_server.c) so
-     * we preempt it during the synchronous video decode + CPU YUV→RGB565
-     * transpose (~30 ms / frame). At equal priority touch only got CPU in
-     * the small gaps between frames, which on 30 fps source surfaced as a
-     * very laggy on-screen tap response. The poll loop is mostly vTaskDelay
-     * so it doesn't actually starve the recv-loop. */
-    BaseType_t ok = xTaskCreate(poll_task, "touch_input", 4096, NULL, 10, &s_task);
+    s_aa_cb  = cb;
+    /* Pinned to core 0 alongside LVGL (prio 6) — we want touch to be on the
+     * same core as the UI it drives. Priority 10 keeps us above LVGL so the
+     * dashboard render never starves the input poll. Decoder + AA recv-loop
+     * live on core 1, so we don't need to outprioritise them anymore. The
+     * poll loop is mostly vTaskDelay anyway. */
+    BaseType_t ok = xTaskCreatePinnedToCore(poll_task, "touch_input", 4096, NULL, 10, &s_task, 0);
     if (ok != pdPASS) {
         s_aa_cb  = NULL;
         s_aa_ctx = NULL;
@@ -202,8 +202,9 @@ void touch_input_set_gesture_cb(touch_gesture_fn cb)
 
 void touch_input_stop(void)
 {
-    if (!s_task) return;
-    atomic_store(&s_stop_requested, true);
+    /* Clear cb first (close the gate), then ctx — a poll-task read that
+     * sees cb=NULL takes the early-out and never touches ctx. The poll
+     * task itself keeps running so LVGL/gesture stay alive. */
     s_aa_cb  = NULL;
     s_aa_ctx = NULL;
 }

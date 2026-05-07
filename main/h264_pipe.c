@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "ui_mode.h"
 
 static const char *TAG = "h264_pipe";
 
@@ -21,6 +22,17 @@ static const char *TAG = "h264_pipe";
  * but above the AAP recv-loop (5) so the decoder/display run between recv
  * iterations rather than being starved by them. */
 #define H264_TASK_PRIORITY     8
+
+/* In VESC mode (LVGL dashboard owns the panel) we still decode every frame —
+ * H.264 is stateful and dropping P-frames here would leave the decoder unable
+ * to recover until the next IDR (this phone only emits IDRs ~every 10 s and
+ * doesn't honour VideoFocusIndication as a forced-keyframe trigger). What we
+ * do is throttle the *ack* rate to 5 fps: with max_unacked=4 advertised in
+ * handle_av_setup, gearhead naturally stops sending more than ~5 frames per
+ * second, so the decoder runs at ~150 ms/s instead of ~900 ms/s, and the
+ * phone never has TCP packets to drop. Display work is skipped inside
+ * display_video_show_yuv420 (it returns early when ui_mode == VESC). */
+#define VESC_ACK_INTERVAL_US   (1000 * 1000 / 5)
 
 typedef struct {
     uint8_t            *buf;
@@ -113,11 +125,23 @@ static void decoder_task(void *arg)
 {
     (void)arg;
     pipe_item_t it;
+    int64_t last_ack_us = 0;
     while (true) {
         if (xQueueReceive(s_queue, &it, portMAX_DELAY) != pdTRUE) continue;
         decode_and_show(it.buf, it.len);
         free(it.buf);
         if (it.ack_cb) {
+            /* VESC dashboard active → pace acks to 5 fps so phone backs
+             * off via max_unacked. See VESC_ACK_INTERVAL_US comment above. */
+            if (ui_mode_get() == UI_MODE_VESC) {
+                int64_t now    = esp_timer_get_time();
+                int64_t target = last_ack_us + VESC_ACK_INTERVAL_US;
+                if (now < target) {
+                    int wait_ms = (int)((target - now + 999) / 1000);
+                    vTaskDelay(pdMS_TO_TICKS(wait_ms));
+                }
+            }
+            last_ack_us = esp_timer_get_time();
             esp_err_t e = it.ack_cb(it.ack_ctx);
             if (e != ESP_OK) {
                 ESP_LOGW(TAG, "ack cb returned %s", esp_err_to_name(e));

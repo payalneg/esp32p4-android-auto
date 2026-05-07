@@ -110,7 +110,7 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
     if (!s_sem_init_done) {
         s_ping_sem   = xSemaphoreCreateBinary();
         s_send_mutex = xSemaphoreCreateMutex();
-        xTaskCreatePinnedToCore(process_task, "can_proc", 3072, NULL, 8, NULL, tskNO_AFFINITY);
+        xTaskCreatePinnedToCore(process_task, "can_proc", 3072, NULL, 8, NULL, 0);
         s_sem_init_done = true;
     }
 
@@ -132,7 +132,7 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
     }
 
     s_stop_rx = false;
-    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, 0);
 
     s_init_done = true;
     ESP_LOGI(TAG, "TWAI up: TX=%d RX=%d ID=%u %d kbps",
@@ -179,7 +179,7 @@ esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps)
     }
 
     s_stop_rx = false;
-    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, 0);
     s_init_done = true;
     ESP_LOGI(TAG, "reinit ok TX=%d RX=%d ID=%u %d kbps",
              prev_tx, prev_rx, controller_id, s_can_config.can_baud_rate_kbps);

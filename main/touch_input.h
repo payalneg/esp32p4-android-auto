@@ -42,8 +42,9 @@ esp_err_t touch_input_start(touch_send_fn cb, void *ctx);
 /* Install or clear the 3-finger gesture callback. Independent of the AA cb. */
 void touch_input_set_gesture_cb(touch_gesture_fn cb);
 
-/* Stop the polling task. Both AA and gesture callbacks become inactive after
- * this returns (within one poll tick). */
+/* Detach the AA single-finger callback. Polling task and gesture detection
+ * keep running so the LVGL dashboard and the 3-finger toggle stay live
+ * between AA sessions. Idempotent. */
 void touch_input_stop(void);
 
 /* Multiplex the GT911 reader between two consumers:
