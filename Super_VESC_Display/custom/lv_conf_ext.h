@@ -23,6 +23,10 @@
 #undef LV_SPRINTF_USE_FLOAT
 #define LV_SPRINTF_USE_FLOAT 1
 
+/* Antonio_Regular_220 → bitmap_index переполняет 12-битное поле */
+#undef LV_FONT_FMT_TXT_LARGE
+#define LV_FONT_FMT_TXT_LARGE 1
+
 /* common code end */
 
 

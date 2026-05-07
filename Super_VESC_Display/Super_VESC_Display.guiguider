@@ -387,7 +387,7 @@
 												"duration": 200,
 												"delay": 200,
 												"scrId": "g53wa3pp",
-												"anim_type": "LV_SCR_LOAD_ANIM_FADE_ON",
+												"anim_type": "LV_SCR_LOAD_ANIM_MOVE_BOTTOM",
 												"is_clean": false,
 												"is_del": false
 											}
@@ -9388,7 +9388,7 @@
 												"duration": 200,
 												"delay": 200,
 												"scrId": "ehjqt834",
-												"anim_type": "LV_SCR_LOAD_ANIM_NONE",
+												"anim_type": "LV_SCR_LOAD_ANIM_MOVE_TOP",
 												"is_clean": false,
 												"is_del": false
 											}
@@ -18553,7 +18553,7 @@
 													"duration": 200,
 													"delay": 200,
 													"scrId": "g53wa3pp",
-													"anim_type": "LV_SCR_LOAD_ANIM_FADE_ON",
+													"anim_type": "LV_SCR_LOAD_ANIM_MOVE_BOTTOM",
 													"is_clean": false,
 													"is_del": false
 												}
@@ -18773,7 +18773,7 @@
 																					"duration": 200,
 																					"delay": 200,
 																					"scrId": "ehjqt834",
-																					"anim_type": "LV_SCR_LOAD_ANIM_NONE",
+																					"anim_type": "LV_SCR_LOAD_ANIM_MOVE_TOP",
 																					"is_clean": false,
 																					"is_del": false
 																				}
@@ -19009,7 +19009,7 @@
 													"duration": 200,
 													"delay": 200,
 													"scrId": "ehjqt834",
-													"anim_type": "LV_SCR_LOAD_ANIM_NONE",
+													"anim_type": "LV_SCR_LOAD_ANIM_MOVE_TOP",
 													"is_clean": false,
 													"is_del": false
 												}
@@ -19147,7 +19147,7 @@
 																					"duration": 200,
 																					"delay": 200,
 																					"scrId": "g53wa3pp",
-																					"anim_type": "LV_SCR_LOAD_ANIM_FADE_ON",
+																					"anim_type": "LV_SCR_LOAD_ANIM_MOVE_BOTTOM",
 																					"is_clean": false,
 																					"is_del": false
 																				}

@@ -1226,9 +1226,19 @@ void settings_ui_init(lv_ui *ui) {
         return;
     }
     
-    // Check if already initialized (prevent double initialization)
-    if (settings_target_id_spinbox != NULL) {
-        return; // Already initialized
+    /* Guard: skip re-init only if our widgets still belong to the current
+     * ui->settings. setup_scr_settings re-creates ui->settings via
+     * lv_obj_create(NULL) every time settings_del=true, and gui_guider's
+     * ui_load_scr_animation never resets settings_del after calling
+     * setup_scr. So if the user enters Settings, toggles AA/VESC mode (which
+     * bypasses the "Back to dashboard" path that would have cleared the
+     * flag), then re-enters Settings, ui->settings is fresh but our static
+     * pointers still reference orphaned widgets on the old screen. Without
+     * the parent check the early-return would leave only the generated
+     * "Back to dashboard" button visible. */
+    if (settings_target_id_spinbox != NULL &&
+        lv_obj_get_parent(settings_target_id_spinbox) == ui->settings) {
+        return;
     }
     
     // Initialize modules
