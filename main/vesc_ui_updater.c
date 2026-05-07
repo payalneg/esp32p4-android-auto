@@ -2,8 +2,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "lvgl.h"
 #include "ui_mode.h"
 #include "vesc_can/vesc_rt_data.h"
 
@@ -14,8 +13,8 @@
 
 static const char *TAG = "vesc_ui_upd";
 
-static TaskHandle_t s_task;
-static bool         s_zeros_pushed;
+static lv_timer_t *s_timer;
+static bool        s_zeros_pushed;
 
 static void push_zeros_locked(void)
 {
@@ -57,38 +56,30 @@ static void push_rt_locked(void)
     update_uptime(vesc_rt_data_get_uptime_ms());
 }
 
-static void updater_task(void *arg)
+/* Runs inside lv_timer_handler() with the LVGL lock already held — zero
+ * contention with the render task (it's the same task). 10 Hz is plenty
+ * for a dashboard; numeric fields don't benefit from higher refresh. */
+static void updater_lv_timer_cb(lv_timer_t *t)
 {
-    (void)arg;
-    /* 10 Hz is plenty for a dashboard — humans don't see >15 Hz on numeric
-     * fields. Going slower also gives the LVGL worker more idle time between
-     * dirty-region bursts so partial-flush can drain. */
-    const TickType_t period = pdMS_TO_TICKS(100);
-    TickType_t last = xTaskGetTickCount();
-    for (;;) {
-        /* 250 ms covers the worst case: TRIPLE_PARTIAL flush of all three
-         * framebuffers (3 × ~50 ms with PPA rotate + DPI vsync wait). The
-         * adapter ESP_LOG_E's on every lock timeout via ESP_RETURN_ON_FALSE
-         * regardless of caller's intent — keeping the timeout high prevents
-         * spurious ERROR spam during AA setup / video bring-up. */
-        if (bsp_display_lock(250) == ESP_OK) {
-            if (!s_zeros_pushed) {
-                push_zeros_locked();
-                s_zeros_pushed = true;
-            }
-            push_rt_locked();
-            bsp_display_unlock();
-        }
-        vTaskDelayUntil(&last, period);
+    (void)t;
+    if (!s_zeros_pushed) {
+        push_zeros_locked();
+        s_zeros_pushed = true;
     }
+    push_rt_locked();
 }
 
 esp_err_t vesc_ui_updater_start(void)
 {
-    if (s_task) return ESP_OK;
-    BaseType_t r = xTaskCreate(updater_task, "vesc_ui_upd", 4096, NULL, 4, &s_task);
-    if (r != pdPASS) {
-        ESP_LOGE(TAG, "task create failed");
+    if (s_timer) return ESP_OK;
+    if (bsp_display_lock(2000) != ESP_OK) {
+        ESP_LOGE(TAG, "lvgl lock timeout — cannot register update timer");
+        return ESP_FAIL;
+    }
+    s_timer = lv_timer_create(updater_lv_timer_cb, 100, NULL);
+    bsp_display_unlock();
+    if (!s_timer) {
+        ESP_LOGE(TAG, "lv_timer_create failed");
         return ESP_FAIL;
     }
     return ESP_OK;
