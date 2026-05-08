@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "aa_overlay.h"
 #include "display_init.h"
 #include "ui_mode.h"
 
@@ -44,6 +45,11 @@ static void               *s_fb[3];
 static int                 s_fb_count;
 static int                 s_fb_idx;
 static bool                s_adapter_paused;
+/* Set to true after the first pause attempt of an AA session (whether it
+ * succeeded or timed out). Suppresses retries — see comment near the pause
+ * call in show_yuv420 for the race-in-adapter rationale. Cleared on
+ * mode-switch back to VESC. */
+static bool                s_pause_attempted;
 static SemaphoreHandle_t   s_refresh_sem;
 /* Intermediate landscape RGB565 buffer for the split PPA+CPU rotate
  * path. Allocated lazily in display_video_show_yuv420 once we know the
@@ -123,6 +129,8 @@ void display_video_yield_panel(void)
         s_adapter_paused = false;
         ESP_LOGI(TAG, "yielded panel to LVGL");
     }
+    /* Allow next AA entry to attempt pause once again. */
+    s_pause_attempted = false;
 }
 
 /* When non-zero, skip PPA and instead fill s_fb[0] with a hard-coded
@@ -182,6 +190,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             s_adapter_paused = false;
             ESP_LOGI(TAG, "VESC mode — resumed LVGL worker, frames dropped");
         }
+        /* Reset the once-per-session pause gate so the next AA entry
+         * gets one fresh attempt. */
+        s_pause_attempted = false;
         /* AA path naturally yields inside PPA + DPI flush; the drop path
          * doesn't, and h264_pipe keeps slamming us with frames as fast as
          * the decoder produces them. Without yielding here, IDLE0 starves
@@ -202,7 +213,24 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
      * Production path doesn't wait on s_refresh_sem anyway (see comment at the
      * draw_bitmap call below); DISPLAY_TEST_PATTERN's wait will just time out
      * harmlessly. */
-    if (!s_adapter_paused) {
+    /* Try to pause the LVGL worker exactly ONCE per AA session.
+     *
+     * The adapter's pause() has a known race: if the worker happens to
+     * give pause_done_sem just before pause() does its `take(0)` to clear
+     * pending, the give is consumed and the worker is now stuck in
+     * ulTaskNotifyTake forever (it'll only wake on a manual notify from
+     * resume(), but resume() bails early when paused was rolled back to
+     * false on timeout — so the worker stays parked).
+     *
+     * Once that race trips, every subsequent pause(2000) on this session
+     * will time out too, blocking the decoder for 2 s per frame and
+     * stuffing the AA recv queue. We don't actually need pause for
+     * correctness — our s_fb[] is private and we draw to the panel
+     * directly with esp_lcd_panel_draw_bitmap; LVGL only renders the
+     * (empty) AA active screen, which doesn't dirty anything. So if the
+     * first pause failed, we accept some CPU contention with whatever
+     * the worker does and move on. */
+    if (!s_adapter_paused && !s_pause_attempted) {
         if (!s_refresh_sem) {
             s_refresh_sem = xSemaphoreCreateBinary();
         }
@@ -210,8 +238,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             s_adapter_paused = true;
             ESP_LOGI(TAG, "paused LVGL worker; panel ours");
         } else {
-            ESP_LOGW(TAG, "esp_lv_adapter_pause timed out");
+            ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
         }
+        s_pause_attempted = true;
     }
 
     int idx = s_fb_idx;
@@ -405,9 +434,15 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "ppa rotate: %s", esp_err_to_name(err));
             return err;
         }
+        /* Invalidate so our overlay reads the PPA-written pixels (DMA bypassed
+         * the cache), then paint the speed/battery HUD with CPU writes,
+         * then flush back to PSRAM before the LCD DMA scans it out. */
         esp_cache_msync(s_fb[idx], out_buf_size,
                         ESP_CACHE_MSYNC_FLAG_DIR_M2C |
                         ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        aa_overlay_draw((uint16_t *)s_fb[idx]);
+        esp_cache_msync(s_fb[idx], out_buf_size,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
                                         PANEL_NATIVE_W, PANEL_NATIVE_H,
                                         s_fb[idx]);

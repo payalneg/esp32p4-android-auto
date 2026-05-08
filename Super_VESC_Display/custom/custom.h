@@ -48,6 +48,13 @@ void reset_icon_pressed(void);
 bool dashboard_demo_is_active(void);
 void dashboard_demo_set_active(bool on);
 
+/* Last clamped values fed into update_speed / update_battery_proc. Atomic
+ * snapshots so non-LVGL threads (e.g. the AA video overlay) can read them
+ * without holding the LVGL lock. Show the same numbers as the cockpit,
+ * including demo-mode values. */
+int cockpit_get_speed_value(void);
+int cockpit_get_battery_proc_value(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -20,6 +20,7 @@ idf_component_register(
         "bt_agent_ota.c"
         "h264_pipe.c"
         "display_video.c"
+        "aa_overlay.c"
         "touch_input.c"
         "aa_overclock.c"
         "ui_mode.c"

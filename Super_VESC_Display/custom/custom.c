@@ -15,9 +15,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
 #include "lvgl.h"
 #include "custom.h"
 #include "settings_wrapper.h"
+
+/* Cached display values exposed to readers outside the LVGL thread (e.g. the
+ * AA video overlay running on the H.264 decoder task). Mirror what the user
+ * sees on the cockpit so AA HUD and dashboard agree, including demo-mode
+ * values. Atomic so the decoder can read without taking the LVGL lock. */
+static _Atomic int s_cockpit_speed_value;
+static _Atomic int s_cockpit_battery_proc_value;
+
+int cockpit_get_speed_value(void)        { return atomic_load(&s_cockpit_speed_value); }
+int cockpit_get_battery_proc_value(void) { return atomic_load(&s_cockpit_battery_proc_value); }
 
 #ifdef LV_REALDEVICE
 #include "vesc_limits.h"
@@ -432,6 +443,7 @@ void update_speed(float speed)
     snprintf(text, sizeof(text), "%02d", v_clamped);
     lv_label_set_text(guider_ui.dashboard_Speed_text, text);
     cockpit_paint_speed_bar(value, 60);
+    atomic_store(&s_cockpit_speed_value, v_clamped);
 }
 
 void update_cruise_speed(float speed)
@@ -483,6 +495,7 @@ void update_battery_proc(float battery_proc)
     lv_color_t bcol = cockpit_battery_color(v_clamped);
     lv_obj_set_style_text_color(guider_ui.dashboard_Battery_proc_text, bcol, LV_PART_MAIN);
     cockpit_paint_battery_bar(v_clamped);
+    atomic_store(&s_cockpit_battery_proc_value, v_clamped);
 }
 
 void update_trip(float trip_distance)
