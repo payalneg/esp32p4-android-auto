@@ -15,6 +15,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -63,6 +64,137 @@ static uint16_t            s_landscape_h;
  * frame. Not thread-safe — only the single decoder task touches it. */
 static esp_imgfx_color_convert_handle_t s_imgfx;
 
+/* Per-stage timing accumulators for the AA video path. Reset every second
+ * by aa_stats_log_once_per_second(). All times in microseconds. */
+static struct {
+    uint32_t frames;
+    uint64_t imgfx_us;
+    uint64_t ppa_us;
+    uint64_t overlay_us;
+    uint64_t draw_us;
+    uint64_t total_us;
+    int64_t  window_start_us;
+} s_aa_stats;
+
+static void aa_stats_log_once_per_second(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (s_aa_stats.window_start_us == 0) {
+        s_aa_stats.window_start_us = now;
+        return;
+    }
+    if (now - s_aa_stats.window_start_us < 1000000) return;
+    uint32_t f = s_aa_stats.frames;
+    if (f > 0) {
+        ESP_LOGI(TAG,
+                 "AA show: %u fr | imgfx %llu | ppa %llu | hud %llu | "
+                 "draw %llu | total %llu us/fr (avg)",
+                 (unsigned)f,
+                 (unsigned long long)(s_aa_stats.imgfx_us  / f),
+                 (unsigned long long)(s_aa_stats.ppa_us    / f),
+                 (unsigned long long)(s_aa_stats.overlay_us/ f),
+                 (unsigned long long)(s_aa_stats.draw_us   / f),
+                 (unsigned long long)(s_aa_stats.total_us  / f));
+    }
+    s_aa_stats.frames     = 0;
+    s_aa_stats.imgfx_us   = 0;
+    s_aa_stats.ppa_us     = 0;
+    s_aa_stats.overlay_us = 0;
+    s_aa_stats.draw_us    = 0;
+    s_aa_stats.total_us   = 0;
+    s_aa_stats.window_start_us = now;
+}
+
+/* LVGL render-time hook. v8 calls monitor_cb after each refresh with the
+ * elapsed time (ms) and pixel count for the area redrawn. We aggregate and
+ * log once per second so we can compare LVGL's own render cost to the AA
+ * imgfx+PPA+draw_bitmap path above. Only fires when the adapter worker is
+ * running (i.e. UI_MODE_VESC, or AA idle screen between sessions). */
+static struct {
+    uint32_t refreshes;
+    uint64_t total_ms;
+    uint64_t total_px;
+    int64_t  window_start_us;
+} s_lv_stats;
+
+static void lv_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
+{
+    s_lv_stats.refreshes++;
+    s_lv_stats.total_ms += time_ms;
+    s_lv_stats.total_px += px;
+    int64_t now = esp_timer_get_time();
+    if (s_lv_stats.window_start_us == 0) {
+        s_lv_stats.window_start_us = now;
+        return;
+    }
+    if (now - s_lv_stats.window_start_us < 1000000) return;
+    uint32_t r = s_lv_stats.refreshes;
+    if (r > 0) {
+        ESP_LOGI(TAG,
+                 "LVGL: %u refresh | %llu ms total | avg %llu ms / "
+                 "%llu px per refresh",
+                 (unsigned)r,
+                 (unsigned long long)s_lv_stats.total_ms,
+                 (unsigned long long)(s_lv_stats.total_ms / r),
+                 (unsigned long long)(s_lv_stats.total_px / r));
+    }
+    s_lv_stats.refreshes = 0;
+    s_lv_stats.total_ms  = 0;
+    s_lv_stats.total_px  = 0;
+    s_lv_stats.window_start_us = now;
+}
+
+/* I420 (planar 4:2:0) → OUYY/EVYY packed layout. This is what the ESP32-P4
+ * PPA SRM YUV420 input mode actually expects (the LCD docs name the format:
+ * "YUV420 packed in OUYY/EVYY order"). Single-plane, row-interleaved chroma:
+ *
+ *   stride = W * 3 / 2 bytes per row, total = W*H*1.5 (same as I420)
+ *   even row (y=0,2,4,...): triplets [V, Y0, Y1] per 2 luma pixels
+ *   odd row  (y=1,3,5,...): triplets [U, Y0, Y1] per 2 luma pixels
+ *
+ * The V on row 2r and U on row 2r+1 together encode the chroma sample for
+ * the 2×2 luma block at (2r, 2c). PPA reads with pbyte=1.5 (advance 3 B
+ * per 2 H pixels) and stride W*3/2, so the (x,y) DMA arithmetic lands on
+ * the correct triplet without any plane-pointer arithmetic.
+ *
+ * Why this is right and JPEG-MCU was wrong: ppa_srm.c configures one
+ * SINGLE-block DMA descriptor with ha_length=pic_w, va_size=pic_h,
+ * channel_flags=0 (i.e. NO TX_REORDER). PPA SRM never un-tiles MCU input —
+ * raster-in is what it expects.
+ *
+ * Performance: same per-pixel CPU cost as the previous JPEG shuffle
+ * (~16 ms at 800×480), but with the correct layout the PPA output is
+ * geometrically right. */
+static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
+{
+    const uint8_t *Yp = yuv;
+    const uint8_t *Up = yuv + (size_t)w * h;
+    const uint8_t *Vp = Up   + ((size_t)w * h) / 4;
+    const int uv_w  = w / 2;
+    const int stride = w * 3 / 2;
+
+    for (int r2 = 0; r2 < h / 2; r2++) {
+        const uint8_t *Y_even = Yp + (size_t)(r2 * 2)     * w;
+        const uint8_t *Y_odd  = Yp + (size_t)(r2 * 2 + 1) * w;
+        const uint8_t *U_row  = Up + (size_t)r2 * uv_w;
+        const uint8_t *V_row  = Vp + (size_t)r2 * uv_w;
+        uint8_t *out_even = out + (size_t)(r2 * 2)     * stride;
+        uint8_t *out_odd  = out + (size_t)(r2 * 2 + 1) * stride;
+        for (int c = 0; c < uv_w; c++) {
+            /* Empirically confirmed on v1.3 silicon: even rows carry U,
+             * odd rows carry V — opposite of the LCD doc "OUYY/EVYY"
+             * naming hint. Geometry was correct with V/U; only colours
+             * were swapped (logs/20260512-002045.log). */
+            out_even[c * 3 + 0] = U_row[c];
+            out_even[c * 3 + 1] = Y_even[c * 2];
+            out_even[c * 3 + 2] = Y_even[c * 2 + 1];
+            out_odd[c * 3 + 0]  = V_row[c];
+            out_odd[c * 3 + 1]  = Y_odd[c * 2];
+            out_odd[c * 3 + 2]  = Y_odd[c * 2 + 1];
+        }
+    }
+}
+
 static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
                                       esp_lcd_dpi_panel_event_data_t *edata,
                                       void *user_ctx)
@@ -80,6 +212,11 @@ esp_err_t display_video_init(void)
     if (!s_disp) {
         ESP_LOGW(TAG, "no LVGL display — video will be silent");
         return ESP_ERR_INVALID_STATE;
+    }
+    /* Hook the LVGL-side render-time monitor. The adapter doesn't use
+     * monitor_cb itself (verified), so it's free for our timing log. */
+    if (s_disp->driver) {
+        s_disp->driver->monitor_cb = lv_monitor_cb;
     }
 
     s_panel = bsp_display_get_panel_handle();
@@ -158,10 +295,16 @@ void display_video_yield_panel(void)
 
 /* Full CPU pipeline: per-pixel YUV→RGB565 (BT.601 limited range) with
  * the 90° transpose folded into the output index. esp_h264 produces I420
- * which is what we read directly. ~25-30 ms/frame on a single 360 MHz
- * RISC-V core; with CONFIG_ESP_H264_DUAL_TASK=y the decoder uses both
- * cores at ~50% each, leaving real headroom for this loop and for the
- * AAP / WiFi / BT loops too. */
+ * which is what we read directly.
+ *
+ * 2026-05-11: measured against imgfx+PPA — turned out MUCH WORSE,
+ * 105 ms/frame vs 62 ms (logs/20260511-174527.log). The transpose-folded
+ * mapping (sx=dy, sy=W-1-dx) reads YUV column-by-column, so every pixel
+ * is a PSRAM cache miss (cache lines are 64 B = 16 horizontal pixels,
+ * useless when stride is 800 vertical). imgfx reads sequentially and
+ * trades a separate landscape staging buffer + PPA rotate for that.
+ * Do NOT enable this branch as a "simpler" path — cache locality
+ * dominates here. Kept for reference and for testing future changes. */
 #define DISPLAY_CPU_YUV_FULL 0
 
 /* CPU does YUV→RGB565 into a landscape staging buffer, PPA does the
@@ -171,8 +314,47 @@ void display_video_yield_panel(void)
  * YUV+rotate misreads the input and tiles the output. PPA on RGB565+
  * rotate, however, is well-supported (Waveshare reference examples use
  * exactly this path). Splitting saves the CPU transpose step (~5-10 ms)
- * vs the all-CPU path. */
-#define DISPLAY_CPU_YUV_THEN_PPA_ROTATE 1
+ * vs the all-CPU path.
+ *
+ * 2026-05-10: profiling showed esp_imgfx I420→RGB565 is the bottleneck
+ * (~47 ms/frame on 800×480 — esp_image_effects has no PIE asm path on
+ * P4, README confirms `ASM: ✗`). */
+#define DISPLAY_CPU_YUV_THEN_PPA_ROTATE 0
+
+/* I420 → UYVY (byte-shuffle, no colour math) on CPU, then PPA UYVY →
+ * RGB565 + 270° rotate in a single HW op.
+ *
+ * 2026-05-11: DOES NOT WORK on our hardware. ppa_ll_srm_is_color_mode_supported
+ * gates YUV422_UYVY/VYUY/YUYV/YVYU on `HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300`
+ * (see hal/esp32p4/include/hal/ppa_ll.h:248). Our chip is v1.3 (logs report
+ * "chip revision: v1.3") so the call returns ESP_ERR_INVALID_ARG
+ * ("unsupported color mode"). Runtime confirmed in
+ * logs/20260511-204040.log — hundreds of consecutive PPA errors.
+ *
+ * Path is fundamentally blocked at the silicon level until a v3.0 P4 ships.
+ * Kept for reference; do not enable. */
+#define DISPLAY_CPU_I420_UYVY_THEN_PPA 0
+
+/* Single PPA op: I420 → RGB565 + 270° rotate. PPA YUV420 mode expects the
+ * JPEG MCU layout — disabled because we don't pre-shuffle. See the next
+ * branch for the working JPEG-shuffle + PPA YUV420 attempt. */
+#define DISPLAY_PPA_YUV_ROTATE 0
+
+/* JPEG MCU shuffle on CPU, then PPA YUV420 → RGB565 + 270° rotate in one
+ * HW op. PPA's YUV420 input mode expects the JPEG-decoder macroblock
+ * layout (per JPEG_decoder.c usage of DMA2D_CSC_RX_YUV420_TO_RGB565_601):
+ *   For each 16×16 macroblock (left→right, top→bottom):
+ *     4×Y blocks of 8×8 (top-left, top-right, bottom-left, bottom-right)
+ *     1×U block of 8×8 (covers the 16×16 due to 4:2:0)
+ *     1×V block of 8×8
+ *   → 384 bytes per macroblock, MCUs sequential.
+ *
+ * The shuffle is byte-copy-only (no colour math). At 800×480 we have
+ * 50×30=1500 MCUs. Reads from planar I420 have strided locality (Y rows
+ * are 800 B apart, UV rows 400 B apart — both larger than one cache line,
+ * but a single MB row reuses the same 16/8 Y/UV row-pairs). Estimate
+ * ~15-25 ms CPU shuffle. PPA YUV420→RGB+rotate target ~15-20 ms HW. */
+#define DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420 1
 
 esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                                     uint16_t src_w, uint16_t src_h)
@@ -297,6 +479,8 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
      *   B = clip((298*C + 516*D + 128) >> 8)
      */
     {
+        int64_t t_total_start = esp_timer_get_time();
+        int64_t t0 = t_total_start;
         uint16_t *fb = (uint16_t *)s_fb[idx];
         const int W = PANEL_NATIVE_W;
         const int H = PANEL_NATIVE_H;
@@ -333,13 +517,28 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                                   ((B & 0xF8) >> 3);
             }
         }
-        esp_cache_msync(fb, ALIGN_UP(W * H * 2, s_cache_line),
-                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_yuv_end = esp_timer_get_time();
+        /* HUD overlay sits in the same fb (still in cache from CPU writes). */
+        aa_overlay_draw(fb);
+        size_t fb_bytes = ALIGN_UP(W * H * 2, s_cache_line);
+        esp_cache_msync(fb, fb_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_overlay_end = esp_timer_get_time();
         esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, W, H, fb);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "panel_draw_bitmap (full cpu): %s",
                      esp_err_to_name(err));
         }
+        int64_t t_draw_end = esp_timer_get_time();
+
+        /* imgfx column repurposed as the YUV→RGB+transpose loop time;
+         * ppa is unused (zero); hud is overlay+flush; draw is panel call. */
+        s_aa_stats.frames++;
+        s_aa_stats.imgfx_us   += (uint64_t)(t_yuv_end     - t0);
+        s_aa_stats.ppa_us     += 0;
+        s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_yuv_end);
+        s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
+        s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
+        aa_stats_log_once_per_second();
         return err;
     }
 #elif DISPLAY_CPU_YUV_THEN_PPA_ROTATE
@@ -397,6 +596,8 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             .data     = (uint8_t *)s_landscape_rgb,
             .data_len = (uint32_t)((size_t)src_w * src_h * 2),
         };
+        int64_t t_total_start = esp_timer_get_time();
+        int64_t t0 = t_total_start;
         esp_imgfx_err_t e = esp_imgfx_color_convert_process(s_imgfx, &in, &out);
         if (e != ESP_IMGFX_ERR_OK) {
             ESP_LOGW(TAG, "imgfx_convert: %d", (int)e);
@@ -405,6 +606,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         /* PPA reads via DMA bypassing the cache; flush CPU writes first. */
         esp_cache_msync(s_landscape_rgb, s_landscape_rgb_bytes,
                         ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_imgfx_end = esp_timer_get_time();
 
         size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
                                        s_cache_line);
@@ -434,6 +636,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "ppa rotate: %s", esp_err_to_name(err));
             return err;
         }
+        int64_t t_ppa_end = esp_timer_get_time();
         /* Invalidate so our overlay reads the PPA-written pixels (DMA bypassed
          * the cache), then paint the speed/battery HUD with CPU writes,
          * then flush back to PSRAM before the LCD DMA scans it out. */
@@ -443,6 +646,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         aa_overlay_draw((uint16_t *)s_fb[idx]);
         esp_cache_msync(s_fb[idx], out_buf_size,
                         ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_overlay_end = esp_timer_get_time();
         err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
                                         PANEL_NATIVE_W, PANEL_NATIVE_H,
                                         s_fb[idx]);
@@ -450,6 +654,104 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "panel_draw_bitmap (cpu+ppa): %s",
                      esp_err_to_name(err));
         }
+        int64_t t_draw_end = esp_timer_get_time();
+
+        s_aa_stats.frames++;
+        s_aa_stats.imgfx_us   += (uint64_t)(t_imgfx_end   - t0);
+        s_aa_stats.ppa_us     += (uint64_t)(t_ppa_end     - t_imgfx_end);
+        s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
+        s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
+        s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
+        aa_stats_log_once_per_second();
+        return err;
+    }
+#elif DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420
+    /* Step 1: CPU shuffle planar I420 → JPEG-MCU YUV420 layout (4×Y + U + V
+     *         8x8 blocks per 16×16 macroblock). No colour math.
+     * Step 2: PPA YUV420 → RGB565 + 270° rotation in one HW pass.
+     *
+     * Buffer size: W*H*1.5 (same total bytes as I420 — just reordered). */
+    {
+        size_t need = ALIGN_UP((size_t)src_w * src_h * 3 / 2, s_cache_line);
+        if (s_landscape_rgb == NULL || need > s_landscape_rgb_bytes ||
+            src_w != s_landscape_w || src_h != s_landscape_h) {
+            free(s_landscape_rgb);
+            s_landscape_rgb = heap_caps_aligned_calloc(s_cache_line, 1,
+                                                       need,
+                                                       MALLOC_CAP_SPIRAM);
+            if (!s_landscape_rgb) {
+                ESP_LOGE(TAG, "yuv420 staging alloc %u failed", (unsigned)need);
+                return ESP_ERR_NO_MEM;
+            }
+            s_landscape_rgb_bytes = need;
+            s_landscape_w = src_w;
+            s_landscape_h = src_h;
+        }
+
+        int64_t t_total_start = esp_timer_get_time();
+        int64_t t0 = t_total_start;
+
+        i420_to_ouyy_evyy(yuv, src_w, src_h, (uint8_t *)s_landscape_rgb);
+        esp_cache_msync(s_landscape_rgb, s_landscape_rgb_bytes,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_shuffle_end = esp_timer_get_time();
+
+        size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
+                                       s_cache_line);
+        ppa_srm_oper_config_t op = {
+            .in = {
+                .buffer  = s_landscape_rgb,
+                .pic_w   = src_w,
+                .pic_h   = src_h,
+                .block_w = src_w,
+                .block_h = src_h,
+                .srm_cm  = PPA_SRM_COLOR_MODE_YUV420,
+                .yuv_range = COLOR_RANGE_LIMIT,
+                .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
+            },
+            .out = {
+                .buffer      = s_fb[idx],
+                .buffer_size = out_buf_size,
+                .pic_w       = PANEL_NATIVE_W,
+                .pic_h       = PANEL_NATIVE_H,
+                .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
+            },
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
+            .mode    = PPA_TRANS_MODE_BLOCKING,
+        };
+        esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "ppa yuv420+rot: %s", esp_err_to_name(err));
+            return err;
+        }
+        int64_t t_ppa_end = esp_timer_get_time();
+
+        esp_cache_msync(s_fb[idx], out_buf_size,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        aa_overlay_draw((uint16_t *)s_fb[idx]);
+        esp_cache_msync(s_fb[idx], out_buf_size,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_overlay_end = esp_timer_get_time();
+
+        err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
+                                        PANEL_NATIVE_W, PANEL_NATIVE_H,
+                                        s_fb[idx]);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "panel_draw_bitmap (yuv420+ppa): %s",
+                     esp_err_to_name(err));
+        }
+        int64_t t_draw_end = esp_timer_get_time();
+
+        s_aa_stats.frames++;
+        s_aa_stats.imgfx_us   += (uint64_t)(t_shuffle_end - t0);
+        s_aa_stats.ppa_us     += (uint64_t)(t_ppa_end     - t_shuffle_end);
+        s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
+        s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
+        s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
+        aa_stats_log_once_per_second();
         return err;
     }
 #elif DISPLAY_CPU_YUV_BYPASS
@@ -574,6 +876,108 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "panel_draw_bitmap (split): %s",
                      esp_err_to_name(err));
         }
+        return err;
+    }
+#elif DISPLAY_PPA_YUV_ROTATE
+    /* Single PPA pass: I420 → RGB565 + 270° rotate, straight into the
+     * panel framebuffer. Saves the ~47 ms imgfx step from the previous
+     * active path. Differences from the legacy `#else` PPA-YUV branch
+     * which produced tiled output:
+     *   1. C2M flush of the I420 input plane before PPA reads it.
+     *      esp_h264 writes the I420 buffer via CPU writes; without this,
+     *      PPA's DMA may read stale (cached-but-not-flushed) bytes.
+     *   2. block_w/h locked to src_w/h (which are 16-aligned at 800×480
+     *      — PPA YUV420 needs even dims; we get 16-byte alignment for
+     *      free, JPEG-style macroblocks fit cleanly).
+     *   3. Single rotate-only op, no scaling (scale_x=scale_y=1) — the
+     *      panel-native 480×800 ≡ rot270(800×480), so PPA's input pixel
+     *      count == output pixel count, no resampling. */
+    {
+        size_t yuv_bytes = (size_t)src_w * src_h * 3 / 2;
+        int64_t t_total_start = esp_timer_get_time();
+        int64_t t0 = t_total_start;
+        /* C2M: flush decoder's CPU writes so DMA in PPA sees current data. */
+        esp_cache_msync((void *)yuv,
+                        ALIGN_UP(yuv_bytes, s_cache_line),
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_flush_end = esp_timer_get_time();
+
+        size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
+                                       s_cache_line);
+        ppa_srm_oper_config_t op = {
+            .in = {
+                .buffer  = yuv,
+                .pic_w   = src_w,
+                .pic_h   = src_h,
+                .block_w = src_w,
+                .block_h = src_h,
+                .block_offset_x = 0,
+                .block_offset_y = 0,
+                .srm_cm  = PPA_SRM_COLOR_MODE_YUV420,
+                .yuv_range = COLOR_RANGE_LIMIT,
+                .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
+            },
+            .out = {
+                .buffer      = s_fb[idx],
+                .buffer_size = out_buf_size,
+                .pic_w       = PANEL_NATIVE_W,
+                .pic_h       = PANEL_NATIVE_H,
+                .block_offset_x = 0,
+                .block_offset_y = 0,
+                .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
+            },
+            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
+            .mode    = PPA_TRANS_MODE_BLOCKING,
+        };
+
+        static bool s_ppa_logged;
+        if (!s_ppa_logged) {
+            ESP_LOGI(TAG, "PPA YUV420→RGB565 + rot270: src %ux%u (yuv=%p, "
+                          "%u B) → panel %dx%d",
+                     (unsigned)src_w, (unsigned)src_h, yuv,
+                     (unsigned)yuv_bytes,
+                     PANEL_NATIVE_W, PANEL_NATIVE_H);
+            s_ppa_logged = true;
+        }
+
+        esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "ppa yuv+rot: %s", esp_err_to_name(err));
+            return err;
+        }
+        int64_t t_ppa_end = esp_timer_get_time();
+
+        /* M2C invalidate so overlay reads PPA-written pixels, paint HUD,
+         * C2M flush before DPI DMA scans out. */
+        esp_cache_msync(s_fb[idx], out_buf_size,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        aa_overlay_draw((uint16_t *)s_fb[idx]);
+        esp_cache_msync(s_fb[idx], out_buf_size,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        int64_t t_overlay_end = esp_timer_get_time();
+
+        err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
+                                        PANEL_NATIVE_W, PANEL_NATIVE_H,
+                                        s_fb[idx]);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "panel_draw_bitmap (ppa-yuv): %s",
+                     esp_err_to_name(err));
+        }
+        int64_t t_draw_end = esp_timer_get_time();
+
+        /* Reuse the existing log columns: imgfx slot now reports the
+         * input cache flush, ppa is the actual PPA call, hud is overlay
+         * + cache cycles, draw is panel_draw_bitmap. */
+        s_aa_stats.frames++;
+        s_aa_stats.imgfx_us   += (uint64_t)(t_flush_end   - t0);
+        s_aa_stats.ppa_us     += (uint64_t)(t_ppa_end     - t_flush_end);
+        s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
+        s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
+        s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
+        aa_stats_log_once_per_second();
         return err;
     }
 #else  /* DISPLAY_TEST_PATTERN */

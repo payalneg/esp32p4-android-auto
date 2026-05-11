@@ -515,6 +515,43 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     return send_err;
 }
 
+/* Per-second timing accumulators for the recv/decrypt path. Logged from
+ * recv_decrypted itself so we don't have to thread state through callers. */
+static struct {
+    uint32_t messages;
+    uint32_t frames;       /* AA frames including MIDDLE/LAST fragments */
+    uint64_t recv_us;      /* time spent in aa_frame_recv (TCP + lwIP) */
+    uint64_t decrypt_us;   /* time spent in aa_tls_decrypt (mbedTLS) */
+    int64_t  window_start_us;
+} s_recv_stats;
+
+static void recv_stats_log_once_per_second(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (s_recv_stats.window_start_us == 0) {
+        s_recv_stats.window_start_us = now;
+        return;
+    }
+    if (now - s_recv_stats.window_start_us < 1000000) return;
+    uint32_t m = s_recv_stats.messages;
+    uint32_t f = s_recv_stats.frames;
+    if (m > 0) {
+        ESP_LOGI(TAG,
+                 "recv: %u msg / %u frames | recv %llu us total "
+                 "(%llu us/frame) | decrypt %llu us total (%llu us/frame)",
+                 (unsigned)m, (unsigned)f,
+                 (unsigned long long)s_recv_stats.recv_us,
+                 (unsigned long long)(f ? s_recv_stats.recv_us / f : 0),
+                 (unsigned long long)s_recv_stats.decrypt_us,
+                 (unsigned long long)(f ? s_recv_stats.decrypt_us / f : 0));
+    }
+    s_recv_stats.messages   = 0;
+    s_recv_stats.frames     = 0;
+    s_recv_stats.recv_us    = 0;
+    s_recv_stats.decrypt_us = 0;
+    s_recv_stats.window_start_us = now;
+}
+
 /* Per-channel reassembly state. AAP can interleave fragments across channels:
  * gearhead pushes a video FIRST on ch=3, then sends a small audio BULK on
  * ch=4, then resumes ch=3 with MIDDLE/LAST. aasdk's MessageInStream rejects
@@ -561,8 +598,11 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         aa_channel_id_t ch;
         uint8_t flags;
         size_t cipher_len;
+        int64_t t_recv0 = esp_timer_get_time();
         esp_err_t err = aa_frame_recv(sock, &ch, &flags,
                                       cipher_buf, cipher_cap, &cipher_len);
+        s_recv_stats.recv_us += (uint64_t)(esp_timer_get_time() - t_recv0);
+        s_recv_stats.frames++;
         if (err != ESP_OK) return err;
         if (!(flags & AA_FRAME_FLAG_ENCRYPT)) {
             ESP_LOGW(TAG, "unexpected plaintext frame post-auth (flags 0x%02x)", flags);
@@ -584,11 +624,15 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
         if (is_bulk) {
+            int64_t t_dec0 = esp_timer_get_time();
             err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                                  plain_buf, plain_cap, plain_len);
+            s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
             xSemaphoreGive(s_ssl_mutex);
             if (err != ESP_OK) return err;
             *out_ch = ch;
+            s_recv_stats.messages++;
+            recv_stats_log_once_per_second();
             return ESP_OK;
         }
 
@@ -613,8 +657,10 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         }
 
         size_t got = 0;
+        int64_t t_dec0 = esp_timer_get_time();
         err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                              p->buf + p->len, p->cap - p->len, &got);
+        s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
         xSemaphoreGive(s_ssl_mutex);
         if (err != ESP_OK) return err;
         p->len += got;
@@ -632,6 +678,8 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             *out_ch = ch;
             p->active = false;
             p->len = 0;
+            s_recv_stats.messages++;
+            recv_stats_log_once_per_second();
             return ESP_OK;
         }
         /* MIDDLE — keep reading next frame (which may be on any channel). */
@@ -1003,16 +1051,16 @@ static esp_err_t handle_av_setup(int sock, aa_tls_t *tls,
     uint8_t resp[12];
     size_t  rp = 0;
     pb_w_uint32(resp, sizeof(resp), &rp, 1, 2 /* MEDIA_STATUS_2 */);
-    pb_w_uint32(resp, sizeof(resp), &rp, 2, 8 /* max_unacked — controls how
+    pb_w_uint32(resp, sizeof(resp), &rp, 2, 1 /* max_unacked — controls how
         many frames the phone keeps in flight before waiting for our acks.
         Each in-flight frame is ~33 ms of touch→video lag (we ack after
         display, so phone paces to our decode rate via this window).
-        1 tripped FRAMER_WRITER_STALL within 20-30 s. 4 was comfortable
-        but felt sluggish (~130 ms queued lag). 2 halved input latency
-        but pushed back-pressure closer to the stall edge. 8 gives the
-        phone plenty of headroom — touch lag is worse, but we shouldn't
-        ever back-pressure the recv-loop; useful for diagnosing whether
-        stalls/judder come from the unack window or from elsewhere. */);
+        1 = strict ping-pong: phone sends one frame, waits for our ack,
+        sends the next. Minimal touch→video lag and no h264_pipe queue
+        pressure (we'll never see push blocked on full queue). Risk:
+        FRAMER_WRITER_STALL on the phone if our ack is late by >5-10 s
+        — but with the current ack-after-display path acks fire every
+        ~67 ms (display rate) and shouldn't approach that bound. */);
     pb_w_uint32(resp, sizeof(resp), &rp, 3, 0 /* configs[0] = use config 0 */);
     esp_err_t err = send_encrypted(sock, tls, ch, AA_MSG_AV_MEDIA_SETUP_RESP,
                                    resp, rp, cipher_buf, cipher_cap);

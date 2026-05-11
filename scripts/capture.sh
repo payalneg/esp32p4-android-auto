@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-DURATION="${1:-600}"
+DURATION="${1:-6000}"
 FLASH=""
 for arg in "${@:2}"; do
     case "$arg" in

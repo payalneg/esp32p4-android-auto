@@ -50,6 +50,13 @@ static TaskHandle_t                s_task;
 static uint32_t s_decoded_frames;
 static uint32_t s_decode_errors;
 static uint64_t s_decode_total_us;
+/* Per-second high-water mark of queue depth, sampled both inside the
+ * decoder pop loop (just after we dequeued — so this is the depth left
+ * behind after take) and by push() before it enqueues. Lets us tell
+ * "queue spikes to 32 once then drains" from "queue stays near 32". */
+static uint32_t s_queue_hwm;
+static uint32_t s_push_blocked;       /* number of push waits > 50 ms */
+static uint64_t s_push_blocked_us;    /* sum of those waits */
 
 static void log_stats_once_per_second(void)
 {
@@ -61,16 +68,24 @@ static void log_stats_once_per_second(void)
     }
     if (now - window_start_us < 1000000) return;
 
-    if (s_decoded_frames > 0 || s_decode_errors > 0) {
-        ESP_LOGI(TAG, "decoded %u frames (avg %llu us/frame), errors %u",
+    if (s_decoded_frames > 0 || s_decode_errors > 0 || s_queue_hwm > 0) {
+        ESP_LOGI(TAG,
+                 "decoded %u fr (avg %llu us/fr) | q hwm %u/4 | "
+                 "push blocked %u times, %llu ms total | errors %u",
                  (unsigned)s_decoded_frames,
                  (unsigned long long)(s_decoded_frames
                      ? (s_decode_total_us / s_decoded_frames) : 0),
+                 (unsigned)s_queue_hwm,
+                 (unsigned)s_push_blocked,
+                 (unsigned long long)(s_push_blocked_us / 1000),
                  (unsigned)s_decode_errors);
     }
     s_decoded_frames  = 0;
     s_decode_errors   = 0;
     s_decode_total_us = 0;
+    s_queue_hwm       = 0;
+    s_push_blocked    = 0;
+    s_push_blocked_us = 0;
     window_start_us   = now;
 }
 
@@ -128,6 +143,11 @@ static void decoder_task(void *arg)
     int64_t last_ack_us = 0;
     while (true) {
         if (xQueueReceive(s_queue, &it, portMAX_DELAY) != pdTRUE) continue;
+        /* Depth right after dequeue: items still waiting behind this one.
+         * A persistently full queue means push is paying the warn cost on
+         * every frame; a one-off spike means we just had a burst. */
+        uint32_t depth = (uint32_t)uxQueueMessagesWaiting(s_queue);
+        if (depth > s_queue_hwm) s_queue_hwm = depth;
         decode_and_show(it.buf, it.len);
         free(it.buf);
         if (it.ack_cb) {
@@ -174,11 +194,17 @@ esp_err_t h264_pipe_init(void)
         s_dec_param = NULL;
     }
 
-    /* 32 slots. Earlier 16 was enough on average but bursts during initial
-     * channel setup or movement scenes filled it up and made push block,
-     * which collapses TCP draining and trips gearhead's STALL detector.
-     * 32 × ~100 KiB peak ≈ 3 MB in PSRAM — fine. */
-    s_queue = xQueueCreate(32, sizeof(pipe_item_t));
+    /* 4 slots. Profiling (logs/20260511-143558.log) showed gearhead ignores
+     * max_unacked=1 and streams at source rate (~30 fps), while our
+     * decoder+display+ack pipeline tops out near ~10 fps. With queue=32 the
+     * queue stayed pegged at 32 → 32×~100ms = ~3s of touch→video latency.
+     * With queue=4 the recv-loop back-pressures TCP within ~400ms of decode
+     * lag; phone-side TCP buffer fills and gearhead slows to our actual
+     * rate via flow control instead of via the protocol's ack window. No
+     * frames are dropped (push still blocks on full, just for less time
+     * and with much less accumulated lag), so H.264 decoder state stays
+     * valid across IDR boundaries. */
+    s_queue = xQueueCreate(4, sizeof(pipe_item_t));
     if (!s_queue) {
         ESP_LOGE(TAG, "xQueueCreate failed");
         esp_h264_dec_close(s_dec);
@@ -220,15 +246,22 @@ void h264_pipe_push(const uint8_t *data, size_t len,
     }
     memcpy(it.buf, data, len);
 
+    /* Depth right before enqueue: shows what the producer sees. Combined
+     * with the post-dequeue hwm we can tell whether queue is filling up
+     * faster than it drains or sitting steady. */
+    uint32_t pre_depth = (uint32_t)uxQueueMessagesWaiting(s_queue);
+    if (pre_depth > s_queue_hwm) s_queue_hwm = pre_depth;
+
     /* Block on full queue. Should not happen with depth=32 + max_unacked
-     * gating — log if it does so we can tell. */
+     * gating — accumulate wait time so the per-second stats can summarise. */
     int64_t t0 = esp_timer_get_time();
     if (xQueueSend(s_queue, &it, portMAX_DELAY) != pdTRUE) {
         free(it.buf);
         return;
     }
-    int64_t dt_ms = (esp_timer_get_time() - t0) / 1000;
-    if (dt_ms > 50) {
-        ESP_LOGW(TAG, "push blocked %lld ms on full queue", (long long)dt_ms);
+    int64_t dt_us = esp_timer_get_time() - t0;
+    if (dt_us > 50 * 1000) {
+        s_push_blocked++;
+        s_push_blocked_us += (uint64_t)dt_us;
     }
 }
