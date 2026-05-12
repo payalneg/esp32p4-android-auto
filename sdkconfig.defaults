@@ -166,11 +166,20 @@ CONFIG_BT_NIMBLE_GATT_CLIENT=n
 # "esp_startup_start_app: assert failed res == pdTRUE". Decoding from flash
 # is plenty fast for our 480p target.
 CONFIG_ESP_H264_DECODER_IRAM=n
-# Single-thread decoder. Dual-task mode used to claim 2x speedup but only when
-# the helper sat on a different core than the main decoder; once we forced both
-# onto core 1 (so they wouldn't fight LVGL on core 0) the gain dropped to a few
-# percent and we paid a prio-17 task that preempted the AA recv-loop on every
-# frame. Backpressure is handled at the protocol layer instead: max_unacked=4
-# on the video channel + ack-on-display in h264_pipe means the phone slows to
-# our actual decode rate, no AAP ring overflow even if a frame takes 40 ms.
-CONFIG_ESP_H264_DUAL_TASK=n
+# Dual-task decoder ON, helper pinned to core 0. Profiling showed that
+# big H.264 frames (IDR / scene-change keyframes, ~25 KiB each) take 90-
+# 120 ms to decode single-threaded — the median fps stays at ~13 in idle
+# but bursts collapse to 6-7 fps because of these spikes. With dual-task
+# the helper crunches MBs on core 0 in parallel with the main decoder on
+# core 1, roughly halving the big-frame cost.
+#
+# Why core 0 is OK: LVGL adapter (task_priority=6, no affinity) is the
+# only other significant consumer of core 0 cycles, and it's paused
+# while AA video is active (display_video.c calls esp_lv_adapter_pause
+# on the first frame). In VESC mode the decoder still runs to keep H.264
+# state valid, but the ack throttle in h264_pipe slows the phone to ~5
+# fps — even with the prio-17 helper occasionally preempting LVGL, the
+# 200 ms gap between frames leaves plenty of room.
+CONFIG_ESP_H264_DUAL_TASK=y
+CONFIG_ESP_H264_DUAL_TASK_CORE=0
+CONFIG_ESP_H264_DUAL_TASK_PRIORITY=17
