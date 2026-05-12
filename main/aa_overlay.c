@@ -3,8 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "custom.h"
 #include "lvgl.h"
+#include "vesc_can/vesc_rt_data.h"
+#include "vesc_can/vesc_datatypes.h"
 
 /* Panel-native (portrait) dimensions, mirrored from display_video.c. The
  * AA frame in `fb` was rotated 90° CW into this layout, so the user sees
@@ -216,16 +217,27 @@ void aa_overlay_draw(uint16_t *fb)
 {
     if (!fb) return;
 
-    /* Pull the same numbers the cockpit shows. cockpit_get_*() return the
-     * last value passed to update_speed / update_battery_proc, so AA HUD
-     * agrees with the dashboard, demo mode included. */
-    int speed = cockpit_get_speed_value();
-    int batt  = cockpit_get_battery_proc_value();
+    /* Read VESC RT data directly. The cockpit_get_*() cache used to feed
+     * this overlay is updated from an lv_timer, which freezes whenever the
+     * AA path pauses the LVGL worker (esp_lv_adapter_pause in display_video).
+     * vesc_rt_data has its own FreeRTOS poller and stays live regardless,
+     * so it's the only source guaranteed to be fresh while AA video runs. */
+    unsigned speed = 0;
+    unsigned batt  = 0;
+    if (vesc_rt_data_is_fresh()) {
+        const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
+        float spd_kmh = vesc_rt_data_get_speed_kmh();
+        if (spd_kmh < 0) spd_kmh = -spd_kmh;
+        int s = (int)(spd_kmh + 0.5f);
+        speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
+        int b = (int)(rt->battery_level * 100.0f + 0.5f);
+        batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
+    }
 
     char speed_buf[8];
     char batt_buf[8];
-    snprintf(speed_buf, sizeof speed_buf, "%d", speed);
-    snprintf(batt_buf,  sizeof batt_buf,  "%d", batt);
+    snprintf(speed_buf, sizeof speed_buf, "%u", speed);
+    snprintf(batt_buf,  sizeof batt_buf,  "%u", batt);
 
     const lv_font_t *big = &lv_font_Antonio_Regular_64;
     const lv_font_t *sml = &lv_font_Antonio_Regular_22;
