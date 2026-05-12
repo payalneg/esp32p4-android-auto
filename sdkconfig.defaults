@@ -159,12 +159,11 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_GATT_CLIENT=n
 
 # ===== H.264 SW decoder =====
-# The default ESP_H264_DECODER_IRAM=y stuffs ~22 KiB of decoder hot-path code
-# into IRAM/L2 SRAM, which on this board (after BSP, ESP-Hosted, mbedTLS,
-# LVGL framebuffer pool) leaves so little internal RAM that FreeRTOS can't
-# even allocate the 16 KiB main-task stack — boot crashes at
-# "esp_startup_start_app: assert failed res == pdTRUE". Decoding from flash
-# is plenty fast for our 480p target.
+# IRAM-resident hot path (~22 KiB) leaves too little internal SRAM heap
+# for the ESP-Hosted SDIO mempool (sdio_drv.c:249 buf_mp_g assert) and
+# the FreeRTOS main-task stack. Retested 2026-05-12 and boot still
+# crashes the same way — keep =n. Decoding from flash is fast enough
+# for our 480p target.
 CONFIG_ESP_H264_DECODER_IRAM=n
 # Dual-task decoder ON, helper pinned to core 0. Profiling showed that
 # big H.264 frames (IDR / scene-change keyframes, ~25 KiB each) take 90-
