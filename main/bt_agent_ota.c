@@ -39,7 +39,20 @@ static const char *TAG = "bt_agent_ota";
  * combination that survives end-to-end on this board's wiring. */
 #define FLASH_BLOCK_SIZE  (1 * 1024)
 
-static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len)
+/* Briefly let LVGL render a frame while we're otherwise keeping it paused
+ * for the duration of the flash. ~40 ms is enough for one render pass at
+ * the usual frame rate; we call this only between flash blocks so it
+ * cannot interleave with an in-flight ACK from the agent. */
+static void lvgl_pulse_if_paused(bool paused)
+{
+    if (!paused) return;
+    if (esp_lv_adapter_resume() != ESP_OK) return;
+    vTaskDelay(pdMS_TO_TICKS(40));
+    esp_lv_adapter_pause(1000);
+}
+
+static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len,
+                                bool lvgl_paused)
 {
     const uint8_t *data = bt_agent_fw_data();
     size_t         size = bt_agent_fw_size();
@@ -60,6 +73,7 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len)
         .gpio0_trigger_pin = BT_AGENT_IO0_PIN,
     };
     ota_screen_set_status("Connecting to bootloader...");
+    lvgl_pulse_if_paused(lvgl_paused);
     if (loader_port_esp32_init(&cfg) != ESP_LOADER_SUCCESS) {
         ESP_LOGE(TAG, "loader_port_esp32_init failed");
         snprintf(err_buf, err_buf_len, "port init failed");
@@ -92,6 +106,7 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len)
 
     ota_screen_set_status("Erasing flash...");
     ota_screen_set_progress(0, size);
+    lvgl_pulse_if_paused(lvgl_paused);
     if (esp_loader_flash_start(BT_AGENT_FLASH_ADDR, size, FLASH_BLOCK_SIZE)
             != ESP_LOADER_SUCCESS) {
         ESP_LOGE(TAG, "flash_start failed");
@@ -116,8 +131,10 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len)
     }
 
     ota_screen_set_status("Writing firmware...");
+    lvgl_pulse_if_paused(lvgl_paused);
     size_t   off = 0;
-    int      pct_last = -1;
+    int      pct_last  = -1;
+    int      pct_drawn = 0;
     while (off < size) {
         size_t chunk = (size - off > FLASH_BLOCK_SIZE)
                            ? FLASH_BLOCK_SIZE : (size - off);
@@ -138,10 +155,19 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len)
                      pct, (unsigned)off, (unsigned)size);
             pct_last = pct;
         }
+        /* ~5% steps → ~20 short LVGL render windows over the whole flash.
+         * Frequent enough that the user sees the bar move, rare enough
+         * that the ACK-loss issue (see the pause comment in the caller)
+         * stays away. */
+        if (pct >= pct_drawn + 5) {
+            pct_drawn = pct - (pct % 5);
+            lvgl_pulse_if_paused(lvgl_paused);
+        }
     }
     free(staging);
 
     ota_screen_set_status("Verifying…");
+    lvgl_pulse_if_paused(lvgl_paused);
     /* Pass true → reboot into the new app. Library handles the reset. */
     if (esp_loader_flash_finish(true) != ESP_LOADER_SUCCESS) {
         ESP_LOGE(TAG, "flash_finish failed");
@@ -209,7 +235,7 @@ esp_err_t bt_agent_ota_check_and_update(void)
     bool lvgl_paused = (esp_lv_adapter_pause(2000) == ESP_OK);
 
     char err_msg[64] = "";
-    esp_err_t flash_err = do_flash_image(err_msg, sizeof(err_msg));
+    esp_err_t flash_err = do_flash_image(err_msg, sizeof(err_msg), lvgl_paused);
 
     if (lvgl_paused) esp_lv_adapter_resume();
     bt_link_resume_after_flash();

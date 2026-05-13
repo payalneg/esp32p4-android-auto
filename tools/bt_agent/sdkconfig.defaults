@@ -14,6 +14,13 @@ CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_SPP_ENABLED=y
 CONFIG_BT_SSP_ENABLED=y
+# A2DP Sink + AVRCP Controller — used in the AVRCP-only mode (top-level
+# CONN_AVRCP). We don't actually play audio; A2DP is enabled because phones
+# refuse to emit AVRCP metadata unless something is listening as a sink, so
+# we accept the audio frames and drop them in the data callback. Enabling
+# A2DP automatically selects BT_AVRCP_ENABLED (see bluedroid Kconfig.in),
+# so the esp_avrc_ct_* API becomes available without an explicit flag.
+CONFIG_BT_A2DP_ENABLE=y
 # Custom SDP records (we need this to advertise the AA Wireless UUID
 # alongside the default SPP record).
 CONFIG_BT_SDP_COMMON_ENABLED=y
@@ -38,5 +45,6 @@ CONFIG_BTDM_CTRL_BR_EDR_MAX_ACL_CONN=2
 # Default log level — verbose enough to debug pairing without drowning UART.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# Smaller flash footprint (no OTA needed for the BT agent).
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
+# A2DP+AVRCP push the app over the 1 MiB single-app limit, so use the
+# single-app-large table (1.5 MiB app slot). No OTA needed for the BT agent.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

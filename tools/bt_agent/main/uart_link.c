@@ -10,6 +10,7 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 
 /* UART0 on the standard GPIO 1 (TX) / GPIO 3 (RX) pins. UART2 on this
@@ -34,6 +35,14 @@ static const char *TAG = "uart_link";
 static uart_link_wifi_t s_wifi;
 static volatile bool    s_wifi_have;
 
+/* Top-level mode handshake. P4 sends "MODE|AVRCP" or "MODE|AA" on its boot
+ * right after the UART is up. main.c blocks on uart_link_wait_mode() until
+ * the line lands (or until the timeout, in which case we default to AA so
+ * existing pre-AVRCP boards keep working). */
+static volatile uart_link_mode_t s_mode = UART_LINK_MODE_NONE;
+static EventGroupHandle_t        s_mode_ev;
+#define MODE_EV_BIT  (1 << 0)
+
 bool uart_link_have_wifi(void) { return s_wifi_have; }
 
 const uart_link_wifi_t *uart_link_get_wifi(void)
@@ -47,6 +56,31 @@ const uart_link_wifi_t *uart_link_get_wifi(void)
  * Stores into s_wifi on success and sets s_wifi_have. */
 static void parse_line(char *line)
 {
+    if (strncmp(line, "MODE|", 5) == 0) {
+        const char *m = line + 5;
+        uart_link_mode_t new_mode;
+        if (strcmp(m, "AVRCP") == 0) {
+            new_mode = UART_LINK_MODE_AVRCP;
+        } else if (strcmp(m, "AA") == 0) {
+            new_mode = UART_LINK_MODE_AA;
+        } else {
+            ESP_LOGW(TAG, "MODE: unknown value '%s'", m);
+            return;
+        }
+        if (s_mode == UART_LINK_MODE_NONE) {
+            s_mode = new_mode;
+            if (s_mode_ev) xEventGroupSetBits(s_mode_ev, MODE_EV_BIT);
+            ESP_LOGI(TAG, "MODE locked to %s", m);
+        } else if (s_mode != new_mode) {
+            /* P4 re-sent a different mode after we already committed —
+             * the agent stack is already up; ignore and let the next
+             * reboot apply the new choice. */
+            ESP_LOGW(TAG, "MODE change to %s ignored (already %s)", m,
+                     s_mode == UART_LINK_MODE_AVRCP ? "AVRCP" : "AA");
+        }
+        return;
+    }
+
     if (strncmp(line, "WIFI|", 5) != 0) {
         ESP_LOGW(TAG, "ignoring unknown line: %.40s", line);
         return;
@@ -137,8 +171,65 @@ static void rx_task(void *arg)
     }
 }
 
+uart_link_mode_t uart_link_wait_mode(uint32_t timeout_ms)
+{
+    if (!s_mode_ev) {
+        ESP_LOGW(TAG, "wait_mode called before init — defaulting to AA");
+        return UART_LINK_MODE_AA;
+    }
+    EventBits_t bits = xEventGroupWaitBits(s_mode_ev, MODE_EV_BIT,
+                                           pdFALSE, pdTRUE,
+                                           pdMS_TO_TICKS(timeout_ms));
+    if (!(bits & MODE_EV_BIT)) {
+        ESP_LOGW(TAG, "no MODE from P4 within %u ms — defaulting to AA",
+                 (unsigned)timeout_ms);
+        return UART_LINK_MODE_AA;
+    }
+    return s_mode;
+}
+
+/* Replace any '|' in `src` with a space when copying — keeps the META line
+ * format unambiguous without needing escape parsing on P4. Truncates to
+ * `dstsize - 1` chars. Returns chars written (excl. NUL). */
+static size_t sanitize_field(char *dst, size_t dstsize, const char *src)
+{
+    if (!dst || dstsize == 0) return 0;
+    size_t n = 0;
+    if (!src) { dst[0] = '\0'; return 0; }
+    while (src[n] && n < dstsize - 1) {
+        char c = src[n];
+        dst[n] = (c == '|') ? ' ' : c;
+        n++;
+    }
+    dst[n] = '\0';
+    return n;
+}
+
+void uart_link_send_meta(const char *title, const char *artist, const char *album)
+{
+    char t[160], a[160], al[160];
+    sanitize_field(t,  sizeof(t),  title);
+    sanitize_field(a,  sizeof(a),  artist);
+    sanitize_field(al, sizeof(al), album);
+    char line[520];
+    int n = snprintf(line, sizeof(line), "META|%s|%s|%s\n", t, a, al);
+    if (n <= 0 || n >= (int)sizeof(line)) {
+        ESP_LOGW(TAG, "send_meta: line too long, dropped");
+        return;
+    }
+    uart_write_bytes(UART_PORT, line, (size_t)n);
+}
+
+void uart_link_send_state(bool playing)
+{
+    const char *s = playing ? "STATE|playing\n" : "STATE|paused\n";
+    uart_write_bytes(UART_PORT, s, strlen(s));
+}
+
 void uart_link_init(void)
 {
+    if (!s_mode_ev) s_mode_ev = xEventGroupCreate();
+
     /* On UART0 the IDF console may already have configured baud/pins.
      * Install the IDF UART driver to get an RX ring buffer (we need to
      * read P4's WIFI line). The console's printf path is unaffected — it

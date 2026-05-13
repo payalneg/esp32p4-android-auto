@@ -6,6 +6,7 @@
 
 #include "settings_wrapper.h"
 #include "lv_conf.h"
+#include <stdio.h>
 
 // Determine if we're running in simulator using LVGL's flag
 #ifndef LV_REALDEVICE
@@ -14,6 +15,9 @@
     #define SIMULATOR_MODE 0
     // On device - include real settings
     #include "dev_settings.h"
+    #include "esp_system.h"
+    #include "freertos/FreeRTOS.h"
+    #include "freertos/task.h"
 #endif
 
 // Simulator-mode storage
@@ -28,6 +32,8 @@ static struct {
     bool show_fps;
     uint16_t wheel_diameter_mm;
     uint8_t motor_poles;
+    uint8_t connection_mode;
+    float power_max_kw;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -37,7 +43,9 @@ static struct {
     .battery_calc_mode = 0,  // Direct
     .show_fps = true,
     .wheel_diameter_mm = 200,  // 200mm default
-    .motor_poles = 7  // Standard for VESC motors
+    .motor_poles = 7,  // Standard for VESC motors
+    .connection_mode = CONN_MODE_OPT_ANDROID_AUTO,
+    .power_max_kw = 4.5f,
 };
 #endif
 
@@ -205,6 +213,123 @@ void settings_wrapper_set_motor_poles(uint8_t poles) {
     sim_settings.motor_poles = poles;
 #else
     settings_set_motor_poles(poles);
+#endif
+}
+
+uint8_t settings_wrapper_get_connection_mode(void) {
+#if SIMULATOR_MODE
+    return sim_settings.connection_mode;
+#else
+    return (uint8_t)settings_get_connection_mode();
+#endif
+}
+
+void settings_wrapper_set_connection_mode(uint8_t mode) {
+#if SIMULATOR_MODE
+    sim_settings.connection_mode = mode;
+#else
+    settings_set_connection_mode((connection_mode_t)mode);
+#endif
+}
+
+float settings_wrapper_get_power_max_kw(void) {
+#if SIMULATOR_MODE
+    return sim_settings.power_max_kw;
+#else
+    return settings_get_power_max_kw();
+#endif
+}
+
+void settings_wrapper_set_power_max_kw(float power_max_kw) {
+#if SIMULATOR_MODE
+    sim_settings.power_max_kw = power_max_kw;
+#else
+    settings_set_power_max_kw(power_max_kw);
+#endif
+}
+
+void settings_wrapper_set_power_max_kw_volatile(float power_max_kw) {
+#if SIMULATOR_MODE
+    sim_settings.power_max_kw = power_max_kw;
+#else
+    settings_set_power_max_kw_volatile(power_max_kw);
+#endif
+}
+
+void settings_wrapper_persist_power_max_kw(void) {
+#if SIMULATOR_MODE
+    /* simulator: nothing to persist */
+#else
+    settings_persist_power_max_kw();
+#endif
+}
+
+void settings_wrapper_set_target_vesc_id_volatile(uint8_t id) {
+#if SIMULATOR_MODE
+    sim_settings.target_vesc_id = id;
+#else
+    settings_set_target_vesc_id_volatile(id);
+#endif
+}
+
+void settings_wrapper_persist_target_vesc_id(void) {
+#if !SIMULATOR_MODE
+    settings_persist_target_vesc_id();
+#endif
+}
+
+void settings_wrapper_set_brightness_volatile(uint8_t brightness) {
+#if SIMULATOR_MODE
+    sim_settings.brightness = brightness;
+#else
+    settings_set_screen_brightness_volatile(brightness);
+#endif
+}
+
+void settings_wrapper_persist_brightness(void) {
+#if !SIMULATOR_MODE
+    settings_persist_screen_brightness();
+#endif
+}
+
+void settings_wrapper_set_controller_id_volatile(uint8_t id) {
+#if SIMULATOR_MODE
+    sim_settings.controller_id = id;
+#else
+    settings_set_controller_id_volatile(id);
+#endif
+}
+
+void settings_wrapper_persist_controller_id(void) {
+#if !SIMULATOR_MODE
+    settings_persist_controller_id();
+#endif
+}
+
+void settings_wrapper_set_battery_capacity_volatile(float capacity) {
+#if SIMULATOR_MODE
+    sim_settings.battery_capacity = capacity;
+#else
+    settings_set_battery_capacity_volatile(capacity);
+#endif
+}
+
+void settings_wrapper_persist_battery_capacity(void) {
+#if !SIMULATOR_MODE
+    settings_persist_battery_capacity();
+#endif
+}
+
+void settings_wrapper_apply_restart(void) {
+#if SIMULATOR_MODE
+    printf("[settings] simulator: would esp_restart() now\n");
+#else
+    /* Give NVS a moment to flush its commit before we yank the CPU. The
+     * setter already called nvs_commit synchronously, but the flash write
+     * is itself a few hundred ms; sleep one tick so the LVGL task that
+     * called us has a chance to unlock the display too. */
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
 #endif
 }
 

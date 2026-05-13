@@ -80,6 +80,14 @@ CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 CONFIG_VESC_CAN_TX_GPIO=48
 CONFIG_VESC_CAN_RX_GPIO=47
 
+# Enable LISP stats poll — required for cruise-control indicator, cruise
+# speed text and current-profile (mode) label. The Super_VESC_Display Lisp
+# script (main.lisp) publishes `cruise-active`, `cruise-rpm`, `rpm-per-ms`
+# and `current-profile`; vesc_ui_updater.c::push_cruise_locked() reads them
+# from vesc_lisp_poll and pushes to the dashboard. Off in Kconfig default
+# because not every VESC has a Lisp app loaded; this firmware assumes one.
+CONFIG_VESC_CAN_LISP_POLL_ENABLE=y
+
 # esp_serial_flasher (used by bt_agent_ota): bump retries 3→10. Single-byte
 # UART drops under sustained load occasionally burned through 3 retries;
 # 10 absorbs the jitter without measurably hurting normal throughput.

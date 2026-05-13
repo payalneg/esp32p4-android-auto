@@ -3,7 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "dev_settings.h"
 #include "lvgl.h"
+#include "vesc_battery_calc.h"
+#include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_datatypes.h"
 
@@ -224,14 +227,34 @@ void aa_overlay_draw(uint16_t *fb)
      * so it's the only source guaranteed to be fresh while AA video runs. */
     unsigned speed = 0;
     unsigned batt  = 0;
+    bool cc_active = false;
     if (vesc_rt_data_is_fresh()) {
         const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
         float spd_kmh = vesc_rt_data_get_speed_kmh();
         if (spd_kmh < 0) spd_kmh = -spd_kmh;
         int s = (int)(spd_kmh + 0.5f);
         speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
-        int b = (int)(rt->battery_level * 100.0f + 0.5f);
+
+        /* Battery percent — Smart mode delegates to the persistent tracker
+         * so the HUD agrees with the VESC dashboard; Direct mode uses the
+         * controller's voltage-based estimate. */
+        float pct;
+        if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_SMART) {
+            pct = battery_calc_get_smart_percentage(
+                    rt->battery_level, rt->amp_hours,
+                    settings_get_battery_capacity());
+        } else {
+            pct = rt->battery_level * 100.0f;
+        }
+        int b = (int)(pct + 0.5f);
         batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
+    }
+    /* Cruise indicator — independent of vesc_rt_data freshness; Lisp poll
+     * has its own pump and may report CC active even if the RT poll just
+     * gapped a frame. */
+    int32_t cc_val = 0;
+    if (vesc_lisp_poll_get_variable_int("cruise-active", &cc_val)) {
+        cc_active = (cc_val != 0);
     }
 
     char speed_buf[8];
@@ -250,8 +273,22 @@ void aa_overlay_draw(uint16_t *fb)
     int sml_top = line_top_for_baseline(sml, baseline_y);
 
     /* ── Speed widget (left) ──
-     * "64" in big, " KM/H" in small, anchored to SPEED_LEFT_X. */
+     * "64" in big, " KM/H" in small, anchored to SPEED_LEFT_X.
+     * When cruise control is engaged, a small "CC" sits to the left of
+     * the speed digits so the user can tell at a glance the throttle is
+     * being held by the controller. */
     int x = SPEED_LEFT_X;
+    if (cc_active) {
+        /* Lime "CC" tag — same accent green the battery icon uses for ok. */
+        int cc_w = measure_text(sml, "CC");
+        /* Drop a halo'd CC slightly raised so it caps the speed digits. */
+        draw_text(fb, sml, x - 1, sml_top,     "CC", COLOR_OUTLINE, GLOBAL_ALPHA);
+        draw_text(fb, sml, x + 1, sml_top,     "CC", COLOR_OUTLINE, GLOBAL_ALPHA);
+        draw_text(fb, sml, x,     sml_top - 1, "CC", COLOR_OUTLINE, GLOBAL_ALPHA);
+        draw_text(fb, sml, x,     sml_top + 1, "CC", COLOR_OUTLINE, GLOBAL_ALPHA);
+        draw_text(fb, sml, x,     sml_top,     "CC", COLOR_BATT_OK, GLOBAL_ALPHA);
+        x += cc_w + 6;
+    }
     x += draw_text_with_halo(fb, big, x, big_top, speed_buf);
     x += 4;
     draw_text_with_halo(fb, sml, x, sml_top, "KM/H");

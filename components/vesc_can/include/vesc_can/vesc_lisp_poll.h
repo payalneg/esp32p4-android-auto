@@ -37,6 +37,8 @@ typedef struct {
 void vesc_lisp_poll_init(uint8_t target_vesc_id, uint32_t poll_interval_ms);
 void vesc_lisp_poll_start(void);
 void vesc_lisp_poll_stop(void);
+/* Pumped from vesc_rt_data's CAN polling task — one task drives both
+ * pollers so we don't double the FreeRTOS overhead for a single CAN bus. */
 void vesc_lisp_poll_loop(void);
 
 void vesc_lisp_poll_process_response(const uint8_t *data, unsigned int len);

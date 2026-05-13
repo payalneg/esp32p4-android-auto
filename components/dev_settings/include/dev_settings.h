@@ -21,6 +21,17 @@ typedef enum {
     BATTERY_CALC_MODE_SMART  = 1,
 } battery_calc_mode_t;
 
+/* Top-level connection mode chosen by the user in Settings. Decides which
+ * stack we bring up at boot (AA stays on the WROOM SPP/Wireless-Helper path,
+ * AVRCP switches the WROOM into A2DP-sink+AVRCP-CT and shows Now Playing on
+ * LVGL, CarPlay is a placeholder screen for now). The dropdown index in
+ * custom.c must match this enum order. */
+typedef enum {
+    CONN_AVRCP        = 0,
+    CONN_ANDROID_AUTO = 1,
+    CONN_CARPLAY      = 2,
+} connection_mode_t;
+
 /* Loads cache from NVS. Idempotent — settings_ui_init() also calls this
  * via settings_wrapper_init(), so order between main and UI doesn't matter. */
 void settings_init(void);
@@ -34,6 +45,8 @@ battery_calc_mode_t  settings_get_battery_calc_mode(void);
 bool                 settings_get_show_fps(void);
 uint16_t             settings_get_wheel_diameter_mm(void);
 uint8_t              settings_get_motor_poles(void);
+connection_mode_t    settings_get_connection_mode(void);
+float                settings_get_power_max_kw(void);
 
 void settings_set_target_vesc_id(uint8_t id);
 void settings_set_can_speed(can_speed_t speed);
@@ -44,6 +57,26 @@ void settings_set_battery_calc_mode(battery_calc_mode_t mode);
 void settings_set_show_fps(bool show);
 void settings_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_set_motor_poles(uint8_t poles);
+void settings_set_connection_mode(connection_mode_t mode);
+void settings_set_power_max_kw(float power_max_kw);
+
+/* Debounced setters — update the RAM cache and fire any hot-apply callback
+ * immediately, but DO NOT touch NVS. The UI pairs them with the matching
+ * settings_persist_* call on a debounce timer, so rapid spinbox/slider
+ * activity doesn't issue an nvs_commit on every tick. Without this, the
+ * LVGL task spends ~100 ms per value-change in a flash write and starves
+ * touch_input of the LVGL lock ("Failed to acquire LVGL lock"). */
+void settings_set_target_vesc_id_volatile(uint8_t id);
+void settings_set_screen_brightness_volatile(uint8_t brightness);
+void settings_set_controller_id_volatile(uint8_t id);
+void settings_set_battery_capacity_volatile(float capacity);
+void settings_set_power_max_kw_volatile(float power_max_kw);
+
+void settings_persist_target_vesc_id(void);
+void settings_persist_screen_brightness(void);
+void settings_persist_controller_id(void);
+void settings_persist_battery_capacity(void);
+void settings_persist_power_max_kw(void);
 
 /* Hot-apply hooks: registered by main once the corresponding subsystem is
  * up. settings_set_* fires the callback synchronously on the caller after

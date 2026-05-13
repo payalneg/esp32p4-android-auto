@@ -109,6 +109,7 @@ typedef struct
 	lv_obj_t *dashboard_Ah_text;
 	lv_obj_t *dashboard_Speed_cc_text;
 	lv_obj_t *dashboard_Settings_text;
+	lv_obj_t *dashboard_song_title_label;
 	lv_obj_t *settings;
 	bool settings_del;
 	lv_obj_t *settings_exit_button;

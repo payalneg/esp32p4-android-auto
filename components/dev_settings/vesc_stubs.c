@@ -1,4 +1,3 @@
-#include "vesc_battery_calc.h"
 #include "vesc_limits.h"
 
 #include "esp_log.h"
@@ -31,9 +30,4 @@ bool vesc_limits_set_speed_max(uint8_t target_id, float erpm) {
     ESP_LOGW(TAG, "vesc_limits_set_speed_max(%u, %.0f): backend not wired",
              target_id, erpm);
     return false;
-}
-
-void battery_calc_reset_trip_and_ah(void)
-{
-    ESP_LOGW(TAG, "battery_calc_reset_trip_and_ah: backend not wired");
 }

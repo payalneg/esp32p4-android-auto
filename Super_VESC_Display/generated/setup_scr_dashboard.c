@@ -710,6 +710,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_00, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_00, 245, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_00, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_00, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_00, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_00, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -735,6 +736,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_01, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_01, 271, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_01, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_01, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_01, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_01, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -760,6 +762,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_02, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_02, 297, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_02, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_02, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_02, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_02, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -785,6 +788,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_03, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_03, 323, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_03, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_03, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_03, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_03, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -810,6 +814,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_04, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_04, 349, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_04, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_04, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_04, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_04, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -835,6 +840,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_05, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_05, 375, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_05, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_05, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_05, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_05, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -860,6 +866,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_06, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_06, 401, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_06, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_06, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_06, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_06, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -885,6 +892,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_07, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_07, 427, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_07, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_07, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_07, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_07, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -910,6 +918,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_08, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_08, 453, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_08, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_08, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_08, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_08, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -935,6 +944,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_09, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_09, 479, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_09, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_09, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_09, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_09, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -960,6 +970,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_10, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_10, 505, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_10, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_10, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_10, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_10, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -985,6 +996,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_seg_11, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_seg_11, 531, 320);
     lv_obj_set_size(ui->dashboard_speed_seg_11, 24, 6);
+    lv_obj_add_flag(ui->dashboard_speed_seg_11, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_seg_11, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_seg_11, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1010,6 +1022,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_min, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_min, 240, 332);
     lv_obj_set_size(ui->dashboard_speed_min, 20, 20);
+    lv_obj_add_flag(ui->dashboard_speed_min, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_min, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_min, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1033,6 +1046,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_long_mode(ui->dashboard_speed_max, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_speed_max, 491, 332);
     lv_obj_set_size(ui->dashboard_speed_max, 80, 20);
+    lv_obj_add_flag(ui->dashboard_speed_max, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_speed_max, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_speed_max, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2169,6 +2183,29 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_pad_bottom(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_pad_left(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_shadow_width(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write codes dashboard_song_title_label
+    ui->dashboard_song_title_label = lv_label_create(ui->dashboard);
+    lv_label_set_text(ui->dashboard_song_title_label, "");
+    lv_label_set_long_mode(ui->dashboard_song_title_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(ui->dashboard_song_title_label, 180, 290);
+    lv_obj_set_size(ui->dashboard_song_title_label, 440, 50);
+
+    //Write style for dashboard_song_title_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_border_width(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui->dashboard_song_title_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_song_title_label, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui->dashboard_song_title_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_letter_space(ui->dashboard_song_title_label, 4, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_line_space(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui->dashboard_song_title_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
 
     //The custom code of dashboard.
 

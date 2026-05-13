@@ -6,6 +6,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
+#include "vesc_battery_calc.h"
 
 static const char *TAG = "dev_settings";
 #define NS "vesc_cfg"
@@ -24,7 +25,21 @@ static struct {
     bool                 show_fps;
     uint16_t             wheel_diameter_mm;
     uint8_t              motor_poles;
+    connection_mode_t    connection_mode;
+    float                power_max_kw;
 } s_cache;
+
+/* Coerce a raw NVS byte to a valid enum value. CONN_ANDROID_AUTO is the
+ * historical default — devices that never touched the new dropdown keep
+ * doing AA. */
+static connection_mode_t sanitize_connection_mode(uint8_t v) {
+    switch (v) {
+        case CONN_AVRCP:        return CONN_AVRCP;
+        case CONN_ANDROID_AUTO: return CONN_ANDROID_AUTO;
+        case CONN_CARPLAY:      return CONN_CARPLAY;
+        default:                return CONN_ANDROID_AUTO;
+    }
+}
 
 static settings_can_speed_cb_t     s_can_speed_cb;
 static settings_brightness_cb_t    s_brightness_cb;
@@ -70,12 +85,17 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "show_fps",    &u8 ) == ESP_OK) s_cache.show_fps          = (u8 != 0);
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
+    if (nvs_get_u8 (h, "conn_mode",   &u8 ) == ESP_OK) s_cache.connection_mode   = sanitize_connection_mode(u8);
 
     /* float via blob — NVS has no native float type. */
     size_t sz = sizeof(float);
     float  fv;
     if (nvs_get_blob(h, "batt_cap", &fv, &sz) == ESP_OK && sz == sizeof(float)) {
         s_cache.battery_capacity = fv;
+    }
+    sz = sizeof(float);
+    if (nvs_get_blob(h, "pwr_max", &fv, &sz) == ESP_OK && sz == sizeof(float)) {
+        s_cache.power_max_kw = fv;
     }
 
     nvs_close(h);
@@ -109,6 +129,8 @@ void settings_init(void) {
     s_cache.show_fps          = true;
     s_cache.wheel_diameter_mm = 200;
     s_cache.motor_poles       = 7;
+    s_cache.connection_mode   = CONN_ANDROID_AUTO;
+    s_cache.power_max_kw      = 4.5f;
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -128,6 +150,8 @@ battery_calc_mode_t settings_get_battery_calc_mode(void) { return s_cache.batter
 bool                settings_get_show_fps(void)          { return s_cache.show_fps; }
 uint16_t            settings_get_wheel_diameter_mm(void) { return s_cache.wheel_diameter_mm; }
 uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_poles; }
+connection_mode_t   settings_get_connection_mode(void)   { return s_cache.connection_mode; }
+float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 
 /* ---------------- setters ---------------- */
 
@@ -184,6 +208,9 @@ void settings_set_battery_capacity(float capacity) {
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_blob(h, "batt_cap", &capacity, sizeof(capacity));
     commit(h);
+    /* Smart calc keeps a separate remaining-Ah counter; capacity change must
+     * trigger a reset so the new full = new capacity. */
+    battery_calc_capacity_changed();
 }
 
 void settings_set_battery_calc_mode(battery_calc_mode_t mode) {
@@ -219,6 +246,107 @@ void settings_set_motor_poles(uint8_t poles) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "motor_poles", poles);
+    commit(h);
+}
+
+void settings_set_connection_mode(connection_mode_t mode) {
+    mode = sanitize_connection_mode((uint8_t)mode);
+    if (s_cache.connection_mode == mode) return;
+    s_cache.connection_mode = mode;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "conn_mode", (uint8_t)mode);
+    commit(h);
+    /* No hot-apply callback — change requires reboot to re-init the stack
+     * cleanly. The UI shows a "restart now?" msgbox after this returns. */
+}
+
+void settings_set_power_max_kw(float power_max_kw) {
+    if (power_max_kw < 0.1f)  power_max_kw = 0.1f;
+    if (power_max_kw > 100.0f) power_max_kw = 100.0f;
+    if (s_cache.power_max_kw == power_max_kw) return;
+    s_cache.power_max_kw = power_max_kw;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_blob(h, "pwr_max", &power_max_kw, sizeof(power_max_kw));
+    commit(h);
+}
+
+/* ---------- debounced (volatile + persist) variants ----------
+ * Volatile setters mirror their full counterparts EXCEPT they skip the
+ * nvs_set/commit pair. Hot-apply callbacks still fire so the UI gets a
+ * live preview (e.g. brightness changes the backlight while dragging).
+ * Persist functions just flush the current cache value to NVS — they do
+ * not re-fire callbacks. */
+
+void settings_set_target_vesc_id_volatile(uint8_t id) {
+    if (s_cache.target_vesc_id == id) return;
+    s_cache.target_vesc_id = id;
+    if (s_target_id_cb) s_target_id_cb(id);
+}
+
+void settings_persist_target_vesc_id(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "tgt_vesc_id", s_cache.target_vesc_id);
+    commit(h);
+}
+
+void settings_set_screen_brightness_volatile(uint8_t brightness) {
+    if (brightness > 100) brightness = 100;
+    if (s_cache.brightness == brightness) return;
+    s_cache.brightness = brightness;
+    if (s_brightness_cb) s_brightness_cb(brightness);
+}
+
+void settings_persist_screen_brightness(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "brightness", s_cache.brightness);
+    commit(h);
+}
+
+void settings_set_controller_id_volatile(uint8_t id) {
+    if (s_cache.controller_id == id) return;
+    s_cache.controller_id = id;
+    if (s_controller_id_cb) s_controller_id_cb(id);
+}
+
+void settings_persist_controller_id(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "ctrl_id", s_cache.controller_id);
+    commit(h);
+}
+
+void settings_set_battery_capacity_volatile(float capacity) {
+    if (s_cache.battery_capacity == capacity) return;
+    s_cache.battery_capacity = capacity;
+    /* Smart-calc reset is a heavy-ish operation but still cheap compared to
+     * a flash commit — keep it on the volatile path so the calc tracks the
+     * live UI value, otherwise it'd reset 800 ms after the user lets go. */
+    battery_calc_capacity_changed();
+}
+
+void settings_persist_battery_capacity(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    float v = s_cache.battery_capacity;
+    nvs_set_blob(h, "batt_cap", &v, sizeof(v));
+    commit(h);
+}
+
+void settings_set_power_max_kw_volatile(float power_max_kw) {
+    if (power_max_kw < 0.1f)  power_max_kw = 0.1f;
+    if (power_max_kw > 100.0f) power_max_kw = 100.0f;
+    s_cache.power_max_kw = power_max_kw;
+}
+
+void settings_persist_power_max_kw(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    float v = s_cache.power_max_kw;
+    nvs_set_blob(h, "pwr_max", &v, sizeof(v));
     commit(h);
 }
 

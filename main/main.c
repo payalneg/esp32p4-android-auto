@@ -50,13 +50,18 @@ void port_start_app_hook(void)
 #include "h264_pipe.h"
 #include "idle_screen.h"
 #include "mdns_advertise.h"
+#include "now_playing.h"
+#include "gui_guider.h"   /* guider_ui — for dashboard_song_title_label */
+#include "ota_http.h"
 #include "ota_screen.h"
 #include "tcp_server.h"
 #include "touch_input.h"
 #include "ui_mode.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_rt_data.h"
+#include "vesc_trip_persist.h"
 #include "vesc_ui_updater.h"
 #include "wifi_manager.h"
 
@@ -180,7 +185,7 @@ static void on_target_id_changed(uint8_t new_id)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, mode=%d", CONNECTION_MODE);
+    ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, aa_submode=%d", CONNECTION_MODE);
     ESP_LOGI(TAG, "HEAP_PROBE: app_main INTERNAL+8BIT free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -190,6 +195,24 @@ void app_main(void)
      * via settings_wrapper_init → settings_init) and our callback wiring
      * below. settings_init is idempotent. */
     settings_init();
+
+    /* Smart battery calc needs NVS open before its first percentage call.
+     * settings_init's nvs_flash_init has already run; battery_calc keeps its
+     * own namespace ("battery_calc") for the remaining-Ah counter. */
+    battery_calc_init();
+    /* trip_persist tracks trip / Ah / uptime across VESC reboots — same NVS
+     * pattern as battery_calc, separate namespace. The dashboard reset icon
+     * eventually flows here via battery_calc_reset_trip_and_ah(). */
+    trip_persist_init();
+
+    /* Top-level connection mode picked by the user in Settings. Read once
+     * here and reused throughout app_main — the value is stable for the
+     * lifetime of the boot (changing it in the UI triggers esp_restart). */
+    const connection_mode_t conn_mode = settings_get_connection_mode();
+    ESP_LOGI(TAG, "connection_mode = %s",
+             conn_mode == CONN_AVRCP        ? "AVRCP"        :
+             conn_mode == CONN_ANDROID_AUTO ? "ANDROID_AUTO" :
+             conn_mode == CONN_CARPLAY      ? "CARPLAY"      : "?");
 
     /* Bump CPU to 400 MHz before any peripheral / WiFi init so APB ratio
      * stays consistent. No-op unless CONFIG_AA_OVERCLOCK_400 is set. */
@@ -228,7 +251,14 @@ void app_main(void)
         esp_task_wdt_add(idle0);
     }
     if (ui_err == ESP_OK) {
-        touch_input_set_gesture_cb(ui_mode_toggle);
+        /* 3-finger gesture toggles between VESC dashboard and AA projection.
+         * Only meaningful when the AA stack is up and an AA screen exists —
+         * in AVRCP/CarPlay there's nothing to switch to, so leave the
+         * gesture callback NULL and the swipe is silently ignored. The GT911
+         * polling task still starts so LVGL touch keeps working. */
+        if (conn_mode == CONN_ANDROID_AUTO) {
+            touch_input_set_gesture_cb(ui_mode_toggle);
+        }
         touch_input_start(NULL, NULL);
     }
 
@@ -249,6 +279,9 @@ void app_main(void)
         vesc_rt_data_start();
         vesc_rt_data_start_task();
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
+        /* start() only flips the active flag. The pumping happens inside the
+         * single CAN-polling task spawned by vesc_rt_data_start_task() above —
+         * see rt_task() in vesc_rt_data.c. */
         vesc_lisp_poll_start();
 #endif
         ESP_LOGI(TAG, "VESC CAN ready, polling target ID %u (own ID %u)",
@@ -290,6 +323,57 @@ void app_main(void)
         ESP_LOGW(TAG, "BLE host init failed — VESC Tool over BLE unavailable");
     }
 
+    if (conn_mode == CONN_CARPLAY) {
+        /* CarPlay placeholder — no stack to bring up yet. Show the idle
+         * screen with a "coming soon" message and let the rest of the
+         * firmware (VESC dashboard, BLE NUS, CAN poller) keep running. */
+        idle_screen_show("CarPlay", "Coming soon — not yet implemented");
+        ESP_LOGI(TAG, "CarPlay mode — nothing else to start");
+        return;
+    }
+
+    if (conn_mode == CONN_AVRCP) {
+        /* AVRCP mode — WROOM does all Classic BT, P4 just renders now-
+         * playing metadata. We don't need the AA stack, but we do bring up
+         * the SoftAP solely so scripts/ota_push.sh can reach the HTTP OTA
+         * endpoint at http://192.168.4.1/ota. WROOM-side WiFi creds are
+         * NOT published — the agent stays in AVRCP profile and doesn't
+         * try to push them into the AA Wireless setup channel. */
+        now_playing_init();
+        /* Bind the GUI Guider dashboard widget. Only title for now; pass
+         * NULL for artist/album/play_icon — now_playing_set_track ignores
+         * unbound fields. attach_labels is safe before bt_link is up. */
+        now_playing_attach_labels(guider_ui.dashboard_song_title_label,
+                                  NULL, NULL, NULL);
+        bt_link_init();
+        bt_agent_ota_check_and_update();
+        bt_link_publish_mode(CONN_AVRCP);
+        /* No idle screen — VESC dashboard is already on screen from
+         * ui_mode_init above and stays there for the whole session. */
+        idle_screen_hide();
+
+        /* OTA-only WiFi: SoftAP up, no AA TCP server, no mDNS, no creds
+         * to WROOM. ota_http_start runs even if AP_START hasn't fired
+         * yet — httpd binds to 0.0.0.0:80, lwIP will start accepting as
+         * soon as the AP netif has its address. */
+        ESP_LOGI(TAG, "AVRCP: starting WiFi for OTA");
+        esp_err_t werr = wifi_manager_start();
+        if (werr != ESP_OK) {
+            ESP_LOGE(TAG, "AVRCP: wifi_manager_start: %s",
+                     esp_err_to_name(werr));
+        } else {
+            esp_err_t rerr = wifi_manager_wait_ready(10000);
+            ESP_LOGI(TAG, "AVRCP: wifi_manager_wait_ready=%s",
+                     esp_err_to_name(rerr));
+        }
+        esp_err_t herr = ota_http_start();
+        ESP_LOGI(TAG, "AVRCP: ota_http_start=%s", esp_err_to_name(herr));
+
+        ESP_LOGI(TAG, "AVRCP mode ready — waiting for phone to pair with the BT agent");
+        return;
+    }
+
+    /* conn_mode == CONN_ANDROID_AUTO from here on. */
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");
 
 #if CONNECTION_MODE == MODE_WIRELESS_HELPER
@@ -308,6 +392,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(mdns_advertise_start());
     ESP_ERROR_CHECK(tcp_server_start(AA_TCP_PORT));
+    /* Plain HTTP OTA server — phone joins the SoftAP for AA anyway, so
+     * scripts/ota_push.sh can hit http://<gw>/ota from a laptop on the
+     * same AP. No-op when CONFIG_OTA_HTTP_ENABLED is unset. */
+    ota_http_start();
 
     /* Display sink first — it captures the panel handle from BSP and waits
      * idle until first frame. Then the H.264 pipe; push() is a no-op until
@@ -335,6 +423,9 @@ void app_main(void)
         /* If CONFIG_BT_AGENT_OTA_ENABLED, compare BT-VER: against expected
          * and reflash on mismatch / silence. No-op when disabled. */
         bt_agent_ota_check_and_update();
+        /* Tell the agent we want the AA Wireless SPP path (not AVRCP).
+         * Agent reads this once on boot and locks into one profile set. */
+        bt_link_publish_mode(CONN_ANDROID_AUTO);
         esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
         esp_netif_ip_info_t ap_ip = {0};
         if (ap_netif) esp_netif_get_ip_info(ap_netif, &ap_ip);

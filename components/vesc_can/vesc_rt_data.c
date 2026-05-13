@@ -7,6 +7,8 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_lisp_poll.h"
+#include "sdkconfig.h"
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -230,11 +232,20 @@ void vesc_rt_data_loop(void)
     }
 }
 
+/* Single CAN-polling task: drives both RT data (~100 ms cycle) and the
+ * optional LISP stats poll (~100 ms cycle). Each _loop() function has its
+ * own internal interval gate, so calling both at 50 Hz here is fine — the
+ * actual `comm_can_send_buffer()` cadence is owned by the loops, not us.
+ * Keeping them on one task halves FreeRTOS overhead and serialises CAN
+ * writes onto a single context (no contention on the TWAI driver). */
 static void rt_task(void *arg)
 {
     (void)arg;
     for (;;) {
         vesc_rt_data_loop();
+#if CONFIG_VESC_CAN_LISP_POLL_ENABLE
+        vesc_lisp_poll_loop();
+#endif
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

@@ -79,7 +79,7 @@ menu "Android Auto Head Unit"
         config BT_AGENT_FW_VERSION
             string "Expected BT agent firmware version"
             depends on BT_AGENT_OTA_ENABLED
-            default "0.1.0"
+            default "0.2.2-avrcp"
             help
                 Must exactly match what the agent emits on boot via
                 `BT-VER:<version>`. Bump this in lockstep with the agent
@@ -107,6 +107,25 @@ menu "Android Auto Head Unit"
                 direct UART wires is the usual sweet spot; 921600 also
                 works but cuts error margin. Drop to 115200 if you suspect
                 signal-integrity issues on a long noisy line.
+
+    endmenu
+
+    menu "OTA over WiFi"
+
+        config OTA_HTTP_ENABLED
+            bool "Enable HTTP OTA server"
+            default y
+            help
+                Starts a small HTTP server (default port 80) on the SoftAP
+                interface after WiFi is up. POST the new app binary to
+                /ota and the device will flash the inactive OTA slot and
+                reboot. See scripts/ota_push.sh.
+
+        config OTA_HTTP_PORT
+            int "OTA HTTP port"
+            depends on OTA_HTTP_ENABLED
+            default 80
+            range 1 65535
 
     endmenu
 

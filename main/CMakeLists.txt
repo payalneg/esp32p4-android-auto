@@ -8,6 +8,7 @@ idf_component_register(
         "idle_screen.c"
         "ota_screen.c"
         "c6_ota.c"
+        "ota_http.c"
         "aa_frame.c"
         "aa_tls.c"
         "aa_handshake.c"
@@ -25,6 +26,8 @@ idf_component_register(
         "aa_overclock.c"
         "ui_mode.c"
         "vesc_ui_updater.c"
+        "now_playing.c"
+        "font_song_title_12.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -44,6 +47,8 @@ idf_component_register(
         mdns
         mbedtls
         driver
+        app_update
+        esp_http_server
         c6_ota_partition
         bt_agent_fw
         esp32_p4_wifi6_touch_lcd_4_3

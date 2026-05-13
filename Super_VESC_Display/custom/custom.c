@@ -84,8 +84,18 @@ static lv_obj_t *settings_motor_poles_spinbox = NULL;
 static lv_obj_t *settings_motor_poles_label = NULL;
 static lv_obj_t *settings_motor_poles_plus_btn = NULL;
 static lv_obj_t *settings_motor_poles_minus_btn = NULL;
+static lv_obj_t *settings_power_max_spinbox = NULL;
+static lv_obj_t *settings_power_max_label = NULL;
+static lv_obj_t *settings_power_max_plus_btn = NULL;
+static lv_obj_t *settings_power_max_minus_btn = NULL;
 static lv_obj_t *settings_reset_button = NULL;
 static lv_obj_t *settings_info_label = NULL;
+static lv_obj_t *settings_connection_mode_dropdown = NULL;
+static lv_obj_t *settings_connection_mode_label = NULL;
+/* Pending selection while the "Apply and restart?" msgbox is up.
+ * Captured at LV_EVENT_VALUE_CHANGED so the user's choice survives even if
+ * they tap Yes seconds later. */
+static uint8_t   s_pending_conn_mode = 0;
 
 // VESC Limits UI objects
 static lv_obj_t *settings_limits_title_label = NULL;
@@ -197,7 +207,18 @@ static void cockpit_paint_speed_bar(int speed_kmh, int speed_max_kmh)
  * call this helper to refresh the Power panel digit and bar. */
 static float s_cockpit_last_current_a = 0.0f;
 static float s_cockpit_last_voltage_v = 0.0f;
-static const float COCKPIT_POWER_MAX_KW = 4.5f;
+
+/* Refresh the "X.X KW" label next to the power bar from the current setting.
+ * Called on init and from the settings event handlers so the scale label
+ * always matches the bar's full-scale value. */
+static void cockpit_refresh_power_max_label(void)
+{
+    if (!guider_ui.dashboard_power_max_val) return;
+    float pmax = settings_wrapper_get_power_max_kw();
+    char text[16];
+    snprintf(text, sizeof(text), "%.1f KW", pmax);
+    lv_label_set_text(guider_ui.dashboard_power_max_val, text);
+}
 
 static void cockpit_update_power(void)
 {
@@ -212,7 +233,7 @@ static void cockpit_update_power(void)
             (power_kw < 0.0f) ? COCKPIT_REGEN : COCKPIT_ACCENT,
             LV_PART_MAIN);
     }
-    cockpit_paint_power_bar(power_kw, COCKPIT_POWER_MAX_KW);
+    cockpit_paint_power_bar(power_kw, settings_wrapper_get_power_max_kw());
 }
 /* ====================================================================== */
 
@@ -270,6 +291,11 @@ void custom_init(lv_ui *ui)
     /* Demo loop is no longer auto-started. It is toggled at runtime from
      * the Settings screen via dashboard_demo_set_active() — see the
      * "Demo mode" switch wired up in settings_ui_init(). */
+
+    /* Paint the "X.X KW" scale label from the saved power-max setting so the
+     * bar fill ratio and the printed full-scale agree at boot. */
+    settings_wrapper_init();
+    cockpit_refresh_power_max_label();
 }
 
 /* 4 Hz tick (~250 ms). sinf() drives smooth value sweeps; every change goes
@@ -765,16 +791,53 @@ void update_music_text(const char *text)
 // SETTINGS UI IMPLEMENTATION
 // ============================================================================
 
+// Debounced NVS commit. Each spinbox tick / slider drag step during a rapid
+// burst would otherwise issue an nvs_commit on the LVGL thread (~100ms of
+// flash write) and starve touch_input's lock attempt, producing
+// "esp_lv_adapter_lock: Failed to acquire LVGL lock" and a visible freeze.
+// We update the in-memory cache live via the *_volatile setters (so the
+// UI/hot-apply react immediately) and only commit to NVS once the user
+// stops adjusting (debounce period below).
+#define DEBOUNCED_COMMIT_PERIOD_MS 800
+
+typedef struct {
+    lv_timer_t *timer;
+    void (*persist)(void);
+} debounced_commit_t;
+
+static void debounced_commit_timer_cb(lv_timer_t *t) {
+    debounced_commit_t *d = (debounced_commit_t *)t->user_data;
+    if (d && d->persist) d->persist();
+    lv_timer_del(t);
+    if (d) d->timer = NULL;
+}
+
+static void debounced_commit_schedule(debounced_commit_t *d,
+                                      void (*persist)(void)) {
+    d->persist = persist;
+    if (d->timer) {
+        lv_timer_reset(d->timer);
+    } else {
+        d->timer = lv_timer_create(debounced_commit_timer_cb,
+                                   DEBOUNCED_COMMIT_PERIOD_MS, d);
+        lv_timer_set_repeat_count(d->timer, 1);
+    }
+}
+
+static debounced_commit_t s_target_id_commit;
+static debounced_commit_t s_brightness_commit;
+static debounced_commit_t s_controller_id_commit;
+static debounced_commit_t s_battery_capacity_commit;
+static debounced_commit_t s_power_max_commit;
+
 // Event handler for Target VESC ID spinbox
 static void target_id_spinbox_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *spinbox = lv_event_get_target(e);
-        int32_t value = lv_spinbox_get_value(spinbox);
-        
-        // Save to settings
-        settings_wrapper_set_target_vesc_id((uint8_t)value);
-    }
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *spinbox = lv_event_get_target(e);
+    int32_t value = lv_spinbox_get_value(spinbox);
+    settings_wrapper_set_target_vesc_id_volatile((uint8_t)value);
+    debounced_commit_schedule(&s_target_id_commit,
+                              settings_wrapper_persist_target_vesc_id);
 }
 
 // Event handler for Plus button
@@ -800,6 +863,58 @@ static void target_id_minus_btn_event_cb(lv_event_t *e) {
 }
 
 // Event handler for CAN speed dropdown
+/* Confirmation msgbox handler — the user chose Yes or No to applying the new
+ * connection mode. Yes path persists the pending selection and reboots.
+ * No path reverts the dropdown's UI selection to whatever's currently in NVS.
+ *
+ * LVGL 8.3: lv_msgbox emits LV_EVENT_VALUE_CHANGED with the button index in
+ * lv_msgbox_get_active_btn_text(); index 0 = Yes (left), 1 = No (right). */
+static void connection_mode_msgbox_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *mbox = lv_event_get_current_target(e);
+    uint16_t btn_id = lv_msgbox_get_active_btn(mbox);
+    if (btn_id == 0) {
+        /* Yes — persist and reboot. apply_restart blocks forever on device. */
+        settings_wrapper_set_connection_mode(s_pending_conn_mode);
+        if (settings_info_label) {
+            lv_label_set_text(settings_info_label, "Rebooting to apply...");
+        }
+        settings_wrapper_apply_restart();
+        /* Simulator falls through; close the msgbox so the test keeps running. */
+    } else {
+        /* No — revert dropdown to the saved value. */
+        if (settings_connection_mode_dropdown) {
+            lv_dropdown_set_selected(settings_connection_mode_dropdown,
+                                     settings_wrapper_get_connection_mode());
+        }
+    }
+    lv_msgbox_close(mbox);
+}
+
+// Event handler for Connection Mode dropdown
+static void connection_mode_dropdown_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *dropdown = lv_event_get_target(e);
+    uint16_t selected = lv_dropdown_get_selected(dropdown);
+    if (selected == settings_wrapper_get_connection_mode()) {
+        /* No-op — user re-picked the current value. */
+        return;
+    }
+    s_pending_conn_mode = (uint8_t)selected;
+
+    /* Confirmation modal — Yes / No buttons. Owned by lv_scr_act() so it
+     * floats over the settings screen and survives screen unload. */
+    static const char *btns[] = {"Yes", "No", ""};
+    lv_obj_t *mbox = lv_msgbox_create(NULL, "Apply and restart?",
+                                      "Connection mode change takes effect after reboot.",
+                                      btns, false);
+    lv_obj_center(mbox);
+    lv_obj_add_event_cb(mbox, connection_mode_msgbox_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+}
+
 static void can_speed_dropdown_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
@@ -816,57 +931,50 @@ static void can_speed_dropdown_event_cb(lv_event_t *e) {
 
 // Event handler for brightness slider
 static void brightness_slider_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *slider = lv_event_get_target(e);
-        int32_t value = lv_slider_get_value(slider);
-        
-        // Update label
-        char buf[32];
-        sprintf(buf, "Brightness: %d%%", (int)value);
-        lv_label_set_text(settings_brightness_label, buf);
-        
-        // Save to settings and apply immediately
-        settings_wrapper_set_brightness((uint8_t)value);
-    }
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *slider = lv_event_get_target(e);
+    int32_t value = lv_slider_get_value(slider);
+
+    char buf[32];
+    sprintf(buf, "Brightness: %d%%", (int)value);
+    lv_label_set_text(settings_brightness_label, buf);
+
+    /* Volatile setter fires the brightness callback immediately so the
+     * backlight tracks the drag live; NVS commit is debounced. */
+    settings_wrapper_set_brightness_volatile((uint8_t)value);
+    debounced_commit_schedule(&s_brightness_commit,
+                              settings_wrapper_persist_brightness);
 }
 
 // Event handler for Controller ID slider
 static void controller_id_slider_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *slider = lv_event_get_target(e);
-        int32_t value = lv_slider_get_value(slider);
-        
-        // Update label
-        char buf[32];
-        sprintf(buf, "Controller ID: %d", (int)value);
-        lv_label_set_text(settings_controller_id_label, buf);
-        
-        // Save to settings
-        settings_wrapper_set_controller_id((uint8_t)value);
-        
-        // Update info label
-        lv_label_set_text(settings_info_label, "Controller ID requires restart!");
-    }
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *slider = lv_event_get_target(e);
+    int32_t value = lv_slider_get_value(slider);
+
+    char buf[32];
+    sprintf(buf, "Controller ID: %d", (int)value);
+    lv_label_set_text(settings_controller_id_label, buf);
+
+    settings_wrapper_set_controller_id_volatile((uint8_t)value);
+    debounced_commit_schedule(&s_controller_id_commit,
+                              settings_wrapper_persist_controller_id);
+
+    lv_label_set_text(settings_info_label, "Controller ID requires restart!");
 }
 
 // Event handler for Battery Capacity spinbox
 static void battery_capacity_spinbox_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *spinbox = lv_event_get_target(e);
-        int32_t value = lv_spinbox_get_value(spinbox);
-        
-        // Value is stored as integer (e.g., 150 for 15.0 Ah)
-        float capacity = (float)value / 10.0f;
-        
-        // Save to settings (this will trigger battery calc reset)
-        settings_wrapper_set_battery_capacity(capacity);
-        
-        // Update info label
-        lv_label_set_text(settings_info_label, "Battery capacity changed - will recalibrate!");
-    }
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *spinbox = lv_event_get_target(e);
+    int32_t value = lv_spinbox_get_value(spinbox);
+    /* Value is stored as integer (e.g., 150 for 15.0 Ah) */
+    float capacity = (float)value / 10.0f;
+    settings_wrapper_set_battery_capacity_volatile(capacity);
+    debounced_commit_schedule(&s_battery_capacity_commit,
+                              settings_wrapper_persist_battery_capacity);
+    lv_label_set_text(settings_info_label,
+                      "Battery capacity changed - will recalibrate!");
 }
 
 // Event handler for Battery Capacity Plus button
@@ -906,6 +1014,39 @@ static void battery_calc_mode_dropdown_event_cb(lv_event_t *e) {
             lv_label_set_text(settings_info_label, "Smart calc enabled - will calibrate on next data!");
         } else {
             lv_label_set_text(settings_info_label, "Direct mode - using controller battery level");
+        }
+    }
+}
+
+// Event handler for Power Max spinbox (value stored as int with 0.1 kW step,
+// e.g. 45 → 4.5 kW)
+static void power_max_spinbox_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *spinbox = lv_event_get_target(e);
+    int32_t value = lv_spinbox_get_value(spinbox);
+    settings_wrapper_set_power_max_kw_volatile((float)value / 10.0f);
+    cockpit_refresh_power_max_label();
+    debounced_commit_schedule(&s_power_max_commit,
+                              settings_wrapper_persist_power_max_kw);
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label, "Power scale max updated");
+    }
+}
+
+static void power_max_plus_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED && settings_power_max_spinbox) {
+        int32_t v = lv_spinbox_get_value(settings_power_max_spinbox);
+        if (v < 1000) {  // max 100.0 kW
+            lv_spinbox_increment(settings_power_max_spinbox);
+        }
+    }
+}
+
+static void power_max_minus_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED && settings_power_max_spinbox) {
+        int32_t v = lv_spinbox_get_value(settings_power_max_spinbox);
+        if (v > 1) {  // min 0.1 kW
+            lv_spinbox_decrement(settings_power_max_spinbox);
         }
     }
 }
@@ -1193,6 +1334,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_show_fps(true);
         settings_wrapper_set_wheel_diameter_mm(200); // 200mm
         settings_wrapper_set_motor_poles(7); // Standard for VESC
+        settings_wrapper_set_power_max_kw(4.5f);
         
         // Update UI elements
         if (settings_target_id_spinbox) {
@@ -1222,6 +1364,10 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_motor_poles_spinbox) {
             lv_spinbox_set_value(settings_motor_poles_spinbox, 7); // Standard for VESC
         }
+        if (settings_power_max_spinbox) {
+            lv_spinbox_set_value(settings_power_max_spinbox, 45); // 4.5 kW
+        }
+        cockpit_refresh_power_max_label();
 
         /* Cockpit: fps_text removed — nothing to toggle visibility on. */
         // if (guider_ui.dashboard_fps_text) {
@@ -1272,7 +1418,37 @@ void settings_ui_init(lv_ui *ui) {
     
     int y_pos = 70; // Start below "Back to dashboard" button
     int spacing = 90;
-    
+
+    // ========== Connection Mode Dropdown ==========
+    /* Top-level mode picker: which phone-projection stack to bring up at
+     * boot. Putting it first because it's the most consequential setting —
+     * everything below only matters for the VESC dashboard, which lives in
+     * all three modes. Order MUST match connection_mode_option_t and the
+     * device enum: AVRCP=0, Android Auto=1, CarPlay=2. */
+    settings_connection_mode_label = lv_label_create(ui->settings);
+    lv_label_set_text(settings_connection_mode_label, "Connection Mode");
+    lv_obj_set_pos(settings_connection_mode_label, 20, y_pos);
+    lv_obj_set_style_text_color(settings_connection_mode_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_connection_mode_label, &lv_font_montserrat_24, 0);
+
+    settings_connection_mode_dropdown = lv_dropdown_create(ui->settings);
+    lv_dropdown_set_options(settings_connection_mode_dropdown,
+                            "AVRCP\nAndroid Auto\nCarPlay");
+    lv_dropdown_set_selected(settings_connection_mode_dropdown,
+                             settings_wrapper_get_connection_mode());
+    lv_obj_set_pos(settings_connection_mode_dropdown, 20, y_pos + 30);
+    lv_obj_set_size(settings_connection_mode_dropdown, 770, 50);
+    lv_obj_set_style_bg_color(settings_connection_mode_dropdown, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(settings_connection_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_connection_mode_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_border_width(settings_connection_mode_dropdown, 0, 0);
+    lv_obj_set_style_radius(settings_connection_mode_dropdown, 8, 0);
+    lv_obj_add_event_cb(settings_connection_mode_dropdown,
+                        connection_mode_dropdown_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += spacing + 10;
+
     // ========== Target VESC ID Spinbox ==========
     settings_target_id_label = lv_label_create(ui->settings);
     char buf[32];
@@ -1426,8 +1602,66 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_border_width(settings_battery_calc_mode_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
+
     y_pos += spacing + 10;
+
+    // ========== Power Max Spinbox (kW) ==========
+    // Full-scale value for the cockpit power bar. The bar fill ratio and
+    // the "X.X KW" label next to it are both driven from this setting.
+    float power_max_kw = settings_wrapper_get_power_max_kw();
+
+    settings_power_max_label = lv_label_create(ui->settings);
+    lv_label_set_text(settings_power_max_label, "Power Max (kW):");
+    lv_obj_set_pos(settings_power_max_label, 20, y_pos);
+    lv_obj_set_style_text_color(settings_power_max_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_power_max_label, &lv_font_montserrat_24, 0);
+
+    // Minus button
+    settings_power_max_minus_btn = lv_btn_create(ui->settings);
+    lv_obj_t *pmax_minus_label = lv_label_create(settings_power_max_minus_btn);
+    lv_label_set_text(pmax_minus_label, "-");
+    lv_obj_align(pmax_minus_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(settings_power_max_minus_btn, 20, y_pos + 30);
+    lv_obj_set_size(settings_power_max_minus_btn, 130, 50);
+    lv_obj_set_style_bg_color(settings_power_max_minus_btn, lv_color_hex(0xff4444), 0);
+    lv_obj_set_style_text_color(settings_power_max_minus_btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_power_max_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(settings_power_max_minus_btn, 8, 0);
+    lv_obj_set_style_border_width(settings_power_max_minus_btn, 0, 0);
+    lv_obj_add_event_cb(settings_power_max_minus_btn, power_max_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+    // Spinbox (value is int with 0.1 kW step: 45 → 4.5 kW)
+    settings_power_max_spinbox = lv_spinbox_create(ui->settings);
+    lv_spinbox_set_range(settings_power_max_spinbox, 1, 1000);   // 0.1 .. 100.0 kW
+    lv_spinbox_set_digit_format(settings_power_max_spinbox, 4, 3); // "XX.X"
+    lv_spinbox_set_value(settings_power_max_spinbox, (int32_t)(power_max_kw * 10.0f + 0.5f));
+    lv_spinbox_set_step(settings_power_max_spinbox, 1);
+    lv_obj_set_pos(settings_power_max_spinbox, 335, y_pos + 30);
+    lv_obj_set_size(settings_power_max_spinbox, 130, 50);
+    lv_obj_set_style_bg_color(settings_power_max_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
+    lv_obj_set_style_text_color(settings_power_max_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_power_max_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_border_width(settings_power_max_spinbox, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(settings_power_max_spinbox, lv_color_hex(0xffa500), LV_PART_MAIN);
+    lv_obj_set_style_radius(settings_power_max_spinbox, 8, LV_PART_MAIN);
+    lv_obj_add_event_cb(settings_power_max_spinbox, power_max_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // Plus button
+    settings_power_max_plus_btn = lv_btn_create(ui->settings);
+    lv_obj_t *pmax_plus_label = lv_label_create(settings_power_max_plus_btn);
+    lv_label_set_text(pmax_plus_label, "+");
+    lv_obj_align(pmax_plus_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(settings_power_max_plus_btn, 660, y_pos + 30);
+    lv_obj_set_size(settings_power_max_plus_btn, 130, 50);
+    lv_obj_set_style_bg_color(settings_power_max_plus_btn, lv_color_hex(0x00a9ff), 0);
+    lv_obj_set_style_text_color(settings_power_max_plus_btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_power_max_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(settings_power_max_plus_btn, 8, 0);
+    lv_obj_set_style_border_width(settings_power_max_plus_btn, 0, 0);
+    lv_obj_add_event_cb(settings_power_max_plus_btn, power_max_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+    y_pos += spacing;
+
     /*
     // ========== VESC LIMITS SECTION ==========
     // Title

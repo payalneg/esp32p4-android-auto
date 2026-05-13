@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Thin UART link to the ESP32-P4 on the other side. Used to signal events
  * like "phone paired" or "wifi setup done" so P4 can coordinate its TCP
@@ -44,3 +45,25 @@ typedef struct {
 
 bool uart_link_have_wifi(void);
 const uart_link_wifi_t *uart_link_get_wifi(void);
+
+/* Top-level mode the P4 selected — received as `MODE|AA\n` or
+ * `MODE|AVRCP\n`. main.c waits for this on boot before deciding which BT
+ * profile set to enable. Values match the P4 connection_mode_t enum
+ * (AVRCP=0, ANDROID_AUTO=1; CARPLAY is not sent because P4 never boots the
+ * agent in that mode). */
+typedef enum {
+    UART_LINK_MODE_AVRCP = 0,
+    UART_LINK_MODE_AA    = 1,
+    UART_LINK_MODE_NONE  = 0xff,   /* "not received yet" sentinel */
+} uart_link_mode_t;
+
+/* Block up to `timeout_ms` waiting for a MODE line from P4. On timeout
+ * returns UART_LINK_MODE_AA — that's the historical pre-AVRCP behaviour,
+ * so existing boards that never get a MODE line keep doing AA. */
+uart_link_mode_t uart_link_wait_mode(uint32_t timeout_ms);
+
+/* AVRCP CT helpers — fire-and-forget tagged lines so the P4 can drive its
+ * Now Playing widget. Empty fields are allowed (sender pre-replaces any
+ * '|' inside a field with a space to keep the format unambiguous). */
+void uart_link_send_meta(const char *title, const char *artist, const char *album);
+void uart_link_send_state(bool playing);
