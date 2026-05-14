@@ -29,7 +29,6 @@ typedef struct
 	lv_obj_t *dashboard_battery_label;
 	lv_obj_t *dashboard_Battery_proc_text;
 	lv_obj_t *dashboard_battery_pct;
-	lv_obj_t *dashboard_Voltage_text;
 	lv_obj_t *dashboard_batt_seg_00;
 	lv_obj_t *dashboard_batt_seg_01;
 	lv_obj_t *dashboard_batt_seg_02;
@@ -110,6 +109,9 @@ typedef struct
 	lv_obj_t *dashboard_Speed_cc_text;
 	lv_obj_t *dashboard_Settings_text;
 	lv_obj_t *dashboard_song_title_label;
+	lv_obj_t *dashboard_label_3;
+	lv_obj_t *dashboard_Voltage_text;
+	lv_obj_t *dashboard_col_voltage_label;
 	lv_obj_t *settings;
 	bool settings_del;
 	lv_obj_t *settings_exit_button;
@@ -142,13 +144,13 @@ void setup_scr_settings(lv_ui *ui);
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 
 LV_FONT_DECLARE(lv_font_montserratMedium_16)
+LV_FONT_DECLARE(lv_font_montserratMedium_18)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
 LV_FONT_DECLARE(lv_font_montserratMedium_22)
-LV_FONT_DECLARE(lv_font_montserratMedium_18)
-LV_FONT_DECLARE(lv_font_montserratMedium_14)
 LV_FONT_DECLARE(lv_font_montserratMedium_12)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_220)
 LV_FONT_DECLARE(lv_font_montserratMedium_20)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_40)
 LV_FONT_DECLARE(lv_font_montserratMedium_11)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_32)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_22)

@@ -76,6 +76,9 @@ static lv_obj_t *settings_show_fps_switch = NULL;
 static lv_obj_t *settings_show_fps_label = NULL;
 static lv_obj_t *settings_demo_mode_switch = NULL;
 static lv_obj_t *settings_demo_mode_label = NULL;
+static lv_obj_t *settings_vesc_emulator_switch = NULL;
+static lv_obj_t *settings_vesc_emulator_label = NULL;
+static lv_obj_t *settings_vesc_emulator_hint  = NULL;
 static lv_obj_t *settings_wheel_diameter_spinbox = NULL;
 static lv_obj_t *settings_wheel_diameter_label = NULL;
 static lv_obj_t *settings_wheel_diameter_plus_btn = NULL;
@@ -616,7 +619,7 @@ void update_battery_voltage(float battery_voltage)
     old_value = battery_voltage;
     
     char text[10];
-    sprintf(text,"%.1f V", battery_voltage);
+    sprintf(text,"%.1f", battery_voltage);
 
     lv_label_set_text(guider_ui.dashboard_Voltage_text,text);
 
@@ -1259,6 +1262,17 @@ static void demo_mode_switch_event_cb(lv_event_t *e) {
         lv_obj_t *obj = lv_event_get_target(e);
         bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
         dashboard_demo_set_active(checked);
+    }
+}
+
+// Event handler for VESC Emulator switch. Persists to NVS; takes effect on
+// next boot (the CAN driver vs simulated source is wired once in main.c).
+static void vesc_emulator_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *obj = lv_event_get_target(e);
+        bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        settings_wrapper_set_vesc_emulator(checked);
     }
 }
 
@@ -1959,6 +1973,33 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_demo_mode_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
     lv_obj_set_style_bg_color(settings_demo_mode_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(settings_demo_mode_switch, demo_mode_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += spacing;
+
+    // ========== VESC Emulator Switch ==========
+    settings_vesc_emulator_label = lv_label_create(ui->settings);
+    lv_label_set_text(settings_vesc_emulator_label, "VESC Emulator");
+    lv_obj_set_pos(settings_vesc_emulator_label, 20, y_pos);
+    lv_obj_set_style_text_color(settings_vesc_emulator_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_vesc_emulator_label, &lv_font_montserrat_24, 0);
+
+    settings_vesc_emulator_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_vesc_emulator_switch, 380, y_pos - 5);
+    lv_obj_set_size(settings_vesc_emulator_switch, 60, 30);
+    if (settings_wrapper_get_vesc_emulator()) {
+        lv_obj_add_state(settings_vesc_emulator_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_vesc_emulator_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_vesc_emulator_switch, lv_color_hex(0x00a9ff),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_vesc_emulator_switch, vesc_emulator_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    settings_vesc_emulator_hint = lv_label_create(ui->settings);
+    lv_label_set_text(settings_vesc_emulator_hint, "Restart required");
+    lv_obj_set_pos(settings_vesc_emulator_hint, 20, y_pos + 28);
+    lv_obj_set_style_text_color(settings_vesc_emulator_hint, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(settings_vesc_emulator_hint, &lv_font_montserrat_14, 0);
 
     y_pos += spacing;
     /*

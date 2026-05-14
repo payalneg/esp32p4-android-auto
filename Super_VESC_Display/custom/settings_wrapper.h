@@ -72,6 +72,9 @@ void    settings_wrapper_set_connection_mode(uint8_t mode);
 float settings_wrapper_get_power_max_kw(void);
 void  settings_wrapper_set_power_max_kw(float power_max_kw);
 
+bool  settings_wrapper_get_vesc_emulator(void);
+void  settings_wrapper_set_vesc_emulator(bool on);
+
 /* Debounced (volatile + persist) variants: update the cache and hot-apply
  * immediately, defer the NVS commit to a UI-level debounce timer so rapid
  * spinbox/slider clicks don't stall the LVGL task in a flash write. */

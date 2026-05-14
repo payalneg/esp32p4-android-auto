@@ -58,13 +58,13 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_text(ui->dashboard_status_vesc, "VESC");
     lv_label_set_long_mode(ui->dashboard_status_vesc, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_status_vesc, 16, 10);
-    lv_obj_set_size(ui->dashboard_status_vesc, 54, 30);
+    lv_obj_set_size(ui->dashboard_status_vesc, 58, 30);
 
     //Write style for dashboard_status_vesc, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_status_vesc, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_status_vesc, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_status_vesc, lv_color_hex(0xB6FF2E), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_status_vesc, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_status_vesc, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_status_vesc, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_status_vesc, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_status_vesc, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -80,14 +80,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_mode_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_mode_text, "");
     lv_label_set_long_mode(ui->dashboard_mode_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_mode_text, 76, 10);
-    lv_obj_set_size(ui->dashboard_mode_text, 80, 30);
+    lv_obj_set_pos(ui->dashboard_mode_text, 74, 10);
+    lv_obj_set_size(ui->dashboard_mode_text, 90, 30);
 
     //Write style for dashboard_mode_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_mode_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_mode_text, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_mode_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_mode_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -103,14 +103,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_uptime_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_uptime_text, "00:42:18");
     lv_label_set_long_mode(ui->dashboard_uptime_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_uptime_text, 170, 10);
+    lv_obj_set_pos(ui->dashboard_uptime_text, 187, 10);
     lv_obj_set_size(ui->dashboard_uptime_text, 80, 30);
 
     //Write style for dashboard_uptime_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_uptime_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_uptime_text, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_uptime_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_uptime_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -133,7 +133,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_status_bt, lv_color_hex(0xB6FF2E), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_status_bt, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_status_bt, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_status_bt, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -220,7 +220,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_battery_pct = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_battery_pct, "%");
     lv_label_set_long_mode(ui->dashboard_battery_pct, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_battery_pct, 88, 96);
+    lv_obj_set_pos(ui->dashboard_battery_pct, 88, 100);
     lv_obj_set_size(ui->dashboard_battery_pct, 40, 24);
 
     //Write style for dashboard_battery_pct, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -238,29 +238,6 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_pad_bottom(ui->dashboard_battery_pct, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_pad_left(ui->dashboard_battery_pct, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_shadow_width(ui->dashboard_battery_pct, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-
-    //Write codes dashboard_Voltage_text
-    ui->dashboard_Voltage_text = lv_label_create(ui->dashboard);
-    lv_label_set_text(ui->dashboard_Voltage_text, "54.2 V");
-    lv_label_set_long_mode(ui->dashboard_Voltage_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Voltage_text, 20, 140);
-    lv_obj_set_size(ui->dashboard_Voltage_text, 130, 30);
-
-    //Write style for dashboard_Voltage_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
-    lv_obj_set_style_border_width(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(ui->dashboard_Voltage_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Voltage_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui->dashboard_Voltage_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_letter_space(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_line_space(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->dashboard_Voltage_text, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_top(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_right(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_bottom(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_left(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_width(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
 
     //Write codes dashboard_batt_seg_00
     ui->dashboard_batt_seg_00 = lv_label_create(ui->dashboard);
@@ -617,13 +594,13 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_text(ui->dashboard_battery_range_label, "RANGE");
     lv_label_set_long_mode(ui->dashboard_battery_range_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_battery_range_label, 20, 380);
-    lv_obj_set_size(ui->dashboard_battery_range_label, 60, 30);
+    lv_obj_set_size(ui->dashboard_battery_range_label, 71, 30);
 
     //Write style for dashboard_battery_range_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_battery_range_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_battery_range_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_battery_range_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_battery_range_label, &lv_font_montserratMedium_14, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_battery_range_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_battery_range_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_battery_range_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_battery_range_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -646,7 +623,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_Range_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Range_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Range_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Range_text, &lv_font_montserratMedium_14, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Range_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Range_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Range_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Range_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1169,7 +1146,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_Current_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Current_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Current_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Current_text, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Current_text, &lv_font_montserratMedium_22, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Current_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Current_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Current_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1542,7 +1519,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_power_max_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_power_max_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_power_max_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_power_max_label, &lv_font_montserratMedium_14, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_power_max_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_power_max_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_power_max_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_power_max_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1565,7 +1542,7 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_power_max_val, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_power_max_val, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_power_max_val, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_power_max_val, &lv_font_montserratMedium_14, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_power_max_val, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_power_max_val, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_power_max_val, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_power_max_val, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1731,14 +1708,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_trip_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_trip_label, "TRIP");
     lv_label_set_long_mode(ui->dashboard_col_trip_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_trip_label, 0, 414);
-    lv_obj_set_size(ui->dashboard_col_trip_label, 160, 12);
+    lv_obj_set_pos(ui->dashboard_col_trip_label, 160, 405);
+    lv_obj_set_size(ui->dashboard_col_trip_label, 160, 18);
 
     //Write style for dashboard_col_trip_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_trip_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_trip_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_trip_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_trip_label, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_trip_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_trip_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_trip_label, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_trip_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1754,14 +1731,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_TRIP_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_TRIP_text, "14.2");
     lv_label_set_long_mode(ui->dashboard_TRIP_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_TRIP_text, 0, 432);
+    lv_obj_set_pos(ui->dashboard_TRIP_text, 158, 432);
     lv_obj_set_size(ui->dashboard_TRIP_text, 100, 60);
 
     //Write style for dashboard_TRIP_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_TRIP_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_TRIP_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_TRIP_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_TRIP_text, &lv_font_Antonio_Regular_32, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_TRIP_text, &lv_font_Antonio_Regular_40, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_TRIP_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_TRIP_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_TRIP_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1777,14 +1754,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_trip_unit = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_trip_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_col_trip_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_trip_unit, 104, 442);
+    lv_obj_set_pos(ui->dashboard_col_trip_unit, 262, 442);
     lv_obj_set_size(ui->dashboard_col_trip_unit, 56, 14);
 
     //Write style for dashboard_col_trip_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_trip_unit, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_trip_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_trip_unit, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_trip_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1800,14 +1777,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_odo_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_odo_label, "ODO");
     lv_label_set_long_mode(ui->dashboard_col_odo_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_odo_label, 160, 414);
-    lv_obj_set_size(ui->dashboard_col_odo_label, 160, 12);
+    lv_obj_set_pos(ui->dashboard_col_odo_label, 321, 405);
+    lv_obj_set_size(ui->dashboard_col_odo_label, 160, 18);
 
     //Write style for dashboard_col_odo_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_odo_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_odo_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_odo_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_odo_label, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_odo_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_odo_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_odo_label, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_odo_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1823,14 +1800,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_odo_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_odo_text, "4128");
     lv_label_set_long_mode(ui->dashboard_odo_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_odo_text, 160, 432);
+    lv_obj_set_pos(ui->dashboard_odo_text, 321, 432);
     lv_obj_set_size(ui->dashboard_odo_text, 100, 60);
 
     //Write style for dashboard_odo_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_odo_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_odo_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_odo_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_odo_text, &lv_font_Antonio_Regular_32, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_odo_text, &lv_font_Antonio_Regular_40, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_odo_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_odo_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_odo_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1846,14 +1823,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_odo_unit = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_odo_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_col_odo_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_odo_unit, 264, 442);
+    lv_obj_set_pos(ui->dashboard_col_odo_unit, 422, 442);
     lv_obj_set_size(ui->dashboard_col_odo_unit, 56, 14);
 
     //Write style for dashboard_col_odo_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_odo_unit, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_odo_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_odo_unit, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_odo_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1869,14 +1846,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_mtmp_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_mtmp_label, "M·TEMP");
     lv_label_set_long_mode(ui->dashboard_col_mtmp_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_mtmp_label, 320, 414);
-    lv_obj_set_size(ui->dashboard_col_mtmp_label, 160, 12);
+    lv_obj_set_pos(ui->dashboard_col_mtmp_label, 479, 405);
+    lv_obj_set_size(ui->dashboard_col_mtmp_label, 160, 18);
 
     //Write style for dashboard_col_mtmp_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_mtmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_mtmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_mtmp_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_mtmp_label, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_mtmp_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_mtmp_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_mtmp_label, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_mtmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1892,14 +1869,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_temp_mot_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_temp_mot_text, "62");
     lv_label_set_long_mode(ui->dashboard_temp_mot_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_temp_mot_text, 320, 432);
+    lv_obj_set_pos(ui->dashboard_temp_mot_text, 479, 432);
     lv_obj_set_size(ui->dashboard_temp_mot_text, 100, 60);
 
     //Write style for dashboard_temp_mot_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_temp_mot_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_temp_mot_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_temp_mot_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_temp_mot_text, &lv_font_Antonio_Regular_32, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_temp_mot_text, &lv_font_Antonio_Regular_40, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_temp_mot_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_temp_mot_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_temp_mot_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1915,14 +1892,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_mtmp_unit = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_mtmp_unit, "°C");
     lv_label_set_long_mode(ui->dashboard_col_mtmp_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_mtmp_unit, 424, 442);
+    lv_obj_set_pos(ui->dashboard_col_mtmp_unit, 582, 442);
     lv_obj_set_size(ui->dashboard_col_mtmp_unit, 56, 14);
 
     //Write style for dashboard_col_mtmp_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_mtmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_mtmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_mtmp_unit, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_mtmp_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_mtmp_unit, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_mtmp_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_mtmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_mtmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1938,14 +1915,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_ctmp_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_ctmp_label, "C·TEMP");
     lv_label_set_long_mode(ui->dashboard_col_ctmp_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_ctmp_label, 480, 414);
-    lv_obj_set_size(ui->dashboard_col_ctmp_label, 160, 12);
+    lv_obj_set_pos(ui->dashboard_col_ctmp_label, 631, 405);
+    lv_obj_set_size(ui->dashboard_col_ctmp_label, 160, 16);
 
     //Write style for dashboard_col_ctmp_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_ctmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_ctmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_ctmp_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_ctmp_label, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_ctmp_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_ctmp_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_ctmp_label, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_ctmp_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1961,14 +1938,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_temp_esc_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_temp_esc_text, "48");
     lv_label_set_long_mode(ui->dashboard_temp_esc_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_temp_esc_text, 480, 432);
+    lv_obj_set_pos(ui->dashboard_temp_esc_text, 637, 432);
     lv_obj_set_size(ui->dashboard_temp_esc_text, 100, 60);
 
     //Write style for dashboard_temp_esc_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_temp_esc_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_temp_esc_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_temp_esc_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_temp_esc_text, &lv_font_Antonio_Regular_32, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_temp_esc_text, &lv_font_Antonio_Regular_40, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_temp_esc_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_temp_esc_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_temp_esc_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1984,14 +1961,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_col_ctmp_unit = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_col_ctmp_unit, "°C");
     lv_label_set_long_mode(ui->dashboard_col_ctmp_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_col_ctmp_unit, 584, 442);
+    lv_obj_set_pos(ui->dashboard_col_ctmp_unit, 742, 442);
     lv_obj_set_size(ui->dashboard_col_ctmp_unit, 56, 14);
 
     //Write style for dashboard_col_ctmp_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_col_ctmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_col_ctmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_col_ctmp_unit, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_col_ctmp_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_ctmp_unit, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_col_ctmp_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_col_ctmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_col_ctmp_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2118,14 +2095,14 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_Ah_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_Ah_text, "14.2 Ah");
     lv_label_set_long_mode(ui->dashboard_Ah_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Ah_text, 90, 140);
-    lv_obj_set_size(ui->dashboard_Ah_text, 130, 30);
+    lv_obj_set_pos(ui->dashboard_Ah_text, 20, 140);
+    lv_obj_set_size(ui->dashboard_Ah_text, 130, 27);
 
     //Write style for dashboard_Ah_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Ah_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Ah_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Ah_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Ah_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Ah_text, &lv_font_montserratMedium_22, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Ah_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Ah_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Ah_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2165,14 +2142,14 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Settings_text, "SETTINGS");
     lv_label_set_long_mode(ui->dashboard_Settings_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Settings_text, 616, 10);
-    lv_obj_set_size(ui->dashboard_Settings_text, 96, 30);
+    lv_obj_set_size(ui->dashboard_Settings_text, 109, 30);
     lv_obj_add_flag(ui->dashboard_Settings_text, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Settings_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Settings_text, lv_color_hex(0xB6FF2E), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Settings_text, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Settings_text, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Settings_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Settings_text, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Settings_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2206,6 +2183,75 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_pad_bottom(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_pad_left(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_shadow_width(ui->dashboard_song_title_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write codes dashboard_label_3
+    ui->dashboard_label_3 = lv_label_create(ui->dashboard);
+    lv_label_set_text(ui->dashboard_label_3, "V");
+    lv_label_set_long_mode(ui->dashboard_label_3, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(ui->dashboard_label_3, 104, 442);
+    lv_obj_set_size(ui->dashboard_label_3, 56, 14);
+
+    //Write style for dashboard_label_3, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_border_width(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui->dashboard_label_3, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_label_3, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui->dashboard_label_3, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_letter_space(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_line_space(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui->dashboard_label_3, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->dashboard_label_3, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write codes dashboard_Voltage_text
+    ui->dashboard_Voltage_text = lv_label_create(ui->dashboard);
+    lv_label_set_text(ui->dashboard_Voltage_text, "14.2");
+    lv_label_set_long_mode(ui->dashboard_Voltage_text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(ui->dashboard_Voltage_text, 0, 432);
+    lv_obj_set_size(ui->dashboard_Voltage_text, 100, 60);
+
+    //Write style for dashboard_Voltage_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_border_width(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui->dashboard_Voltage_text, lv_color_hex(0xE8EDEE), LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Voltage_text, &lv_font_Antonio_Regular_40, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui->dashboard_Voltage_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_letter_space(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_line_space(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui->dashboard_Voltage_text, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->dashboard_Voltage_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write codes dashboard_col_voltage_label
+    ui->dashboard_col_voltage_label = lv_label_create(ui->dashboard);
+    lv_label_set_text(ui->dashboard_col_voltage_label, "TRIP");
+    lv_label_set_long_mode(ui->dashboard_col_voltage_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(ui->dashboard_col_voltage_label, 0, 405);
+    lv_obj_set_size(ui->dashboard_col_voltage_label, 160, 18);
+
+    //Write style for dashboard_col_voltage_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_border_width(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui->dashboard_col_voltage_label, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_col_voltage_label, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui->dashboard_col_voltage_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_letter_space(ui->dashboard_col_voltage_label, 2, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_line_space(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui->dashboard_col_voltage_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->dashboard_col_voltage_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
 
     //The custom code of dashboard.
 

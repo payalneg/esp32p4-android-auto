@@ -248,6 +248,22 @@ void settings_wrapper_set_power_max_kw(float power_max_kw) {
 #endif
 }
 
+bool settings_wrapper_get_vesc_emulator(void) {
+#if SIMULATOR_MODE
+    return false;
+#else
+    return settings_get_vesc_emulator();
+#endif
+}
+
+void settings_wrapper_set_vesc_emulator(bool on) {
+#if SIMULATOR_MODE
+    (void)on;
+#else
+    settings_set_vesc_emulator(on);
+#endif
+}
+
 void settings_wrapper_set_power_max_kw_volatile(float power_max_kw) {
 #if SIMULATOR_MODE
     sim_settings.power_max_kw = power_max_kw;
