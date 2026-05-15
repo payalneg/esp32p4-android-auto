@@ -55,8 +55,96 @@ int cruise_active = 0;
 
 extern lv_ui guider_ui;
 
+/* Numeric field: a plain centred label paired with +/- buttons. Replaces the
+ * built-in lv_spinbox, which had an editor-style border/cursor we didn't want
+ * (the value never gets typed in — it's always driven by the buttons). */
+typedef struct num_field {
+    int value;
+    int min, max, step;
+    int decimals;          /* 0 → "%d", 1 → "%d.%d" */
+    lv_obj_t *label;
+    void (*on_change)(struct num_field *f);
+} num_field_t;
+
+static num_field_t s_target_id_field;
+static num_field_t s_battery_capacity_field;
+static num_field_t s_power_max_field;
+
+static void num_field_refresh(num_field_t *f) {
+    if (!f->label) return;
+    char buf[16];
+    if (f->decimals == 1) {
+        int v = f->value;
+        int sign = v < 0 ? -1 : 1;
+        v *= sign;
+        snprintf(buf, sizeof buf, "%s%d.%d", sign < 0 ? "-" : "", v / 10, v % 10);
+    } else {
+        snprintf(buf, sizeof buf, "%d", f->value);
+    }
+    lv_label_set_text(f->label, buf);
+}
+
+static void num_field_set(num_field_t *f, int v) {
+    if (v < f->min) v = f->min;
+    if (v > f->max) v = f->max;
+    if (v == f->value) return;
+    f->value = v;
+    num_field_refresh(f);
+    if (f->on_change) f->on_change(f);
+}
+
+static void num_field_inc(num_field_t *f) { num_field_set(f, f->value + f->step); }
+static void num_field_dec(num_field_t *f) { num_field_set(f, f->value - f->step); }
+
+/* Compact settings layout: one row per setting, heading on the left,
+ * controls clustered on the right edge. */
+#define SETTINGS_ROW_H        60
+#define SETTINGS_BTN_W        60
+#define SETTINGS_VAL_W        100
+#define SETTINGS_PLUS_X       730
+#define SETTINGS_VAL_X        620
+#define SETTINGS_MINUS_X      550
+
+static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
+                                          const char *glyph, uint32_t bg_color,
+                                          lv_event_cb_t cb) {
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, glyph);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(btn, x, y);
+    lv_obj_set_size(btn, SETTINGS_BTN_W, 50);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg_color), 0);
+    lv_obj_set_style_text_color(btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    return btn;
+}
+
+static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
+                                      int y, uint32_t text_color) {
+    f->label = lv_label_create(parent);
+    lv_obj_set_pos(f->label, SETTINGS_VAL_X, y);
+    lv_obj_set_size(f->label, SETTINGS_VAL_W, 50);
+    lv_obj_set_style_text_color(f->label, lv_color_hex(text_color), 0);
+    lv_obj_set_style_text_font(f->label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_align(f->label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_top(f->label, 11, 0);
+    num_field_refresh(f);
+}
+
+static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *text) {
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_pos(lbl, 20, y + 15);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    return lbl;
+}
+
 // Settings UI objects (dynamically created)
-static lv_obj_t *settings_target_id_spinbox = NULL;
 static lv_obj_t *settings_target_id_label = NULL;
 static lv_obj_t *settings_target_id_plus_btn = NULL;
 static lv_obj_t *settings_target_id_minus_btn = NULL;
@@ -66,7 +154,6 @@ static lv_obj_t *settings_brightness_slider = NULL;
 static lv_obj_t *settings_brightness_label = NULL;
 static lv_obj_t *settings_controller_id_slider = NULL;
 static lv_obj_t *settings_controller_id_label = NULL;
-static lv_obj_t *settings_battery_capacity_spinbox = NULL;
 static lv_obj_t *settings_battery_capacity_label = NULL;
 static lv_obj_t *settings_battery_capacity_plus_btn = NULL;
 static lv_obj_t *settings_battery_capacity_minus_btn = NULL;
@@ -87,7 +174,6 @@ static lv_obj_t *settings_motor_poles_spinbox = NULL;
 static lv_obj_t *settings_motor_poles_label = NULL;
 static lv_obj_t *settings_motor_poles_plus_btn = NULL;
 static lv_obj_t *settings_motor_poles_minus_btn = NULL;
-static lv_obj_t *settings_power_max_spinbox = NULL;
 static lv_obj_t *settings_power_max_label = NULL;
 static lv_obj_t *settings_power_max_plus_btn = NULL;
 static lv_obj_t *settings_power_max_minus_btn = NULL;
@@ -827,36 +913,19 @@ static debounced_commit_t s_controller_id_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
 
-// Event handler for Target VESC ID spinbox
-static void target_id_spinbox_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *spinbox = lv_event_get_target(e);
-    int32_t value = lv_spinbox_get_value(spinbox);
-    settings_wrapper_set_target_vesc_id_volatile((uint8_t)value);
+// Target VESC ID — value-change callback (volatile + debounced NVS commit)
+static void target_id_on_change(num_field_t *f) {
+    settings_wrapper_set_target_vesc_id_volatile((uint8_t)f->value);
     debounced_commit_schedule(&s_target_id_commit,
                               settings_wrapper_persist_target_vesc_id);
 }
 
-// Event handler for Plus button
 static void target_id_plus_btn_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        int32_t current_value = lv_spinbox_get_value(settings_target_id_spinbox);
-        if (current_value < 254) {
-            lv_spinbox_increment(settings_target_id_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_target_id_field);
 }
 
-// Event handler for Minus button
 static void target_id_minus_btn_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        int32_t current_value = lv_spinbox_get_value(settings_target_id_spinbox);
-        if (current_value > 1) {
-            lv_spinbox_decrement(settings_target_id_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_target_id_field);
 }
 
 // Event handler for CAN speed dropdown
@@ -908,40 +977,23 @@ static void controller_id_slider_event_cb(lv_event_t *e) {
     lv_label_set_text(settings_info_label, "Controller ID requires restart!");
 }
 
-// Event handler for Battery Capacity spinbox
-static void battery_capacity_spinbox_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *spinbox = lv_event_get_target(e);
-    int32_t value = lv_spinbox_get_value(spinbox);
-    /* Value is stored as integer (e.g., 150 for 15.0 Ah) */
-    float capacity = (float)value / 10.0f;
-    settings_wrapper_set_battery_capacity_volatile(capacity);
+// Battery Capacity — stored as int with 0.1 Ah step (e.g., 150 → 15.0 Ah)
+static void battery_capacity_on_change(num_field_t *f) {
+    settings_wrapper_set_battery_capacity_volatile((float)f->value / 10.0f);
     debounced_commit_schedule(&s_battery_capacity_commit,
                               settings_wrapper_persist_battery_capacity);
-    lv_label_set_text(settings_info_label,
-                      "Battery capacity changed - will recalibrate!");
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label,
+                          "Battery capacity changed - will recalibrate!");
+    }
 }
 
-// Event handler for Battery Capacity Plus button
 static void battery_capacity_plus_btn_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        int32_t current_value = lv_spinbox_get_value(settings_battery_capacity_spinbox);
-        if (current_value < 2000) { // Max 200.0 Ah
-            lv_spinbox_increment(settings_battery_capacity_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_battery_capacity_field);
 }
 
-// Event handler for Battery Capacity Minus button
 static void battery_capacity_minus_btn_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        int32_t current_value = lv_spinbox_get_value(settings_battery_capacity_spinbox);
-        if (current_value > 10) { // Min 1.0 Ah
-            lv_spinbox_decrement(settings_battery_capacity_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_battery_capacity_field);
 }
 
 // Event handler for Battery Calculation Mode dropdown
@@ -963,13 +1015,9 @@ static void battery_calc_mode_dropdown_event_cb(lv_event_t *e) {
     }
 }
 
-// Event handler for Power Max spinbox (value stored as int with 0.1 kW step,
-// e.g. 45 → 4.5 kW)
-static void power_max_spinbox_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *spinbox = lv_event_get_target(e);
-    int32_t value = lv_spinbox_get_value(spinbox);
-    settings_wrapper_set_power_max_kw_volatile((float)value / 10.0f);
+// Power Max — stored as int with 0.1 kW step (e.g. 45 → 4.5 kW)
+static void power_max_on_change(num_field_t *f) {
+    settings_wrapper_set_power_max_kw_volatile((float)f->value / 10.0f);
     cockpit_refresh_power_max_label();
     debounced_commit_schedule(&s_power_max_commit,
                               settings_wrapper_persist_power_max_kw);
@@ -979,21 +1027,11 @@ static void power_max_spinbox_event_cb(lv_event_t *e) {
 }
 
 static void power_max_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED && settings_power_max_spinbox) {
-        int32_t v = lv_spinbox_get_value(settings_power_max_spinbox);
-        if (v < 1000) {  // max 100.0 kW
-            lv_spinbox_increment(settings_power_max_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_power_max_field);
 }
 
 static void power_max_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED && settings_power_max_spinbox) {
-        int32_t v = lv_spinbox_get_value(settings_power_max_spinbox);
-        if (v > 1) {  // min 0.1 kW
-            lv_spinbox_decrement(settings_power_max_spinbox);
-        }
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_power_max_field);
 }
 
 // Timer callback for checking limits response
@@ -1293,9 +1331,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_power_max_kw(4.5f);
         
         // Update UI elements
-        if (settings_target_id_spinbox) {
-            lv_spinbox_set_value(settings_target_id_spinbox, 10);
-        }
+        if (s_target_id_field.label)        num_field_set(&s_target_id_field, 10);
         if (settings_can_speed_dropdown) {
             lv_dropdown_set_selected(settings_can_speed_dropdown, 3);
         }
@@ -1305,9 +1341,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_controller_id_slider) {
             lv_slider_set_value(settings_controller_id_slider, 2, LV_ANIM_ON);
         }
-        if (settings_battery_capacity_spinbox) {
-            lv_spinbox_set_value(settings_battery_capacity_spinbox, 150); // 15.0 Ah
-        }
+        if (s_battery_capacity_field.label) num_field_set(&s_battery_capacity_field, 150); // 15.0 Ah
         if (settings_battery_calc_mode_dropdown) {
             lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, 0);
         }
@@ -1320,9 +1354,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_motor_poles_spinbox) {
             lv_spinbox_set_value(settings_motor_poles_spinbox, 7); // Standard for VESC
         }
-        if (settings_power_max_spinbox) {
-            lv_spinbox_set_value(settings_power_max_spinbox, 45); // 4.5 kW
-        }
+        if (s_power_max_field.label)        num_field_set(&s_power_max_field, 45); // 4.5 kW
         cockpit_refresh_power_max_label();
 
         /* Cockpit: fps_text removed — nothing to toggle visibility on. */
@@ -1351,8 +1383,8 @@ void settings_ui_init(lv_ui *ui) {
      * pointers still reference orphaned widgets on the old screen. Without
      * the parent check the early-return would leave only the generated
      * "Back to dashboard" button visible. */
-    if (settings_target_id_spinbox != NULL &&
-        lv_obj_get_parent(settings_target_id_spinbox) == ui->settings) {
+    if (s_target_id_field.label != NULL &&
+        lv_obj_get_parent(s_target_id_field.label) == ui->settings) {
         return;
     }
     
@@ -1373,155 +1405,59 @@ void settings_ui_init(lv_ui *ui) {
     uint8_t battery_calc_mode = settings_wrapper_get_battery_calc_mode();
     
     int y_pos = 70; // Start below "Back to dashboard" button
-    int spacing = 90;
 
-    // ========== Target VESC ID Spinbox ==========
-    settings_target_id_label = lv_label_create(ui->settings);
-    char buf[32];
-    sprintf(buf, "Target VESC ID:");
-    lv_label_set_text(settings_target_id_label, buf);
-    lv_obj_set_pos(settings_target_id_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_target_id_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_target_id_label, &lv_font_montserrat_24, 0);
-    
-    // Create Minus button (left side)
-    settings_target_id_minus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *minus_label = lv_label_create(settings_target_id_minus_btn);
-    lv_label_set_text(minus_label, "-");
-    lv_obj_align(minus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_target_id_minus_btn, 20, y_pos + 30);
-    lv_obj_set_size(settings_target_id_minus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_target_id_minus_btn, lv_color_hex(0xff4444), 0);
-    lv_obj_set_style_text_color(settings_target_id_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_target_id_minus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_target_id_minus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_target_id_minus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_target_id_minus_btn, target_id_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    // Create spinbox for VESC ID selection (center) - positioned relative to minus button
-    settings_target_id_spinbox = lv_spinbox_create(ui->settings);
-    lv_spinbox_set_range(settings_target_id_spinbox, 1, 254);
-    lv_spinbox_set_digit_format(settings_target_id_spinbox, 3, 0); // 3 digits, 0 decimal places
-    lv_spinbox_set_value(settings_target_id_spinbox, target_id);
-    lv_spinbox_set_step(settings_target_id_spinbox, 1);
-    lv_obj_set_pos(settings_target_id_spinbox, 335, y_pos + 30); // 20 + 60 + 10 margin
-    lv_obj_set_size(settings_target_id_spinbox, 130, 50);
-    
-    // Style the spinbox
-    lv_obj_set_style_bg_color(settings_target_id_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
-    lv_obj_set_style_text_color(settings_target_id_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_target_id_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_border_width(settings_target_id_spinbox, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(settings_target_id_spinbox, lv_color_hex(0x00a9ff), LV_PART_MAIN);
-    lv_obj_set_style_radius(settings_target_id_spinbox, 8, LV_PART_MAIN);
-    
-    lv_obj_add_event_cb(settings_target_id_spinbox, target_id_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Create Plus button (right side) - positioned relative to spinbox
-    settings_target_id_plus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *plus_label = lv_label_create(settings_target_id_plus_btn);
-    lv_label_set_text(plus_label, "+");
-    lv_obj_align(plus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_target_id_plus_btn, 660, y_pos + 30); // 90 + 300 + 10 margin
-    lv_obj_set_size(settings_target_id_plus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_target_id_plus_btn, lv_color_hex(0x00a9ff), 0);
-    lv_obj_set_style_text_color(settings_target_id_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_target_id_plus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_target_id_plus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_target_id_plus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_target_id_plus_btn, target_id_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    y_pos += spacing;
+    // ========== Target VESC ID ==========
+    settings_target_id_label = settings_heading_create(ui->settings, y_pos, "Target VESC ID:");
+    s_target_id_field = (num_field_t){
+        .value = target_id, .min = 1, .max = 254, .step = 1, .decimals = 0,
+        .on_change = target_id_on_change,
+    };
+    settings_target_id_minus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, target_id_minus_btn_event_cb);
+    settings_value_label_init(ui->settings, &s_target_id_field, y_pos + 5, 0x00a9ff);
+    settings_target_id_plus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, target_id_plus_btn_event_cb);
+    y_pos += SETTINGS_ROW_H;
     
     // ========== CAN Speed Dropdown ==========
-    settings_can_speed_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_can_speed_label, "CAN Speed (kbps)");
-    lv_obj_set_pos(settings_can_speed_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_can_speed_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_can_speed_label, &lv_font_montserrat_24, 0);
-    
+    settings_can_speed_label = settings_heading_create(ui->settings, y_pos, "CAN Speed (kbps)");
+
     settings_can_speed_dropdown = lv_dropdown_create(ui->settings);
     lv_dropdown_set_options(settings_can_speed_dropdown, "125 kbps\n250 kbps\n500 kbps\n1000 kbps");
     lv_dropdown_set_selected(settings_can_speed_dropdown, can_speed_idx);
-    lv_obj_set_pos(settings_can_speed_dropdown, 20, y_pos + 30);
-    lv_obj_set_size(settings_can_speed_dropdown, 770, 50); // Match height with spinbox group
+    lv_obj_set_pos(settings_can_speed_dropdown, 400, y_pos + 5);
+    lv_obj_set_size(settings_can_speed_dropdown, 390, 50);
     lv_obj_set_style_bg_color(settings_can_speed_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_can_speed_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_can_speed_dropdown, &lv_font_montserrat_24, 0);
     lv_obj_set_style_border_width(settings_can_speed_dropdown, 0, 0);
-    lv_obj_set_style_radius(settings_can_speed_dropdown, 8, 0); // Match radius with other elements
+    lv_obj_set_style_radius(settings_can_speed_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_can_speed_dropdown, can_speed_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
     
-    y_pos += spacing + 10;
-    
-    // ========== Battery Capacity Spinbox ==========
-    settings_battery_capacity_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_battery_capacity_label, "Battery Capacity (Ah):");
-    lv_obj_set_pos(settings_battery_capacity_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_battery_capacity_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_capacity_label, &lv_font_montserrat_24, 0);
-    
-    // Create Minus button (left side)
-    settings_battery_capacity_minus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *bat_minus_label = lv_label_create(settings_battery_capacity_minus_btn);
-    lv_label_set_text(bat_minus_label, "-");
-    lv_obj_align(bat_minus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_battery_capacity_minus_btn, 20, y_pos + 30);
-    lv_obj_set_size(settings_battery_capacity_minus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_battery_capacity_minus_btn, lv_color_hex(0xff4444), 0);
-    lv_obj_set_style_text_color(settings_battery_capacity_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_capacity_minus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_battery_capacity_minus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_battery_capacity_minus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_battery_capacity_minus_btn, battery_capacity_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    // Create spinbox for Battery Capacity (center)
-    settings_battery_capacity_spinbox = lv_spinbox_create(ui->settings);
-    lv_spinbox_set_range(settings_battery_capacity_spinbox, 10, 2000); // 1.0 to 200.0 Ah
-    lv_spinbox_set_digit_format(settings_battery_capacity_spinbox, 4, 3); // 4 digits, 1 decimal place (e.g., "15.0")
-    lv_spinbox_set_value(settings_battery_capacity_spinbox, (int32_t)(battery_capacity * 10.0f));
-    lv_spinbox_set_step(settings_battery_capacity_spinbox, 1); // 0.1 Ah steps
-    lv_obj_set_pos(settings_battery_capacity_spinbox, 335, y_pos + 30);
-    lv_obj_set_size(settings_battery_capacity_spinbox, 130, 50);
-    
-    // Style the spinbox
-    lv_obj_set_style_bg_color(settings_battery_capacity_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
-    lv_obj_set_style_text_color(settings_battery_capacity_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_battery_capacity_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_border_width(settings_battery_capacity_spinbox, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(settings_battery_capacity_spinbox, lv_color_hex(0xffa500), LV_PART_MAIN);
-    lv_obj_set_style_radius(settings_battery_capacity_spinbox, 8, LV_PART_MAIN);
-    
-    lv_obj_add_event_cb(settings_battery_capacity_spinbox, battery_capacity_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Create Plus button (right side)
-    settings_battery_capacity_plus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *bat_plus_label = lv_label_create(settings_battery_capacity_plus_btn);
-    lv_label_set_text(bat_plus_label, "+");
-    lv_obj_align(bat_plus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_battery_capacity_plus_btn, 660, y_pos + 30);
-    lv_obj_set_size(settings_battery_capacity_plus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_battery_capacity_plus_btn, lv_color_hex(0x00a9ff), 0);
-    lv_obj_set_style_text_color(settings_battery_capacity_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_capacity_plus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_battery_capacity_plus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_battery_capacity_plus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_battery_capacity_plus_btn, battery_capacity_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    y_pos += spacing;
+    // ========== Battery Capacity ==========
+    settings_battery_capacity_label = settings_heading_create(ui->settings, y_pos, "Battery Capacity (Ah):");
+    s_battery_capacity_field = (num_field_t){
+        .value = (int)(battery_capacity * 10.0f),
+        .min = 10, .max = 2000, .step = 1, .decimals = 1,
+        .on_change = battery_capacity_on_change,
+    };
+    settings_battery_capacity_minus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, battery_capacity_minus_btn_event_cb);
+    settings_value_label_init(ui->settings, &s_battery_capacity_field, y_pos + 5, 0xffa500);
+    settings_battery_capacity_plus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, battery_capacity_plus_btn_event_cb);
+    y_pos += SETTINGS_ROW_H;
     
     // ========== Battery Calculation Mode Dropdown ==========
-    settings_battery_calc_mode_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_battery_calc_mode_label, "Battery Calculation:");
-    lv_obj_set_pos(settings_battery_calc_mode_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_battery_calc_mode_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_calc_mode_label, &lv_font_montserrat_24, 0);
-    
+    settings_battery_calc_mode_label = settings_heading_create(ui->settings, y_pos, "Battery Calculation:");
+
     settings_battery_calc_mode_dropdown = lv_dropdown_create(ui->settings);
     lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
     lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
-    lv_obj_set_pos(settings_battery_calc_mode_dropdown, 20, y_pos + 30);
-    lv_obj_set_size(settings_battery_calc_mode_dropdown, 770, 50);
+    lv_obj_set_pos(settings_battery_calc_mode_dropdown, 400, y_pos + 5);
+    lv_obj_set_size(settings_battery_calc_mode_dropdown, 390, 50);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, &lv_font_montserrat_24, 0);
@@ -1529,64 +1465,25 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    y_pos += spacing + 10;
+    y_pos += SETTINGS_ROW_H;
 
-    // ========== Power Max Spinbox (kW) ==========
-    // Full-scale value for the cockpit power bar. The bar fill ratio and
-    // the "X.X KW" label next to it are both driven from this setting.
+    // ========== Power Max (kW) ==========
+    // Full-scale value for the cockpit power bar — drives both bar fill ratio
+    // and the "X.X KW" label next to it.
     float power_max_kw = settings_wrapper_get_power_max_kw();
 
-    settings_power_max_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_power_max_label, "Power Max (kW):");
-    lv_obj_set_pos(settings_power_max_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_power_max_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_power_max_label, &lv_font_montserrat_24, 0);
-
-    // Minus button
-    settings_power_max_minus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *pmax_minus_label = lv_label_create(settings_power_max_minus_btn);
-    lv_label_set_text(pmax_minus_label, "-");
-    lv_obj_align(pmax_minus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_power_max_minus_btn, 20, y_pos + 30);
-    lv_obj_set_size(settings_power_max_minus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_power_max_minus_btn, lv_color_hex(0xff4444), 0);
-    lv_obj_set_style_text_color(settings_power_max_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_power_max_minus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_power_max_minus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_power_max_minus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_power_max_minus_btn, power_max_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-
-    // Spinbox (value is int with 0.1 kW step: 45 → 4.5 kW)
-    settings_power_max_spinbox = lv_spinbox_create(ui->settings);
-    lv_spinbox_set_range(settings_power_max_spinbox, 1, 1000);   // 0.1 .. 100.0 kW
-    lv_spinbox_set_digit_format(settings_power_max_spinbox, 4, 3); // "XX.X"
-    lv_spinbox_set_value(settings_power_max_spinbox, (int32_t)(power_max_kw * 10.0f + 0.5f));
-    lv_spinbox_set_step(settings_power_max_spinbox, 1);
-    lv_obj_set_pos(settings_power_max_spinbox, 335, y_pos + 30);
-    lv_obj_set_size(settings_power_max_spinbox, 130, 50);
-    lv_obj_set_style_bg_color(settings_power_max_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
-    lv_obj_set_style_text_color(settings_power_max_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_power_max_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_border_width(settings_power_max_spinbox, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(settings_power_max_spinbox, lv_color_hex(0xffa500), LV_PART_MAIN);
-    lv_obj_set_style_radius(settings_power_max_spinbox, 8, LV_PART_MAIN);
-    lv_obj_add_event_cb(settings_power_max_spinbox, power_max_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    // Plus button
-    settings_power_max_plus_btn = lv_btn_create(ui->settings);
-    lv_obj_t *pmax_plus_label = lv_label_create(settings_power_max_plus_btn);
-    lv_label_set_text(pmax_plus_label, "+");
-    lv_obj_align(pmax_plus_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_power_max_plus_btn, 660, y_pos + 30);
-    lv_obj_set_size(settings_power_max_plus_btn, 130, 50);
-    lv_obj_set_style_bg_color(settings_power_max_plus_btn, lv_color_hex(0x00a9ff), 0);
-    lv_obj_set_style_text_color(settings_power_max_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_power_max_plus_btn, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_power_max_plus_btn, 8, 0);
-    lv_obj_set_style_border_width(settings_power_max_plus_btn, 0, 0);
-    lv_obj_add_event_cb(settings_power_max_plus_btn, power_max_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
-
-    y_pos += spacing;
+    settings_power_max_label = settings_heading_create(ui->settings, y_pos, "Power Max (kW):");
+    s_power_max_field = (num_field_t){
+        .value = (int)(power_max_kw * 10.0f + 0.5f),
+        .min = 1, .max = 1000, .step = 1, .decimals = 1,
+        .on_change = power_max_on_change,
+    };
+    settings_power_max_minus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, power_max_minus_btn_event_cb);
+    settings_value_label_init(ui->settings, &s_power_max_field, y_pos + 5, 0xffa500);
+    settings_power_max_plus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, power_max_plus_btn_event_cb);
+    y_pos += SETTINGS_ROW_H;
 
     /*
     // ========== VESC LIMITS SECTION ==========
@@ -1870,14 +1767,10 @@ void settings_ui_init(lv_ui *ui) {
     */
 
     // ========== Demo Mode Switch ==========
-    settings_demo_mode_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_demo_mode_label, "Demo mode");
-    lv_obj_set_pos(settings_demo_mode_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_demo_mode_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_demo_mode_label, &lv_font_montserrat_24, 0);
+    settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
 
     settings_demo_mode_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_demo_mode_switch, 380, y_pos - 5);
+    lv_obj_set_pos(settings_demo_mode_switch, 730, y_pos + 15);
     lv_obj_set_size(settings_demo_mode_switch, 60, 30);
     if (dashboard_demo_is_active()) {
         lv_obj_add_state(settings_demo_mode_switch, LV_STATE_CHECKED);
@@ -1886,17 +1779,13 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_demo_mode_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(settings_demo_mode_switch, demo_mode_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    y_pos += spacing;
+    y_pos += SETTINGS_ROW_H;
 
     // ========== VESC Emulator Switch ==========
-    settings_vesc_emulator_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_vesc_emulator_label, "VESC Emulator");
-    lv_obj_set_pos(settings_vesc_emulator_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_vesc_emulator_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_vesc_emulator_label, &lv_font_montserrat_24, 0);
+    settings_vesc_emulator_label = settings_heading_create(ui->settings, y_pos, "VESC Emulator");
 
     settings_vesc_emulator_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_vesc_emulator_switch, 380, y_pos - 5);
+    lv_obj_set_pos(settings_vesc_emulator_switch, 730, y_pos + 15);
     lv_obj_set_size(settings_vesc_emulator_switch, 60, 30);
     if (settings_wrapper_get_vesc_emulator()) {
         lv_obj_add_state(settings_vesc_emulator_switch, LV_STATE_CHECKED);
@@ -1909,11 +1798,11 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_vesc_emulator_hint = lv_label_create(ui->settings);
     lv_label_set_text(settings_vesc_emulator_hint, "Restart required");
-    lv_obj_set_pos(settings_vesc_emulator_hint, 20, y_pos + 28);
+    lv_obj_set_pos(settings_vesc_emulator_hint, 220, y_pos + 22);
     lv_obj_set_style_text_color(settings_vesc_emulator_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_vesc_emulator_hint, &lv_font_montserrat_14, 0);
 
-    y_pos += spacing;
+    y_pos += SETTINGS_ROW_H;
     /*
     // ========== Wheel Diameter Spinbox ==========
     uint16_t wheel_diameter = settings_wrapper_get_wheel_diameter_mm();
@@ -2032,21 +1921,22 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
 */
     // ========== Reset Button ==========
+    y_pos += 10; // small visual break before the destructive action
     settings_reset_button = lv_btn_create(ui->settings);
     lv_obj_t *reset_label = lv_label_create(settings_reset_button);
     lv_label_set_text(reset_label, "Reset to Defaults");
     lv_obj_align(reset_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_reset_button, 20, y_pos);
-    lv_obj_set_size(settings_reset_button, 770, 50); // Match height with other elements
+    lv_obj_set_size(settings_reset_button, 770, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_radius(settings_reset_button, 8, 0); // Match radius with other elements
+    lv_obj_set_style_radius(settings_reset_button, 8, 0);
     lv_obj_set_style_border_width(settings_reset_button, 0, 0);
     lv_obj_add_event_cb(settings_reset_button, reset_button_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    y_pos += spacing;
-    
+
+    y_pos += SETTINGS_ROW_H;
+
     // ========== Info Label ==========
     settings_info_label = lv_label_create(ui->settings);
     lv_label_set_text(settings_info_label, "Settings saved automatically");
