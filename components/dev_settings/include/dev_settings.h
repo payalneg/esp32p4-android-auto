@@ -21,17 +21,6 @@ typedef enum {
     BATTERY_CALC_MODE_SMART  = 1,
 } battery_calc_mode_t;
 
-/* Top-level connection mode chosen by the user in Settings. Decides which
- * stack we bring up at boot (AA stays on the WROOM SPP/Wireless-Helper path,
- * AVRCP switches the WROOM into A2DP-sink+AVRCP-CT and shows Now Playing on
- * LVGL, CarPlay is a placeholder screen for now). The dropdown index in
- * custom.c must match this enum order. */
-typedef enum {
-    CONN_AVRCP        = 0,
-    CONN_ANDROID_AUTO = 1,
-    CONN_CARPLAY      = 2,
-} connection_mode_t;
-
 /* Loads cache from NVS. Idempotent — settings_ui_init() also calls this
  * via settings_wrapper_init(), so order between main and UI doesn't matter. */
 void settings_init(void);
@@ -45,7 +34,6 @@ battery_calc_mode_t  settings_get_battery_calc_mode(void);
 bool                 settings_get_show_fps(void);
 uint16_t             settings_get_wheel_diameter_mm(void);
 uint8_t              settings_get_motor_poles(void);
-connection_mode_t    settings_get_connection_mode(void);
 float                settings_get_power_max_kw(void);
 bool                 settings_get_vesc_emulator(void);
 
@@ -58,7 +46,6 @@ void settings_set_battery_calc_mode(battery_calc_mode_t mode);
 void settings_set_show_fps(bool show);
 void settings_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_set_motor_poles(uint8_t poles);
-void settings_set_connection_mode(connection_mode_t mode);
 void settings_set_power_max_kw(float power_max_kw);
 void settings_set_vesc_emulator(bool on);
 

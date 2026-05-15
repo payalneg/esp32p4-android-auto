@@ -10,7 +10,6 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
-#include "now_playing.h"
 
 #define UART_PORT      ((uart_port_t)BT_AGENT_UART_PORT)
 #define UART_TX_PIN    BT_AGENT_UART_TX
@@ -158,24 +157,6 @@ static void rx_task(void *arg)
                             s_wifi_acked = true;  /* stop resend loop */
                         }
                         if (!s_quiet) ESP_LOGI(TAG, "agent event %s", evt);
-                    } else if (strncmp(line, "META|", 5) == 0) {
-                        /* AVRCP CT metadata from the WROOM. Format:
-                         *   META|<title>|<artist>|<album>
-                         * Pipes inside the field strings are pre-replaced
-                         * by the sender (titles rarely contain '|'). Empty
-                         * fields are allowed — phones often omit album. */
-                        char *p = line + 5;
-                        char *title = p;
-                        char *artist = "";
-                        char *album  = "";
-                        char *q = strchr(p, '|');
-                        if (q) { *q = '\0'; artist = q + 1;
-                                 q = strchr(artist, '|');
-                                 if (q) { *q = '\0'; album = q + 1; } }
-                        now_playing_set_track(title, artist, album);
-                    } else if (strncmp(line, "STATE|", 6) == 0) {
-                        const char *st = line + 6;
-                        now_playing_set_state(strcmp(st, "playing") == 0);
                     } else if (strncmp(line, "BT-VER:", 7) == 0) {
                         /* Always parse — wait_version() depends on this even
                          * when forwarding is muted. */
@@ -318,27 +299,3 @@ void bt_link_publish_wifi(const char *ssid, const char *password,
     }
 }
 
-void bt_link_publish_mode(connection_mode_t mode)
-{
-    const char *tag;
-    switch (mode) {
-        case CONN_AVRCP:        tag = "AVRCP"; break;
-        case CONN_ANDROID_AUTO: tag = "AA";    break;
-        default:
-            ESP_LOGW(TAG, "publish_mode: unsupported mode %d", (int)mode);
-            return;
-    }
-    char line[32];
-    int n = snprintf(line, sizeof(line), "MODE|%s\n", tag);
-    if (n <= 0 || n >= (int)sizeof(line)) return;
-    /* Send it three times spaced ~150 ms apart — the agent may still be in
-     * ROM bootloader / first 200 ms of app start when bt_link_init returns,
-     * and there's no ack for MODE on purpose (simpler state machine on the
-     * agent side). Three sends in ~450 ms is short enough not to delay AA
-     * boot and long enough to land at least one. */
-    for (int i = 0; i < 3; i++) {
-        uart_write_bytes(UART_PORT, line, (size_t)n);
-        vTaskDelay(pdMS_TO_TICKS(150));
-    }
-    ESP_LOGI(TAG, "→ BT agent: MODE|%s", tag);
-}

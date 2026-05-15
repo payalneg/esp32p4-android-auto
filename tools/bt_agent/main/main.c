@@ -30,7 +30,6 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
-#include "avrcp_mode.h"
 #include "uart_link.h"
 #include "wifi_setup_proto.h"
 
@@ -41,7 +40,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.2.2-avrcp"
+#define BT_AGENT_FW_VERSION "0.3.0"
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
@@ -507,21 +506,6 @@ void app_main(void)
     uart_link_init();
     uart_link_say("BT:BOOT");
     uart_link_say("BT-VER:" BT_AGENT_FW_VERSION);
-
-    /* P4 sends MODE|AA or MODE|AVRCP within ~500 ms of our boot. Block
-     * here briefly so we pick the right profile set the first time —
-     * tearing A2DP+AVRCP down to re-init as AA later is supported by
-     * Bluedroid but messy, easier to just get it right on boot. Timeout
-     * defaults to AA so legacy P4 firmware (no MODE line yet) keeps
-     * working. */
-    uart_link_mode_t mode = uart_link_wait_mode(3000);
-    ESP_LOGI(TAG, "P4 selected mode: %s",
-             mode == UART_LINK_MODE_AVRCP ? "AVRCP" : "AA");
-
-    if (mode == UART_LINK_MODE_AVRCP) {
-        avrcp_mode_run();    /* does not return */
-        return;
-    }
 
     init_bt();
 

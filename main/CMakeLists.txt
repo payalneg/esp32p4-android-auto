@@ -27,8 +27,6 @@ idf_component_register(
         "ui_mode.c"
         "vesc_ui_updater.c"
         "vesc_sim.c"
-        "now_playing.c"
-        "font_song_title_12.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

@@ -25,22 +25,9 @@ static struct {
     bool                 show_fps;
     uint16_t             wheel_diameter_mm;
     uint8_t              motor_poles;
-    connection_mode_t    connection_mode;
     float                power_max_kw;
     bool                 vesc_emulator;
 } s_cache;
-
-/* Coerce a raw NVS byte to a valid enum value. CONN_ANDROID_AUTO is the
- * historical default — devices that never touched the new dropdown keep
- * doing AA. */
-static connection_mode_t sanitize_connection_mode(uint8_t v) {
-    switch (v) {
-        case CONN_AVRCP:        return CONN_AVRCP;
-        case CONN_ANDROID_AUTO: return CONN_ANDROID_AUTO;
-        case CONN_CARPLAY:      return CONN_CARPLAY;
-        default:                return CONN_ANDROID_AUTO;
-    }
-}
 
 static settings_can_speed_cb_t     s_can_speed_cb;
 static settings_brightness_cb_t    s_brightness_cb;
@@ -87,7 +74,6 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "vesc_sim",    &u8 ) == ESP_OK) s_cache.vesc_emulator     = (u8 != 0);
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
-    if (nvs_get_u8 (h, "conn_mode",   &u8 ) == ESP_OK) s_cache.connection_mode   = sanitize_connection_mode(u8);
 
     /* float via blob — NVS has no native float type. */
     size_t sz = sizeof(float);
@@ -131,7 +117,6 @@ void settings_init(void) {
     s_cache.show_fps          = true;
     s_cache.wheel_diameter_mm = 200;
     s_cache.motor_poles       = 7;
-    s_cache.connection_mode   = CONN_ANDROID_AUTO;
     s_cache.power_max_kw      = 4.5f;
     s_cache.vesc_emulator     = false;
 
@@ -153,7 +138,6 @@ battery_calc_mode_t settings_get_battery_calc_mode(void) { return s_cache.batter
 bool                settings_get_show_fps(void)          { return s_cache.show_fps; }
 uint16_t            settings_get_wheel_diameter_mm(void) { return s_cache.wheel_diameter_mm; }
 uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_poles; }
-connection_mode_t   settings_get_connection_mode(void)   { return s_cache.connection_mode; }
 float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 bool                settings_get_vesc_emulator(void)     { return s_cache.vesc_emulator; }
 
@@ -251,18 +235,6 @@ void settings_set_motor_poles(uint8_t poles) {
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "motor_poles", poles);
     commit(h);
-}
-
-void settings_set_connection_mode(connection_mode_t mode) {
-    mode = sanitize_connection_mode((uint8_t)mode);
-    if (s_cache.connection_mode == mode) return;
-    s_cache.connection_mode = mode;
-    nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
-    nvs_set_u8(h, "conn_mode", (uint8_t)mode);
-    commit(h);
-    /* No hot-apply callback — change requires reboot to re-init the stack
-     * cleanly. The UI shows a "restart now?" msgbox after this returns. */
 }
 
 void settings_set_power_max_kw(float power_max_kw) {

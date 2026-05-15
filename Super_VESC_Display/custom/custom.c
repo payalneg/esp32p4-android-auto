@@ -93,12 +93,6 @@ static lv_obj_t *settings_power_max_plus_btn = NULL;
 static lv_obj_t *settings_power_max_minus_btn = NULL;
 static lv_obj_t *settings_reset_button = NULL;
 static lv_obj_t *settings_info_label = NULL;
-static lv_obj_t *settings_connection_mode_dropdown = NULL;
-static lv_obj_t *settings_connection_mode_label = NULL;
-/* Pending selection while the "Apply and restart?" msgbox is up.
- * Captured at LV_EVENT_VALUE_CHANGED so the user's choice survives even if
- * they tap Yes seconds later. */
-static uint8_t   s_pending_conn_mode = 0;
 
 // VESC Limits UI objects
 static lv_obj_t *settings_limits_title_label = NULL;
@@ -866,58 +860,6 @@ static void target_id_minus_btn_event_cb(lv_event_t *e) {
 }
 
 // Event handler for CAN speed dropdown
-/* Confirmation msgbox handler — the user chose Yes or No to applying the new
- * connection mode. Yes path persists the pending selection and reboots.
- * No path reverts the dropdown's UI selection to whatever's currently in NVS.
- *
- * LVGL 8.3: lv_msgbox emits LV_EVENT_VALUE_CHANGED with the button index in
- * lv_msgbox_get_active_btn_text(); index 0 = Yes (left), 1 = No (right). */
-static void connection_mode_msgbox_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *mbox = lv_event_get_current_target(e);
-    uint16_t btn_id = lv_msgbox_get_active_btn(mbox);
-    if (btn_id == 0) {
-        /* Yes — persist and reboot. apply_restart blocks forever on device. */
-        settings_wrapper_set_connection_mode(s_pending_conn_mode);
-        if (settings_info_label) {
-            lv_label_set_text(settings_info_label, "Rebooting to apply...");
-        }
-        settings_wrapper_apply_restart();
-        /* Simulator falls through; close the msgbox so the test keeps running. */
-    } else {
-        /* No — revert dropdown to the saved value. */
-        if (settings_connection_mode_dropdown) {
-            lv_dropdown_set_selected(settings_connection_mode_dropdown,
-                                     settings_wrapper_get_connection_mode());
-        }
-    }
-    lv_msgbox_close(mbox);
-}
-
-// Event handler for Connection Mode dropdown
-static void connection_mode_dropdown_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *dropdown = lv_event_get_target(e);
-    uint16_t selected = lv_dropdown_get_selected(dropdown);
-    if (selected == settings_wrapper_get_connection_mode()) {
-        /* No-op — user re-picked the current value. */
-        return;
-    }
-    s_pending_conn_mode = (uint8_t)selected;
-
-    /* Confirmation modal — Yes / No buttons. Owned by lv_scr_act() so it
-     * floats over the settings screen and survives screen unload. */
-    static const char *btns[] = {"Yes", "No", ""};
-    lv_obj_t *mbox = lv_msgbox_create(NULL, "Apply and restart?",
-                                      "Connection mode change takes effect after reboot.",
-                                      btns, false);
-    lv_obj_center(mbox);
-    lv_obj_add_event_cb(mbox, connection_mode_msgbox_event_cb,
-                        LV_EVENT_VALUE_CHANGED, NULL);
-}
-
 static void can_speed_dropdown_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
@@ -1432,36 +1374,6 @@ void settings_ui_init(lv_ui *ui) {
     
     int y_pos = 70; // Start below "Back to dashboard" button
     int spacing = 90;
-
-    // ========== Connection Mode Dropdown ==========
-    /* Top-level mode picker: which phone-projection stack to bring up at
-     * boot. Putting it first because it's the most consequential setting —
-     * everything below only matters for the VESC dashboard, which lives in
-     * all three modes. Order MUST match connection_mode_option_t and the
-     * device enum: AVRCP=0, Android Auto=1, CarPlay=2. */
-    settings_connection_mode_label = lv_label_create(ui->settings);
-    lv_label_set_text(settings_connection_mode_label, "Connection Mode");
-    lv_obj_set_pos(settings_connection_mode_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_connection_mode_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_connection_mode_label, &lv_font_montserrat_24, 0);
-
-    settings_connection_mode_dropdown = lv_dropdown_create(ui->settings);
-    lv_dropdown_set_options(settings_connection_mode_dropdown,
-                            "AVRCP\nAndroid Auto\nCarPlay");
-    lv_dropdown_set_selected(settings_connection_mode_dropdown,
-                             settings_wrapper_get_connection_mode());
-    lv_obj_set_pos(settings_connection_mode_dropdown, 20, y_pos + 30);
-    lv_obj_set_size(settings_connection_mode_dropdown, 770, 50);
-    lv_obj_set_style_bg_color(settings_connection_mode_dropdown, lv_color_hex(0x2a3440), 0);
-    lv_obj_set_style_text_color(settings_connection_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_connection_mode_dropdown, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_border_width(settings_connection_mode_dropdown, 0, 0);
-    lv_obj_set_style_radius(settings_connection_mode_dropdown, 8, 0);
-    lv_obj_add_event_cb(settings_connection_mode_dropdown,
-                        connection_mode_dropdown_event_cb,
-                        LV_EVENT_VALUE_CHANGED, NULL);
-
-    y_pos += spacing + 10;
 
     // ========== Target VESC ID Spinbox ==========
     settings_target_id_label = lv_label_create(ui->settings);

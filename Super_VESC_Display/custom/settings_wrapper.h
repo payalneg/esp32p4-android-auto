@@ -28,14 +28,6 @@ typedef enum {
     CAN_SPEED_1000 = 3
 } can_speed_option_t;
 
-/* Connection mode dropdown indices — must match the order of strings in the
- * lv_dropdown_set_options call AND the connection_mode_t enum on device. */
-typedef enum {
-    CONN_MODE_OPT_AVRCP        = 0,
-    CONN_MODE_OPT_ANDROID_AUTO = 1,
-    CONN_MODE_OPT_CARPLAY      = 2,
-} connection_mode_option_t;
-
 #ifndef LV_REALDEVICE
 // Simulator-only fallback. Device build uses the dev_settings enum.
 typedef enum {
@@ -65,9 +57,6 @@ void settings_wrapper_set_battery_calc_mode(uint8_t mode);
 void settings_wrapper_set_show_fps(bool show);
 void settings_wrapper_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_wrapper_set_motor_poles(uint8_t poles);
-
-uint8_t settings_wrapper_get_connection_mode(void);
-void    settings_wrapper_set_connection_mode(uint8_t mode);
 
 float settings_wrapper_get_power_max_kw(void);
 void  settings_wrapper_set_power_max_kw(float power_max_kw);

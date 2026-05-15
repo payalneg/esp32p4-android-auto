@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 #include "driver/gpio.h"
-#include "dev_settings.h"   /* connection_mode_t */
 
 /* P4 ↔ D1 Mini BT-agent UART link.
  *
@@ -68,13 +67,3 @@ void bt_link_set_quiet(bool quiet);
  * pipes, so no escaping. */
 void bt_link_publish_wifi(const char *ssid, const char *password,
                           const char *bssid, const char *ip, int port);
-
-/* Tell the BT agent which top-level mode the user picked. The agent waits
- * for this line on boot before deciding whether to bring up the AA Wireless
- * SPP server or A2DP-sink + AVRCP-CT. Sent once at startup; re-sent only on
- * re-pair / reboot of the agent. Maps:
- *   CONN_AVRCP        → "MODE|AVRCP\n"
- *   CONN_ANDROID_AUTO → "MODE|AA\n"
- *   CONN_CARPLAY      → not called (we don't boot the agent in this mode)
- */
-void bt_link_publish_mode(connection_mode_t mode);

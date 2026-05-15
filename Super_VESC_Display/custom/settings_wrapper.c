@@ -32,7 +32,6 @@ static struct {
     bool show_fps;
     uint16_t wheel_diameter_mm;
     uint8_t motor_poles;
-    uint8_t connection_mode;
     float power_max_kw;
 } sim_settings = {
     .target_vesc_id = 10,
@@ -44,7 +43,6 @@ static struct {
     .show_fps = true,
     .wheel_diameter_mm = 200,  // 200mm default
     .motor_poles = 7,  // Standard for VESC motors
-    .connection_mode = CONN_MODE_OPT_ANDROID_AUTO,
     .power_max_kw = 4.5f,
 };
 #endif
@@ -213,22 +211,6 @@ void settings_wrapper_set_motor_poles(uint8_t poles) {
     sim_settings.motor_poles = poles;
 #else
     settings_set_motor_poles(poles);
-#endif
-}
-
-uint8_t settings_wrapper_get_connection_mode(void) {
-#if SIMULATOR_MODE
-    return sim_settings.connection_mode;
-#else
-    return (uint8_t)settings_get_connection_mode();
-#endif
-}
-
-void settings_wrapper_set_connection_mode(uint8_t mode) {
-#if SIMULATOR_MODE
-    sim_settings.connection_mode = mode;
-#else
-    settings_set_connection_mode((connection_mode_t)mode);
 #endif
 }
 

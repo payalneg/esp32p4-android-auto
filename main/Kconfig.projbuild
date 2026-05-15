@@ -79,7 +79,7 @@ menu "Android Auto Head Unit"
         config BT_AGENT_FW_VERSION
             string "Expected BT agent firmware version"
             depends on BT_AGENT_OTA_ENABLED
-            default "0.2.2-avrcp"
+            default "0.3.0"
             help
                 Must exactly match what the agent emits on boot via
                 `BT-VER:<version>`. Bump this in lockstep with the agent
