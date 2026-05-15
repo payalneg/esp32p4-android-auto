@@ -39,6 +39,11 @@ void vesc_rt_data_request(void);
  * so passing every packet is fine. */
 void vesc_rt_data_process_response(const uint8_t *data, unsigned int len);
 
+/* Replace the live snapshot with a fully-formed one. Bypasses the CAN
+ * parser entirely — used by the VESC emulator (vesc_sim.c) to drive the
+ * dashboard without a real controller. Stamps rx_time so is_fresh()==true. */
+void vesc_rt_data_inject(const vesc_setup_values_t *src);
+
 /* Latest snapshot. Always non-NULL; use vesc_rt_data_is_fresh() to
  * tell whether it's up-to-date. */
 const vesc_setup_values_t *vesc_rt_data_get_latest(void);

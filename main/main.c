@@ -61,6 +61,7 @@ void port_start_app_hook(void)
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_rt_data.h"
+#include "vesc_sim.h"
 #include "vesc_trip_persist.h"
 #include "vesc_ui_updater.h"
 #include "wifi_manager.h"
@@ -269,8 +270,16 @@ void app_main(void)
     int     can_kbps = (int)settings_get_can_speed();
     uint8_t ctrl_id  = settings_get_controller_id();
     uint8_t tgt_id   = settings_get_target_vesc_id();
-    if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
-                       ctrl_id, can_kbps) == ESP_OK) {
+
+    if (settings_get_vesc_emulator()) {
+        /* Synthetic source — runs a scripted drive cycle and injects into
+         * vesc_rt_data. No CAN driver, no real polling. */
+        vesc_rt_data_init(tgt_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
+        vesc_sim_start();
+        ESP_LOGW(TAG, "VESC EMULATOR active — no real CAN");
+        vesc_ui_updater_start();
+    } else if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
+                              ctrl_id, can_kbps) == ESP_OK) {
         vesc_rt_data_init(tgt_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
         vesc_lisp_poll_init(tgt_id, CONFIG_VESC_CAN_LISP_INTERVAL_MS);

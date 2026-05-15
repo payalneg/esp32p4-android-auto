@@ -187,6 +187,14 @@ void vesc_rt_data_process_response(const uint8_t *data, unsigned int len)
     }
 }
 
+void vesc_rt_data_inject(const vesc_setup_values_t *src)
+{
+    if (!src) return;
+    s_rt_data = *src;
+    s_rt_data.rx_time = millis_now();
+    s_data_received   = true;
+}
+
 const vesc_setup_values_t *vesc_rt_data_get_latest(void) { return &s_rt_data; }
 
 bool vesc_rt_data_is_fresh(void)

@@ -47,6 +47,7 @@ uint16_t             settings_get_wheel_diameter_mm(void);
 uint8_t              settings_get_motor_poles(void);
 connection_mode_t    settings_get_connection_mode(void);
 float                settings_get_power_max_kw(void);
+bool                 settings_get_vesc_emulator(void);
 
 void settings_set_target_vesc_id(uint8_t id);
 void settings_set_can_speed(can_speed_t speed);
@@ -59,6 +60,7 @@ void settings_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_set_motor_poles(uint8_t poles);
 void settings_set_connection_mode(connection_mode_t mode);
 void settings_set_power_max_kw(float power_max_kw);
+void settings_set_vesc_emulator(bool on);
 
 /* Debounced setters — update the RAM cache and fire any hot-apply callback
  * immediately, but DO NOT touch NVS. The UI pairs them with the matching
