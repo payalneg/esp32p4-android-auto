@@ -423,7 +423,7 @@
 /*Documentation of the widgets: https://docs.lvgl.io/latest/en/html/widgets/index.html*/
 #define LV_USE_ARC 0
 
-#define LV_USE_BAR 0
+#define LV_USE_BAR 1
 
 #define LV_USE_BTN 1
 
@@ -453,7 +453,7 @@
 #define LV_ROLLER_INF_PAGES 7
 #endif    /* LV_USE_ROLLER */
 
-#define LV_USE_SLIDER 0
+#define LV_USE_SLIDER 1
 
 #define LV_USE_SWITCH 0
 

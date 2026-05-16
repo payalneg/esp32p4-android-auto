@@ -113,6 +113,7 @@ typedef struct
 	lv_obj_t *dashboard_Voltage_text;
 	lv_obj_t *dashboard_col_voltage_label;
 	lv_obj_t *dashboard_cur_time_label;
+	lv_obj_t *dashboard_brightness_slider;
 	lv_obj_t *settings;
 	bool settings_del;
 	lv_obj_t *settings_exit_button;

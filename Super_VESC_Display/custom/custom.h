@@ -32,6 +32,12 @@ void update_odometer(float odometer);
 void update_fps(int fps);
 void update_uptime(uint32_t uptime);
 void update_cur_time(int hour, int minute, int second);
+
+/* Called from events_init.c when the invisible dashboard brightness
+ * slider (full-screen drag area) changes value. Applies the brightness
+ * live and debounces the NVS commit so a continuous drag doesn't issue
+ * one flash write per slider tick. */
+void dashboard_brightness_slider_changed(int32_t value);
 void update_ble_status(bool connected);
 void update_esc_connection_status(bool connected);
 void update_navigation_icon(const uint8_t *img_data, uint32_t data_size, uint16_t width, uint16_t height, lv_img_cf_t color_format);

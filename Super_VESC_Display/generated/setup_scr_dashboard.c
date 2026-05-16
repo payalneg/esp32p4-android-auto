@@ -2276,6 +2276,28 @@ void setup_scr_dashboard(lv_ui *ui)
     lv_obj_set_style_pad_left(ui->dashboard_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_shadow_width(ui->dashboard_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
 
+    //Write codes dashboard_brightness_slider
+    ui->dashboard_brightness_slider = lv_slider_create(ui->dashboard);
+    lv_slider_set_range(ui->dashboard_brightness_slider, 0, 100);
+    lv_slider_set_mode(ui->dashboard_brightness_slider, LV_SLIDER_MODE_NORMAL);
+    lv_slider_set_value(ui->dashboard_brightness_slider, 50, LV_ANIM_OFF);
+    lv_obj_set_pos(ui->dashboard_brightness_slider, 250, 0);
+    lv_obj_set_size(ui->dashboard_brightness_slider, 300, 480);
+
+    //Write style for dashboard_brightness_slider, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_bg_opa(ui->dashboard_brightness_slider, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_brightness_slider, 10, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_outline_width(ui->dashboard_brightness_slider, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->dashboard_brightness_slider, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write style for dashboard_brightness_slider, Part: LV_PART_INDICATOR, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_bg_opa(ui->dashboard_brightness_slider, 0, LV_PART_INDICATOR|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_brightness_slider, 8, LV_PART_INDICATOR|LV_STATE_DEFAULT);
+
+    //Write style for dashboard_brightness_slider, Part: LV_PART_KNOB, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_bg_opa(ui->dashboard_brightness_slider, 0, LV_PART_KNOB|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_brightness_slider, 13, LV_PART_KNOB|LV_STATE_DEFAULT);
+
     //The custom code of dashboard.
 
 

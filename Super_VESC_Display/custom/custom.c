@@ -387,6 +387,14 @@ void custom_init(lv_ui *ui)
      * bar fill ratio and the printed full-scale agree at boot. */
     settings_wrapper_init();
     cockpit_refresh_power_max_label();
+
+    /* Sync the invisible dashboard brightness drag slider with the saved
+     * value so a touch on the slider starts from the real brightness,
+     * not the GUI Guider default of 50. */
+    if (ui->dashboard_brightness_slider) {
+        lv_slider_set_value(ui->dashboard_brightness_slider,
+                            settings_wrapper_get_brightness(), LV_ANIM_OFF);
+    }
 }
 
 /* 4 Hz tick (~250 ms). sinf() drives smooth value sweeps; every change goes
@@ -960,6 +968,19 @@ static void can_speed_dropdown_event_cb(lv_event_t *e) {
         // Update info label
         lv_label_set_text(settings_info_label, "CAN speed requires restart!");
     }
+}
+
+/* Public entry from the dashboard's invisible full-screen brightness drag
+ * slider (events_init_dashboard). Shares the s_brightness_commit debounce
+ * timer with the settings-page slider so a fast drag doesn't queue two
+ * NVS commits. Volatile setter fires the brightness callback right away,
+ * the backlight tracks the drag live. */
+void dashboard_brightness_slider_changed(int32_t value) {
+    if (value < 0)   value = 0;
+    if (value > 100) value = 100;
+    settings_wrapper_set_brightness_volatile((uint8_t)value);
+    debounced_commit_schedule(&s_brightness_commit,
+                              settings_wrapper_persist_brightness);
 }
 
 // Event handler for brightness slider
