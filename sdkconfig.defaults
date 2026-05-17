@@ -195,3 +195,11 @@ CONFIG_ESP_H264_DUAL_TASK_PRIORITY=17
 # CAL_CYCLES must be ≥3000 for EXT_CRYS or IDF silently falls back to RC.
 CONFIG_RTC_CLK_SRC_EXT_CRYS=y
 CONFIG_RTC_CLK_CAL_CYCLES=3000
+
+# RTC backup battery (CR2032 / LIR2032 in H8). INIT_AUTO sets up the
+# brownout comparator so esp_vbat_get_battery_state() returns
+# NORMAL/LOWBATTERY relative to the threshold below. We pick the
+# highest available pre-v3 threshold (2.6V) so a fading CR2032 trips
+# LOWBATTERY before it actually fails to hold the RTC domain.
+CONFIG_ESP_VBAT_INIT_AUTO=y
+CONFIG_ESP_VBAT_BROWNOUT_DET_LVL_SEL_7=y

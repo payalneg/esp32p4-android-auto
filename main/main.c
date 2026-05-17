@@ -55,7 +55,7 @@ void port_start_app_hook(void)
 #include "tcp_server.h"
 #include "touch_input.h"
 #include "ui_mode.h"
-#include "vbat_experiment.h"
+#include "vbat_routing.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
@@ -190,20 +190,18 @@ void app_main(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 
+    /* Arm the PMU so the LP domain runs in AUTO mode (falls through to
+     * VBAT/CR2032 when main power collapses). Required for the wall-
+     * clock on the dashboard to survive USB-unplug — without this poke,
+     * a POR wipes the LP_TIMER and the boot_time epoch in LP_STORE2/3.
+     * Has to run before anything else that touches PMU state. */
+    vbat_routing_enable();
+
     init_nvs();
     /* Settings cache is now ready for both the UI (settings_ui_init pulls
      * via settings_wrapper_init → settings_init) and our callback wiring
      * below. settings_init is idempotent. */
     settings_init();
-
-    /* EXPERIMENT: try to enable VBAT power routing for the LP domain in
-     * active mode by poking PMU.lp_sys[PMU_MODE_LP_ACTIVE].dig_power.
-     * vddbat_mode directly. ESP-IDF only sets this for LP_SLEEP, but the
-     * register field is writable per pmu_struct.h and works that way on
-     * ESP32-H21. If it sticks on P4, time(NULL) will survive USB-unplug
-     * because the LP_TIMER and LP_STORE2/3 regs (where RTC boot_time
-     * lives) stay powered from the CR2032 on H8. See vbat_experiment.c. */
-    vbat_experiment_enable_active_routing();
 
     /* Smart battery calc needs NVS open before its first percentage call.
      * settings_init's nvs_flash_init has already run; battery_calc keeps its

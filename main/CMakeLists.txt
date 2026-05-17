@@ -27,7 +27,7 @@ idf_component_register(
         "ui_mode.c"
         "vesc_ui_updater.c"
         "vesc_sim.c"
-        "vbat_experiment.c"
+        "vbat_routing.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

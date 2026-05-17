@@ -1,6 +1,11 @@
 # Name,     Type, SubType,  Offset,    Size
+# 32 MB flash, fully used: reserved 0x20000 up front (bootloader + NVS +
+# otadata + phy_init), then two equal-sized OTA slots filling the rest
+# (0x1FE0000 / 2 = 0xFF0000 ≈ 15.94 MB each). No free tail — if a SPIFFS
+# / data partition is ever needed, shrink the OTA slots back to 8 MB
+# each and reclaim the middle.
 nvs,        data, nvs,      0x9000,    0x6000
 otadata,    data, ota,      0xf000,    0x2000
 phy_init,   data, phy,      0x11000,   0x1000
-ota_0,      app,  ota_0,    0x20000,   0x500000
-ota_1,      app,  ota_1,    0x520000,  0x500000
+ota_0,      app,  ota_0,    0x20000,   0xFF0000
+ota_1,      app,  ota_1,    0x1010000, 0xFF0000

@@ -127,16 +127,6 @@ void settings_init(void) {
     ESP_LOGI(TAG, "loaded: can=%d kbps brightness=%u%% target_id=%u ctrl_id=%u",
              (int)s_cache.can_speed, s_cache.brightness,
              s_cache.target_vesc_id, s_cache.controller_id);
-
-    /* Critical for the vbat experiment: this is what we read after a
-     * USB-unplug+replug. If it's non-zero, the LP_TIMER kept ticking on
-     * the CR2032 → VBAT poke worked. If it's 0, time was lost. */
-    uint32_t sod = (uint32_t)time(NULL) % 86400u;
-    ESP_LOGW(TAG, "clock at boot: %02u:%02u:%02u (time(NULL)=%lld)",
-             (unsigned)(sod / 3600u),
-             (unsigned)((sod / 60u) % 60u),
-             (unsigned)(sod % 60u),
-             (long long)time(NULL));
 }
 
 /* ---------------- getters ---------------- */
