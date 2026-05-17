@@ -482,12 +482,12 @@
 					"name": "cur_time_label",
 					"id": "umazate1",
 					"type": "label",
-					"left": 520,
+					"left": 495,
 					"top": 5,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
-					"width": 80,
+					"width": 110,
 					"height": 30,
 					"default_style": false,
 					"text": "--:--:--",
@@ -1308,7 +1308,7 @@
 					"id": "z2rs7qcf",
 					"type": "label",
 					"left": 280,
-					"top": 5,
+					"top": 7,
 					"visible": true,
 					"isLock": 0,
 					"flag": [
@@ -5241,8 +5241,8 @@
 					"name": "power_unit",
 					"id": "4a42qzsc",
 					"type": "label",
-					"left": 724,
-					"top": 96,
+					"left": 722,
+					"top": 102,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -5342,7 +5342,7 @@
 					"id": "bfcnll6s",
 					"type": "label",
 					"left": 610,
-					"top": 73,
+					"top": 75,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -5442,7 +5442,7 @@
 					"id": "ov1beisw",
 					"type": "label",
 					"left": 636,
-					"top": 50,
+					"top": 45,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -8842,7 +8842,7 @@
 					"id": "znkdd51a",
 					"type": "label",
 					"left": 88,
-					"top": 100,
+					"top": 102,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -8942,7 +8942,7 @@
 					"id": "xtgz9bvz",
 					"type": "label",
 					"left": 20,
-					"top": 73,
+					"top": 75,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -9042,7 +9042,7 @@
 					"id": "bv4syufy",
 					"type": "label",
 					"left": 20,
-					"top": 50,
+					"top": 45,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -9341,12 +9341,12 @@
 					"name": "uptime_text",
 					"id": "j94hivem",
 					"type": "label",
-					"left": 200,
+					"left": 215,
 					"top": 5,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
-					"width": 80,
+					"width": 110,
 					"height": 30,
 					"default_style": false,
 					"text": "--:--:--",
@@ -10444,11 +10444,11 @@
 						"visible": true,
 						"flag": [],
 						"pos": [
-							200,
+							215,
 							5
 						],
 						"size": [
-							80,
+							110,
 							30
 						],
 						"default_style": false,
@@ -10754,7 +10754,7 @@
 						"flag": [],
 						"pos": [
 							20,
-							50
+							45
 						],
 						"size": [
 							154,
@@ -10857,7 +10857,7 @@
 						"flag": [],
 						"pos": [
 							20,
-							73
+							75
 						],
 						"size": [
 							90,
@@ -10960,7 +10960,7 @@
 						"flag": [],
 						"pos": [
 							88,
-							100
+							102
 						],
 						"size": [
 							40,
@@ -14462,7 +14462,7 @@
 						"flag": [],
 						"pos": [
 							636,
-							50
+							45
 						],
 						"size": [
 							144,
@@ -14565,7 +14565,7 @@
 						"flag": [],
 						"pos": [
 							610,
-							73
+							75
 						],
 						"size": [
 							112,
@@ -14667,8 +14667,8 @@
 						"visible": true,
 						"flag": [],
 						"pos": [
-							724,
-							96
+							722,
+							102
 						],
 						"size": [
 							60,
@@ -18722,7 +18722,7 @@
 						],
 						"pos": [
 							280,
-							5
+							7
 						],
 						"size": [
 							240,
@@ -19838,11 +19838,11 @@
 						"visible": true,
 						"flag": [],
 						"pos": [
-							520,
+							495,
 							5
 						],
 						"size": [
-							80,
+							110,
 							30
 						],
 						"default_style": false,
@@ -20471,12 +20471,12 @@
 														"name": "cur_time_label",
 														"id": "umazate1",
 														"type": "label",
-														"left": 520,
+														"left": 495,
 														"top": 5,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
-														"width": 80,
+														"width": 110,
 														"height": 30,
 														"default_style": false,
 														"text": "--:--:--",
@@ -21297,7 +21297,7 @@
 														"id": "z2rs7qcf",
 														"type": "label",
 														"left": 280,
-														"top": 5,
+														"top": 7,
 														"visible": true,
 														"isLock": 0,
 														"flag": [
@@ -25230,8 +25230,8 @@
 														"name": "power_unit",
 														"id": "4a42qzsc",
 														"type": "label",
-														"left": 724,
-														"top": 96,
+														"left": 722,
+														"top": 102,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -25331,7 +25331,7 @@
 														"id": "bfcnll6s",
 														"type": "label",
 														"left": 610,
-														"top": 73,
+														"top": 75,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -25431,7 +25431,7 @@
 														"id": "ov1beisw",
 														"type": "label",
 														"left": 636,
-														"top": 50,
+														"top": 45,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -28831,7 +28831,7 @@
 														"id": "znkdd51a",
 														"type": "label",
 														"left": 88,
-														"top": 100,
+														"top": 102,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -28931,7 +28931,7 @@
 														"id": "xtgz9bvz",
 														"type": "label",
 														"left": 20,
-														"top": 73,
+														"top": 75,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -29031,7 +29031,7 @@
 														"id": "bv4syufy",
 														"type": "label",
 														"left": 20,
-														"top": 50,
+														"top": 45,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -29330,12 +29330,12 @@
 														"name": "uptime_text",
 														"id": "j94hivem",
 														"type": "label",
-														"left": 200,
+														"left": 215,
 														"top": 5,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
-														"width": 80,
+														"width": 110,
 														"height": 30,
 														"default_style": false,
 														"text": "--:--:--",

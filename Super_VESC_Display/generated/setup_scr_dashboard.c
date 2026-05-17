@@ -103,8 +103,8 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_uptime_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_uptime_text, "--:--:--");
     lv_label_set_long_mode(ui->dashboard_uptime_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_uptime_text, 200, 5);
-    lv_obj_set_size(ui->dashboard_uptime_text, 80, 30);
+    lv_obj_set_pos(ui->dashboard_uptime_text, 215, 5);
+    lv_obj_set_size(ui->dashboard_uptime_text, 110, 30);
 
     //Write style for dashboard_uptime_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -174,7 +174,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_battery_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_battery_label, "BATTERY");
     lv_label_set_long_mode(ui->dashboard_battery_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_battery_label, 20, 50);
+    lv_obj_set_pos(ui->dashboard_battery_label, 20, 45);
     lv_obj_set_size(ui->dashboard_battery_label, 154, 35);
 
     //Write style for dashboard_battery_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -197,7 +197,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_Battery_proc_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_Battery_proc_text, "--");
     lv_label_set_long_mode(ui->dashboard_Battery_proc_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Battery_proc_text, 20, 73);
+    lv_obj_set_pos(ui->dashboard_Battery_proc_text, 20, 75);
     lv_obj_set_size(ui->dashboard_Battery_proc_text, 90, 70);
 
     //Write style for dashboard_Battery_proc_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -220,7 +220,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_battery_pct = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_battery_pct, "%");
     lv_label_set_long_mode(ui->dashboard_battery_pct, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_battery_pct, 88, 100);
+    lv_obj_set_pos(ui->dashboard_battery_pct, 88, 102);
     lv_obj_set_size(ui->dashboard_battery_pct, 40, 24);
 
     //Write style for dashboard_battery_pct, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1070,7 +1070,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_power_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_power_label, "POWER");
     lv_label_set_long_mode(ui->dashboard_power_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_power_label, 636, 50);
+    lv_obj_set_pos(ui->dashboard_power_label, 636, 45);
     lv_obj_set_size(ui->dashboard_power_label, 144, 29);
 
     //Write style for dashboard_power_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1093,7 +1093,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_power_value = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_power_value, "-.-");
     lv_label_set_long_mode(ui->dashboard_power_value, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_power_value, 610, 73);
+    lv_obj_set_pos(ui->dashboard_power_value, 610, 75);
     lv_obj_set_size(ui->dashboard_power_value, 112, 70);
 
     //Write style for dashboard_power_value, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1116,7 +1116,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_power_unit = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_power_unit, "kW");
     lv_label_set_long_mode(ui->dashboard_power_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_power_unit, 724, 96);
+    lv_obj_set_pos(ui->dashboard_power_unit, 722, 102);
     lv_obj_set_size(ui->dashboard_power_unit, 60, 24);
 
     //Write style for dashboard_power_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -2071,7 +2071,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_esc_not_connected_text = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_esc_not_connected_text, "ESC NOT CONNECTED");
     lv_label_set_long_mode(ui->dashboard_esc_not_connected_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_esc_not_connected_text, 280, 5);
+    lv_obj_set_pos(ui->dashboard_esc_not_connected_text, 280, 7);
     lv_obj_set_size(ui->dashboard_esc_not_connected_text, 240, 32);
     lv_obj_add_flag(ui->dashboard_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
 
@@ -2257,8 +2257,8 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_cur_time_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_cur_time_label, "--:--:--");
     lv_label_set_long_mode(ui->dashboard_cur_time_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_cur_time_label, 520, 5);
-    lv_obj_set_size(ui->dashboard_cur_time_label, 80, 30);
+    lv_obj_set_pos(ui->dashboard_cur_time_label, 495, 5);
+    lv_obj_set_size(ui->dashboard_cur_time_label, 110, 30);
 
     //Write style for dashboard_cur_time_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
