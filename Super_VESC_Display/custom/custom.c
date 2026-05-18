@@ -20,6 +20,10 @@
 #include "custom.h"
 #include "settings_wrapper.h"
 
+#ifdef LV_REALDEVICE
+#include "log_capture.h"
+#endif
+
 /* Cached display values exposed to readers outside the LVGL thread (e.g. the
  * AA video overlay running on the H.264 decoder task). Mirror what the user
  * sees on the cockpit so AA HUD and dashboard agree, including demo-mode
@@ -1411,6 +1415,202 @@ static void motor_poles_minus_btn_event_cb(lv_event_t *e) {
     }
 }
 
+/* ====== Logs screen — created on-demand from Settings ============= */
+/* A full-screen scrollable view backed by the log_capture ring buffer
+ * in PSRAM. Allocated only when the user actually opens it; freed on
+ * exit so the snapshot buffer (32 KB) doesn't sit around when nobody's
+ * looking.
+ *
+ * A 500 ms lv_timer tails the ring buffer while the screen is up:
+ * each tick we check whether the captured byte count grew, and if so
+ * re-render the label and keep the scroll position pinned to the
+ * bottom (unless the user has scrolled up to read older entries —
+ * detected by being more than 40 px above the bottom). */
+static lv_obj_t   *s_logs_screen     = NULL;
+static lv_obj_t   *s_logs_label      = NULL;
+static lv_obj_t   *s_logs_container  = NULL;
+static char       *s_logs_text_buf   = NULL;
+static lv_timer_t *s_logs_refresh_tmr = NULL;
+static size_t      s_logs_last_total = 0;
+/* 16 KB tail is ~200 lines at typical ESP_LOG density — enough to see
+ * recent context, small enough that lv_label_set_text + recolor parse
+ * stays responsive. Was 32 KB; the larger snapshot caused visible UI
+ * hitching every 500 ms refresh because LVGL re-measured the entire
+ * label on each set_text. */
+#define LOGS_SNAPSHOT_BYTES (16u * 1024u)
+#define LOGS_TAIL_SLACK_PX  40
+/* Fixed label width — skips LV_SIZE_CONTENT's per-glyph width scan that
+ * runs on every set_text. Wide enough that most log lines fit without
+ * clipping; the container scrolls horizontally for the rare longer ones. */
+#define LOGS_LABEL_WIDTH_PX 2000
+
+static void logs_screen_destroy(void) {
+    if (s_logs_refresh_tmr) {
+        lv_timer_del(s_logs_refresh_tmr);
+        s_logs_refresh_tmr = NULL;
+    }
+    s_logs_label = NULL;
+    s_logs_container = NULL;
+    if (s_logs_screen) {
+        /* Async delete — safe to call from within an event callback
+         * on the same object; LVGL queues the delete to run after the
+         * current event dispatch returns. */
+        lv_obj_del_async(s_logs_screen);
+        s_logs_screen = NULL;
+    }
+    if (s_logs_text_buf) {
+        free(s_logs_text_buf);
+        s_logs_text_buf = NULL;
+    }
+}
+
+static void logs_back_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    /* Switch to settings first; defer screen destruction until the
+     * animation has finished so we don't yank widgets out from under
+     * LVGL while it's still rendering them. */
+    lv_scr_load_anim(guider_ui.settings, LV_SCR_LOAD_ANIM_MOVE_TOP,
+                     200, 200, false);
+}
+
+static void logs_screen_loaded_event_cb(lv_event_t *e) {
+    /* Auto-scroll to bottom so the newest log line is visible. Has to
+     * run after the SCREEN_LOADED event because LVGL needs at least
+     * one layout pass to know the label's actual height. */
+    if (lv_event_get_code(e) != LV_EVENT_SCREEN_LOADED) return;
+    lv_obj_t *cont = (lv_obj_t *)lv_event_get_user_data(e);
+    if (cont) {
+        lv_obj_scroll_to_y(cont, lv_obj_get_scroll_bottom(cont), LV_ANIM_OFF);
+    }
+}
+
+static void logs_screen_unloaded_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_SCREEN_UNLOADED) return;
+    /* User has gone back to settings (or somewhere else) — the screen
+     * is off-screen now, safe to delete + free the snapshot. */
+    logs_screen_destroy();
+}
+
+#ifdef LV_REALDEVICE
+/* 500 ms refresh tick. Re-snapshots the ring buffer only when its byte
+ * count has grown since the last tick, and only re-pins to the bottom
+ * if the user wasn't actively scrolling up. */
+static void logs_refresh_timer_cb(lv_timer_t *t) {
+    (void)t;
+    if (!s_logs_label || !s_logs_text_buf || !s_logs_container) return;
+
+    size_t total = log_capture_total_bytes();
+    if (total == s_logs_last_total) return;  /* nothing new */
+    s_logs_last_total = total;
+
+    bool was_at_bottom =
+        lv_obj_get_scroll_bottom(s_logs_container) <= LOGS_TAIL_SLACK_PX;
+
+    log_capture_snapshot_colorized(s_logs_text_buf, LOGS_SNAPSHOT_BYTES);
+    lv_label_set_text(s_logs_label, s_logs_text_buf);
+
+    if (was_at_bottom) {
+        lv_obj_update_layout(s_logs_container);
+        lv_coord_t down = lv_obj_get_scroll_bottom(s_logs_container);
+        if (down > 0) {
+            lv_obj_scroll_by(s_logs_container, 0, -down, LV_ANIM_OFF);
+        }
+    }
+}
+#endif
+
+static void logs_open_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+
+    /* Re-entrancy guard: if previous screen wasn't cleaned up, do it
+     * now. Shouldn't normally happen but defensive. */
+    logs_screen_destroy();
+
+    s_logs_text_buf = malloc(LOGS_SNAPSHOT_BYTES);
+    if (!s_logs_text_buf) return;
+#ifdef LV_REALDEVICE
+    log_capture_snapshot_colorized(s_logs_text_buf, LOGS_SNAPSHOT_BYTES);
+    if (s_logs_text_buf[0] == '\0') {
+        snprintf(s_logs_text_buf, LOGS_SNAPSHOT_BYTES,
+                 "(no log entries captured yet)");
+    }
+#else
+    snprintf(s_logs_text_buf, LOGS_SNAPSHOT_BYTES,
+             "(log capture is disabled in the simulator build)");
+#endif
+
+    s_logs_screen = lv_obj_create(NULL);
+    lv_obj_set_size(s_logs_screen, 800, 480);
+    lv_obj_set_style_bg_color(s_logs_screen, lv_color_hex(0x111111), 0);
+    lv_obj_set_style_bg_opa(s_logs_screen, 255, 0);
+    lv_obj_clear_flag(s_logs_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Back button — matches the "Back to dashboard" style on settings. */
+    lv_obj_t *back_btn = lv_btn_create(s_logs_screen);
+    lv_obj_set_pos(back_btn, 17, 14);
+    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_border_width(back_btn, 0, 0);
+    lv_obj_set_style_radius(back_btn, 5, 0);
+    lv_obj_t *back_lbl = lv_label_create(back_btn);
+    lv_label_set_text(back_lbl, "Back to settings");
+    lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(back_lbl);
+    lv_obj_add_event_cb(back_btn, logs_back_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    /* Scrollable container holding the long log label. The label
+     * sits inside its own clipping region so LVGL can scroll just
+     * the log content, leaving the Back button pinned at the top. */
+    lv_obj_t *cont = lv_obj_create(s_logs_screen);
+    lv_obj_set_pos(cont, 10, 64);
+    lv_obj_set_size(cont, 780, 410);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_style_pad_all(cont, 8, 0);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+
+    /* Single lv_label with recolor — much lighter on RAM than one widget
+     * per line. Long log lines aren't wrapped (LV_LABEL_LONG_CLIP +
+     * fixed width); the container scrolls both vertically and horizontally
+     * so the user can pan along long messages. */
+    lv_obj_set_scroll_dir(cont, LV_DIR_ALL);
+
+    lv_obj_t *log_lbl = lv_label_create(cont);
+    lv_label_set_long_mode(log_lbl, LV_LABEL_LONG_CLIP);
+    lv_label_set_recolor(log_lbl, true);
+    lv_obj_set_width(log_lbl, LOGS_LABEL_WIDTH_PX);
+    lv_obj_set_style_text_color(log_lbl, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_text_font(log_lbl, &lv_font_montserratMedium_16, 0);
+    lv_obj_set_style_text_line_space(log_lbl, 2, 0);
+    lv_label_set_text(log_lbl, s_logs_text_buf);
+
+    s_logs_label     = log_lbl;
+    s_logs_container = cont;
+
+#ifdef LV_REALDEVICE
+    s_logs_last_total = log_capture_total_bytes();
+    /* 500 ms live-tail refresh while the screen is up. */
+    s_logs_refresh_tmr = lv_timer_create(logs_refresh_timer_cb, 500, NULL);
+#endif
+
+    /* After the screen-load animation completes, jump scroll to the
+     * bottom so the newest entries are on-screen. */
+    lv_obj_add_event_cb(s_logs_screen, logs_screen_loaded_event_cb,
+                        LV_EVENT_SCREEN_LOADED, cont);
+
+    /* Hook destruction onto the SCREEN_UNLOADED event of the logs
+     * screen — fires once the user has navigated away (back button)
+     * and the move-top animation has completed. */
+    lv_obj_add_event_cb(s_logs_screen, logs_screen_unloaded_event_cb,
+                        LV_EVENT_SCREEN_UNLOADED, NULL);
+
+    lv_scr_load_anim(s_logs_screen, LV_SCR_LOAD_ANIM_MOVE_BOTTOM,
+                     200, 0, false);
+}
+
 // Event handler for Reset button
 static void reset_button_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -2064,14 +2264,29 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += spacing;
 */
-    // ========== Reset Button ==========
+    // ========== Logs + Reset (two buttons in one row) ==========
     y_pos += 10; // small visual break before the destructive action
+
+    lv_obj_t *logs_btn = lv_btn_create(ui->settings);
+    lv_obj_t *logs_lbl = lv_label_create(logs_btn);
+    lv_label_set_text(logs_lbl, "Logs");
+    lv_obj_align(logs_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(logs_btn, 20, y_pos);
+    lv_obj_set_size(logs_btn, 375, 50);
+    lv_obj_set_style_bg_color(logs_btn, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(logs_btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(logs_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(logs_btn, 8, 0);
+    lv_obj_set_style_border_width(logs_btn, 0, 0);
+    lv_obj_add_event_cb(logs_btn, logs_open_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
     settings_reset_button = lv_btn_create(ui->settings);
     lv_obj_t *reset_label = lv_label_create(settings_reset_button);
     lv_label_set_text(reset_label, "Reset to Defaults");
     lv_obj_align(reset_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_reset_button, 20, y_pos);
-    lv_obj_set_size(settings_reset_button, 770, 50);
+    lv_obj_set_pos(settings_reset_button, 412, y_pos);
+    lv_obj_set_size(settings_reset_button, 375, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);

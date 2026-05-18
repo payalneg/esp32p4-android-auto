@@ -274,6 +274,38 @@
 			"flag": [],
 			"list": [
 				{
+					"name": "nav_img",
+					"id": "av0lvd99",
+					"type": "img",
+					"left": 190,
+					"top": 36,
+					"visible": false,
+					"isLock": false,
+					"flag": [],
+					"width": 420,
+					"height": 360,
+					"default_style": false,
+					"use_fs": false,
+					"fs_type": "flash",
+					"sd_path": "",
+					"img_path": "",
+					"rotate": 0,
+					"x": 50,
+					"y": 50,
+					"color_format": "true-color-alpha",
+					"style": [
+						{
+							"part": "LV_PART_MAIN",
+							"state": "LV_STATE_DEFAULT",
+							"disable": false,
+							"image_recolor": "#ffffff",
+							"image_recolor_opa": 0,
+							"image_opa": 255,
+							"radius": 0
+						}
+					]
+				},
+				{
 					"name": "brightness_slider",
 					"id": "huc3lzyk",
 					"type": "slider",
@@ -9446,10 +9478,10 @@
 					"visible": true,
 					"isLock": false,
 					"flag": [],
-					"width": 90,
+					"width": 120,
 					"height": 30,
 					"default_style": false,
-					"text": "MODE",
+					"text": "MODE ",
 					"long_mode": "LV_LABEL_LONG_WRAP",
 					"is_static": false,
 					"custom_attribute": [],
@@ -9776,8 +9808,7 @@
 					"bg_img_recolor": "#000000",
 					"bg_img_recolor_opa": 0
 				}
-			],
-			"layerName": "dashboard"
+			]
 		},
 		{
 			"name": "settings",
@@ -10043,8 +10074,7 @@
 					"bg_img_recolor": "#ffffff",
 					"bg_img_recolor_opa": 0
 				}
-			],
-			"layerName": "settings"
+			]
 		}
 	],
 	"Application": {
@@ -10345,13 +10375,13 @@
 							5
 						],
 						"size": [
-							90,
+							120,
 							30
 						],
 						"default_style": false,
 						"attribute_type": "",
 						"custom_attribute": [],
-						"text": "MODE",
+						"text": "MODE ",
 						"long_mode": "LV_LABEL_LONG_WRAP",
 						"is_static": false,
 						"style": [
@@ -20145,6 +20175,41 @@
 							310,
 							310
 						]
+					},
+					{
+						"name": "dashboard_nav_img",
+						"id": "av0lvd99",
+						"type": "img",
+						"visible": false,
+						"flag": [],
+						"pos": [
+							190,
+							36
+						],
+						"size": [
+							420,
+							360
+						],
+						"default_style": false,
+						"img_path": "",
+						"color_format": "true-color-alpha",
+						"rotate": 0,
+						"pivot": "50,50",
+						"use_fs": false,
+						"fs_type": "flash",
+						"img_flash_path": "F:/",
+						"img_sd_path": "S:/",
+						"style": [
+							{
+								"part": "LV_PART_MAIN",
+								"state": "LV_STATE_DEFAULT",
+								"disable": false,
+								"image_recolor": "#ffffff",
+								"image_recolor_opa": 0,
+								"image_opa": 255,
+								"radius": 0
+							}
+						]
 					}
 				]
 			},
@@ -20262,6 +20327,38 @@
 												"visible": true,
 												"flag": [],
 												"list": [
+													{
+														"name": "nav_img",
+														"id": "av0lvd99",
+														"type": "img",
+														"left": 190,
+														"top": 36,
+														"visible": false,
+														"isLock": false,
+														"flag": [],
+														"width": 420,
+														"height": 360,
+														"default_style": false,
+														"use_fs": false,
+														"fs_type": "flash",
+														"sd_path": "",
+														"img_path": "",
+														"rotate": 0,
+														"x": 50,
+														"y": 50,
+														"color_format": "true-color-alpha",
+														"style": [
+															{
+																"part": "LV_PART_MAIN",
+																"state": "LV_STATE_DEFAULT",
+																"disable": false,
+																"image_recolor": "#ffffff",
+																"image_recolor_opa": 0,
+																"image_opa": 255,
+																"radius": 0
+															}
+														]
+													},
 													{
 														"name": "brightness_slider",
 														"id": "huc3lzyk",
@@ -29435,10 +29532,10 @@
 														"visible": true,
 														"isLock": false,
 														"flag": [],
-														"width": 90,
+														"width": 120,
 														"height": 30,
 														"default_style": false,
-														"text": "MODE",
+														"text": "MODE ",
 														"long_mode": "LV_LABEL_LONG_WRAP",
 														"is_static": false,
 														"custom_attribute": [],

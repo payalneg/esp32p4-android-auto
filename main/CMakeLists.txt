@@ -57,6 +57,7 @@ idf_component_register(
         vesc_ui
         vesc_can
         dev_settings
+        log_capture
 )
 
 # Reroute mbedTLS's UTCTime parser to our offset-tolerant wrapper. Required

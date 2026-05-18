@@ -130,13 +130,13 @@ static void lv_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
     if (now - s_lv_stats.window_start_us < 1000000) return;
     uint32_t r = s_lv_stats.refreshes;
     if (r > 0) {
-        ESP_LOGI(TAG,
-                 "LVGL: %u refresh | %llu ms total | avg %llu ms / "
-                 "%llu px per refresh",
-                 (unsigned)r,
-                 (unsigned long long)s_lv_stats.total_ms,
-                 (unsigned long long)(s_lv_stats.total_ms / r),
-                 (unsigned long long)(s_lv_stats.total_px / r));
+        // ESP_LOGI(TAG,
+        //          "LVGL: %u refresh | %llu ms total | avg %llu ms / "
+        //          "%llu px per refresh",
+        //          (unsigned)r,
+        //          (unsigned long long)s_lv_stats.total_ms,
+        //          (unsigned long long)(s_lv_stats.total_ms / r),
+        //          (unsigned long long)(s_lv_stats.total_px / r));
     }
     s_lv_stats.refreshes = 0;
     s_lv_stats.total_ms  = 0;

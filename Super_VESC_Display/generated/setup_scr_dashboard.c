@@ -78,10 +78,10 @@ void setup_scr_dashboard(lv_ui *ui)
 
     //Write codes dashboard_mode_text
     ui->dashboard_mode_text = lv_label_create(ui->dashboard);
-    lv_label_set_text(ui->dashboard_mode_text, "MODE");
+    lv_label_set_text(ui->dashboard_mode_text, "MODE ");
     lv_label_set_long_mode(ui->dashboard_mode_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_mode_text, 90, 5);
-    lv_obj_set_size(ui->dashboard_mode_text, 90, 30);
+    lv_obj_set_size(ui->dashboard_mode_text, 120, 30);
 
     //Write style for dashboard_mode_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2297,6 +2297,21 @@ void setup_scr_dashboard(lv_ui *ui)
     //Write style for dashboard_brightness_slider, Part: LV_PART_KNOB, State: LV_STATE_DEFAULT.
     lv_obj_set_style_bg_opa(ui->dashboard_brightness_slider, 0, LV_PART_KNOB|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_brightness_slider, 13, LV_PART_KNOB|LV_STATE_DEFAULT);
+
+    //Write codes dashboard_nav_img
+    ui->dashboard_nav_img = lv_img_create(ui->dashboard);
+    lv_obj_add_flag(ui->dashboard_nav_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_img_set_pivot(ui->dashboard_nav_img, 50,50);
+    lv_img_set_angle(ui->dashboard_nav_img, 0);
+    lv_obj_set_pos(ui->dashboard_nav_img, 190, 36);
+    lv_obj_set_size(ui->dashboard_nav_img, 420, 360);
+    lv_obj_add_flag(ui->dashboard_nav_img, LV_OBJ_FLAG_HIDDEN);
+
+    //Write style for dashboard_nav_img, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_img_recolor_opa(ui->dashboard_nav_img, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_img_opa(ui->dashboard_nav_img, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->dashboard_nav_img, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_clip_corner(ui->dashboard_nav_img, true, LV_PART_MAIN|LV_STATE_DEFAULT);
 
     //The custom code of dashboard.
 

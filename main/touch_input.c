@@ -111,18 +111,18 @@ static void poll_task(void *arg)
             static uint8_t  prev_cnt;
             const bool any_now = (cnt > 0);
             if (any_now != prev_any) {
-                if (any_now) {
-                    ESP_LOGI(TAG, "DOWN cnt=%u panel=(%u,%u) mode=%s",
-                             cnt, tx[0], ty[0],
-                             mode == TOUCH_MODE_AA ? "AA" : "LVGL");
-                } else {
-                    ESP_LOGI(TAG, "UP   mode=%s",
-                             mode == TOUCH_MODE_AA ? "AA" : "LVGL");
-                }
+                // if (any_now) {
+                //     ESP_LOGI(TAG, "DOWN cnt=%u panel=(%u,%u) mode=%s",
+                //              cnt, tx[0], ty[0],
+                //              mode == TOUCH_MODE_AA ? "AA" : "LVGL");
+                // } else {
+                //     ESP_LOGI(TAG, "UP   mode=%s",
+                //              mode == TOUCH_MODE_AA ? "AA" : "LVGL");
+                // }
                 prev_any = any_now;
             } else if (any_now && cnt != prev_cnt) {
-                ESP_LOGI(TAG, "CNT  %u->%u panel=(%u,%u)",
-                         prev_cnt, cnt, tx[0], ty[0]);
+                // ESP_LOGI(TAG, "CNT  %u->%u panel=(%u,%u)",
+                //          prev_cnt, cnt, tx[0], ty[0]);
             }
             prev_cnt = cnt;
 

@@ -49,6 +49,7 @@ void port_start_app_hook(void)
 #include "display_video.h"
 #include "h264_pipe.h"
 #include "idle_screen.h"
+#include "log_capture.h"
 #include "mdns_advertise.h"
 #include "ota_http.h"
 #include "ota_screen.h"
@@ -185,6 +186,11 @@ static void on_target_id_changed(uint8_t new_id)
 
 void app_main(void)
 {
+    /* Install the PSRAM-backed log ring buffer before anything else
+     * logs, so the Logs screen in Settings can show the full boot
+     * sequence (PMU register dumps, NVS contents, BLE init, …). */
+    log_capture_init();
+
     ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, aa_submode=%d", CONNECTION_MODE);
     ESP_LOGI(TAG, "HEAP_PROBE: app_main INTERNAL+8BIT free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
