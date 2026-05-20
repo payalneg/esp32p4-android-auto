@@ -26,18 +26,107 @@ static httpd_handle_t s_server;
 
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
+    /* HTML <form enctype=application/octet-stream> is NOT a real value —
+     * browsers fall back to x-www-form-urlencoded and send only the
+     * filename. So we POST raw bytes via XHR (XHR gives us upload
+     * progress events, which fetch() still doesn't). */
     static const char html[] =
-        "<!doctype html><meta charset=utf-8><title>P4 OTA</title>"
-        "<style>body{font-family:sans-serif;max-width:40em;margin:2em auto}</style>"
+        "<!doctype html><html><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>ESP32-P4 OTA</title><style>"
+        "*{box-sizing:border-box}"
+        "body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"
+        "'Segoe UI',system-ui,sans-serif;background:#0b0d10;color:#e6e8eb;"
+        "display:flex;align-items:center;justify-content:center;padding:1.5em}"
+        ".card{width:100%;max-width:32em;background:#14181d;border-radius:14px;"
+        "padding:2em;box-shadow:0 8px 32px rgba(0,0,0,.4);"
+        "border:1px solid #20262d}"
+        "h1{margin:0 0 .2em;font-weight:600;font-size:1.4em}"
+        ".sub{color:#8a939c;font-size:.9em;margin-bottom:1.4em}"
+        "input[type=file]{display:none}"
+        ".file{margin-top:1em;padding:.8em 1em;background:#10141a;"
+        "border-radius:8px;display:none;font-size:.9em}"
+        ".file.on{display:flex;justify-content:space-between;gap:1em}"
+        ".file .nm{color:#e6e8eb;overflow:hidden;text-overflow:ellipsis;"
+        "white-space:nowrap}"
+        ".file .sz{color:#8a939c;flex-shrink:0}"
+        "button{width:100%;margin-top:1em;padding:.85em;border:0;border-radius:8px;"
+        "font-weight:600;font-size:1em;cursor:pointer;transition:.15s}"
+        ".btn-pick{background:#2a3138;color:#e6e8eb}"
+        ".btn-pick:hover{background:#343c44}"
+        ".btn-up{background:#4ea1ff;color:#0b0d10}"
+        ".btn-up:hover:not(:disabled){background:#6cb3ff}"
+        "button:disabled{background:#2a3138;color:#5a6068;cursor:not-allowed}"
+        ".bar{margin-top:1em;height:6px;background:#10141a;border-radius:3px;"
+        "overflow:hidden;display:none}"
+        ".bar.on{display:block}"
+        ".bar .fill{height:100%;background:#4ea1ff;width:0;transition:width .1s}"
+        ".bar .fill.ok{background:#3dd68c}"
+        ".bar .fill.err{background:#ff5e5e}"
+        ".status{margin-top:.8em;font-size:.9em;color:#8a939c;min-height:1.2em;"
+        "font-variant-numeric:tabular-nums}"
+        ".status.ok{color:#3dd68c}"
+        ".status.err{color:#ff5e5e}"
+        ".foot{margin-top:1.6em;padding-top:1.2em;border-top:1px solid #20262d;"
+        "font-size:.82em;color:#6b7480}"
+        ".foot a{color:#4ea1ff;text-decoration:none}"
+        ".foot a:hover{text-decoration:underline}"
+        ".foot details{margin-top:.5em}"
+        ".foot summary{cursor:pointer;color:#8a939c}"
+        ".foot pre{background:#10141a;padding:.7em;border-radius:6px;"
+        "overflow-x:auto;font-size:.85em;color:#b8c0c8;margin:.5em 0 0}"
+        "</style></head><body><div class=card>"
         "<h1>ESP32-P4 OTA</h1>"
-        "<form method=POST action=/ota enctype=application/octet-stream>"
-        "<input type=file name=fw required> "
-        "<button>Upload</button></form>"
-        "<p>or from a shell:</p>"
+        "<div class=sub>upload firmware image to the next partition</div>"
+        "<input type=file id=f accept='.bin'>"
+        "<button id=p class=btn-pick>Select firmware (.bin)</button>"
+        "<div class=file id=fi><span class=nm id=fn></span>"
+        "<span class=sz id=fs></span></div>"
+        "<button id=b class=btn-up disabled>Upload &amp; reboot</button>"
+        "<div class=bar id=ba><div class=fill id=bf></div></div>"
+        "<div class=status id=st></div>"
+        "<div class=foot>"
+        "<a href=/info>&#9432; device info</a>"
+        "<details><summary>shell upload</summary>"
         "<pre>curl --data-binary @build/esp32p4_android_auto.bin \\\n"
-        "     -H 'Content-Type: application/octet-stream' \\\n"
-        "     http://&lt;device&gt;/ota</pre>"
-        "<p><a href=/info>device info</a></p>";
+        "  -H 'Content-Type: application/octet-stream' \\\n"
+        "  http://&lt;device&gt;/ota</pre></details>"
+        "</div></div>"
+        "<script>"
+        "const $=id=>document.getElementById(id),"
+        "f=$('f'),p=$('p'),fi=$('fi'),fn=$('fn'),fs=$('fs'),"
+        "b=$('b'),ba=$('ba'),bf=$('bf'),st=$('st');"
+        "const fmt=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KiB':"
+        "(n/1048576).toFixed(2)+' MiB';"
+        "let file=null;"
+        "p.onclick=()=>f.click();"
+        "f.onchange=()=>{const x=f.files[0];if(!x)return;file=x;"
+        "fn.textContent=x.name;fs.textContent=fmt(x.size);"
+        "fi.classList.add('on');b.disabled=false;"
+        "st.textContent='';st.className='status';"
+        "bf.className='fill';bf.style.width='0';ba.classList.remove('on');};"
+        "b.onclick=()=>{if(!file)return;"
+        "b.disabled=true;p.disabled=true;ba.classList.add('on');"
+        "st.className='status';st.textContent='uploading...';"
+        "const x=new XMLHttpRequest(),t0=performance.now();"
+        "x.upload.onprogress=e=>{if(!e.lengthComputable)return;"
+        "const pr=e.loaded/e.total,dt=(performance.now()-t0)/1000,"
+        "sp=e.loaded/dt;bf.style.width=(pr*100).toFixed(1)+'%';"
+        "st.textContent=fmt(e.loaded)+' / '+fmt(e.total)+"
+        "'  ('+fmt(sp)+'/s)';};"
+        "x.onload=()=>{const ok=x.status>=200&&x.status<300;"
+        "bf.className='fill '+(ok?'ok':'err');"
+        "st.className='status '+(ok?'ok':'err');"
+        "st.textContent=ok?'OK — rebooting...':"
+        "'error '+x.status+': '+x.responseText;"
+        "if(!ok){b.disabled=false;p.disabled=false}};"
+        "x.onerror=()=>{bf.className='fill err';"
+        "st.className='status err';st.textContent='network error';"
+        "b.disabled=false;p.disabled=false};"
+        "x.open('POST','/ota');"
+        "x.setRequestHeader('Content-Type','application/octet-stream');"
+        "x.send(file);};"
+        "</script></body></html>";
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html, sizeof(html) - 1);
 }
@@ -186,8 +275,13 @@ esp_err_t ota_http_start(void)
         return err;
     }
 
+    /* Serve the upload page on both "/" and "/ota" so QR codes that
+     * point straight at /ota land on the form instead of a 405. */
     static const httpd_uri_t ix = {
         .uri = "/",     .method = HTTP_GET,  .handler = index_get_handler,
+    };
+    static const httpd_uri_t ix_ota = {
+        .uri = "/ota",  .method = HTTP_GET,  .handler = index_get_handler,
     };
     static const httpd_uri_t in = {
         .uri = "/info", .method = HTTP_GET,  .handler = info_get_handler,
@@ -196,6 +290,7 @@ esp_err_t ota_http_start(void)
         .uri = "/ota",  .method = HTTP_POST, .handler = ota_post_handler,
     };
     httpd_register_uri_handler(s_server, &ix);
+    httpd_register_uri_handler(s_server, &ix_ota);
     httpd_register_uri_handler(s_server, &in);
     httpd_register_uri_handler(s_server, &up);
 
