@@ -320,7 +320,6 @@ design firms up.
   the open-source motor controller this dashboard is built around.
 - [**aasdk**](https://github.com/f1xpl/aasdk) and [**openauto**](https://github.com/f1xpl/openauto) by *f1xpl* — the AA Wireless protocol reference for the bonus mode.
 - [**headunit-revived**](https://github.com/andreknieriem/headunit-revived) by *andreknieriem* — wireless-mode reference.
-- [**WirelessAndroidAutoDongle**](https://github.com/Nicba1010/WirelessAndroidAutoDongle) by *Nicba1010* — Raspberry Pi based AA dongle.
 - [**esp-h264**](https://github.com/espressif/esp-h264) and [**esp-hosted**](https://github.com/espressif/esp-hosted) by *Espressif*.
 - [**Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 wiki**](https://github.com/waveshareteam/ESP32-P4-WIFI6-Touch-LCD-4.3) — board BSP and example code.
 
