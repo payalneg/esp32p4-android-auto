@@ -14,8 +14,9 @@
 включении. В качестве бонуса — дашборд VESC по CAN-шине для электросамокатов,
 велосипедов, DIY-электротранспорта.
 
-<!-- TODO: общий вид собранного устройства -->
-![Общий вид](docs/images/hero.jpg)
+![Android Auto на ESP32-P4 head unit, установленном на руле велосипеда](docs/images/hero.jpg)
+
+> 🎬 Короткое демо на ходу: [`docs/demo.mp4`](docs/demo.mp4)
 
 ---
 
@@ -45,11 +46,7 @@
 
 ## 📺 Скриншоты
 
-<!-- TODO: AA проекция Google Maps / Spotify на экране устройства -->
-![Android Auto проекция](docs/images/aa-screen.jpg)
-
-<!-- TODO: оверлей VESC HUD (батарея / скорость / температуры) -->
-![VESC дашборд](docs/images/vesc-hud.jpg)
+![VESC дашборд — батарея, скорость, напряжение, одометр, температуры мотора и контроллера](docs/images/vesc-hud.jpg)
 
 <!-- TODO: экран настроек с версиями прошивок и log viewer -->
 ![Settings UI](docs/images/settings.jpg)

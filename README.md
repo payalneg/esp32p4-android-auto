@@ -13,8 +13,9 @@ display. Talks the native AA Wireless protocol — **no extra app on the phone**
 Pair once over Bluetooth, then Android Auto launches automatically on every
 power-on. Bonus: a VESC CAN dashboard overlay for e-skates / e-bikes / DIY EVs.
 
-<!-- TODO: hero photo of the assembled device on a desk / bike / car dash -->
-![Device hero shot](docs/images/hero.jpg)
+![Android Auto running on a bike-mounted ESP32-P4 head unit](docs/images/hero.jpg)
+
+> 🎬 Short ride demo: [`docs/demo.mp4`](docs/demo.mp4)
 
 ---
 
@@ -45,11 +46,7 @@ power-on. Bonus: a VESC CAN dashboard overlay for e-skates / e-bikes / DIY EVs.
 
 ## 📺 Screenshots
 
-<!-- TODO: AA projecting Google Maps / Spotify on the device -->
-![Android Auto projection](docs/images/aa-screen.jpg)
-
-<!-- TODO: VESC HUD overlay (battery / speed / temps) -->
-![VESC dashboard overlay](docs/images/vesc-hud.jpg)
+![VESC dashboard overlay — battery, speed, voltage, odometer, motor / controller temps](docs/images/vesc-hud.jpg)
 
 <!-- TODO: Settings UI showing firmware versions / log viewer -->
 ![Settings UI](docs/images/settings.jpg)
