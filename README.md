@@ -233,7 +233,15 @@ to change units, CAN bitrate, controller ID, or open the log viewer.
 While the dashboard is running, **VESC Tool can connect over Bluetooth LE**
 (NUS bridge) just like to any other VESC adapter.
 
-### Android Auto bonus (after flashing the D1 Mini)
+### Switching between modes
+
+**Three-finger tap** (any three fingers on the screen for ~100 ms) toggles
+between the **VESC dashboard** and the **Android Auto projection**. The
+gesture works in either direction, in both modes, and only fires once per
+gesture — your fingers have to lift before it can fire again, so it won't
+leak through to the phone as a stray touch.
+
+### Android Auto bonus (after flashing the BT agent)
 
 1. The screen also shows **"Waiting for phone"** in a corner with the SoftAP
    SSID / IP.
