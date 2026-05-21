@@ -179,7 +179,21 @@ idf.py -p /dev/cu.usbserial-* flash monitor
 See [`tools/bt_agent/README.md`](tools/bt_agent/README.md) for the full agent
 boot log walkthrough and what the SSP pairing dialogue looks like.
 
-### 3. OTA updates after the first flash
+### 3. VESC LISP script — for cruise control + speed profiles
+
+[`lisp/main.lisp`](lisp/main.lisp) runs on the **VESC controller** (not on
+the P4). It adds cruise control via the PPM `RX` pin and three speed-profile
+presets via `TX`, plus exposes the cruise state to the dashboard's LISP
+poll channel — that's what drives the cruise indicator on screen.
+
+Open *VESC Tool → VESC Packages → Lisp Scripting*, load `lisp/main.lisp`,
+**Upload** → **Activate** → save to flash. See [`lisp/README.md`](lisp/README.md)
+for details and how to customise the speed presets.
+
+Without this script the dashboard still shows live telemetry — only the
+cruise indicator and profile-switch beeps are lost.
+
+### 4. OTA updates after the first flash
 
 Once the head unit is on its SoftAP (default IP `192.168.4.1`), push new
 firmware over HTTP from any laptop joined to the same AP:
@@ -224,7 +238,7 @@ subsequent power-on auto-reconnects without prompts.
 | Area | Status | Notes |
 |---|---|---|
 | VESC RT data over CAN | ✅ | Battery %, speed, voltage, current, temps, odometer |
-| VESC LISP poll | ✅ | Cruise indicator + custom stats |
+| VESC LISP poll | ✅ | Cruise indicator + custom stats (requires [`lisp/main.lisp`](lisp/main.lisp) on the controller) |
 | BLE NUS bridge (VESC Tool over BLE) | ✅ | Works concurrently with AA |
 | Settings UI + PSRAM log viewer | ✅ | Logs survive resets, viewable on device |
 | HTTP OTA + on-screen progress | ✅ | `scripts/ota_push.sh` |
@@ -266,6 +280,7 @@ design firms up.
 │   ├── c6_slave_fw/            # Sources of the bundled C6 firmware (gitignored, see CLAUDE.md)
 │   └── c6_ota_flasher/         # Standalone fallback C6 flasher
 ├── scripts/                    # capture.sh (Wireshark), ota_push.sh, extract_yuv.py
+├── lisp/                       # VESC LISP script (cruise + speed profiles) — runs on the VESC, not the P4
 ├── 3d-model/                   # STL / STEP files for the printed enclosure
 ├── docs/images/                # Photos / screenshots used by this README
 ├── research/                   # Reference upstream sources (gitignored)
