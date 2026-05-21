@@ -20,7 +20,11 @@
 static const char *TAG = "vesc_can";
 
 #define RX_BUFFER_NUM   3
-#define RX_BUFFER_SIZE  512
+/* Match PACKET_PARSER_MAX_PAYLOAD — VESC Tool's SET_MCCONF over BLE
+ * arrives as PROCESS_RX_BUFFER fragments and we reassemble here before
+ * handing to the packet handler. 512 was the historical FW value; recent
+ * VESC FW emits configs up to ~800 B. */
+#define RX_BUFFER_SIZE  1024
 #define RXBUF_LEN       50
 
 static can_status_msg   stat_msgs  [CAN_STATUS_MSGS_TO_STORE];
@@ -114,8 +118,15 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
         s_sem_init_done = true;
     }
 
-    s_g_config.tx_queue_len = 20;
-    s_g_config.rx_queue_len = 20;
+    /* A 1 KB SET_MCCONF fragments into ~150 CAN frames (FILL_RX_BUFFER
+     * @7B + FILL_RX_BUFFER_LONG @6B + PROCESS_RX_BUFFER). At 500 kbit/s
+     * one frame is ~280 µs → the burst flushes in ~42 ms, but bursts
+     * arrive faster than that from VESC Tool over BLE. tx_queue_len 20
+     * overflowed and twai_transmit silently timed out mid-fragment →
+     * VESC saw a hole in the reassembly buffer and dropped the whole
+     * write. 200 holds a full burst with headroom. */
+    s_g_config.tx_queue_len = 200;
+    s_g_config.rx_queue_len = 100;
     s_g_config.tx_io        = (gpio_num_t)pin_tx;
     s_g_config.rx_io        = (gpio_num_t)pin_rx;
 

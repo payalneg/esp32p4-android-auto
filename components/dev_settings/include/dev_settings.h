@@ -90,6 +90,24 @@ void settings_register_brightness_cb(settings_brightness_cb_t cb);
 void settings_register_target_id_cb(settings_target_id_cb_t cb);
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb);
 
+/* Firmware-version strings shown on the Settings screen.
+ *
+ *   P4 — this binary's app descriptor version (esp_app_get_description()).
+ *   BT — the D1 Mini BT-agent reporting on UART (bt_agent_get_version()).
+ *   C6 — the ESP-Hosted co-processor (esp_hosted_get_coprocessor_fwversion).
+ *
+ * Setters take a short string (clipped to FW_INFO_MAX-1 chars + NUL); they
+ * are safe to call from any task. Getter returns "" until the corresponding
+ * setter has run, so UI code can render unconditionally and just see an
+ * empty value while a subsystem is still bringing itself up. */
+#define FW_INFO_MAX 24
+void        fw_info_set_p4(const char *version);
+void        fw_info_set_bt(const char *version);
+void        fw_info_set_c6(const char *version);
+const char *fw_info_get_p4(void);
+const char *fw_info_get_bt(void);
+const char *fw_info_get_c6(void);
+
 #ifdef __cplusplus
 }
 #endif

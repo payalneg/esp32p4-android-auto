@@ -105,12 +105,26 @@ lv_res_t lv_qrcode_update(lv_obj_t * qrcode, const void * data, uint32_t data_le
     LV_ASSERT_MALLOC(qr0);
     uint8_t * data_tmp = lv_mem_alloc(qrcodegen_BUFFER_LEN_FOR_VERSION(qr_version));
     LV_ASSERT_MALLOC(data_tmp);
+    /* Copy + NUL-terminate so we can hand the payload to encodeText, which
+     * needs a C string. Callers in this project always pass strlen() as
+     * data_len, so the input is text and safe to terminate this way. */
     lv_memcpy(data_tmp, data, data_len);
+    data_tmp[data_len] = '\0';
 
-    bool ok = qrcodegen_encodeBinary(data_tmp, data_len,
-                                     qr0, qrcodegen_Ecc_MEDIUM,
-                                     qr_version, qr_version,
-                                     qrcodegen_Mask_AUTO, true);
+    uint8_t * temp = lv_mem_alloc(qrcodegen_BUFFER_LEN_FOR_VERSION(qr_version));
+    LV_ASSERT_MALLOC(temp);
+
+    /* encodeText auto-picks numeric / alphanumeric / byte mode per segment.
+     * For URLs in alphanumeric charset (0-9 A-Z + . : / etc., uppercase!) it
+     * packs 2 chars per 11 bits vs 8 per char in byte mode — much smaller QR.
+     * Allow versions 1..qr_version so the encoder can shrink below the
+     * byte-mode worst case we computed above. Buffers are sized to qr_version
+     * which is ≥ whatever encodeText ends up picking, so they always fit. */
+    bool ok = qrcodegen_encodeText((const char *)data_tmp, temp,
+                                   qr0, qrcodegen_Ecc_MEDIUM,
+                                   qrcodegen_VERSION_MIN, qr_version,
+                                   qrcodegen_Mask_AUTO, true);
+    lv_mem_free(temp);
 
     if(!ok) {
         lv_mem_free(qr0);

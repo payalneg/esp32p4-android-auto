@@ -17,6 +17,13 @@
 
 static const char *TAG = "c6_ota";
 
+/* Last successfully-read slave version, formatted as "MAJ.MIN.PAT". Cleared
+ * if the read fails on the current boot so the UI doesn't show stale data
+ * from a prior session. */
+static char s_slave_ver_str[16] = "";
+
+const char *c6_ota_get_slave_version_str(void) { return s_slave_ver_str; }
+
 static void on_progress(ota_partition_stage_t stage, uint32_t done, uint32_t total, void *ctx)
 {
     (void)ctx;
@@ -76,9 +83,13 @@ c6_ota_status_t c6_ota_check_and_update(void)
     if (vret == ESP_OK) {
         ESP_LOGI(TAG, "Slave version: %" PRIu32 ".%" PRIu32 ".%" PRIu32,
                  slave_ver.major1, slave_ver.minor1, slave_ver.patch1);
+        snprintf(s_slave_ver_str, sizeof(s_slave_ver_str),
+                 "%" PRIu32 ".%" PRIu32 ".%" PRIu32,
+                 slave_ver.major1, slave_ver.minor1, slave_ver.patch1);
     } else {
         ESP_LOGW(TAG, "fwversion not readable: %s — assuming update needed",
                  esp_err_to_name(vret));
+        s_slave_ver_str[0] = '\0';
     }
 
     uint32_t host_ver = ESP_HOSTED_VERSION_VAL(ESP_HOSTED_VERSION_MAJOR_1,

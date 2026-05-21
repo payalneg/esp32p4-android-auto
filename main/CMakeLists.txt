@@ -28,6 +28,7 @@ idf_component_register(
         "vesc_ui_updater.c"
         "vesc_sim.c"
         "vbat_routing.c"
+        "pixel_watch.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash

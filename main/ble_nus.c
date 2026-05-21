@@ -10,6 +10,7 @@
 #include "host/ble_hs.h"
 #include "host/ble_hs_mbuf.h"
 #include "host/ble_uuid.h"
+#include "os/os_mbuf.h"
 
 #include "vesc_can/comm_can.h"
 #include "vesc_can/packet_parser.h"
@@ -65,7 +66,10 @@ static packet_parser_t s_rx_parser;
 static void rx_packet_complete(const uint8_t *payload, uint16_t len)
 {
     if (len == 0) return;
-    ESP_LOGI(TAG, "BLE→CAN cmd 0x%02X len=%u", payload[0], (unsigned)len);
+    /* Per-command line — useful for first-bringup debugging, but VESC Tool
+     * issues bursts of these on every screen open. Demoted to DEBUG so the
+     * default INFO log stays readable. */
+    ESP_LOGD(TAG, "BLE→CAN cmd 0x%02X len=%u", payload[0], (unsigned)len);
     /* send=0 — VESC controller replies via CAN; comm_can's RX task wraps
      * the response into PROCESS_RX_BUFFER and the handler in main.c
      * fans it back to ble_nus_forward_response. */
@@ -81,8 +85,20 @@ static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
     }
 
-    /* Flatten os_mbuf into a stack buffer one MTU's worth at a time. */
-    uint8_t  buf[256];
+    /* VESC Tool negotiates ATT_MTU up to 512, so a single ATT_WRITE can
+     * land here with up to MTU-3 = 509 bytes — and SET_MCCONF often comes
+     * as a chain of those. The old 256 B stack buffer silently truncated
+     * the tail (ble_hs_mbuf_to_flat does not signal overflow), which is
+     * why writes died at the packet_parser CRC check while reads worked.
+     * 1024 covers the longest plausible MTU + chain length; the packet
+     * parser fans the bytes out one at a time so any chunking is fine. */
+    uint8_t  buf[1024];
+    uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
+    if (pkt_len > sizeof(buf)) {
+        ESP_LOGW(TAG, "write too long for buf: %u > %u — dropping",
+                 (unsigned)pkt_len, (unsigned)sizeof(buf));
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
     uint16_t out_len = 0;
     int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
     if (rc != 0) {
@@ -269,9 +285,10 @@ void ble_nus_forward_response(const uint8_t *data, uint16_t len)
         return;
     }
 
-    /* Frame the payload (start byte + len + crc + end). 600 covers the
-     * 512-byte parser cap + framing. */
-    uint8_t  framed[600];
+    /* Frame the payload (start byte + len + crc + end). 1030 covers the
+     * 1024-byte parser cap + 6 B framing overhead (long-header START + 2
+     * len + 2 crc + END). Must stay in sync with PACKET_PARSER_MAX_PAYLOAD. */
+    uint8_t  framed[1030];
     uint16_t framed_len = packet_build_frame(data, len, framed, sizeof(framed));
     if (framed_len == 0) return;
 

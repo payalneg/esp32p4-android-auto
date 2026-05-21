@@ -507,7 +507,9 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                  (msg_id == AA_MSG_INPUT_EVENT_IND) ||
                  (channel == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_RESPONSE);
     if (!noisy) {
-        ESP_LOGI(TAG, "tx ch=%d msg=0x%04x plain=%u cipher=%u",
+        /* One log line per outbound AA message — useful for handshake
+         * debugging, just noise once we're projecting. */
+        ESP_LOGD(TAG, "tx ch=%d msg=0x%04x plain=%u cipher=%u",
                  channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
     }
     esp_err_t send_err = aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
@@ -536,7 +538,8 @@ static void recv_stats_log_once_per_second(void)
     uint32_t m = s_recv_stats.messages;
     uint32_t f = s_recv_stats.frames;
     if (m > 0) {
-        ESP_LOGI(TAG,
+        /* 1 Hz recv/decrypt timing — only matters when profiling. */
+        ESP_LOGD(TAG,
                  "recv: %u msg / %u frames | recv %llu us total "
                  "(%llu us/frame) | decrypt %llu us total (%llu us/frame)",
                  (unsigned)m, (unsigned)f,
@@ -927,7 +930,8 @@ static void video_stats_tick(size_t body_len)
     frames += 1;
     bytes  += body_len;
     if (now - window_start_us >= 1000000) {
-        ESP_LOGI(TAG, "video stats: %u frames, %llu KiB in last %llu ms",
+        /* 1 Hz video throughput — profiling aid. */
+        ESP_LOGD(TAG, "video stats: %u frames, %llu KiB in last %llu ms",
                  (unsigned)frames,
                  (unsigned long long)(bytes / 1024),
                  (unsigned long long)((now - window_start_us) / 1000));
@@ -1334,7 +1338,8 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
                         (msg_id == AA_MSG_AV_MEDIA_DATA) ||
                         (ch == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_REQUEST);
         if (!rx_noisy) {
-            ESP_LOGI(TAG, "rx ch=%d msg=0x%04x len=%u",
+            /* One line per inbound AA message — handshake debug only. */
+            ESP_LOGD(TAG, "rx ch=%d msg=0x%04x len=%u",
                      ch, msg_id, (unsigned)body_len);
         }
 

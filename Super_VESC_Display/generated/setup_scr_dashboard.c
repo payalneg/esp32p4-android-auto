@@ -174,7 +174,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_battery_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_battery_label, "BATTERY");
     lv_label_set_long_mode(ui->dashboard_battery_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_battery_label, 20, 45);
+    lv_obj_set_pos(ui->dashboard_battery_label, 20, 40);
     lv_obj_set_size(ui->dashboard_battery_label, 154, 35);
 
     //Write style for dashboard_battery_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1070,7 +1070,7 @@ void setup_scr_dashboard(lv_ui *ui)
     ui->dashboard_power_label = lv_label_create(ui->dashboard);
     lv_label_set_text(ui->dashboard_power_label, "POWER");
     lv_label_set_long_mode(ui->dashboard_power_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_power_label, 636, 45);
+    lv_obj_set_pos(ui->dashboard_power_label, 636, 40);
     lv_obj_set_size(ui->dashboard_power_label, 144, 29);
 
     //Write style for dashboard_power_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

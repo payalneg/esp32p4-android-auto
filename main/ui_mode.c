@@ -2,6 +2,8 @@
 
 #include <stdatomic.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "bsp/esp-bsp.h"
 #include "display_video.h"
 #include "esp_log.h"
@@ -37,6 +39,9 @@ void ui_mode_set(ui_mode_t mode)
 {
     if (!s_inited) return;
     if (atomic_load(&s_mode) == mode) return;
+    ESP_LOGW(TAG, "ui_mode_set(%s) called from task=%s",
+             mode == UI_MODE_VESC ? "VESC" : "AA",
+             pcTaskGetName(NULL));
     if (mode == UI_MODE_VESC) {
         /* Flip the mode flag BEFORE we let LVGL start rendering the VESC
          * dashboard. Decoder thread (display_video_show_yuv420) checks

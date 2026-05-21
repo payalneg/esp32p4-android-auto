@@ -86,7 +86,9 @@ static void aa_stats_log_once_per_second(void)
     if (now - s_aa_stats.window_start_us < 1000000) return;
     uint32_t f = s_aa_stats.frames;
     if (f > 0) {
-        ESP_LOGI(TAG,
+        /* 1 Hz per-frame timing breakdown — only useful while profiling
+         * the imgfx/PPA/overlay path. */
+        ESP_LOGD(TAG,
                  "AA show: %u fr | imgfx %llu | ppa %llu | hud %llu | "
                  "draw %llu | total %llu us/fr (avg)",
                  (unsigned)f,

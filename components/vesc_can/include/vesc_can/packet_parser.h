@@ -21,7 +21,12 @@ extern "C" {
 #define PACKET_START_BYTE_LONG    0x03
 #define PACKET_END_BYTE           0x03
 
-#define PACKET_PARSER_MAX_PAYLOAD 512
+/* 1024 covers VESC Tool's SET_MCCONF / SET_APPCONF — on recent firmware
+ * (FW 6.x with extended config) those payloads land in the 600-800 B
+ * range, well above the original 512 B cap which silently dropped writes
+ * while reads (short replies) kept working. Keep this in sync with
+ * RX_BUFFER_SIZE in comm_can.c — both buffer the same VESC packet. */
+#define PACKET_PARSER_MAX_PAYLOAD 1024
 
 typedef enum {
     PARSER_STATE_IDLE = 0,

@@ -28,6 +28,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #include "uart_link.h"
@@ -40,7 +41,19 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.3.0"
+#define BT_AGENT_FW_VERSION "0.4.0"
+
+/* NVS namespace + key for remembering the last successfully-paired phone's
+ * BDA. On boot, if a value is present, we proactively HFP-connect to it so
+ * the user doesn't have to fish the phone out and tap "connect" every time
+ * the head unit powers up — once ACL is up, gearhead on the phone opens
+ * SPP to our AA Wireless UUID by itself. */
+#define NVS_NS           "bt_agent"
+#define NVS_KEY_LAST_BDA "last_bda"
+
+static esp_bd_addr_t g_last_bda = {0};
+static bool          g_last_bda_valid = false;
+static volatile bool g_hfp_connected  = false;
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
@@ -276,6 +289,22 @@ static void gap_callback(esp_bt_gap_cb_event_t event,
         if (p->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(TAG, "auth ok with '%s'", p->auth_cmpl.device_name);
             uart_link_say("BT:PAIRED");
+            /* Persist the BDA so the next boot can HFP-connect back to this
+             * phone without user interaction. Overwrites any previous value
+             * — we track only the most-recent phone, which matches how OEM
+             * head units behave (one car key ↔ one phone). */
+            memcpy(g_last_bda, p->auth_cmpl.bda, sizeof(esp_bd_addr_t));
+            g_last_bda_valid = true;
+            nvs_handle_t h;
+            if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_blob(h, NVS_KEY_LAST_BDA, g_last_bda,
+                             sizeof(esp_bd_addr_t));
+                nvs_commit(h);
+                nvs_close(h);
+                ESP_LOGI(TAG, "saved last_bda %02x:%02x:%02x:%02x:%02x:%02x",
+                         g_last_bda[0], g_last_bda[1], g_last_bda[2],
+                         g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+            }
         } else {
             ESP_LOGW(TAG, "auth failed status=%d", p->auth_cmpl.stat);
         }
@@ -376,6 +405,13 @@ static void hf_client_callback(esp_hf_client_cb_event_t event,
     case ESP_HF_CLIENT_CONNECTION_STATE_EVT:
         ESP_LOGI(TAG, "HFP conn state: %d (peer features 0x%lx)",
                  p->conn_stat.state, (unsigned long)p->conn_stat.peer_feat);
+        /* SLC_CONNECTED == 2 in esp_hf_client_connection_state_t. Treat
+         * anything past the initial "connecting" state as link-up for the
+         * purpose of stopping the auto-reconnect loop — once ACL is up the
+         * phone can reach our SPP server by itself. */
+        g_hfp_connected =
+            (p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_CONNECTED ||
+             p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_SLC_CONNECTED);
         break;
     case ESP_HF_CLIENT_AUDIO_STATE_EVT:
         ESP_LOGI(TAG, "HFP audio state: %d", p->audio_stat.state);
@@ -383,6 +419,75 @@ static void hf_client_callback(esp_hf_client_cb_event_t event,
     default:
         break;
     }
+}
+
+/* ---------- Auto-reconnect to last paired phone ----------
+ *
+ * Pattern lifted from how OEM car kits behave: after power-on we don't sit
+ * waiting for the user to dig into the phone's BT menu — we *page* the last
+ * paired phone ourselves. HFP-HF -> HFP-AG `connect()` opens the ACL link;
+ * once ACL is up, gearhead on the phone notices its trusted car kit just
+ * came back online and pops the SPP connection to our AA Wireless UUID on
+ * its own. From our point of view the SRV_OPEN_EVT arrives without anyone
+ * having to touch the phone.
+ *
+ * Backoff is conservative — paging while the phone is out of range burns
+ * battery on both sides, and the BT controller serializes paging anyway, so
+ * fast retries gain nothing. */
+static void auto_reconnect_task(void *arg)
+{
+    (void)arg;
+    static const uint32_t delays_ms[] = {3000, 7000, 15000, 30000, 60000};
+    size_t idx = 0;
+
+    /* Give the controller a moment after going discoverable before we start
+     * paging — paging too early sometimes races with the inquiry-scan
+     * window setup and the first connect attempt silently no-ops. */
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
+    while (g_last_bda_valid) {
+        if (g_spp_handle != 0 || g_hfp_connected) {
+            /* Phone is back. Sleep, then re-check periodically — if the link
+             * drops later (phone walked away, then came back) we'll page
+             * again from the top of the backoff. */
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            if (g_spp_handle == 0 && !g_hfp_connected) {
+                idx = 0;  /* reset backoff for the next campaign */
+            }
+            continue;
+        }
+
+        ESP_LOGI(TAG, "auto-reconnect: HFP-connecting to %02x:%02x:%02x:%02x:%02x:%02x",
+                 g_last_bda[0], g_last_bda[1], g_last_bda[2],
+                 g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+        esp_err_t e = esp_hf_client_connect(g_last_bda);
+        if (e != ESP_OK) {
+            /* INVALID_STATE here means a previous connect attempt is still
+             * pending in the stack; just wait it out. */
+            ESP_LOGW(TAG, "esp_hf_client_connect: %s", esp_err_to_name(e));
+        }
+
+        uint32_t d = delays_ms[idx];
+        if (idx + 1 < sizeof(delays_ms) / sizeof(delays_ms[0])) idx++;
+        vTaskDelay(pdMS_TO_TICKS(d));
+    }
+    vTaskDelete(NULL);
+}
+
+/* Load BDA persisted on previous AUTH_CMPL into g_last_bda. Best-effort. */
+static void load_last_bda(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t sz = sizeof(esp_bd_addr_t);
+    if (nvs_get_blob(h, NVS_KEY_LAST_BDA, g_last_bda, &sz) == ESP_OK &&
+        sz == sizeof(esp_bd_addr_t)) {
+        g_last_bda_valid = true;
+        ESP_LOGI(TAG, "loaded last_bda %02x:%02x:%02x:%02x:%02x:%02x",
+                 g_last_bda[0], g_last_bda[1], g_last_bda[2],
+                 g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+    }
+    nvs_close(h);
 }
 
 /* ---------- Init ---------- */
@@ -503,6 +608,8 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(r);
 
+    load_last_bda();
+
     uart_link_init();
     uart_link_say("BT:BOOT");
     uart_link_say("BT-VER:" BT_AGENT_FW_VERSION);
@@ -538,4 +645,14 @@ void app_main(void)
      * credentials in WifiInfoResponse and can join our AP. */
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
     uart_link_say("BT:DISCOVERABLE");
+
+    /* Kick off the auto-reconnect loop. If NVS held a BDA from a prior
+     * pairing, we'll page that phone every few seconds (with backoff) until
+     * either ACL comes up or someone else pairs (overwriting the saved BDA
+     * — handled inside ESP_BT_GAP_AUTH_CMPL_EVT). */
+    if (g_last_bda_valid) {
+        xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5, NULL);
+    } else {
+        ESP_LOGI(TAG, "no saved phone BDA — waiting for first manual pair");
+    }
 }

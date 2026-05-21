@@ -394,10 +394,27 @@ void custom_init(lv_ui *ui)
 
     /* Sync the invisible dashboard brightness drag slider with the saved
      * value so a touch on the slider starts from the real brightness,
-     * not the GUI Guider default of 50. */
+     * not the GUI Guider default of 50.
+     *
+     * Also override default styles so phantom touches from vibration on
+     * the road don't paint LVGL's default-theme blue PRESSED-state
+     * highlight across the entire 300×480 slider area. The slider stays
+     * touch-active (still drags brightness when intentionally swiped)
+     * but with transparent overlay in every state. */
     if (ui->dashboard_brightness_slider) {
         lv_slider_set_value(ui->dashboard_brightness_slider,
                             settings_wrapper_get_brightness(), LV_ANIM_OFF);
+        lv_obj_t *sl = ui->dashboard_brightness_slider;
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_MAIN      | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_INDICATOR | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_KNOB      | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_MAIN      | LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_INDICATOR | LV_STATE_FOCUSED);
+        lv_obj_set_style_bg_opa(sl, 0, LV_PART_KNOB      | LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_width(sl, 0, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_outline_width(sl, 0, LV_PART_MAIN | LV_STATE_FOCUSED);
+        lv_obj_set_style_shadow_width(sl, 0, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_shadow_width(sl, 0, LV_PART_MAIN | LV_STATE_FOCUSED);
     }
 
 #if defined(ENABLE_WALL_CLOCK) && !ENABLE_WALL_CLOCK
@@ -1611,6 +1628,143 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
                      200, 0, false);
 }
 
+/* ===== QR codes screen — connection info & OTA URL ============= */
+
+/* Connection info comes from the qr_info component (so we don't have
+ * to depend on `main/` and create a circular link). */
+#ifdef LV_REALDEVICE
+#include "qr_info.h"
+#endif
+
+static lv_obj_t *s_qr_screen = NULL;
+
+static void qr_screen_destroy(void) {
+    if (s_qr_screen) {
+        lv_obj_del_async(s_qr_screen);
+        s_qr_screen = NULL;
+    }
+}
+
+static void qr_back_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_scr_load_anim(guider_ui.settings, LV_SCR_LOAD_ANIM_MOVE_TOP,
+                     200, 200, false);
+}
+
+static void qr_screen_unloaded_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_SCREEN_UNLOADED) return;
+    qr_screen_destroy();
+}
+
+/* Build one labelled QR tile: caption on top, QR in the middle, footer
+ * with the plain-text value below. Returns nothing — caller positions
+ * the returned container. The container is a plain lv_obj_t parented
+ * to `parent`, positioned absolutely. */
+static void qr_tile_create(lv_obj_t *parent, int x, int y,
+                           const char *caption,
+                           const char *data, const char *footer)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_size(box, 340, 380);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x1a1f25), 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 12, 0);
+    lv_obj_set_style_pad_all(box, 16, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(box);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
+
+    /* 260 px QR — fits the box with room for caption + footer. Dark on
+     * light, the canonical scannable combination. */
+    lv_obj_t *qr = lv_qrcode_create(box, 260,
+                                    lv_color_hex(0x000000),
+                                    lv_color_hex(0xFFFFFF));
+    lv_qrcode_update(qr, data, strlen(data));
+    lv_obj_align(qr, LV_ALIGN_CENTER, 0, 6);
+    /* 4 px white quiet zone around the modules — scanners need it. */
+    lv_obj_set_style_border_color(qr, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(qr, 4, 0);
+
+    if (footer && footer[0]) {
+        lv_obj_t *ft = lv_label_create(box);
+        lv_label_set_text(ft, footer);
+        lv_label_set_long_mode(ft, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(ft, 308);
+        lv_obj_set_style_text_color(ft, lv_color_hex(0xa0a8b0), 0);
+        lv_obj_set_style_text_font(ft, &lv_font_montserratMedium_16, 0);
+        lv_obj_set_style_text_align(ft, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(ft, LV_ALIGN_BOTTOM_MID, 0, 0);
+    }
+}
+
+static void qr_open_btn_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    qr_screen_destroy();
+
+    s_qr_screen = lv_obj_create(NULL);
+    lv_obj_set_size(s_qr_screen, 800, 480);
+    lv_obj_set_style_bg_color(s_qr_screen, lv_color_hex(0x111111), 0);
+    lv_obj_set_style_bg_opa(s_qr_screen, 255, 0);
+    lv_obj_clear_flag(s_qr_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Back button — same style as the logs screen. */
+    lv_obj_t *back_btn = lv_btn_create(s_qr_screen);
+    lv_obj_set_pos(back_btn, 17, 14);
+    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_border_width(back_btn, 0, 0);
+    lv_obj_set_style_radius(back_btn, 5, 0);
+    lv_obj_t *back_lbl = lv_label_create(back_btn);
+    lv_label_set_text(back_lbl, "Back to settings");
+    lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(back_lbl);
+    lv_obj_add_event_cb(back_btn, qr_back_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    char wifi_qr[160]  = "(no AP)";
+    char wifi_foot[80] = "Wi-Fi not in AP mode";
+    char ota_url[64]   = "(unavailable)";
+    char ota_foot[80]  = "OTA HTTP server is off";
+
+#ifdef LV_REALDEVICE
+    char tmp[160];
+    if (qr_info_get_wifi_qr(tmp, sizeof(tmp))) {
+        strlcpy(wifi_qr, tmp, sizeof(wifi_qr));
+        /* For the footer caption, parse out S: and show the bare SSID
+         * rather than the full WIFI: URI — friendlier to read. */
+        const char *s = strstr(tmp, "S:");
+        if (s) {
+            s += 2;
+            const char *end = strchr(s, ';');
+            size_t n = end ? (size_t)(end - s) : strlen(s);
+            if (n >= sizeof(wifi_foot)) n = sizeof(wifi_foot) - 1;
+            memcpy(wifi_foot, s, n);
+            wifi_foot[n] = '\0';
+        }
+    }
+    if (qr_info_get_ota_url(tmp, sizeof(tmp))) {
+        strlcpy(ota_url, tmp, sizeof(ota_url));
+        strlcpy(ota_foot, tmp, sizeof(ota_foot));
+    }
+#endif
+
+    /* Two 340-wide tiles, 20 px outer + 20 px gap. (340*2 + 20*3 = 740) */
+    qr_tile_create(s_qr_screen,  30, 70, "Wi-Fi",        wifi_qr, wifi_foot);
+    qr_tile_create(s_qr_screen, 430, 70, "Firmware OTA", ota_url, ota_foot);
+
+    lv_obj_add_event_cb(s_qr_screen, qr_screen_unloaded_event_cb,
+                        LV_EVENT_SCREEN_UNLOADED, NULL);
+
+    lv_scr_load_anim(s_qr_screen, LV_SCR_LOAD_ANIM_MOVE_BOTTOM,
+                     200, 0, false);
+}
+
 // Event handler for Reset button
 static void reset_button_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -2264,7 +2418,7 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += spacing;
 */
-    // ========== Logs + Reset (two buttons in one row) ==========
+    // ========== Logs + QR codes + Reset (three buttons in one row) =====
     y_pos += 10; // small visual break before the destructive action
 
     lv_obj_t *logs_btn = lv_btn_create(ui->settings);
@@ -2272,7 +2426,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(logs_lbl, "Logs");
     lv_obj_align(logs_lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(logs_btn, 20, y_pos);
-    lv_obj_set_size(logs_btn, 375, 50);
+    lv_obj_set_size(logs_btn, 245, 50);
     lv_obj_set_style_bg_color(logs_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(logs_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(logs_btn, &lv_font_montserrat_24, 0);
@@ -2281,12 +2435,26 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(logs_btn, logs_open_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
 
+    lv_obj_t *qr_btn = lv_btn_create(ui->settings);
+    lv_obj_t *qr_lbl = lv_label_create(qr_btn);
+    lv_label_set_text(qr_lbl, "QR codes");
+    lv_obj_align(qr_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(qr_btn, 281, y_pos);
+    lv_obj_set_size(qr_btn, 245, 50);
+    lv_obj_set_style_bg_color(qr_btn, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(qr_btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(qr_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(qr_btn, 8, 0);
+    lv_obj_set_style_border_width(qr_btn, 0, 0);
+    lv_obj_add_event_cb(qr_btn, qr_open_btn_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
     settings_reset_button = lv_btn_create(ui->settings);
     lv_obj_t *reset_label = lv_label_create(settings_reset_button);
-    lv_label_set_text(reset_label, "Reset to Defaults");
+    lv_label_set_text(reset_label, "Reset");
     lv_obj_align(reset_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_reset_button, 412, y_pos);
-    lv_obj_set_size(settings_reset_button, 375, 50);
+    lv_obj_set_pos(settings_reset_button, 542, y_pos);
+    lv_obj_set_size(settings_reset_button, 245, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);
@@ -2302,5 +2470,40 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_pos(settings_info_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_info_label, lv_color_hex(0x00ff00), 0);
     lv_obj_set_style_text_font(settings_info_label, &lv_font_montserrat_24, 0);
+
+    y_pos += 40;
+
+    /* Firmware-version block.
+     *
+     * Reads dev_settings RAM cache that main.c populates as each subsystem
+     * comes up:
+     *   P4 — esp_app_get_description()->version (set near start of main)
+     *   BT — UART line "BT-VER:<v>" from the D1 Mini agent (set after
+     *        bt_agent_ota_check_and_update)
+     *   C6 — slave version captured by c6_ota_check_and_update
+     *
+     * If a subsystem isn't up yet when Settings is opened for the very first
+     * time, the fw_info_get_* returns "" and the row shows "(unknown)". */
+#ifdef LV_REALDEVICE
+    const char *p4_v = fw_info_get_p4();
+    const char *bt_v = fw_info_get_bt();
+    const char *c6_v = fw_info_get_c6();
+    if (!*p4_v) p4_v = "(unknown)";
+    if (!*bt_v) bt_v = "(unknown)";
+    if (!*c6_v) c6_v = "(unknown)";
+    char fw_buf[160];
+    snprintf(fw_buf, sizeof(fw_buf),
+             "Firmware versions:\n"
+             "  P4 host  : %s\n"
+             "  BT agent : %s\n"
+             "  C6 slave : %s",
+             p4_v, bt_v, c6_v);
+    lv_obj_t *fw_label = lv_label_create(ui->settings);
+    lv_label_set_text(fw_label, fw_buf);
+    lv_obj_set_pos(fw_label, 20, y_pos);
+    lv_obj_set_style_text_color(fw_label, lv_color_hex(0xB6FF2E), 0);
+    lv_obj_set_style_text_font(fw_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_line_space(fw_label, 4, 0);
+#endif
 }
 

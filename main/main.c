@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "bsp/esp-bsp.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_lv_adapter_input.h"
 #include "esp_log.h"
@@ -50,6 +51,7 @@ void port_start_app_hook(void)
 #include "h264_pipe.h"
 #include "idle_screen.h"
 #include "log_capture.h"
+#include "pixel_watch.h"
 #include "mdns_advertise.h"
 #include "ota_http.h"
 #include "ota_screen.h"
@@ -192,6 +194,14 @@ void app_main(void)
     log_capture_init();
 
     ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, aa_submode=%d", CONNECTION_MODE);
+
+    /* Publish our own (P4) firmware version to dev_settings so the Settings
+     * screen can render it. BT + C6 entries get filled in further below as
+     * those subsystems come up. */
+    {
+        const esp_app_desc_t *desc = esp_app_get_description();
+        if (desc) fw_info_set_p4(desc->version);
+    }
     ESP_LOGI(TAG, "HEAP_PROBE: app_main INTERNAL+8BIT free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -262,6 +272,12 @@ void app_main(void)
          * starts unconditionally so LVGL touch keeps working. */
         touch_input_set_gesture_cb(ui_mode_toggle);
         touch_input_start(NULL, NULL);
+
+        /* Diagnostic: poll pixel (0,0) of each LVGL framebuffer at 50 Hz
+         * and log if it ever turns light blue. Detects whether the random
+         * blue-flash during CAN activity is caused by software (FB gets
+         * written blue) or hardware (panel/DSI glitch — FB stays correct). */
+        pixel_watch_start();
     }
 
     /* VESC CAN bring-up. Independent from the AA pipeline — runs the
@@ -318,6 +334,10 @@ void app_main(void)
     }
     /* If OTA showed itself, drop it now that we're past the update phase. */
     ota_screen_hide();
+
+    /* c6_ota.c populated the slave-version cache during the check above;
+     * surface it on the Settings screen. */
+    fw_info_set_c6(c6_ota_get_slave_version_str());
 #endif
 
     /* NimBLE host on top of C6's BT controller (ESP-Hosted VHCI). Starts
@@ -382,6 +402,10 @@ void app_main(void)
         /* If CONFIG_BT_AGENT_OTA_ENABLED, compare BT-VER: against expected
          * and reflash on mismatch / silence. No-op when disabled. */
         bt_agent_ota_check_and_update();
+        /* bt_agent_ota_check_and_update parses the BT-VER:<v> line emitted
+         * by the agent on boot; whether or not an OTA actually ran, the
+         * version string is now available. Surface it on Settings. */
+        fw_info_set_bt(bt_agent_get_version());
         esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
         esp_netif_ip_info_t ap_ip = {0};
         if (ap_netif) esp_netif_get_ip_info(ap_netif, &ap_ip);

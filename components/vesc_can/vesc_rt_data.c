@@ -181,7 +181,9 @@ void vesc_rt_data_process_response(const uint8_t *data, unsigned int len)
         float speed_kmh   = s_rt_data.speed * 3.6f;
         float odometer_km = s_rt_data.odometer / 1000.0f;
         float power_w     = s_rt_data.current_in * s_rt_data.v_in;
-        ESP_LOGI(TAG, "v=%.1fV i=%.1fA P=%.0fW spd=%.1fkm/h odo=%.1fkm",
+        /* Live telemetry once every 20 polls (~2 s) — useful when
+         * debugging the VESC link, just noisy in the default log. */
+        ESP_LOGD(TAG, "v=%.1fV i=%.1fA P=%.0fW spd=%.1fkm/h odo=%.1fkm",
                  s_rt_data.v_in, s_rt_data.current_in, power_w,
                  speed_kmh, odometer_km);
     }

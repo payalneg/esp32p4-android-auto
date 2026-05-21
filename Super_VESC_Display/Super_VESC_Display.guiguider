@@ -5474,7 +5474,7 @@
 					"id": "ov1beisw",
 					"type": "label",
 					"left": 636,
-					"top": 45,
+					"top": 40,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -9074,7 +9074,7 @@
 					"id": "bv4syufy",
 					"type": "label",
 					"left": 20,
-					"top": 45,
+					"top": 40,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -10784,7 +10784,7 @@
 						"flag": [],
 						"pos": [
 							20,
-							45
+							40
 						],
 						"size": [
 							154,
@@ -14492,7 +14492,7 @@
 						"flag": [],
 						"pos": [
 							636,
-							45
+							40
 						],
 						"size": [
 							144,
@@ -25528,7 +25528,7 @@
 														"id": "ov1beisw",
 														"type": "label",
 														"left": 636,
-														"top": 45,
+														"top": 40,
 														"visible": true,
 														"isLock": false,
 														"flag": [],
@@ -29128,7 +29128,7 @@
 														"id": "bv4syufy",
 														"type": "label",
 														"left": 20,
-														"top": 45,
+														"top": 40,
 														"visible": true,
 														"isLock": false,
 														"flag": [],

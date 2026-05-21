@@ -33,8 +33,14 @@ static vprintf_like_t s_orig_vprintf;
 
 /* esp_log's registered vprintf — runs on every ESP_LOGx call from task
  * context. ISR-context logs go through esp_rom_printf and bypass this
- * hook, so we don't need full ISR-safety on the formatting path. */
-static int IRAM_ATTR log_capture_vprintf(const char *fmt, va_list args)
+ * hook, so we don't need full ISR-safety on the formatting path.
+ *
+ * Intentionally NOT IRAM_ATTR — pinning this in IRAM shifts .text/.bss
+ * boundaries enough to drop the largest contiguous internal-DRAM block
+ * below the SDIO mempool threshold and panic boot ("sdio_mempool_create
+ * ... no mem"). Living in flash .text is fine here: this hook is only
+ * called from task context, never from an ISR. */
+static int log_capture_vprintf(const char *fmt, va_list args)
 {
     /* va_list is single-use: after the first consumer reads via va_arg
      * the source is in an unspecified state, so each downstream call

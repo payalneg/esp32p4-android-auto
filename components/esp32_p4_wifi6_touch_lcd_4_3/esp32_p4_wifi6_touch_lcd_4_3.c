@@ -506,7 +506,7 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
     ESP_LOGI(TAG, "Install Waveshare ESP32-P4-WIFI6-Touch-LCD-4B LCD control panel");
     esp_lcd_dpi_panel_config_t dpi_config = {                                                 
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,  
-        .dpi_clock_freq_mhz = 30,                     
+        .dpi_clock_freq_mhz = 30,
         .virtual_channel = 0,                         
         .pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565,                    
         .num_fbs = 1,                                 

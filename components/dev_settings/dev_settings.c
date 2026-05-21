@@ -1,5 +1,6 @@
 #include "dev_settings.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -355,3 +356,26 @@ void settings_register_can_speed_cb(settings_can_speed_cb_t cb)         { s_can_
 void settings_register_brightness_cb(settings_brightness_cb_t cb)       { s_brightness_cb    = cb; }
 void settings_register_target_id_cb(settings_target_id_cb_t cb)         { s_target_id_cb     = cb; }
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb) { s_controller_id_cb = cb; }
+
+/* ---------------- firmware-version info ----------------
+ * Pure RAM, no NVS. Race-tolerant in practice: setters fire once at boot
+ * from main; getters run on the LVGL task much later. snprintf() guarantees
+ * NUL termination so the worst possible race is a torn string read — the
+ * label simply re-renders the next time Settings is opened. */
+
+static char s_fw_p4[FW_INFO_MAX] = "";
+static char s_fw_bt[FW_INFO_MAX] = "";
+static char s_fw_c6[FW_INFO_MAX] = "";
+
+static void fw_info_copy(char *dst, const char *src) {
+    if (!src) { dst[0] = '\0'; return; }
+    snprintf(dst, FW_INFO_MAX, "%s", src);
+}
+
+void fw_info_set_p4(const char *v) { fw_info_copy(s_fw_p4, v); }
+void fw_info_set_bt(const char *v) { fw_info_copy(s_fw_bt, v); }
+void fw_info_set_c6(const char *v) { fw_info_copy(s_fw_c6, v); }
+
+const char *fw_info_get_p4(void) { return s_fw_p4; }
+const char *fw_info_get_bt(void) { return s_fw_bt; }
+const char *fw_info_get_c6(void) { return s_fw_c6; }

@@ -69,7 +69,9 @@ static void log_stats_once_per_second(void)
     if (now - window_start_us < 1000000) return;
 
     if (s_decoded_frames > 0 || s_decode_errors > 0 || s_queue_hwm > 0) {
-        ESP_LOGI(TAG,
+        /* 1 Hz decode-pipeline summary — handy when tuning the queue /
+         * ACK pacing, otherwise just clutter once AA is up. */
+        ESP_LOGD(TAG,
                  "decoded %u fr (avg %llu us/fr) | q hwm %u/4 | "
                  "push blocked %u times, %llu ms total | errors %u",
                  (unsigned)s_decoded_frames,
