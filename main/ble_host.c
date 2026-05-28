@@ -14,6 +14,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "ble_nus.h"
+#include "notif_bridge.h"
 
 /* Nordic UART Service UUID, NimBLE LE byte order — same value as the
  * one declared in ble_nus.c (kept in sync manually; only used for adv). */
@@ -36,6 +37,15 @@ bool ble_host_is_connected(void)
 
 static void start_advertising(void);
 
+/* Fan a single NimBLE register callback out to every co-resident GATT
+ * service. NimBLE only takes one `gatts_register_cb`, so we proxy. */
+static void gatts_register_dispatcher(struct ble_gatt_register_ctxt *ctxt,
+                                      void *arg)
+{
+    ble_nus_gatts_register_cb(ctxt, arg);
+    notif_bridge_gatts_register_cb(ctxt, arg);
+}
+
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -50,6 +60,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                      (unsigned)event->connect.conn_handle);
             s_connected = true;
             ble_nus_on_connect(event->connect.conn_handle);
+            notif_bridge_on_connect(event->connect.conn_handle);
         } else {
             ESP_LOGW(TAG, "GAP connect failed, status=%d",
                      event->connect.status);
@@ -61,6 +72,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "GAP disconnect, reason=%d", event->disconnect.reason);
         s_connected = false;
         ble_nus_on_disconnect();
+        notif_bridge_on_disconnect();
         start_advertising();
         return 0;
 
@@ -206,22 +218,35 @@ esp_err_t ble_host_init(void)
 
     ble_hs_cfg.reset_cb         = on_reset_cb;
     ble_hs_cfg.sync_cb          = on_sync_cb;
-    ble_hs_cfg.gatts_register_cb = ble_nus_gatts_register_cb;
+    ble_hs_cfg.gatts_register_cb = gatts_register_dispatcher;
 
-    /* Standard GAP / GATT services + NUS. Order matters:
+    /* Standard GAP / GATT services + NUS + NotifBridge. Order matters:
      * ble_svc_*_init must run before ble_gatts_count_cfg/add_svcs. */
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    const struct ble_gatt_svc_def *svcs = ble_nus_get_svcs();
-    int rc = ble_gatts_count_cfg(svcs);
+    notif_bridge_init();
+
+    const struct ble_gatt_svc_def *nus_svcs   = ble_nus_get_svcs();
+    const struct ble_gatt_svc_def *bridge_svcs = notif_bridge_get_svcs();
+    int rc = ble_gatts_count_cfg(nus_svcs);
     if (rc != 0) {
-        ESP_LOGE(TAG, "ble_gatts_count_cfg rc=%d", rc);
+        ESP_LOGE(TAG, "ble_gatts_count_cfg (nus) rc=%d", rc);
         return ESP_FAIL;
     }
-    rc = ble_gatts_add_svcs(svcs);
+    rc = ble_gatts_count_cfg(bridge_svcs);
     if (rc != 0) {
-        ESP_LOGE(TAG, "ble_gatts_add_svcs rc=%d", rc);
+        ESP_LOGE(TAG, "ble_gatts_count_cfg (bridge) rc=%d", rc);
+        return ESP_FAIL;
+    }
+    rc = ble_gatts_add_svcs(nus_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_add_svcs (nus) rc=%d", rc);
+        return ESP_FAIL;
+    }
+    rc = ble_gatts_add_svcs(bridge_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_add_svcs (bridge) rc=%d", rc);
         return ESP_FAIL;
     }
 

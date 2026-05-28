@@ -17,6 +17,8 @@ idf_component_register(
         "aa_x509_patch.c"
         "ble_host.c"
         "ble_nus.c"
+        "notif_bridge.c"
+        "notif_toast.c"
         "bt_link.c"
         "bt_agent_ota.c"
         "h264_pipe.c"

@@ -1,0 +1,27 @@
+name: aa_bridge
+description: "Notification + media BLE bridge to ESP32-P4 head unit."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.7.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_blue_plus: ^1.32.12
+  shared_preferences: ^2.2.3
+  permission_handler: ^11.3.1
+  flutter_local_notifications: ^17.2.3
+  crypto: ^3.0.3
+  protobuf: ^3.1.0
+  rxdart: ^0.27.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
