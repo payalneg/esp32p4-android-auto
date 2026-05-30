@@ -22,6 +22,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
@@ -30,3 +31,12 @@ flutter:
     # Refresh with scripts/stage_firmware_asset.sh after idf.py build.
     - assets/firmware/esp32p4_android_auto.bin
     - assets/firmware/version.txt
+
+# Run: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/icon_legacy.png"
+  adaptive_icon_background: "#161B1E"
+  adaptive_icon_foreground: "assets/icon_foreground.png"
