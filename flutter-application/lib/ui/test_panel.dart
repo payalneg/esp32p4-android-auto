@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../ble/ble_service.dart';
 import '../ble/messages.dart';
+import '../cache/icon_hash.dart';
 import '../i18n/strings.dart';
+import 'test_assets.dart';
 
 /// Sends fake notifications / media frames over BLE without involving
 /// the system listener. Lets us verify the head unit's parser and LVGL
@@ -37,6 +39,18 @@ class _TestPanelState extends State<TestPanel> {
     _toast('${t(context, 'test.sent')}${n.title}');
   }
 
+  /// Renders a coloured-letter PNG on the fly and ships it with the
+  /// notification. After this call the head unit has [color/letter]
+  /// in its icon cache keyed by the returned hash — pass the hash to
+  /// the next sendNotification so the toast picks it up instead of
+  /// falling back to the first-letter placeholder.
+  Future<int> _pushTestIcon(Color color, String letter) async {
+    final png = await makeIconPng(color, letter);
+    final hash = fnv1a32(png);
+    await BleService.instance.sendIcon(IconMsg(hash: hash, png: png));
+    return hash;
+  }
+
   Future<void> _sendMedia() async {
     if (!_connected) return _toast(t(context, 'test.not_connected'));
     final tr = _tracks[_trackIdx];
@@ -58,37 +72,49 @@ class _TestPanelState extends State<TestPanel> {
     );
   }
 
-  Future<void> _testWhatsapp() => _sendNotif(NotificationMsg(
-        id: _idSeed++,
-        package: 'com.whatsapp',
-        appName: 'WhatsApp',
-        title: 'Аня',
-        text: 'Где ты? Я приехала',
-        postedAtMs: DateTime.now().millisecondsSinceEpoch,
-        iconHash: 0,
-      ));
+  Future<void> _testWhatsapp() async {
+    if (!_connected) return _toast(t(context, 'test.not_connected'));
+    final iconHash = await _pushTestIcon(const Color(0xFF25D366), 'W');
+    return _sendNotif(NotificationMsg(
+      id: _idSeed++,
+      package: 'com.whatsapp',
+      appName: 'WhatsApp',
+      title: 'Аня',
+      text: 'Где ты? Я приехала',
+      postedAtMs: DateTime.now().millisecondsSinceEpoch,
+      iconHash: iconHash,
+    ));
+  }
 
-  Future<void> _testTelegram() => _sendNotif(NotificationMsg(
-        id: _idSeed++,
-        package: 'org.telegram.messenger',
-        appName: 'Telegram',
-        title: 'Чат проекта',
-        text: 'Серёжа: смотри, новая прошивка собралась',
-        postedAtMs: DateTime.now().millisecondsSinceEpoch,
-        iconHash: 0,
-      ));
+  Future<void> _testTelegram() async {
+    if (!_connected) return _toast(t(context, 'test.not_connected'));
+    final iconHash = await _pushTestIcon(const Color(0xFF229ED9), 'T');
+    return _sendNotif(NotificationMsg(
+      id: _idSeed++,
+      package: 'org.telegram.messenger',
+      appName: 'Telegram',
+      title: 'Чат проекта',
+      text: 'Серёжа: смотри, новая прошивка собралась',
+      postedAtMs: DateTime.now().millisecondsSinceEpoch,
+      iconHash: iconHash,
+    ));
+  }
 
-  Future<void> _testLong() => _sendNotif(NotificationMsg(
-        id: _idSeed++,
-        package: 'com.test.long',
-        appName: 'Тест длинный',
-        title: 'Длинное название уведомления для проверки переноса',
-        text:
-            'А это сам текст: проверяем что LVGL label с LONG_DOT режимом '
-            'обрезает строку, не ломая UI. Тут специально много букв.',
-        postedAtMs: DateTime.now().millisecondsSinceEpoch,
-        iconHash: 0,
-      ));
+  Future<void> _testLong() async {
+    if (!_connected) return _toast(t(context, 'test.not_connected'));
+    final iconHash = await _pushTestIcon(const Color(0xFF7C7C7C), '?');
+    return _sendNotif(NotificationMsg(
+      id: _idSeed++,
+      package: 'com.test.long',
+      appName: 'Тест длинный',
+      title: 'Длинное название уведомления для проверки переноса',
+      text:
+          'А это сам текст: проверяем что LVGL label с LONG_DOT режимом '
+          'обрезает строку, не ломая UI. Тут специально много букв.',
+      postedAtMs: DateTime.now().millisecondsSinceEpoch,
+      iconHash: iconHash,
+    ));
+  }
 
   Future<void> _mediaPlay() async {
     setState(() => _playing = true);

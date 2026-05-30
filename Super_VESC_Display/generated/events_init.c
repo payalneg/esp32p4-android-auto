@@ -37,7 +37,7 @@ static void dashboard_Settings_text_event_handler (lv_event_t *e)
     switch (code) {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.settings, guider_ui.settings_del, &guider_ui.dashboard_del, setup_scr_settings, LV_SCR_LOAD_ANIM_MOVE_BOTTOM, 200, 200, false, false);
+        ui_load_scr_animation(&guider_ui, &guider_ui.settings, guider_ui.settings_del, &guider_ui.dashboard_del, setup_scr_settings, LV_SCR_LOAD_ANIM_NONE, 200, 200, false, false);
         break;
     }
     default:
@@ -87,7 +87,7 @@ static void settings_exit_button_event_handler (lv_event_t *e)
     switch (code) {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.dashboard, guider_ui.dashboard_del, &guider_ui.settings_del, setup_scr_dashboard, LV_SCR_LOAD_ANIM_MOVE_TOP, 200, 200, false, false);
+        ui_load_scr_animation(&guider_ui, &guider_ui.dashboard, guider_ui.dashboard_del, &guider_ui.settings_del, setup_scr_dashboard, LV_SCR_LOAD_ANIM_NONE, 200, 200, false, false);
         break;
     }
     default:

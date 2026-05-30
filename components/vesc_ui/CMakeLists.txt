@@ -64,6 +64,12 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE ENABLE_WALL_CLOCK=0)
 # IDF's lvgl component exposes "lvgl.h", not "lvgl/lvgl.h".
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 
+# Antonio_Regular_200 (the giant speedometer font) has 32-bit glyph
+# offsets and refuses to compile unless this is set — see the #error
+# at the bottom of the generated .c. Match main/lv_conf.h here in case
+# the build picks up a different lv_conf via global include order.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_FONT_FMT_TXT_LARGE=1)
+
 # Per-widget timing markers in setup_scr_dashboard.c (Super_VESC_Display).
 # Off by default; flip to ON to log per-widget cost via ESP_LOGI("svd_prof").
 option(VESC_UI_PROFILE "Profile per-widget LVGL build time" ON)

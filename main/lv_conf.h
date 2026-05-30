@@ -648,8 +648,10 @@
     #define LV_FS_LITTLEFS_CACHE_SIZE 0    /*>0 to cache this number of bytes in lv_fs_read()*/
 #endif
 
-/*PNG decoder library*/
-#define LV_USE_PNG 0
+/*PNG decoder library — used to render the phone-side album art / app
+ * icons that come in over the NotifBridge BLE service. Library lives in
+ * managed_components/lvgl__lvgl/src/extra/libs/png. */
+#define LV_USE_PNG 1
 
 /*BMP decoder library*/
 #define LV_USE_BMP 0

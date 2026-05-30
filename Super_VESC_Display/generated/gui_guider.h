@@ -114,7 +114,8 @@ typedef struct
 	lv_obj_t *dashboard_col_voltage_label;
 	lv_obj_t *dashboard_cur_time_label;
 	lv_obj_t *dashboard_brightness_slider;
-	lv_obj_t *dashboard_nav_img;
+	lv_obj_t *dashboard_music_info;
+	lv_obj_t *dashboard_music_info_tile;
 	lv_obj_t *settings;
 	bool settings_del;
 	lv_obj_t *settings_exit_button;
@@ -151,7 +152,7 @@ LV_FONT_DECLARE(lv_font_montserratMedium_24)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
 LV_FONT_DECLARE(lv_font_montserratMedium_22)
 LV_FONT_DECLARE(lv_font_montserratMedium_12)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_220)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_200)
 LV_FONT_DECLARE(lv_font_montserratMedium_20)
 LV_FONT_DECLARE(lv_font_montserratMedium_26)
 LV_FONT_DECLARE(lv_font_montserratMedium_18)

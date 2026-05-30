@@ -73,7 +73,7 @@ CONFIG_ESP_HOSTED_SDIO_RESET_DELAY_MS=100
 # when repacking bt_agent_fw.bin.gz. Pinned here too (not just
 # Kconfig.projbuild's default) so existing sdkconfig files from old
 # checkouts don't keep a stale value and silently skip OTA.
-CONFIG_BT_AGENT_FW_VERSION="0.5.0"
+CONFIG_BT_AGENT_FW_VERSION="0.6.2"
 
 # ===== WiFi Remote (transparent esp_wifi API on P4) =====
 CONFIG_ESP_WIFI_REMOTE_ENABLED=y

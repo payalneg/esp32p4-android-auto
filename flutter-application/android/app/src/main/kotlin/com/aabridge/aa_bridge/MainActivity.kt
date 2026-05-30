@@ -58,6 +58,13 @@ class MainActivity : FlutterActivity() {
                     "stop" -> {
                         BleForegroundService.stop(this); result.success(null)
                     }
+                    "status" -> {
+                        val state = call.argument<String>("state")
+                            ?: BleForegroundService.STATE_DISCONNECTED
+                        val sub = call.argument<String>("subtitle") ?: ""
+                        BleForegroundService.updateStatus(this, state, sub)
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }

@@ -428,6 +428,17 @@ void custom_init(lv_ui *ui)
         lv_obj_add_flag(ui->dashboard_cur_time_label, LV_OBJ_FLAG_HIDDEN);
     }
 #endif
+
+    /* GUI Guider's music-info tileview ships with a dark fill + light
+     * border which flashes on the dashboard for the second or two
+     * between setup_scr_dashboard and the first media-frame. Style
+     * overrides on the various LV_PART_* don't reliably win against
+     * the default theme, so we just hide the whole tileview until
+     * music_info_view shows its first track. The view itself flips the
+     * HIDDEN flag back off through music_info_view_set_visible(). */
+    if (ui->dashboard_music_info) {
+        lv_obj_add_flag(ui->dashboard_music_info, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 /* 4 Hz tick (~250 ms). sinf() drives smooth value sweeps; every change goes

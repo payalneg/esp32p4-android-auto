@@ -22,27 +22,33 @@ class _PairingScreenState extends State<PairingScreen> {
       _scanning = true;
     });
     try {
-      await [
+      final perms = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.locationWhenInUse,
       ].request();
+      debugPrint('[pairing] perms granted: $perms');
       final r = await BleService.instance.scan();
+      debugPrint('[pairing] scan returned ${r.length} results');
       if (!mounted) return;
       setState(() => _results = r);
-    } catch (e) {
-      setState(() => _error = '$e');
+    } catch (e, st) {
+      debugPrint('[pairing] scan FAILED: $e\n$st');
+      if (mounted) setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _scanning = false);
     }
   }
 
   Future<void> _connect(BluetoothDevice d) async {
+    debugPrint('[pairing] connect → ${d.remoteId} (${d.platformName})');
     try {
       await BleService.instance.connect(d);
+      debugPrint('[pairing] connect OK');
       if (!mounted) return;
       Navigator.pop(context);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[pairing] connect FAILED: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${t(context, 'pairing.error')}$e')),

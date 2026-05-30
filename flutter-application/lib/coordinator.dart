@@ -32,20 +32,33 @@ class Coordinator {
   int _lastAlbumArtHash = 0;
   MediaSnapshot? _lastMedia;
 
+  StreamSubscription? _stateSub;
+
   Future<void> start() async {
     _filter = await AppFilter.load();
     _notifSub = _notifBridge.events.listen(_onNotification);
     _mediaSub = _mediaBridge.events.listen(_onMedia);
     _cmdSub = _ble.commands.listen(_onCommand);
+    // Re-arm the resend caches on every reconnect — the head unit boots
+    // with an empty icon LRU after a power-cycle / reflash, so the phone
+    // mustn't think anything is still "already pushed".
+    _stateSub = _ble.state.listen((s) {
+      if (s == BleConnState.connected) {
+        _pushedHashes.clear();
+        _lastAlbumArtHash = 0;
+      }
+    });
   }
 
   Future<void> stop() async {
     await _notifSub?.cancel();
     await _mediaSub?.cancel();
     await _cmdSub?.cancel();
+    await _stateSub?.cancel();
     _notifSub = null;
     _mediaSub = null;
     _cmdSub = null;
+    _stateSub = null;
   }
 
   AppFilter? get filter => _filter;
@@ -66,40 +79,59 @@ class Coordinator {
   }
 
   Future<int> _ensureIcon(String package) async {
+    // Fast path: we have a recent hash AND we already pushed the PNG
+    // bytes to the head unit (since the last reconnect cleared the
+    // pushed-set). Skip the PackageManager round-trip.
     final cached = _packageToIconHash[package];
-    if (cached != null) return cached;
+    if (cached != null && _pushedHashes.contains(cached)) return cached;
+
+    // Either first time, or the head unit was reset and lost the LRU.
+    // Re-fetch the PNG and re-send so the toast resolves the hash on
+    // the firmware side; otherwise the head unit would render the
+    // first-letter fallback ("T" instead of the Telegram glyph).
     final png = await _notifBridge.getAppIconPng(package);
     if (png == null || png.isEmpty) return 0;
     final hash = fnv1a32(png);
     _packageToIconHash[package] = hash;
-    if (!_pushedHashes.contains(hash)) {
-      await _ble.sendIcon(IconMsg(hash: hash, png: png));
-      _pushedHashes.add(hash);
-    }
+    await _ble.sendIcon(IconMsg(hash: hash, png: png));
+    _pushedHashes.add(hash);
     return hash;
   }
 
+  // Set while a long PDU (album art) is in flight, so the 1 Hz media
+  // ticker doesn't pile a second sendAlbumArt on top of the first.
+  bool _mediaSending = false;
+
   Future<void> _onMedia(MediaSnapshot m) async {
     _lastMedia = m;
-    int artHash = 0;
-    if (m.albumArtPng != null && m.albumArtPng!.isNotEmpty) {
-      artHash = fnv1a32(m.albumArtPng!);
-      if (artHash != _lastAlbumArtHash && !_pushedHashes.contains(artHash)) {
-        await _ble.sendAlbumArt(IconMsg(hash: artHash, png: m.albumArtPng!));
-        _pushedHashes.add(artHash);
+    if (_mediaSending) return;
+    _mediaSending = true;
+    try {
+      int artHash = 0;
+      if (m.albumArtPng != null && m.albumArtPng!.isNotEmpty) {
+        artHash = fnv1a32(m.albumArtPng!);
+        if (artHash != _lastAlbumArtHash && !_pushedHashes.contains(artHash)) {
+          await _ble.sendAlbumArt(IconMsg(hash: artHash, png: m.albumArtPng!));
+          _pushedHashes.add(artHash);
+        }
+        _lastAlbumArtHash = artHash;
       }
-      _lastAlbumArtHash = artHash;
+      await _ble.sendMedia(MediaMsg(
+        title: m.title,
+        artist: m.artist,
+        album: m.album,
+        durationMs: m.durationMs,
+        positionMs: m.positionMs,
+        isPlaying: m.isPlaying,
+        albumArtHash: artHash,
+        sourceApp: m.sourceApp,
+      ));
+    } catch (_) {
+      // BleService._send already swallows transient errors; this catch
+      // is a backstop so anything escaping doesn't crash the isolate.
+    } finally {
+      _mediaSending = false;
     }
-    await _ble.sendMedia(MediaMsg(
-      title: m.title,
-      artist: m.artist,
-      album: m.album,
-      durationMs: m.durationMs,
-      positionMs: m.positionMs,
-      isPlaying: m.isPlaying,
-      albumArtHash: artHash,
-      sourceApp: m.sourceApp,
-    ));
   }
 
   void _onCommand(InboundCommand cmd) {
@@ -138,11 +170,19 @@ class Coordinator {
   }
 
   Future<void> _resendAlbumArt(int hash) async {
+    // Drop the cache so the next media tick re-uploads the PNG
+    // unconditionally. We don't try to validate the hash against the
+    // last snapshot because the head unit's request races with the next
+    // track change — by the time it lands here, the player may already
+    // be on a new song with different bytes. Force the resend and let
+    // the tick that follows reconcile.
+    _pushedHashes.remove(hash);
+    _lastAlbumArtHash = 0;
     final art = _lastMedia?.albumArtPng;
-    if (art == null) return;
-    if (fnv1a32(art) != hash) return;
-    await _ble.sendAlbumArt(IconMsg(hash: hash, png: art));
-    _pushedHashes.add(hash);
+    if (art == null || art.isEmpty) return;
+    final h = fnv1a32(art);
+    await _ble.sendAlbumArt(IconMsg(hash: h, png: art));
+    _pushedHashes.add(h);
   }
 }
 

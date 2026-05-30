@@ -77,6 +77,11 @@ const media_state_t *notif_bridge_get_media(void);
  * count; entries are copied into the caller buffer. */
 size_t notif_bridge_recent(notif_msg_t *out, size_t max);
 
+/* Monotonic counter — bumped on every accepted NEW notification. UI
+ * code compares against its last-seen value to detect fresh arrivals
+ * without scanning the whole ring on every poll tick. */
+uint32_t notif_bridge_inbox_seq(void);
+
 /* PNG cache lookup — used by LVGL image widgets to draw icons/album art.
  * Returns NULL when the hash isn't cached; in that case the UI may call
  * notif_bridge_send_cmd(NOTIF_OP_REQUEST_ICON, hash) to fetch it. */

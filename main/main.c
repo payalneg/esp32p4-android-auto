@@ -41,6 +41,10 @@ void port_start_app_hook(void)
 #include "aa_overclock.h"
 #include "ble_host.h"
 #include "ble_nus.h"
+#include "notif_bridge.h"
+#include "notif_toast.h"
+#include "music_info_view.h"
+#include "gui_guider.h"
 #include "bt_agent_ota.h"
 #include "bt_link.h"
 #include "c6_ota.h"
@@ -282,6 +286,18 @@ void app_main(void)
          * starts unconditionally so LVGL touch keeps working. */
         touch_input_set_gesture_cb(ui_mode_toggle);
         touch_input_start(NULL, NULL);
+
+        /* Plug the phone-side music info into GUI Guider's dashboard tile.
+         * Wires through guider_ui (built inside ui_mode_init) and the
+         * BLE-driven notif_bridge state. Skipped silently if the tile is
+         * absent (older GUI Guider exports). bsp_display_lock is required
+         * because we're touching LVGL from the main task. */
+        if (bsp_display_lock(200) == ESP_OK) {
+            if (guider_ui.dashboard_music_info_tile) {
+                music_info_view_attach(guider_ui.dashboard_music_info_tile);
+            }
+            bsp_display_unlock();
+        }
     }
 
     /* VESC CAN bring-up. Independent from the AA pipeline — runs the
@@ -356,6 +372,10 @@ void app_main(void)
     if (ble_host_init() != ESP_OK) {
         ESP_LOGW(TAG, "BLE host init failed — VESC Tool over BLE unavailable");
     }
+    /* Phone-side notifications/media overlay. ble_host_init already calls
+     * notif_bridge_init for the GATT plumbing; this one wires the LVGL
+     * toast widget on top so incoming notifications actually appear. */
+    notif_toast_init();
 
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");
 
@@ -408,8 +428,19 @@ void app_main(void)
         bt_agent_ota_check_and_update();
         /* bt_agent_ota_check_and_update parses the BT-VER:<v> line emitted
          * by the agent on boot; whether or not an OTA actually ran, the
-         * version string is now available. Surface it on Settings. */
-        fw_info_set_bt(bt_agent_get_version());
+         * version string is now available. Surface it on Settings.
+         *
+         * When OTA is disabled the check-and-update call is a no-op and
+         * returns before the agent has had a chance to send BT-VER: over
+         * UART — so poll for up to ~2 s (20×100 ms) before giving up.
+         * Without this, the dashboard pinned "unknown" forever even when
+         * the agent later printed its version in the next 500 ms. */
+        const char *bt_ver = bt_agent_get_version();
+        for (int i = 0; !bt_ver && i < 20; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            bt_ver = bt_agent_get_version();
+        }
+        fw_info_set_bt(bt_ver);
         esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
         esp_netif_ip_info_t ap_ip = {0};
         if (ap_netif) esp_netif_get_ip_info(ap_netif, &ap_ip);
@@ -442,6 +473,10 @@ void app_main(void)
                  IP2STR(&ip_info.ip), AA_TCP_PORT);
     }
     idle_screen_show("Waiting for phone", status_line);
+    /* Now that we're actually listening, give the user a manual "Connect"
+     * shortcut — pages the last paired phone over BT regardless of the
+     * auto-reconnect toggle. Hidden during the earlier boot states. */
+    idle_screen_set_connect_visible(true);
 
     ESP_LOGI(TAG, "head unit ready, waiting for Wireless Helper");
 #elif CONNECTION_MODE == MODE_BT_CLASSIC

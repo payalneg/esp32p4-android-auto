@@ -70,7 +70,11 @@ static const ble_uuid128_t NB_ST_UUID  = BLE_UUID128_INIT(
 #define CHUNK_FLAG_START   0x01
 #define CHUNK_FLAG_END     0x02
 
-#define REASM_MAX_BODY     (48 * 1024)   /* hard cap, large icons ok */
+/* Real-world Yandex Music / Spotify album art PNGs land in the 50-90 KB
+ * range; cap at 192 KB so we don't truncate genuine art while still
+ * refusing absurd payloads. Buffer is PSRAM-backed and allocated lazily,
+ * so the cap costs nothing until the first big PDU lands. */
+#define REASM_MAX_BODY     (192 * 1024)
 #define NOTIF_RING_SIZE    20
 #define NOTIF_ICON_CACHE   10
 
@@ -93,6 +97,7 @@ static struct {
 /* Recent notifications — newest at the tail. */
 static notif_msg_t      s_ring[NOTIF_RING_SIZE];
 static size_t           s_ring_count;
+static uint32_t         s_inbox_seq;
 static SemaphoreHandle_t s_state_lock;
 
 static media_state_t    s_media;
@@ -197,6 +202,7 @@ static void handle_notification(const uint8_t *body, uint32_t total)
             s_ring_count--;
         }
         s_ring[s_ring_count++] = n;
+        s_inbox_seq++;
     }
     unlock();
     ESP_LOGI(TAG, "notif %s app=%s title=%s",
@@ -491,10 +497,18 @@ size_t notif_bridge_recent(notif_msg_t *out, size_t max)
 {
     if (!out || !max) return 0;
     lock();
+    /* Caller wants the freshest entries — copy from the tail of the
+     * ring, not the head. With s_ring_count entries laid out oldest
+     * first, the last `n` slots are the newest. */
     size_t n = s_ring_count < max ? s_ring_count : max;
-    memcpy(out, s_ring, n * sizeof(notif_msg_t));
+    memcpy(out, &s_ring[s_ring_count - n], n * sizeof(notif_msg_t));
     unlock();
     return n;
+}
+
+uint32_t notif_bridge_inbox_seq(void)
+{
+    return s_inbox_seq;
 }
 
 const uint8_t *notif_bridge_get_icon(uint32_t hash, size_t *out_len)
