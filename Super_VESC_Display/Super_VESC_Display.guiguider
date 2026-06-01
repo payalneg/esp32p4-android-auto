@@ -536,7 +536,7 @@
 					"name": "cur_time_label",
 					"id": "umazate1",
 					"type": "label",
-					"left": 495,
+					"left": 505,
 					"top": 5,
 					"visible": true,
 					"isLock": false,
@@ -544,7 +544,7 @@
 					"width": 110,
 					"height": 30,
 					"default_style": false,
-					"text": "--:--:--",
+					"text": "--:--",
 					"long_mode": "LV_LABEL_LONG_WRAP",
 					"is_static": false,
 					"custom_attribute": [],
@@ -19892,7 +19892,7 @@
 						"visible": true,
 						"flag": [],
 						"pos": [
-							495,
+							505,
 							5
 						],
 						"size": [
@@ -19902,7 +19902,7 @@
 						"default_style": false,
 						"attribute_type": "",
 						"custom_attribute": [],
-						"text": "--:--:--",
+						"text": "--:--",
 						"long_mode": "LV_LABEL_LONG_WRAP",
 						"is_static": false,
 						"style": [
@@ -20636,7 +20636,7 @@
 														"name": "cur_time_label",
 														"id": "umazate1",
 														"type": "label",
-														"left": 495,
+														"left": 505,
 														"top": 5,
 														"visible": true,
 														"isLock": false,
@@ -20644,7 +20644,7 @@
 														"width": 110,
 														"height": 30,
 														"default_style": false,
-														"text": "--:--:--",
+														"text": "--:--",
 														"long_mode": "LV_LABEL_LONG_WRAP",
 														"is_static": false,
 														"custom_attribute": [],

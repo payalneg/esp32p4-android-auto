@@ -2255,9 +2255,9 @@ void setup_scr_dashboard(lv_ui *ui)
 
     //Write codes dashboard_cur_time_label
     ui->dashboard_cur_time_label = lv_label_create(ui->dashboard);
-    lv_label_set_text(ui->dashboard_cur_time_label, "--:--:--");
+    lv_label_set_text(ui->dashboard_cur_time_label, "--:--");
     lv_label_set_long_mode(ui->dashboard_cur_time_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_cur_time_label, 495, 5);
+    lv_obj_set_pos(ui->dashboard_cur_time_label, 505, 5);
     lv_obj_set_size(ui->dashboard_cur_time_label, 110, 30);
 
     //Write style for dashboard_cur_time_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

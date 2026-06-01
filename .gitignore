@@ -29,3 +29,6 @@ research/_sources/
 # use to temporarily flip back to AP mode without losing the creds.
 main/bench_wifi.h*
 logs/
+
+# Build artifacts staged for distribution (APK + firmware bin)
+/release/
