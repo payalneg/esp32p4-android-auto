@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../ble/ble_service.dart';
 import '../bridge/notification_bridge.dart';
 import '../i18n/strings.dart';
+import 'about_screen.dart';
 import 'app_filter_screen.dart';
 import 'firmware_update_screen.dart';
 import 'pairing_screen.dart';
@@ -197,6 +198,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: Text(t(context, 'home.about.title')),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AboutScreen()),
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
           const TestPanel(),
         ],
