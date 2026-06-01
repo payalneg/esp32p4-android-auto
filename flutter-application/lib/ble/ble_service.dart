@@ -36,6 +36,10 @@ class BleService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _inbound;
   BluetoothCharacteristic? _outbound;
+  // Optional — null when the head unit's firmware predates the time
+  // characteristic. We only push the clock when this is non-null.
+  BluetoothCharacteristic? _time;
+  Timer? _clockTimer;
   StreamSubscription<List<int>>? _outSub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
 
@@ -160,10 +164,43 @@ class BleService {
     _outbound = svc.characteristics.firstWhere(
       (c) => c.uuid.toString().toLowerCase() == NotifBridgeUuids.charOutbound,
     );
+    // Optional characteristic — absent on older firmware. Probe by UUID
+    // and leave _time null if the head unit doesn't advertise it.
+    _time = null;
+    for (final c in svc.characteristics) {
+      if (c.uuid.toString().toLowerCase() == NotifBridgeUuids.charTime) {
+        _time = c;
+        break;
+      }
+    }
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
     _outSub = _outbound!.onValueReceived.listen(_onOutbound);
     _setState(BleConnState.connected);
+    _startClock();
+  }
+
+  /// Push local wall-clock time to the head unit every 15 s (and once
+  /// immediately) so its dashboard can show "HH:MM" without an on-device
+  /// RTC. No-op when the firmware lacks the time characteristic. The head
+  /// unit hides the label on its own if writes stop for 30 s.
+  void _startClock() {
+    _clockTimer?.cancel();
+    if (_time == null) return;
+    _pushTime();
+    _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) => _pushTime());
+  }
+
+  Future<void> _pushTime() async {
+    final ch = _time;
+    if (ch == null || _state != BleConnState.connected) return;
+    final now = DateTime.now();
+    try {
+      await ch.write([now.hour, now.minute], withoutResponse: true);
+    } catch (_) {
+      // Transient link hiccup — the next 15 s tick retries; the head unit
+      // keeps the last value visible until its 30 s TTL lapses.
+    }
   }
 
   void _onConnectionStateChanged(BluetoothConnectionState s) {
@@ -203,6 +240,8 @@ class BleService {
   }
 
   Future<void> _teardown() async {
+    _clockTimer?.cancel();
+    _clockTimer = null;
     await _connSub?.cancel();
     await _outSub?.cancel();
     _connSub = null;
@@ -213,6 +252,7 @@ class BleService {
     _device = null;
     _inbound = null;
     _outbound = null;
+    _time = null;
     _setState(BleConnState.idle);
   }
 

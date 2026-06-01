@@ -22,6 +22,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -55,6 +56,14 @@ static const ble_uuid128_t NB_OUT_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t NB_ST_UUID  = BLE_UUID128_INIT(
     0x04, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+/* TIME char — phone pushes wall-clock time so the dashboard can show it
+ * without an on-device RTC (see ENABLE_WALL_CLOCK in main/config.h, which
+ * we no longer rely on for the coin-cell-free path). The app discovers
+ * this characteristic to decide whether the head unit supports the
+ * feature; firmware without it simply won't expose ...0005. */
+static const ble_uuid128_t NB_TIME_UUID = BLE_UUID128_INIT(
+    0x05, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 
 /* ---------- PDU layer ---------- */
 
@@ -80,8 +89,19 @@ static const ble_uuid128_t NB_ST_UUID  = BLE_UUID128_INIT(
 
 /* ---------- module state ---------- */
 
-static uint16_t s_in_handle, s_out_handle, s_st_handle;
+static uint16_t s_in_handle, s_out_handle, s_st_handle, s_time_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+/* Phone-pushed wall clock. The app writes [hour, minute] every 15 s; we
+ * stamp each write with a monotonic timestamp so the LVGL side can hide
+ * the label once updates stop (PHONE_CLOCK_TTL_US). Written from the
+ * NimBLE host task, read from the LVGL task — guarded by a tiny critical
+ * section since it's just three scalars. */
+#define PHONE_CLOCK_TTL_US  (30 * 1000 * 1000)  /* 30 s */
+static portMUX_TYPE s_clock_mux = portMUX_INITIALIZER_UNLOCKED;
+static int8_t  s_clock_hour = -1;
+static int8_t  s_clock_min  = -1;
+static int64_t s_clock_seen_us;  /* 0 = never set */
 
 /* Inbound reassembly — only one in-flight message at a time (Dart side
  * sends sequentially within a single direction). */
@@ -391,6 +411,22 @@ static int access_cb(uint16_t conn, uint16_t attr,
         reasm_feed(buf, out_len);
         return 0;
     }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_time_handle) {
+        /* Tiny fixed payload: [hour, minute]. No chunking/reassembly —
+         * a clock tick never exceeds the smallest MTU. */
+        uint8_t  buf[2];
+        uint16_t out_len = 0;
+        if (OS_MBUF_PKTLEN(ctxt->om) < 2) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        if (rc != 0 || out_len < 2) return BLE_ATT_ERR_UNLIKELY;
+        if (buf[0] > 23 || buf[1] > 59) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        portENTER_CRITICAL(&s_clock_mux);
+        s_clock_hour    = (int8_t)buf[0];
+        s_clock_min     = (int8_t)buf[1];
+        s_clock_seen_us = esp_timer_get_time();
+        portEXIT_CRITICAL(&s_clock_mux);
+        return 0;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_st_handle) {
         /* Static caps blob: u16 proto version + u16 reserved. */
         static const uint8_t caps[] = { 0x01, 0x00, 0x00, 0x00 };
@@ -424,6 +460,12 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .access_cb  = access_cb,
                 .flags      = BLE_GATT_CHR_F_READ,
                 .val_handle = &s_st_handle,
+            },
+            {
+                .uuid       = &NB_TIME_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                .val_handle = &s_time_handle,
             },
             { 0 },
         },
@@ -509,6 +551,19 @@ size_t notif_bridge_recent(notif_msg_t *out, size_t max)
 uint32_t notif_bridge_inbox_seq(void)
 {
     return s_inbox_seq;
+}
+
+bool notif_bridge_get_phone_time(int *hour, int *minute)
+{
+    portENTER_CRITICAL(&s_clock_mux);
+    int8_t  h = s_clock_hour, m = s_clock_min;
+    int64_t seen = s_clock_seen_us;
+    portEXIT_CRITICAL(&s_clock_mux);
+    if (seen == 0 || h < 0 || m < 0) return false;
+    if (esp_timer_get_time() - seen > PHONE_CLOCK_TTL_US) return false;
+    if (hour)   *hour   = h;
+    if (minute) *minute = m;
+    return true;
 }
 
 const uint8_t *notif_bridge_get_icon(uint32_t hash, size_t *out_len)

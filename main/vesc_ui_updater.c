@@ -4,6 +4,7 @@
 
 #include "ble_host.h"
 #include "config.h"
+#include "notif_bridge.h"
 #include "bsp/esp-bsp.h"
 #include "dev_settings.h"
 #include "esp_log.h"
@@ -185,6 +186,17 @@ static void updater_lv_timer_cb(lv_timer_t *t)
     update_cur_time((int)(sod / 3600u),
                     (int)((sod / 60u) % 60u),
                     (int)(sod % 60u));
+#else
+    /* Coin-cell-free clock: the companion app pushes "HH:MM" over BLE
+     * every 15 s. Show the label only while updates are fresh; it hides
+     * itself after the 30 s TTL inside notif_bridge expires (phone gone,
+     * BLE dropped, or feature unsupported). */
+    int clk_h, clk_m;
+    if (notif_bridge_get_phone_time(&clk_h, &clk_m)) {
+        update_cur_time_hm(clk_h, clk_m);
+    } else {
+        hide_cur_time();
+    }
 #endif
 
     /* Demo mode (Settings → Demo mode) drives the rest of the setters

@@ -815,6 +815,34 @@ void update_cur_time(int hour, int minute, int second)
     lv_label_set_text(guider_ui.dashboard_cur_time_label, text);
 }
 
+/* Phone-pushed clock (no on-device RTC): show "HH:MM" and reveal the
+ * label, which boots hidden when the wall clock is compiled out. The
+ * caller (vesc_ui_updater) polls notif_bridge and hides the label again
+ * via hide_cur_time() once the phone stops sending updates. */
+void update_cur_time_hm(int hour, int minute)
+{
+    lv_obj_t *lbl = guider_ui.dashboard_cur_time_label;
+    if (!lbl) return;
+    static int old_h = -1, old_m = -1;
+    if (hour != old_h || minute != old_m) {
+        old_h = hour; old_m = minute;
+        char text[8];
+        snprintf(text, sizeof(text), "%02d:%02d", hour, minute);
+        lv_label_set_text(lbl, text);
+    }
+    if (lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void hide_cur_time(void)
+{
+    lv_obj_t *lbl = guider_ui.dashboard_cur_time_label;
+    if (lbl && !lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void update_mode_text(uint8_t mode)
 {
     static uint8_t old_mode = -1;

@@ -14,9 +14,10 @@ extern "C" {
  * unit send back media-transport commands.
  *
  *   Service: 7B4E4F00-3F8E-4D2A-9D5C-2C9F1A6E0001
- *   IN  CHR: 7B4E4F00-...-0002  WRITE_NO_RSP  (phone → P4)
- *   OUT CHR: 7B4E4F00-...-0003  NOTIFY        (P4 → phone)
- *   ST  CHR: 7B4E4F00-...-0004  READ          (caps blob; reserved) */
+ *   IN   CHR: 7B4E4F00-...-0002  WRITE_NO_RSP  (phone → P4)
+ *   OUT  CHR: 7B4E4F00-...-0003  NOTIFY        (P4 → phone)
+ *   ST   CHR: 7B4E4F00-...-0004  READ          (caps blob; reserved)
+ *   TIME CHR: 7B4E4F00-...-0005  WRITE_NO_RSP  (phone → P4, [hour, minute]) */
 
 void notif_bridge_init(void);
 
@@ -81,6 +82,12 @@ size_t notif_bridge_recent(notif_msg_t *out, size_t max);
  * code compares against its last-seen value to detect fresh arrivals
  * without scanning the whole ring on every poll tick. */
 uint32_t notif_bridge_inbox_seq(void);
+
+/* Phone-pushed wall clock. Returns true and fills hour/minute (local time
+ * as sent by the companion app) when a fresh time write arrived within the
+ * last 30 s; returns false otherwise so the UI can hide the clock label.
+ * Safe to poll from the LVGL task. */
+bool notif_bridge_get_phone_time(int *hour, int *minute);
 
 /* PNG cache lookup — used by LVGL image widgets to draw icons/album art.
  * Returns NULL when the hash isn't cached; in that case the UI may call
