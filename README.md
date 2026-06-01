@@ -20,7 +20,7 @@ Cycleway projects onto the same screen. No phone app required.
 
 ![VESC dashboard — battery, speed, voltage, odometer, motor / controller temps](docs/images/hero.jpg)
 
-> 🎬 Short ride demo: [`docs/demo.mp4`](docs/demo.mp4)
+> 🎬 Short ride demo: [`docs/demo.mp4`](docs/demo.mp4) · [`docs/demo-2.mp4`](docs/demo-2.mp4)
 
 ---
 
