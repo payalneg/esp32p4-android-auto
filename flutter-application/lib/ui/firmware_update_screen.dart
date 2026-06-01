@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../ble/ble_service.dart';
+import '../bridge/wifi_bridge.dart';
 import '../firmware/firmware_updater.dart';
 import '../firmware/ota_info.dart';
 import '../i18n/strings.dart';
@@ -18,13 +20,16 @@ class FirmwareUpdateScreen extends StatefulWidget {
 
 class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   final _updater = FirmwareUpdater();
+  final _wifi = WifiBridge();
   final _ssidCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
 
   OtaInfo? _info;
   String? _bundled;
+  String? _currentSsid;
   bool _loading = true;
   bool _busy = false;
+  bool _scanning = false;
   UpdateState _state = const UpdateState(UpdatePhase.idle);
 
   /// True when BLE handed us a complete SoftAP credential set — otherwise we
@@ -54,15 +59,68 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
     final info = BleService.instance.supportsOta
         ? await BleService.instance.readOtaInfo()
         : null;
+    String? current;
+    try {
+      current = await _wifi.currentSsid();
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _bundled = bundled;
       _info = info;
+      _currentSsid = current;
       // Prefill whatever BLE did give us so the user only fills the gaps.
       if (info != null && info.ssid.isNotEmpty) _ssidCtrl.text = info.ssid;
       if (info != null && info.password.isNotEmpty) _passCtrl.text = info.password;
       _loading = false;
     });
+  }
+
+  /// Trigger a WiFi scan and let the user pick the head unit's SoftAP from the
+  /// visible networks. Location permission is required for scan results.
+  Future<void> _scanAndPick() async {
+    setState(() => _scanning = true);
+    try {
+      try {
+        await Permission.location.request();
+      } catch (_) {}
+      // With location now granted the connected-SSID lookup also works.
+      try {
+        final cur = await _wifi.currentSsid();
+        if (mounted) setState(() => _currentSsid = cur);
+      } catch (_) {}
+      final ssids = await _wifi.scan();
+      if (!mounted) return;
+      if (ssids.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t(context, 'fw.manual.noscan'))),
+        );
+        return;
+      }
+      final picked = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(t(ctx, 'fw.manual.pick'),
+                    style: Theme.of(ctx).textTheme.titleMedium),
+              ),
+              for (final s in ssids)
+                ListTile(
+                  leading: const Icon(Icons.wifi),
+                  title: Text(s),
+                  onTap: () => Navigator.pop(ctx, s),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (picked != null && mounted) setState(() => _ssidCtrl.text = picked);
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
   }
 
   /// Build the OtaInfo to flash with — from BLE when complete, else from the
@@ -193,6 +251,20 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
           ],
         ),
         const SizedBox(height: 8),
+        Row(
+          children: [
+            Icon(Icons.info_outline, size: 16, color: Colors.grey[600]),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                t(context, 'fw.manual.current') +
+                    (_currentSsid ?? t(context, 'fw.manual.current.none')),
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
         TextField(
           controller: _ssidCtrl,
           enabled: !_busy,
@@ -200,6 +272,19 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
             labelText: t(context, 'fw.manual.ssid'),
             border: const OutlineInputBorder(),
             prefixIcon: const Icon(Icons.wifi),
+            suffixIcon: _scanning
+                ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                : IconButton(
+                    icon: const Icon(Icons.wifi_find),
+                    tooltip: t(context, 'fw.manual.scan'),
+                    onPressed: _busy ? null : _scanAndPick,
+                  ),
           ),
         ),
         const SizedBox(height: 12),

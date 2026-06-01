@@ -64,6 +64,8 @@ class MainActivity : FlutterActivity() {
                     "unbind" -> {
                         WifiBridge.unbind(this); result.success(null)
                     }
+                    "scan" -> result.success(WifiBridge.scan(this))
+                    "currentSsid" -> result.success(WifiBridge.currentSsid(this))
                     else -> result.notImplemented()
                 }
             }

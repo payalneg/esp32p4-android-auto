@@ -89,6 +89,11 @@ const _en = <String, String>{
   'fw.manual.ssid': 'Head unit WiFi name (SSID)',
   'fw.manual.password': 'Head unit WiFi password',
   'fw.manual.needfields': 'Enter the WiFi name and password.',
+  'fw.manual.current': 'Phone is on WiFi: ',
+  'fw.manual.current.none': 'not connected to WiFi',
+  'fw.manual.scan': 'Scan',
+  'fw.manual.pick': 'Select head unit WiFi',
+  'fw.manual.noscan': 'No networks found — is location enabled?',
 };
 
 const _ru = <String, String>{
@@ -169,6 +174,11 @@ const _ru = <String, String>{
   'fw.manual.ssid': 'Имя WiFi устройства (SSID)',
   'fw.manual.password': 'Пароль WiFi устройства',
   'fw.manual.needfields': 'Введите имя и пароль WiFi.',
+  'fw.manual.current': 'Телефон в WiFi: ',
+  'fw.manual.current.none': 'не подключён к WiFi',
+  'fw.manual.scan': 'Поиск',
+  'fw.manual.pick': 'Выберите WiFi устройства',
+  'fw.manual.noscan': 'Сети не найдены — включена ли геолокация?',
 };
 
 const _tables = <String, Map<String, String>>{

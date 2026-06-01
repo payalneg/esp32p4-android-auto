@@ -24,4 +24,14 @@ class WifiBridge {
   }
 
   Future<void> unbind() => _channel.invokeMethod('unbind');
+
+  /// Visible WiFi SSIDs from the latest scan (de-duplicated, sorted). Empty
+  /// on iOS or when location is off / permission denied.
+  Future<List<String>> scan() async {
+    final r = await _channel.invokeMethod<List<dynamic>>('scan');
+    return r?.map((e) => e.toString()).toList() ?? const [];
+  }
+
+  /// SSID the phone is currently connected to, or null if unknown.
+  Future<String?> currentSsid() => _channel.invokeMethod<String>('currentSsid');
 }

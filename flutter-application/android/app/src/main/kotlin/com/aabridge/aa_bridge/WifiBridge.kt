@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Handler
@@ -95,6 +96,45 @@ object WifiBridge {
             settled = true
             callback = null
             main.post { onResult(false, "requestNetwork: ${e.message}") }
+        }
+    }
+
+    /**
+     * SSID the phone is currently connected to, or null if none / unknown
+     * (no location permission, location off, or not on WiFi). The quotes
+     * WifiManager wraps the SSID in are stripped.
+     */
+    fun currentSsid(context: Context): String? {
+        val wm = context.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as WifiManager
+        @Suppress("DEPRECATION")
+        val raw = wm.connectionInfo?.ssid ?: return null
+        val ssid = raw.trim('"')
+        if (ssid.isEmpty() || ssid == "<unknown ssid>" || ssid == "0x") return null
+        return ssid
+    }
+
+    /**
+     * Visible WiFi SSIDs from the latest scan. Triggers a fresh scan as a side
+     * effect (results land on the next call) and returns the cached list,
+     * de-duplicated and sorted. Requires ACCESS_FINE_LOCATION + location on.
+     */
+    fun scan(context: Context): List<String> {
+        val wm = context.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as WifiManager
+        try {
+            @Suppress("DEPRECATION")
+            wm.startScan()
+        } catch (_: Exception) {
+        }
+        return try {
+            wm.scanResults
+                .mapNotNull { it.SSID?.takeIf { s -> s.isNotEmpty() } }
+                .distinct()
+                .sorted()
+        } catch (e: Exception) {
+            Log.w(TAG, "scanResults: ${e.message}")
+            emptyList()
         }
     }
 
