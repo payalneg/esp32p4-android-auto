@@ -5,9 +5,10 @@ import '../firmware/firmware_updater.dart';
 import '../firmware/ota_info.dart';
 import '../i18n/strings.dart';
 
-/// Over-WiFi firmware update screen. Reads the head unit's SoftAP credentials
-/// + version over BLE, then (on confirm) joins that AP and uploads the
-/// firmware image bundled in the APK.
+/// Over-WiFi firmware update screen. Prefers reading the head unit's SoftAP
+/// credentials + version over BLE; if that's unavailable (older firmware, BLE
+/// down, or empty password) it falls back to manual SSID/password entry and
+/// flashes the firmware image bundled in the APK either way.
 class FirmwareUpdateScreen extends StatefulWidget {
   const FirmwareUpdateScreen({super.key});
 
@@ -17,12 +18,19 @@ class FirmwareUpdateScreen extends StatefulWidget {
 
 class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   final _updater = FirmwareUpdater();
+  final _ssidCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
 
   OtaInfo? _info;
   String? _bundled;
   bool _loading = true;
   bool _busy = false;
   UpdateState _state = const UpdateState(UpdatePhase.idle);
+
+  /// True when BLE handed us a complete SoftAP credential set — otherwise we
+  /// show the manual SSID/password form.
+  bool get _hasAutoCreds =>
+      _info != null && _info!.ssid.isNotEmpty && _info!.password.isNotEmpty;
 
   @override
   void initState() {
@@ -36,6 +44,8 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   @override
   void dispose() {
     _updater.dispose();
+    _ssidCtrl.dispose();
+    _passCtrl.dispose();
     super.dispose();
   }
 
@@ -48,13 +58,38 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
     setState(() {
       _bundled = bundled;
       _info = info;
+      // Prefill whatever BLE did give us so the user only fills the gaps.
+      if (info != null && info.ssid.isNotEmpty) _ssidCtrl.text = info.ssid;
+      if (info != null && info.password.isNotEmpty) _passCtrl.text = info.password;
       _loading = false;
     });
   }
 
+  /// Build the OtaInfo to flash with — from BLE when complete, else from the
+  /// manual fields (with sensible IP/port defaults). Returns null if manual
+  /// fields are incomplete.
+  OtaInfo? _resolveTarget() {
+    if (_hasAutoCreds) return _info;
+    final ssid = _ssidCtrl.text.trim();
+    final pass = _passCtrl.text;
+    if (ssid.isEmpty || pass.isEmpty) return null;
+    return OtaInfo(
+      ip: _info?.ip.isNotEmpty == true ? _info!.ip : '192.168.4.1',
+      port: _info?.port ?? 80,
+      ssid: ssid,
+      password: pass,
+      version: _info?.version ?? '',
+    );
+  }
+
   Future<void> _confirmAndFlash() async {
-    final info = _info;
-    if (info == null) return;
+    final target = _resolveTarget();
+    if (target == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t(context, 'fw.manual.needfields'))),
+      );
+      return;
+    }
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -74,7 +109,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
     );
     if (go != true) return;
     setState(() => _busy = true);
-    await _updater.run(info);
+    await _updater.run(target);
     if (mounted) setState(() => _busy = false);
   }
 
@@ -92,16 +127,9 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   }
 
   Widget _body(BuildContext context) {
-    if (BleService.instance.currentState != BleConnState.connected) {
-      return _infoMessage(Icons.bluetooth_disabled, t(context, 'fw.disconnected'));
-    }
-    final info = _info;
-    if (info == null) {
-      return _infoMessage(Icons.info_outline, t(context, 'fw.unsupported'));
-    }
-
     final bundled = _bundled ?? '?';
-    final upToDate = info.version == bundled;
+    final deviceVer = _info?.version;
+    final upToDate = deviceVer != null && deviceVer == bundled;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -112,7 +140,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
               ListTile(
                 leading: const Icon(Icons.memory),
                 title: Text(t(context, 'fw.device')),
-                trailing: Text(info.version,
+                trailing: Text(deviceVer ?? '—',
                     style: Theme.of(context).textTheme.titleMedium),
               ),
               const Divider(height: 1),
@@ -127,10 +155,11 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         if (upToDate)
           Text(t(context, 'fw.uptodate'),
               style: TextStyle(color: Colors.grey[600])),
+        if (!_hasAutoCreds) _manualForm(context),
         const SizedBox(height: 8),
         _progress(context),
         const Spacer(),
@@ -148,6 +177,46 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
     );
   }
 
+  Widget _manualForm(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Icon(Icons.wifi_find, size: 18, color: Colors.orange),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(t(context, 'fw.manual.hint'),
+                  style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _ssidCtrl,
+          enabled: !_busy,
+          decoration: InputDecoration(
+            labelText: t(context, 'fw.manual.ssid'),
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.wifi),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _passCtrl,
+          enabled: !_busy,
+          obscureText: true,
+          decoration: InputDecoration(
+            labelText: t(context, 'fw.manual.password'),
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.password),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _progress(BuildContext context) {
     final s = _state;
     if (s.phase == UpdatePhase.idle) return const SizedBox.shrink();
@@ -160,8 +229,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
         if (showBar) ...[
           LinearProgressIndicator(value: s.progress),
           const SizedBox(height: 4),
-          Text('${(s.progress * 100).round()}%',
-              textAlign: TextAlign.center),
+          Text('${(s.progress * 100).round()}%', textAlign: TextAlign.center),
           const SizedBox(height: 8),
         ],
         if (s.message != null)
@@ -177,19 +245,6 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
             ),
           ),
       ],
-    );
-  }
-
-  Widget _infoMessage(IconData icon, String text) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 48, color: Colors.grey),
-          const SizedBox(height: 12),
-          Text(text, textAlign: TextAlign.center),
-        ],
-      ),
     );
   }
 }

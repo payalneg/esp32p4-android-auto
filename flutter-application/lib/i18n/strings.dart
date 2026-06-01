@@ -85,6 +85,10 @@ const _en = <String, String>{
   'fw.warn.go': 'Flash',
   'fw.cancel': 'Cancel',
   'fw.done': 'Firmware uploaded — the head unit is rebooting.',
+  'fw.manual.hint': 'Couldn\'t read WiFi credentials from the head unit — enter them manually.',
+  'fw.manual.ssid': 'Head unit WiFi name (SSID)',
+  'fw.manual.password': 'Head unit WiFi password',
+  'fw.manual.needfields': 'Enter the WiFi name and password.',
 };
 
 const _ru = <String, String>{
@@ -161,6 +165,10 @@ const _ru = <String, String>{
   'fw.warn.go': 'Прошить',
   'fw.cancel': 'Отмена',
   'fw.done': 'Прошивка залита — устройство перезагружается.',
+  'fw.manual.hint': 'Не удалось получить данные WiFi с устройства — введите вручную.',
+  'fw.manual.ssid': 'Имя WiFi устройства (SSID)',
+  'fw.manual.password': 'Пароль WiFi устройства',
+  'fw.manual.needfields': 'Введите имя и пароль WiFi.',
 };
 
 const _tables = <String, Map<String, String>>{
