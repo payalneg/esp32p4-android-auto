@@ -231,3 +231,14 @@ CONFIG_RTC_CLK_CAL_CYCLES=3000
 # LOWBATTERY before it actually fails to hold the RTC domain.
 CONFIG_ESP_VBAT_INIT_AUTO=y
 CONFIG_ESP_VBAT_BROWNOUT_DET_LVL_SEL_7=y
+
+# LVGL image decoder (esp_lv_decoder): registers a global LVGL image
+# decoder that sniffs in-memory PNG/JPEG sources by magic bytes and
+# decodes them via libpng / esp_jpeg. Needed so the notification toast
+# can render the 72×72 PNG app icons the phone pushes over BLE — without
+# it lv_img got raw PNG bytes it couldn't decode and fell back to the
+# blue letter tile. Music album art keeps using its own hardware-JPEG
+# path (cf=TRUE_COLOR, pre-decoded RGB565), which the magic sniffer
+# ignores (10-byte JFIF / 8-byte PNG signatures never collide with raw
+# pixels).
+CONFIG_ESP_LVGL_ADAPTER_ENABLE_DECODER=y

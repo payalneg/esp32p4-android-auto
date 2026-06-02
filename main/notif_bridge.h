@@ -58,6 +58,7 @@ typedef struct {
     uint64_t posted_at_ms;
     uint32_t icon_hash;
     bool     removed;
+    bool     is_navigation;   /* category == "navigation" (turn-by-turn) */
 } notif_msg_t;
 
 typedef struct {

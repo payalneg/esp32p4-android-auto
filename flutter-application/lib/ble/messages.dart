@@ -15,6 +15,7 @@ class NotifTag {
   static const int postedAtMs = 6;
   static const int iconHash = 7;
   static const int removed = 8;
+  static const int category = 9;
 }
 
 /// TLV tags inside MEDIA body.
@@ -56,6 +57,7 @@ class NotificationMsg {
   final int postedAtMs;
   final int iconHash;
   final bool removed;
+  final String category;
 
   NotificationMsg({
     required this.id,
@@ -66,6 +68,7 @@ class NotificationMsg {
     required this.postedAtMs,
     required this.iconHash,
     this.removed = false,
+    this.category = '',
   });
 
   Uint8List encode() => Tlv.encode({
@@ -77,6 +80,9 @@ class NotificationMsg {
         NotifTag.postedAtMs: _u64(postedAtMs),
         NotifTag.iconHash: iconHash,
         NotifTag.removed: removed,
+        // Only ship a non-empty category — the head unit uses it to keep
+        // high-frequency navigation notifications out of the INFO log.
+        if (category.isNotEmpty) NotifTag.category: category,
       });
 
   static Uint8List _u64(int v) {

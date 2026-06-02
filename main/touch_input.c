@@ -102,7 +102,16 @@ static void poll_task(void *arg)
                 panel_y = ty[0] < PANEL_NATIVE_H ? ty[0] : PANEL_NATIVE_H - 1;
             }
 
-            const touch_mode_t mode = (touch_mode_t)atomic_load(&s_mode);
+            /* In AA mode but with no live projection session, GT911 events
+             * have nowhere to go: the phone's input channel isn't open yet
+             * (s_aa_cb still NULL) and LVGL is starved. That strands the idle
+             * screen's "Connect" button — taps get read and dropped. Fall
+             * back to LVGL routing whenever the AA callback isn't installed so
+             * on-screen buttons stay live until the phone actually projects. */
+            touch_mode_t mode = (touch_mode_t)atomic_load(&s_mode);
+            if (mode == TOUCH_MODE_AA && s_aa_cb == NULL) {
+                mode = TOUCH_MODE_LVGL;
+            }
 
             /* Press/release transitions in raw panel coords — independent of
              * mode-specific rotation. Useful for figuring out whether GT911

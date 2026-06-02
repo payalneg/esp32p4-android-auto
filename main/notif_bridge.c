@@ -208,6 +208,7 @@ static bool notif_visit(uint8_t tag, const uint8_t *val, uint32_t len, void *ctx
         case 6: if (len >= 8) n->posted_at_ms = rd_u64(val); break;
         case 7: if (len >= 4) n->icon_hash = rd_u32(val); break;
         case 8: if (len >= 1) n->removed = val[0] != 0; break;
+        case 9: n->is_navigation = (len == 10 && memcmp(val, "navigation", 10) == 0); break;
     }
     return true;
 }
@@ -237,8 +238,17 @@ static void handle_notification(const uint8_t *body, uint32_t total)
         s_inbox_seq++;
     }
     unlock();
-    ESP_LOGI(TAG, "notif %s app=%s title=%s",
-             n.removed ? "REM" : "NEW", n.app_name, n.title);
+    /* Navigation pushes a fresh notification on every distance tick
+     * ("120 м" → "100 м" → …), which floods the console — log those at
+     * DEBUG so they're recoverable (raise this tag's level) without
+     * spamming INFO. Ordinary notifications stay at INFO. */
+    if (n.is_navigation) {
+        ESP_LOGD(TAG, "notif %s app=%s title=%s (nav)",
+                 n.removed ? "REM" : "NEW", n.app_name, n.title);
+    } else {
+        ESP_LOGI(TAG, "notif %s app=%s title=%s",
+                 n.removed ? "REM" : "NEW", n.app_name, n.title);
+    }
 }
 
 /* ---------- handler: MEDIA ---------- */

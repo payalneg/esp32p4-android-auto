@@ -10,6 +10,11 @@ class IncomingNotification {
   final String text;
   final int postedAtMs;
   final bool removed;
+  final String category;
+  // Per-notification icon rendered natively (e.g. a navigation maneuver
+  // arrow). Null for ordinary notifications, where the launcher icon is
+  // looked up by package instead.
+  final Uint8List? iconPng;
 
   IncomingNotification({
     required this.id,
@@ -19,6 +24,8 @@ class IncomingNotification {
     required this.text,
     required this.postedAtMs,
     required this.removed,
+    required this.category,
+    required this.iconPng,
   });
 
   factory IncomingNotification.fromMap(Map m) => IncomingNotification(
@@ -29,6 +36,8 @@ class IncomingNotification {
         text: m['text'] as String? ?? '',
         postedAtMs: (m['postedAtMs'] as num?)?.toInt() ?? 0,
         removed: m['removed'] as bool? ?? false,
+        category: m['category'] as String? ?? '',
+        iconPng: m['iconPng'] as Uint8List?,
       );
 }
 

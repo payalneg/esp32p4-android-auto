@@ -51,7 +51,8 @@ static lv_obj_t *s_text_lbl;
 /* Backing descriptor for the currently-shown PNG. Points into
  * notif_bridge's LRU icon cache; rebuilt on every hash change. */
 static lv_img_dsc_t s_icon_dsc;
-static uint32_t     s_shown_icon_hash;
+static uint32_t     s_shown_icon_hash;   /* hash of the PNG actually on screen */
+static uint32_t     s_pending_icon_hash; /* requested but not yet in cache */
 
 static lv_timer_t *s_poll;
 static lv_timer_t *s_dismiss;
@@ -89,22 +90,32 @@ static void show_icon_letter(void)
 
 static void apply_icon(const notif_msg_t *m)
 {
-    if (m->icon_hash == s_shown_icon_hash) return;
-    s_shown_icon_hash = m->icon_hash;
+    /* Already showing this exact PNG — nothing to do. (Guard on a
+     * non-zero hash so we don't treat "no icon" as already-shown.) */
+    if (m->icon_hash != 0 && m->icon_hash == s_shown_icon_hash) return;
 
     if (m->icon_hash == 0) {
         show_icon_letter();
+        s_shown_icon_hash = 0;
+        s_pending_icon_hash = 0;
         return;
     }
     size_t len = 0;
     const uint8_t *png = notif_bridge_get_icon(m->icon_hash, &len);
     if (png && len > 0) {
         show_icon_png(png, len);
+        s_shown_icon_hash = m->icon_hash;
+        s_pending_icon_hash = 0;
     } else {
         /* Not in the cache yet — show the letter and nudge the phone to
-         * resend the PNG. Next notification update with the same hash
-         * will pick it up. */
+         * resend the PNG. Crucially DON'T latch s_shown_icon_hash here:
+         * the icon often arrives a beat after the notification (its PDU
+         * doesn't bump inbox_seq, so present() won't fire again), and
+         * poll_cb's pending-icon retry path below upgrades the letter to
+         * the real PNG once the bytes land. */
         show_icon_letter();
+        s_shown_icon_hash = 0;
+        s_pending_icon_hash = m->icon_hash;
         notif_bridge_send_cmd(NOTIF_OP_REQUEST_ICON, m->icon_hash);
     }
 }
@@ -183,7 +194,22 @@ static void poll_cb(lv_timer_t *t)
 {
     (void)t;
     uint32_t seq = notif_bridge_inbox_seq();
-    if (seq == s_last_seen_seq) return;
+    if (seq == s_last_seen_seq) {
+        /* No new notification, but the PNG we requested for the card
+         * currently on screen may have just arrived (icon PDUs don't
+         * bump inbox_seq). Upgrade the letter fallback to the real icon
+         * the moment its bytes land. */
+        if (s_card_visible && s_pending_icon_hash) {
+            size_t len = 0;
+            const uint8_t *png = notif_bridge_get_icon(s_pending_icon_hash, &len);
+            if (png && len > 0) {
+                show_icon_png(png, len);
+                s_shown_icon_hash = s_pending_icon_hash;
+                s_pending_icon_hash = 0;
+            }
+        }
+        return;
+    }
 
     /* New stuff landed since last tick. Replay the freshest one — if
      * many came in at once we'd just queue them, but in practice 250 ms

@@ -2377,7 +2377,7 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_aa_autoconnect_hint = lv_label_create(ui->settings);
     lv_label_set_text(settings_aa_autoconnect_hint, "Reconnect to last phone on power-on");
-    lv_obj_set_pos(settings_aa_autoconnect_hint, 220, y_pos + 22);
+    lv_obj_set_pos(settings_aa_autoconnect_hint, 250, y_pos + 22);
     lv_obj_set_style_text_color(settings_aa_autoconnect_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_aa_autoconnect_hint, &lv_font_montserrat_14, 0);
 

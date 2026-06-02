@@ -6,6 +6,7 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'ble/ble_service.dart';
 import 'ble/messages.dart';
@@ -29,6 +30,12 @@ class Coordinator {
 
   final Map<String, int> _packageToIconHash = {};
   final Set<int> _pushedHashes = {};
+  // Recently-sent per-notification icons (navigation arrows etc.) keyed
+  // by content hash, so a head-unit re-request after a power-cycle can be
+  // honoured without the originating notification still being around.
+  // Bounded — oldest evicted past _notifIconCap.
+  final Map<int, Uint8List> _notifIconByHash = {};
+  static const int _notifIconCap = 24;
   int _lastAlbumArtHash = 0;
   MediaSnapshot? _lastMedia;
 
@@ -63,18 +70,35 @@ class Coordinator {
 
   AppFilter? get filter => _filter;
 
+  // The head unit's LVGL toast font (aabridge_fonts) covers ASCII +
+  // Cyrillic but not the exotic Unicode spaces Google Maps slips between
+  // a distance and its unit (e.g. "40 м" / U+202F narrow no-break
+  // space) nor the U+2026 ellipsis — those render as a tofu box. Fold
+  // them to plain ASCII before they go over the wire.
+  static final RegExp _exoticSpace =
+      RegExp('[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000\u2060\uFEFF]');
+  static String _sanitizeText(String s) =>
+      s.replaceAll('…', '...').replaceAll(_exoticSpace, ' ');
+
   Future<void> _onNotification(IncomingNotification n) async {
     if (_filter?.allows(n.package) == false) return;
-    final iconHash = await _ensureIcon(n.package);
+    // Navigation notifications carry their own maneuver-arrow glyph,
+    // rendered natively. Prefer it over the launcher icon so the head
+    // unit shows the actual turn arrow; fall back to the app icon
+    // otherwise.
+    final iconHash = (n.iconPng != null && n.iconPng!.isNotEmpty)
+        ? await _ensureNotifIcon(n.iconPng!)
+        : await _ensureIcon(n.package);
     await _ble.sendNotification(NotificationMsg(
       id: n.id,
       package: n.package,
       appName: n.appName,
-      title: n.title,
-      text: n.text,
+      title: _sanitizeText(n.title),
+      text: _sanitizeText(n.text),
       postedAtMs: n.postedAtMs,
       iconHash: iconHash,
       removed: n.removed,
+      category: n.category,
     ));
   }
 
@@ -95,6 +119,23 @@ class Coordinator {
     _packageToIconHash[package] = hash;
     await _ble.sendIcon(IconMsg(hash: hash, png: png));
     _pushedHashes.add(hash);
+    return hash;
+  }
+
+  Future<int> _ensureNotifIcon(Uint8List png) async {
+    final hash = fnv1a32(png);
+    // Remember the bytes for a possible head-unit re-request, evicting
+    // the oldest once we exceed the cap.
+    if (!_notifIconByHash.containsKey(hash)) {
+      if (_notifIconByHash.length >= _notifIconCap) {
+        _notifIconByHash.remove(_notifIconByHash.keys.first);
+      }
+      _notifIconByHash[hash] = png;
+    }
+    if (!_pushedHashes.contains(hash)) {
+      await _ble.sendIcon(IconMsg(hash: hash, png: png));
+      _pushedHashes.add(hash);
+    }
     return hash;
   }
 
@@ -158,6 +199,15 @@ class Coordinator {
   }
 
   Future<void> _resendIconByHash(int hash) async {
+    // Per-notification icons (nav arrows) are kept by content hash —
+    // resend straight from that cache before falling back to the
+    // package-keyed launcher icons.
+    final notifPng = _notifIconByHash[hash];
+    if (notifPng != null) {
+      await _ble.sendIcon(IconMsg(hash: hash, png: notifPng));
+      _pushedHashes.add(hash);
+      return;
+    }
     String? matchedPkg;
     _packageToIconHash.forEach((pkg, h) {
       if (h == hash) matchedPkg = pkg;
