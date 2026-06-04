@@ -19,6 +19,10 @@ extern "C" {
 
 void  trip_persist_init(void);
 
+/* Seed the running totals at boot (called by the raw trip log after it reads the
+ * last record). Negative values are ignored. */
+void  trip_persist_seed_totals(float trip_total_m, float ah_total, uint32_t uptime_total_ms);
+
 /* Feed raw VESC counters in every RT-data tick. Order: trip meters,
  * amp-hours consumed, uptime ms. */
 void  trip_persist_update(float vesc_trip_meters,

@@ -47,6 +47,7 @@ idf_component_register(
         esp_hosted
         bt
         esp_timer
+        esp_partition
         esp_ringbuf
         esp_lcd
         esp_mm

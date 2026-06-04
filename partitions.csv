@@ -9,12 +9,18 @@
 #   0x00000..0x12000   bootloader + nvs + otadata + phy_init
 #   0x20000..0x800000  ota_0   (~8 MB - 128 KB)
 #   0x800000..0xFE0000 ota_1   (~8 MB - 128 KB)
-#   0xFE0000..0x2000000 storage (SPIFFS, ~16.125 MB, allowed above 16 MB
-#                                  because the bug only affects app-image
-#                                  verify via bootloader_mmap)
+#   0xFE0000..0x13E0000  storage (LittleFS, 4 MB — VESC config backups only)
+#   0x13E0000..0x2000000 triplog (~12.1 MB raw — circular trip time-series log,
+#                                  written via esp_partition, no filesystem. A
+#                                  boot-time pre-erase of the upcoming sector
+#                                  runway keeps mid-ride erases off the ride —
+#                                  a flash erase stalls the DSI/render path.)
+# Both sit above the 16 MB boundary — data-only, never app images (see the
+# bootloader_mmap bug above).
 nvs,        data, nvs,      0x9000,    0x6000
 otadata,    data, ota,      0xf000,    0x2000
 phy_init,   data, phy,      0x11000,   0x1000
 ota_0,      app,  ota_0,    0x20000,   0x7E0000
 ota_1,      app,  ota_1,    0x800000,  0x7E0000
-storage,    data, spiffs,   0xFE0000,  0x1020000
+storage,    data, spiffs,   0xFE0000,  0x400000
+triplog,    data, 0x40,     0x13E0000, 0xC20000
