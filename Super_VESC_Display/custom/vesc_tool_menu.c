@@ -1255,6 +1255,12 @@ static lv_obj_t *make_header_btn(const char *txt, int x, int w, lv_event_cb_t cb
     return btn;
 }
 
+/* Header tool buttons → sibling screens. Opening either unloads (and thus
+ * destroys, via screen_unloaded_cb) this config screen; their Back returns
+ * here by rebuilding it through run_vesc_tool_menu(). */
+static void lisp_open_cb(lv_event_t *e) { (void)e; show_lisp_editor(); }
+static void rt_open_cb(lv_event_t *e)   { (void)e; show_realtime_viewer(); }
+
 static void vt_build_screen(void)
 {
     s_screen = lv_obj_create(NULL);
@@ -1274,11 +1280,15 @@ static void vt_build_screen(void)
 
     s_emu_banner = lv_label_create(s_screen);
     lv_label_set_text(s_emu_banner, "");
-    lv_obj_set_pos(s_emu_banner, 470, 18);
-    lv_obj_set_width(s_emu_banner, 320);
+    lv_obj_set_pos(s_emu_banner, 300, 18);
+    lv_obj_set_width(s_emu_banner, 270);   /* shrunk to clear the tool buttons */
     lv_obj_set_style_text_color(s_emu_banner, lv_color_hex(COL_ORANGE), 0);
     lv_obj_set_style_text_font(s_emu_banner, &lv_font_montserratMedium_16, 0);
     lv_obj_set_style_text_align(s_emu_banner, LV_TEXT_ALIGN_RIGHT, 0);
+
+    /* tool buttons: LISP editor + realtime viewer (top-right) */
+    make_header_btn("LISP", 576, 100, lisp_open_cb);
+    make_header_btn("Realtime", 680, 110, rt_open_cb);
 
     /* selector row */
     s_btn_motor = lv_btn_create(s_screen);

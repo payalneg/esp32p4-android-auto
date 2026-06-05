@@ -66,6 +66,8 @@ void port_start_app_hook(void)
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_rt_data.h"
+#include "vesc_can/vesc_io_data.h"
+#include "vesc_can/vesc_lisp_code.h"
 #include "vesc_config/vesc_config.h"
 #include "vesc_config/vesc_config_transport.h"
 #include "vesc_sim.h"
@@ -142,6 +144,10 @@ static void vesc_packet_dispatch(const uint8_t *data, unsigned int len)
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
     vesc_lisp_poll_process_response(data, len);
 #endif
+    /* ADC/PPM decoded inputs for the realtime viewer (gated active). */
+    vesc_io_data_process_response(data, len);
+    /* LISP code upload/read acks (gated on an in-flight operation). */
+    vesc_lisp_code_process_response(data, len);
     /* Config GET/SET/FW_VERSION replies (COMM ids 0, 13-18). Gates on data[0]
      * and ignores packets it doesn't own. */
     vesc_config_transport_process_response(data, len);
@@ -192,6 +198,8 @@ static void on_target_id_changed(uint8_t new_id)
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
     vesc_lisp_poll_init(new_id, CONFIG_VESC_CAN_LISP_INTERVAL_MS);
 #endif
+    vesc_io_data_init(new_id, 150);
+    vesc_lisp_code_set_target(new_id);
     ESP_LOGI(TAG, "VESC target ID → %u", new_id);
 }
 
@@ -332,6 +340,10 @@ void app_main(void)
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
         vesc_lisp_poll_init(tgt_id, CONFIG_VESC_CAN_LISP_INTERVAL_MS);
 #endif
+        /* ADC/PPM poller: inactive until the realtime viewer opens it. */
+        vesc_io_data_init(tgt_id, 150);
+        /* LISP code upload/read worker (used by the LISP editor screen). */
+        vesc_lisp_code_init(tgt_id);
         comm_can_set_packet_handler(vesc_packet_dispatch);
         vesc_rt_data_start();
         vesc_rt_data_start_task();

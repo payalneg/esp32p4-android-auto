@@ -17,6 +17,7 @@
  */
 #include "lvgl.h"
 #include "custom.h"
+#include "settings_wrapper.h"   /* km/miles toggle + unit conversion helpers */
 
 #include <stdio.h>
 #include <string.h>
@@ -77,6 +78,8 @@ static lv_obj_t *s_xlbl[5];          /* custom X-axis time labels (M:SS) */
 static lv_obj_t *s_btn_xp, *s_btn_xm; /* X (time) zoom +/- */
 static lv_chart_series_t *s_ser_a, *s_ser_b;
 static lv_obj_t *s_spinner_modal;
+static lv_obj_t *s_delete_btn;       /* detail view: hide this trip */
+static lv_obj_t *s_confirm_modal;    /* delete confirmation overlay */
 static lv_timer_t *s_live_timer;
 static bool      s_alive;
 static bool      s_busy;             /* a scan is in flight */
@@ -168,9 +171,9 @@ static void populate_list(void)
         if (t->is_current) snprintf(b, sizeof b, "%u*", (unsigned)t->trip_id);
         else               snprintf(b, sizeof b, "%u",  (unsigned)t->trip_id);
         lv_table_set_cell_value(s_table, row, 0, b);
-        snprintf(b, sizeof b, "%.1f", t->distance_m / 1000.0); lv_table_set_cell_value(s_table, row, 1, b);
+        snprintf(b, sizeof b, "%.1f", settings_wrapper_dist_to_display(t->distance_m / 1000.0)); lv_table_set_cell_value(s_table, row, 1, b);
         fmt_dur(t->duration_s, b, sizeof b);                   lv_table_set_cell_value(s_table, row, 2, b);
-        snprintf(b, sizeof b, "%.0f", t->avg_speed_dkmh / 10.0); lv_table_set_cell_value(s_table, row, 3, b);
+        snprintf(b, sizeof b, "%.0f", settings_wrapper_speed_to_display(t->avg_speed_dkmh / 10.0)); lv_table_set_cell_value(s_table, row, 3, b);
         snprintf(b, sizeof b, "%.0f", t->wh);                  lv_table_set_cell_value(s_table, row, 4, b);
         sum_km += t->distance_m / 1000.0;
         sum_wh += t->wh;
@@ -178,8 +181,9 @@ static void populate_list(void)
     }
     char tot[64];
     char dur[16]; fmt_dur(sum_s, dur, sizeof dur);
-    snprintf(tot, sizeof tot, "Total: %.1f km  |  %s  |  %.2f kWh",
-             sum_km, dur, sum_wh / 1000.0);
+    const char *du = settings_wrapper_get_use_imperial() ? "mi" : "km";
+    snprintf(tot, sizeof tot, "Total: %.1f %s  |  %s  |  %.2f kWh",
+             settings_wrapper_dist_to_display(sum_km), du, dur, sum_wh / 1000.0);
     lv_label_set_text(s_totals, tot);
 }
 
@@ -194,18 +198,29 @@ static void open_detail(int idx)
     lv_label_set_text_fmt(s_title, "Trip #%u", (unsigned)t->trip_id);
 
     char dur[16]; fmt_dur(t->duration_s, dur, sizeof dur);
-    double whkm = (t->distance_m > 0) ? (t->wh / (t->distance_m / 1000.0)) : 0.0;
+    double disp_dist = settings_wrapper_dist_to_display(t->distance_m / 1000.0);
+    /* Wh per display-distance (Wh/km or Wh/mi). */
+    double wh_per_dist = (disp_dist > 0.0) ? (t->wh / disp_dist) : 0.0;
+    const char *du = settings_wrapper_get_use_imperial() ? "mi"  : "km";
+    const char *su = settings_wrapper_get_use_imperial() ? "mph" : "km/h";
     lv_label_set_text_fmt(s_summary,
-        "%.1f km  |  %s\n"
-        "avg %.0f km/h    max %.0f km/h\n"
+        "%.1f %s  |  %s\n"
+        "avg %.0f %s    max %.0f %s\n"
         "%.0f Wh  |  %.2f Ah\n"
-        "%.1f Wh/km    min %.1f V",
-        t->distance_m / 1000.0, dur,
-        t->avg_speed_dkmh / 10.0, t->max_speed_dkmh / 10.0,
-        t->wh, t->ah, whkm, t->min_voltage_dv / 10.0);
+        "%.1f Wh/%s    min %.1f V",
+        disp_dist, du, dur,
+        settings_wrapper_speed_to_display(t->avg_speed_dkmh / 10.0), su,
+        settings_wrapper_speed_to_display(t->max_speed_dkmh / 10.0), su,
+        t->wh, t->ah, wh_per_dist, du, t->min_voltage_dv / 10.0);
 
     lv_obj_add_flag(s_list_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_detail_view, LV_OBJ_FLAG_HIDDEN);
+
+    /* The live trip is still being written — don't offer to hide it. */
+    if (s_delete_btn) {
+        if (t->is_current) lv_obj_add_flag(s_delete_btn, LV_OBJ_FLAG_HIDDEN);
+        else               lv_obj_clear_flag(s_delete_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     s_metric = 0;
     for (int i = 0; i < 5; i++) style_metric_btn(s_metric_btns[i], i == 0);
@@ -225,10 +240,11 @@ static void sample_metric(int i, int32_t *va, int32_t *vb)
 {
     *vb = 0;
     switch (s_metric) {
-    case 0: *va = s_series[i].speed_dkmh / 10; break;
+    case 0: *va = (int32_t)settings_wrapper_speed_to_display(s_series[i].speed_dkmh / 10.0f); break;
     case 1: *va = s_series[i].power_w;         break;
     case 2: *va = s_series[i].voltage_dv / 10; break;
-    case 3: *va = s_series[i].temp_motor_dc / 10; *vb = s_series[i].temp_fet_dc / 10; break;
+    case 3: *va = (int32_t)settings_wrapper_temp_to_display(s_series[i].temp_motor_dc / 10.0f);
+            *vb = (int32_t)settings_wrapper_temp_to_display(s_series[i].temp_fet_dc / 10.0f); break;
     default: *va = s_series[i].batt_pct;       break;
     }
 }
@@ -311,10 +327,11 @@ static void refresh_chart(int metric)
 
     const char *t;
     switch (metric) {
-    case 0: t = "Speed (km/h)";            break;
+    case 0: t = settings_wrapper_get_use_imperial() ? "Speed (mph)" : "Speed (km/h)"; break;
     case 1: t = "Power (W)";               break;
     case 2: t = "Voltage (V)";             break;
-    case 3: t = "Temp (C)  motor / FET";   break;
+    case 3: t = settings_wrapper_get_use_fahrenheit() ? "Temp (F)  motor / FET"
+                                                      : "Temp (C)  motor / FET"; break;
     default: t = "Battery (%)";            break;
     }
     lv_label_set_text(s_chart_title, t);
@@ -426,11 +443,97 @@ static void screen_unloaded_cb(lv_event_t *e)
     if (s_live_timer) { lv_timer_del(s_live_timer); s_live_timer = NULL; }
     if (s_screen) { lv_obj_del_async(s_screen); s_screen = NULL; }
     s_spinner_modal = NULL;
+    s_delete_btn = NULL;
+    s_confirm_modal = NULL;
     s_table = s_totals = s_empty_lbl = NULL;
     s_summary = s_chart = s_chart_title = s_btn_xp = s_btn_xm = NULL;
     for (int i = 0; i < 5; i++) { s_metric_btns[i] = NULL; s_ylbl[i] = NULL; s_xlbl[i] = NULL; }
     s_list_view = s_detail_view = s_title = s_back_btn = NULL;
     s_busy = false;
+}
+
+/* ===================== delete trip ===================== */
+
+static void confirm_no_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_confirm_modal) { lv_obj_del(s_confirm_modal); s_confirm_modal = NULL; }
+}
+
+static void confirm_yes_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    uint32_t id = s_detail_trip_id;
+    if (s_confirm_modal) { lv_obj_del(s_confirm_modal); s_confirm_modal = NULL; }
+
+#ifdef LV_REALDEVICE
+    /* Persist the hide so it survives reboot and stops counting toward the
+     * MAX_TRIPS window. Simulator has no flash log — just drop it in memory. */
+    trip_log_delete_trip(id);
+#endif
+    /* Remove from the in-memory list for instant feedback. A re-open of the
+     * window re-scans flash (device), which now also surfaces an older trip. */
+    int w = 0;
+    for (int i = 0; i < s_trip_count; i++)
+        if (s_trips[i].trip_id != id) s_trips[w++] = s_trips[i];
+    s_trip_count = w;
+
+    show_list_view();
+    populate_list();
+}
+
+static void show_confirm_delete(void)
+{
+    if (s_confirm_modal) return;
+    s_confirm_modal = lv_obj_create(s_screen);
+    lv_obj_set_size(s_confirm_modal, 800, 480);
+    lv_obj_set_pos(s_confirm_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_confirm_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_confirm_modal, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(s_confirm_modal, 0, 0);
+    lv_obj_clear_flag(s_confirm_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_confirm_modal, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *box = lv_obj_create(s_confirm_modal);
+    lv_obj_set_size(box, 460, 200);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, lv_color_hex(COL_PANEL), 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *l = lv_label_create(box);
+    lv_label_set_text_fmt(l, "Delete trip #%u?", (unsigned)s_detail_trip_id);
+    lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *yes = lv_btn_create(box);
+    lv_obj_set_size(yes, 180, 60);
+    lv_obj_align(yes, LV_ALIGN_BOTTOM_LEFT, 6, -6);
+    lv_obj_set_style_bg_color(yes, lv_color_hex(COL_RED), 0);
+    lv_obj_set_style_radius(yes, 8, 0);
+    lv_obj_set_style_border_width(yes, 0, 0);
+    { lv_obj_t *bl = lv_label_create(yes); lv_label_set_text(bl, "Delete");
+      lv_obj_set_style_text_font(bl, &lv_font_montserrat_24, 0); lv_obj_center(bl); }
+    lv_obj_add_event_cb(yes, confirm_yes_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *no = lv_btn_create(box);
+    lv_obj_set_size(no, 180, 60);
+    lv_obj_align(no, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
+    lv_obj_set_style_bg_color(no, lv_color_hex(COL_BTN), 0);
+    lv_obj_set_style_radius(no, 8, 0);
+    lv_obj_set_style_border_width(no, 0, 0);
+    { lv_obj_t *bl = lv_label_create(no); lv_label_set_text(bl, "Cancel");
+      lv_obj_set_style_text_font(bl, &lv_font_montserrat_24, 0); lv_obj_center(bl); }
+    lv_obj_add_event_cb(no, confirm_no_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void delete_btn_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_busy) return;
+    show_confirm_delete();
 }
 
 /* ===================== build ===================== */
@@ -525,6 +628,18 @@ static void build_screen(void)
     lv_obj_set_style_text_color(s_summary, lv_color_hex(COL_TEXT), 0);
     lv_obj_set_style_text_font(s_summary, &lv_font_montserratMedium_16, 0);
     lv_label_set_text(s_summary, "");
+
+    /* Delete-trip button — top-right of the detail view, clear of the summary
+     * text on the left. Hidden for the live trip (see open_detail). */
+    s_delete_btn = lv_btn_create(s_detail_view);
+    lv_obj_set_pos(s_delete_btn, 624, 4);
+    lv_obj_set_size(s_delete_btn, 160, 40);
+    lv_obj_set_style_bg_color(s_delete_btn, lv_color_hex(COL_RED), 0);
+    lv_obj_set_style_radius(s_delete_btn, 6, 0);
+    lv_obj_set_style_border_width(s_delete_btn, 0, 0);
+    { lv_obj_t *l = lv_label_create(s_delete_btn); lv_label_set_text(l, "Delete");
+      lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0); lv_obj_center(l); }
+    lv_obj_add_event_cb(s_delete_btn, delete_btn_cb, LV_EVENT_CLICKED, NULL);
 
     /* metric selector — five explicit buttons (a btnmatrix renders as thin
      * strips under this theme), selected one filled lime with dark text. */
@@ -638,9 +753,9 @@ static void live_cb(lv_timer_t *t)
     float km = trip_persist_get_trip_km();
     uint32_t dur = trip_persist_get_uptime_ms() / 1000u;
     char b[24];
-    snprintf(b, sizeof b, "%.1f", km);                 lv_table_set_cell_value(s_table, 1, 1, b);
+    snprintf(b, sizeof b, "%.1f", settings_wrapper_dist_to_display(km)); lv_table_set_cell_value(s_table, 1, 1, b);
     fmt_dur(dur, b, sizeof b);                          lv_table_set_cell_value(s_table, 1, 2, b);
-    snprintf(b, sizeof b, "%.0f", dur > 0 ? km / (dur / 3600.0f) : 0.0f);
+    snprintf(b, sizeof b, "%.0f", settings_wrapper_speed_to_display(dur > 0 ? km / (dur / 3600.0f) : 0.0f));
     lv_table_set_cell_value(s_table, 1, 3, b);
 }
 

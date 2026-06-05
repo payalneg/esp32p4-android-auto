@@ -32,6 +32,18 @@ void run_vesc_tool_menu(void);
  * synthetic trips so the UI stays demoable. Defined in custom/trip_statistics.c. */
 void show_trips_statistics(void);
 
+/* Realtime data viewer. Opened from the VESC Tool config menu header.
+ * Shows live telemetry (vesc_rt_data) plus decoded ADC and PPM inputs
+ * (vesc_io_data, polled only while this screen is open). Defined in
+ * custom/realtime_viewer.c. */
+void show_realtime_viewer(void);
+
+/* LISP script editor. Opened from the VESC Tool config menu header. Edits
+ * scripts with an on-screen keyboard, saves/loads them to the local littlefs
+ * (/vescfs/lisp), and reads/uploads/runs code on the VESC. Defined in
+ * custom/lisp_editor.c. */
+void show_lisp_editor(void);
+
 void update_current(float current);
 void update_speed(float speed);
 void update_battery_proc(float battery_proc);
@@ -43,6 +55,14 @@ void update_amp_hours(float amp_hours);
 void update_battery_temp(float battery_temp);
 void update_battery_voltage(float battery_voltage);
 void update_odometer(float odometer);
+
+/* Re-format all distance/speed/temperature readouts and flip the static unit
+ * captions ("KM"↔"MI", "KM/H"↔"MPH", "°C"↔"°F") after either the km/miles or
+ * the Celsius/Fahrenheit toggle changes (shared epoch). Call from the settings
+ * switch handlers and once at UI init so captions match the stored settings.
+ * Must run on the LVGL task. */
+void dashboard_units_changed(void);
+
 void update_fps(int fps);
 void update_uptime(uint32_t uptime);
 void update_cur_time(int hour, int minute, int second);

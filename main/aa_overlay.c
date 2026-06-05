@@ -273,20 +273,14 @@ void aa_overlay_draw(uint16_t *fb)
         const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
         float spd_kmh = vesc_rt_data_get_speed_kmh();
         if (spd_kmh < 0) spd_kmh = -spd_kmh;
+        /* Honour the km/miles toggle (same setting as the dashboard). */
+        if (settings_get_use_imperial()) spd_kmh *= 0.621371f;
         int s = (int)(spd_kmh + 0.5f);
         speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
 
-        /* Battery percent — Smart mode delegates to the persistent tracker
-         * so the HUD agrees with the VESC dashboard; Direct mode uses the
-         * controller's voltage-based estimate. */
-        float pct;
-        if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_SMART) {
-            pct = battery_calc_get_smart_percentage(
-                    rt->battery_level, rt->amp_hours,
-                    settings_get_battery_capacity());
-        } else {
-            pct = rt->battery_level * 100.0f;
-        }
+        /* Battery percent — same helper as the cockpit / trip log so every
+         * readout agrees (Smart tracker vs Direct controller estimate). */
+        float pct = battery_calc_display_percentage(rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
         int b = (int)(pct + 0.5f);
         batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
     }
@@ -330,7 +324,8 @@ void aa_overlay_draw(uint16_t *fb)
     }
     x += draw_text_with_halo(fb, big, x, big_top, speed_buf);
     x += 4;
-    draw_text_with_halo(fb, sml, x, sml_top, "KM/H");
+    draw_text_with_halo(fb, sml, x, sml_top,
+                        settings_get_use_imperial() ? "MPH" : "KM/H");
 
     /* ── Battery widget (right) ──
      * [icon] [gap] "78" big "%" small, right-anchored at BATT_RIGHT_X. */

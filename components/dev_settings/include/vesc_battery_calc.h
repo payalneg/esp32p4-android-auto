@@ -24,15 +24,25 @@ void  battery_calc_init(void);
  * Used on first run, on capacity change, and after charging is detected. */
 void  battery_calc_reset(float current_battery_percent, float battery_capacity);
 
-/* Smart percentage based on consumed Ah versus battery capacity. The first
+/* Smart percentage based on net consumed Ah versus battery capacity. The first
  * call after boot pulls remaining_ah from NVS (or seeds it from the current
- * controller reading); subsequent calls subtract the delta in rt->amp_hours.
+ * controller reading); subsequent calls subtract the delta in net Ah, where
+ * net = rt->amp_hours − rt->amp_hours_charged (so regen credits Ah back).
  * If the controller %  jumps up by >5 % vs. the saved value, treats it as a
  * charge/swap and resets. Falls back to controller_battery_level*100 on bad
  * inputs (capacity <= 0). */
 float battery_calc_get_smart_percentage(float controller_battery_level,
                                         float controller_amp_hours,
+                                        float controller_amp_hours_charged,
                                         float battery_capacity);
+
+/* Battery percentage as shown on the dashboard / HUD — picks Direct vs Smart
+ * per the battery_calc_mode setting and pulls capacity from settings. Use this
+ * everywhere a "what the rider sees" battery % is needed (cockpit, AA overlay,
+ * trip log) so all readouts stay in agreement. */
+float battery_calc_display_percentage(float controller_battery_level,
+                                      float controller_amp_hours,
+                                      float controller_amp_hours_charged);
 
 bool  battery_calc_is_initialized(void);
 

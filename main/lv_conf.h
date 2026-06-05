@@ -547,7 +547,7 @@
 
 #define LV_USE_IMGBTN     1
 
-#define LV_USE_KEYBOARD   0
+#define LV_USE_KEYBOARD   1   /*On-screen keyboard for the LISP editor (custom/lisp_editor.c)*/
 
 #define LV_USE_ZH_KEYBOARD 0
 

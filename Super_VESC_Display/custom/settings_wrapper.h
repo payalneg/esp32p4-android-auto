@@ -67,6 +67,23 @@ void  settings_wrapper_set_vesc_emulator(bool on);
 bool  settings_wrapper_get_aa_autoconnect(void);
 void  settings_wrapper_set_aa_autoconnect(bool on);
 
+/* Units: false = metric (km, km/h), true = imperial (mi, mph). */
+bool  settings_wrapper_get_use_imperial(void);
+void  settings_wrapper_set_use_imperial(bool on);
+
+/* Convert canonical km / km/h to the user-selected display unit, and the
+ * matching short labels ("KM"/"MI", "KM/H"/"MPH"). */
+float        settings_wrapper_dist_to_display(float km);
+float        settings_wrapper_speed_to_display(float kmh);
+const char  *settings_wrapper_dist_unit(void);
+const char  *settings_wrapper_speed_unit(void);
+
+/* Temperature: false = Celsius, true = Fahrenheit. */
+bool         settings_wrapper_get_use_fahrenheit(void);
+void         settings_wrapper_set_use_fahrenheit(bool on);
+float        settings_wrapper_temp_to_display(float celsius);
+const char  *settings_wrapper_temp_unit(void);
+
 uint32_t settings_wrapper_get_clock_secs_of_day(void);
 void     settings_wrapper_set_clock_secs_of_day(uint32_t secs_of_day);
 

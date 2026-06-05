@@ -41,7 +41,7 @@ static bool     s_initialized;
 static float    s_remaining_ah;
 static float    s_last_saved_percent;
 static float    s_last_saved_capacity;
-static float    s_last_amp_hours;
+static float    s_last_net_ah;            /* last (discharged − charged) reading */
 static float    s_last_controller_percent;
 static bool     s_first_calculation = true;
 static bool     s_capacity_changed_flag;
@@ -111,7 +111,7 @@ static bool load_percent(void)
 void battery_calc_init(void)
 {
     s_initialized           = load_state();
-    s_last_amp_hours        = 0.0f;
+    s_last_net_ah           = 0.0f;
     s_first_calculation     = true;
     s_capacity_changed_flag = false;
     s_last_save_us          = 0;
@@ -128,7 +128,7 @@ void battery_calc_reset(float current_battery_percent, float battery_capacity)
     s_last_saved_percent      = current_battery_percent;
     s_last_saved_capacity     = battery_capacity;
     s_last_controller_percent = current_battery_percent;
-    s_last_amp_hours          = 0.0f;
+    s_last_net_ah             = 0.0f;
     s_first_calculation       = true;
     s_capacity_changed_flag   = false;
     s_initialized             = true;
@@ -140,12 +140,20 @@ void battery_calc_reset(float current_battery_percent, float battery_capacity)
 
 float battery_calc_get_smart_percentage(float controller_battery_level,
                                         float controller_amp_hours,
+                                        float controller_amp_hours_charged,
                                         float battery_capacity)
 {
     if (battery_capacity <= 0.0f) {
         ESP_LOGW(TAG, "invalid capacity %.1f — falling back to direct", battery_capacity);
         return controller_battery_level * 100.0f;
     }
+
+    /* Net energy actually pulled from the pack = discharged − regenerated.
+     * Both VESC counters are monotonic; a regen burst grows amp_hours_charged,
+     * which shrinks net so the delta below goes negative and credits Ah back
+     * into the estimate. Tracking net (not gross discharge) keeps the gauge
+     * honest on anything with active braking. */
+    float net_ah = controller_amp_hours - controller_amp_hours_charged;
 
     float current_controller_percent = controller_battery_level * 100.0f;
 
@@ -178,6 +186,12 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
             ESP_LOGI(TAG, "continuing: %.2f Ah remain (saved %.1f%%, now %.1f%%)",
                      s_remaining_ah, s_last_saved_percent, current_controller_percent);
             s_last_controller_percent = current_controller_percent;
+            /* Seed the net-Ah baseline to the current reading so the first
+             * delta below is ~0. Without this, s_last_net_ah is still 0 (set
+             * by init/reset) and the fall-through subtracts the WHOLE absolute
+             * counter in one tick — e.g. 15 Ah pack with net at 1.95 Ah would
+             * jump straight to 13.05 Ah / 87 %. */
+            s_last_net_ah             = net_ah;
             s_first_calculation       = false;
         } else {
             /* No saved state — seed from controller. */
@@ -188,10 +202,11 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
 
     s_last_controller_percent = current_controller_percent;
 
-    /* Integrate Ah consumed since the last call. amp_hours from VESC is a
-     * monotonic counter; we look at its delta, not the absolute value. */
-    float consumed = controller_amp_hours - s_last_amp_hours;
-    s_last_amp_hours = controller_amp_hours;
+    /* Integrate net Ah since the last call: delta of (discharged − charged),
+     * not the absolute value. A regen burst shrinks net → consumed goes
+     * negative → Ah is credited back to the remaining estimate. */
+    float consumed = net_ah - s_last_net_ah;
+    s_last_net_ah = net_ah;
     s_remaining_ah -= consumed;
 
     if (s_remaining_ah < 0.0f)              s_remaining_ah = 0.0f;
@@ -207,6 +222,23 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
         s_last_save_us = now_us;
     }
     return pct;
+}
+
+float battery_calc_display_percentage(float controller_battery_level,
+                                      float controller_amp_hours,
+                                      float controller_amp_hours_charged)
+{
+    /* Single source of truth for "the battery number on screen": honours the
+     * Direct vs Smart setting so the cockpit, AA HUD and trip log all agree.
+     * Direct forwards the controller's voltage-based estimate; Smart uses the
+     * net-Ah-integrating tracker against the configured capacity. */
+    if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_SMART) {
+        return battery_calc_get_smart_percentage(controller_battery_level,
+                                                 controller_amp_hours,
+                                                 controller_amp_hours_charged,
+                                                 settings_get_battery_capacity());
+    }
+    return controller_battery_level * 100.0f;
 }
 
 bool battery_calc_is_initialized(void)

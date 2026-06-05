@@ -20,11 +20,13 @@
 #include "trip_log.h"
 
 #include "vesc_trip_persist.h"
+#include "vesc_battery_calc.h"
 #include "vesc_can/crc.h"
 
 #include "esp_log.h"
 #include "esp_partition.h"
 #include "esp_timer.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -46,6 +48,13 @@ static const char *TAG = "trip_log";
 #define QUEUE_DEPTH        8
 #define MAX_TRIPS          50          /* logical history window, enforced at boot only */
 #define BOOT_PREERASE_SECTORS 64       /* runway erased ahead at boot (~11 h of log) */
+
+/* Soft-delete: trip ids the user hid from the statistics UI. Kept in NVS (the
+ * circular flash log has no per-record rewrite), filtered out of the reader,
+ * and excluded from the MAX_TRIPS window so deleting frees up history slots. */
+#define MAX_DELETED        64
+#define NVS_NS             "trip_log"
+#define NVS_KEY_DELETED    "deleted"
 
 typedef struct __attribute__((packed)) {
     uint16_t magic;
@@ -82,6 +91,36 @@ static int64_t  s_last_sample_us;
 static volatile bool s_pending_new;
 
 static QueueHandle_t s_queue;
+
+static uint32_t s_deleted[MAX_DELETED];   /* hidden trip ids */
+static int      s_deleted_count;
+
+static bool is_deleted(uint32_t id)
+{
+    for (int i = 0; i < s_deleted_count; i++) if (s_deleted[i] == id) return true;
+    return false;
+}
+
+static void load_deleted(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;   /* none yet → empty */
+    size_t sz = sizeof s_deleted;
+    if (nvs_get_blob(h, NVS_KEY_DELETED, s_deleted, &sz) == ESP_OK) {
+        s_deleted_count = (int)(sz / sizeof(uint32_t));
+        if (s_deleted_count > MAX_DELETED) s_deleted_count = MAX_DELETED;
+    }
+    nvs_close(h);
+}
+
+static void save_deleted(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, NVS_KEY_DELETED, s_deleted, (size_t)s_deleted_count * sizeof(uint32_t));
+    nvs_commit(h);
+    nvs_close(h);
+}
 
 static uint32_t slot_off(uint32_t slot)
 {
@@ -231,6 +270,7 @@ void trip_log_init(void)
         return;
     }
     boot_scan();
+    load_deleted();
     trip_persist_set_reset_cb(trip_log_new_trip);
 
     s_queue = xQueueCreate(QUEUE_DEPTH, sizeof(trip_rec_t));
@@ -281,7 +321,10 @@ void trip_log_tick(const vesc_setup_values_t *rt)
     rec.voltage_dv    = (uint16_t)(rt->v_in * 10.0f);
     rec.temp_motor_dc = (int16_t)(rt->temp_motor * 10.0f);
     rec.temp_fet_dc   = (int16_t)(rt->temp_mos * 10.0f);
-    rec.batt_pct      = (uint8_t)(rt->battery_level * 100.0f);
+    /* Log the on-screen battery % (Smart vs Direct per setting), not the raw
+     * controller level — so the statistics chart matches the dashboard. */
+    rec.batt_pct      = (uint8_t)(battery_calc_display_percentage(
+                                      rt->battery_level, rt->amp_hours, rt->amp_hours_charged) + 0.5f);
     rec.fault         = rt->fault_code;
     /* seq + crc are filled by the writer task */
 
@@ -293,6 +336,26 @@ void trip_log_tick(const vesc_setup_values_t *rt)
 
 uint32_t trip_log_first_trip_id(void)   { return s_first_trip_id; }
 uint32_t trip_log_current_trip_id(void) { return s_trip_id; }
+
+bool trip_log_is_trip_deleted(uint32_t trip_id) { return is_deleted(trip_id); }
+
+void trip_log_delete_trip(uint32_t trip_id)
+{
+    if (trip_id == 0 || trip_id == s_trip_id) return;   /* never hide the live trip */
+    if (is_deleted(trip_id)) return;
+    if (s_deleted_count >= MAX_DELETED) {
+        /* Set full — evict the smallest (oldest) id; it has almost certainly
+         * aged out of the physical ring already, so nothing reappears. */
+        int mn = 0;
+        for (int i = 1; i < s_deleted_count; i++)
+            if (s_deleted[i] < s_deleted[mn]) mn = i;
+        s_deleted[mn] = s_deleted[s_deleted_count - 1];
+        s_deleted_count--;
+    }
+    s_deleted[s_deleted_count++] = trip_id;
+    save_deleted();
+    ESP_LOGI(TAG, "trip %u hidden (%d total)", (unsigned)trip_id, s_deleted_count);
+}
 
 /* ============================ Reader API ============================ */
 
@@ -337,6 +400,7 @@ static void list_cb(const trip_rec_t *r, void *u)
 {
     list_ctx_t *c = (list_ctx_t *)u;
     if (r->trip_id < c->first || r->trip_id > c->current) return;   /* outside the window */
+    if (is_deleted(r->trip_id)) return;                             /* hidden by the user */
     trip_acc_t *a = &c->acc[r->trip_id - c->first];
     if (!a->seen) { a->seen = true; a->min_wh = a->max_wh = r->wh; a->max_speed = r->speed_dkmh; }
     if (r->t_s        > a->max_t_s)  a->max_t_s  = r->t_s;
@@ -352,10 +416,15 @@ static void list_cb(const trip_rec_t *r, void *u)
 int trip_log_list_trips(trip_summary_t *out, int max)
 {
     if (!out || max <= 0 || !s_part) return 0;
-    uint32_t first = s_first_trip_id, current = s_trip_id;
-    if (current == 0 || current < first) return 0;
+    uint32_t current = s_trip_id;
+    if (current == 0) return 0;
+    /* Look back MAX_TRIPS *visible* trips: extend the id range by the number of
+     * hidden trips so deleting frees up history slots (older trips surface,
+     * as far back as the ring still physically holds them). list_cb skips the
+     * hidden ids, so they never occupy an output slot. */
+    uint32_t span  = MAX_TRIPS + (uint32_t)s_deleted_count;
+    uint32_t first = (current > span) ? (current - span + 1) : 1;
     uint32_t window = current - first + 1;
-    if (window > MAX_TRIPS) { first = current - MAX_TRIPS + 1; window = MAX_TRIPS; }
 
     trip_acc_t *acc = calloc(window, sizeof(trip_acc_t));
     if (!acc) return 0;

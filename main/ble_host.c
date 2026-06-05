@@ -196,6 +196,12 @@ esp_err_t ble_host_init(void)
         return ESP_OK;
     }
 
+    /* NimBLE logs every GATT notify at INFO ("GATT procedure initiated:
+     * notify; att_handle=..."). With CAN data streaming over NUS that's a
+     * notify every ~50ms — pure spam. Drop the stack's INFO chatter while
+     * keeping its WARN/ERROR. Our own logs use TAG "ble_host", unaffected. */
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+
     /* SDIO transport to C6 should already be up via c6_ota's
      * esp_hosted_init/connect_to_slave; calling controller_init/enable
      * here is the BT-specific bring-up step. */

@@ -29,6 +29,13 @@ Cycleway projects onto the same screen. No phone app required.
 ### 🛴 Primary — VESC dashboard
 - **Live CAN telemetry**: battery %, speed, voltage, current draw, motor
   and FET temperatures, odometer, trip, range estimate, cruise indicator.
+- **Trip tracking** — on-screen trip statistics window (distance, Wh,
+  efficiency, charts) + a **Reset trip** button, backed by a raw circular
+  trip log on a dedicated `triplog` flash partition that survives reboots.
+- **On-device VESC Tool config menu** — read / write the controller's motor
+  and app config straight from the dashboard screen, run FOC detection, keep
+  config / trip backups — no laptop required. Parameter tables are
+  code-generated from the VESC Tool XML.
 - **BLE NUS bridge** — VESC Tool over Bluetooth Low Energy talks straight
   to the controller through this dashboard, no extra adapter needed.
 - **Settings UI** on the device: CAN bitrate, controller ID, persisted
@@ -62,7 +69,8 @@ that talks to the head unit over BLE, independently of Android Auto:
 - **Embedded co-firmwares**: ESP32-C6 (`esp-hosted` WiFi slave) and the
   D1 Mini Bluetooth agent are bundled inside the main binary and auto-flashed
   over SDIO / UART on version mismatch.
-- **Dual-OTA** layout in 32 MB flash (both slots below the 16 MB boundary).
+- **Dual-OTA** layout in 32 MB flash (both slots below the 16 MB boundary),
+  plus a dedicated ~12 MB `triplog` partition above it for the raw trip log.
 
 ---
 
@@ -87,7 +95,6 @@ the BT path on every boot.
 ## 🔌 Wiring
 
 <!-- TODO: close-up photo of the J3 header with VESC + D1 Mini wired in -->
-![Wiring](docs/images/wiring.jpg)
 
 ### 1. Power chain
 
@@ -339,6 +346,8 @@ adb install -r build/app/outputs/flutter-apk/app-release.apk
 | Area | Status | Notes |
 |---|---|---|
 | VESC RT data over CAN | ✅ | Battery %, speed, voltage, current, temps, odometer |
+| Trip statistics window + persistent trip log | ✅ | Per-trip metrics / charts + Reset trip; raw circular log on the `triplog` partition |
+| On-device VESC Tool config menu + FOC detection | ✅ | Read / write controller config from the screen; param tables generated from the VESC Tool XML |
 | VESC LISP poll | ✅ | Cruise indicator + custom stats (requires [`lisp/main.lisp`](lisp/main.lisp) on the controller) |
 | BLE NUS bridge (VESC Tool over BLE) | ✅ | Works concurrently with AA |
 | Companion app — notifications / media / clock bridge | ✅ | Flutter `aa_bridge` over BLE |
@@ -372,22 +381,26 @@ design firms up.
 ├── components/
 │   ├── esp32_p4_wifi6_touch_lcd_4_3/  # Waveshare BSP (LVGL, ST7701 DSI, GT911 touch)
 │   ├── vesc_can/               # CAN driver for VESC (RT data + LISP poll)
-│   ├── vesc_ui/                # Dashboard UI
+│   ├── vesc_ui/                # Dashboard UI — thin wrapper; real UI source is globbed from Super_VESC_Display/{generated,custom}/
+│   ├── vesc_config/            # On-device VESC Tool config menu (param tables from XML, FOC detection)
+│   ├── trip_log/               # Raw circular trip log on the dedicated triplog partition
 │   ├── dev_settings/           # Settings screen + persisted prefs
 │   ├── log_capture/            # PSRAM ring-buffer logger
 │   ├── bt_agent_fw/            # Embeddable bt_agent firmware blob (AA bonus)
 │   ├── c6_ota_partition/       # Embedded ESP32-C6 firmware (network_adapter.bin)
 │   └── qr_info/                # QR code with WiFi creds for the phone
+├── Super_VESC_Display/         # NXP GUI Guider project — the dashboard UI source (generated/ + custom/), compiled into the firmware via vesc_ui
 ├── tools/
 │   ├── bt_agent/               # D1 Mini ESP32 firmware (Classic BT + SPP)
 │   ├── c6_slave_fw/            # Sources of the bundled C6 firmware (gitignored, see CLAUDE.md)
 │   └── c6_ota_flasher/         # Standalone fallback C6 flasher
-├── scripts/                    # capture.sh (Wireshark), ota_push.sh, extract_yuv.py
+├── scripts/                    # capture.sh (Wireshark), ota_push.sh, extract_yuv.py, release.sh
 ├── lisp/                       # VESC LISP script (cruise + speed profiles) — runs on the VESC, not the P4
 ├── 3d-model/                   # STL / STEP files for the printed enclosure
+├── release/                    # Versioned release artifacts (P4 .bin + companion .apk)
 ├── docs/images/                # Photos / screenshots used by this README
 ├── research/                   # Reference upstream sources (gitignored)
-├── partitions.csv              # Dual-OTA layout (both slots below 16 MB boundary)
+├── partitions.csv              # Dual-OTA layout (both slots below 16 MB) + triplog partition
 ├── CLAUDE.md                   # Original architecture notes / design history
 └── README.md
 ```

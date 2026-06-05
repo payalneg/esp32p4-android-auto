@@ -42,6 +42,7 @@ idf_component_register(
         log_capture
         qr_info
         vesc_config
+        vesc_can
         trip_log
 )
 

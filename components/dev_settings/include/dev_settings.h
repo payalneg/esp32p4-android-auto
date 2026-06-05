@@ -37,6 +37,8 @@ uint8_t              settings_get_motor_poles(void);
 float                settings_get_power_max_kw(void);
 bool                 settings_get_vesc_emulator(void);
 bool                 settings_get_aa_autoconnect(void);
+bool                 settings_get_use_imperial(void);
+bool                 settings_get_use_fahrenheit(void);
 
 /* Wall-clock API. RTC-only — relies on the vbat_experiment poke in
  * main.c to keep LP domain alive on USB-unplug via the CR2032 on H8.
@@ -57,6 +59,8 @@ void settings_set_motor_poles(uint8_t poles);
 void settings_set_power_max_kw(float power_max_kw);
 void settings_set_vesc_emulator(bool on);
 void settings_set_aa_autoconnect(bool on);
+void settings_set_use_imperial(bool on);
+void settings_set_use_fahrenheit(bool on);
 
 /* Debounced setters — update the RAM cache and fire any hot-apply callback
  * immediately, but DO NOT touch NVS. The UI pairs them with the matching

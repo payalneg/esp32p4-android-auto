@@ -107,17 +107,9 @@ static void push_rt_locked(void)
     update_speed(vesc_rt_data_get_speed_kmh());
     update_current(rt->current_in);
     /* battery_level is 0..1 in VESC protocol → display wants percent.
-     * Smart mode uses the persistent Ah-integrating tracker; Direct mode
-     * just forwards the controller's voltage-based estimate. */
-    float batt_pct;
-    if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_SMART) {
-        batt_pct = battery_calc_get_smart_percentage(
-                rt->battery_level, rt->amp_hours,
-                settings_get_battery_capacity());
-    } else {
-        batt_pct = rt->battery_level * 100.0f;
-    }
-    update_battery_proc(batt_pct);
+     * battery_calc_display_percentage picks Smart vs Direct per the setting —
+     * the same helper the AA HUD and trip log use, so all three agree. */
+    update_battery_proc(battery_calc_display_percentage(rt->battery_level, rt->amp_hours, rt->amp_hours_charged));
     /* Trip / Ah / uptime come from trip_persist so they survive VESC reboots
      * — the raw counters get reset to 0 by the controller, which would make
      * the dashboard appear to jump backwards. trip_persist folds those

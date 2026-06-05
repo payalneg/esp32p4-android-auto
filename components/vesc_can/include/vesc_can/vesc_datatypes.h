@@ -70,6 +70,8 @@ typedef enum {
     COMM_DETECT_MOTOR_R_L           = 25,
     COMM_DETECT_ENCODER             = 27,
     COMM_DETECT_HALL_FOC            = 28,
+    COMM_GET_DECODED_PPM            = 31,
+    COMM_GET_DECODED_ADC            = 32,
     COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP = 57,
     COMM_DETECT_APPLY_ALL_FOC       = 58,
     COMM_SET_MCCONF                 = 13,
@@ -84,6 +86,10 @@ typedef enum {
     COMM_GET_VALUES_SETUP           = 47,
     COMM_GET_VALUES_SELECTIVE       = 50,
     COMM_GET_VALUES_SETUP_SELECTIVE = 51,
+    COMM_LISP_READ_CODE             = 130,
+    COMM_LISP_WRITE_CODE            = 131,
+    COMM_LISP_ERASE_CODE            = 132,
+    COMM_LISP_SET_RUNNING           = 133,
     COMM_LISP_GET_STATS             = 134,
 } COMM_PACKET_ID;
 

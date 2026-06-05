@@ -36,6 +36,8 @@ static struct {
     float power_max_kw;
     uint32_t clock_offset_secs;
     bool aa_autoconnect;
+    bool use_imperial;
+    bool use_fahrenheit;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -49,8 +51,13 @@ static struct {
     .power_max_kw = 4.5f,
     .clock_offset_secs = 0,
     .aa_autoconnect = true,
+    .use_imperial = false,
+    .use_fahrenheit = false,
 };
 #endif
+
+/* km → miles. Same factor converts km/h → mph. */
+#define MILES_PER_KM 0.621371f
 
 void settings_wrapper_init(void) {
 #if !SIMULATOR_MODE
@@ -265,6 +272,67 @@ void settings_wrapper_set_aa_autoconnect(bool on) {
 #else
     settings_set_aa_autoconnect(on);
 #endif
+}
+
+bool settings_wrapper_get_use_imperial(void) {
+#if SIMULATOR_MODE
+    return sim_settings.use_imperial;
+#else
+    return settings_get_use_imperial();
+#endif
+}
+
+void settings_wrapper_set_use_imperial(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.use_imperial = on;
+#else
+    settings_set_use_imperial(on);
+#endif
+}
+
+/* Unit conversion helpers — callers always pass canonical km / km/h; these
+ * return the value (and the matching label) in the unit the user picked. */
+float settings_wrapper_dist_to_display(float km) {
+    return settings_wrapper_get_use_imperial() ? km * MILES_PER_KM : km;
+}
+
+float settings_wrapper_speed_to_display(float kmh) {
+    return settings_wrapper_get_use_imperial() ? kmh * MILES_PER_KM : kmh;
+}
+
+const char *settings_wrapper_dist_unit(void) {
+    return settings_wrapper_get_use_imperial() ? "MI" : "KM";
+}
+
+const char *settings_wrapper_speed_unit(void) {
+    return settings_wrapper_get_use_imperial() ? "MPH" : "KM/H";
+}
+
+bool settings_wrapper_get_use_fahrenheit(void) {
+#if SIMULATOR_MODE
+    return sim_settings.use_fahrenheit;
+#else
+    return settings_get_use_fahrenheit();
+#endif
+}
+
+void settings_wrapper_set_use_fahrenheit(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.use_fahrenheit = on;
+#else
+    settings_set_use_fahrenheit(on);
+#endif
+}
+
+/* Canonical temperature is always Celsius; convert to the display unit and
+ * return the matching short label ("°C"/"°F"). */
+float settings_wrapper_temp_to_display(float celsius) {
+    return settings_wrapper_get_use_fahrenheit() ? (celsius * 9.0f / 5.0f + 32.0f)
+                                                  : celsius;
+}
+
+const char *settings_wrapper_temp_unit(void) {
+    return settings_wrapper_get_use_fahrenheit() ? "°F" : "°C";
 }
 
 void settings_wrapper_set_power_max_kw_volatile(float power_max_kw) {

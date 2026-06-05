@@ -34,6 +34,12 @@ static _Atomic int s_cockpit_battery_proc_value;
 int cockpit_get_speed_value(void)        { return atomic_load(&s_cockpit_speed_value); }
 int cockpit_get_battery_proc_value(void) { return atomic_load(&s_cockpit_battery_proc_value); }
 
+/* Bumped by dashboard_units_changed() whenever the km/miles toggle flips.
+ * The update_* setters dedup on (value, epoch) so a units change forces a
+ * re-format on the next push even though the canonical value is unchanged.
+ * Single-threaded with the setters (all run on the LVGL task), plain int. */
+static int s_units_epoch = 0;
+
 #ifdef LV_REALDEVICE
 #include "vesc_limits.h"
 #include "vesc_battery_calc.h"
@@ -176,6 +182,12 @@ static lv_obj_t *settings_vesc_emulator_hint  = NULL;
 static lv_obj_t *settings_aa_autoconnect_switch = NULL;
 static lv_obj_t *settings_aa_autoconnect_label  = NULL;
 static lv_obj_t *settings_aa_autoconnect_hint   = NULL;
+static lv_obj_t *settings_units_switch = NULL;
+static lv_obj_t *settings_units_label  = NULL;
+static lv_obj_t *settings_units_hint   = NULL;
+static lv_obj_t *settings_temp_unit_switch = NULL;
+static lv_obj_t *settings_temp_unit_label  = NULL;
+static lv_obj_t *settings_temp_unit_hint   = NULL;
 static lv_obj_t *settings_wheel_diameter_spinbox = NULL;
 static lv_obj_t *settings_wheel_diameter_label = NULL;
 static lv_obj_t *settings_wheel_diameter_plus_btn = NULL;
@@ -451,6 +463,11 @@ void custom_init(lv_ui *ui)
     settings_wrapper_init();
     cockpit_refresh_power_max_label();
 
+    /* Flip the static speed/distance unit captions to match the saved
+     * km/miles setting so they're correct from the first frame (the value
+     * setters convert on their own as data arrives). */
+    dashboard_units_changed();
+
     /* Sync the invisible dashboard brightness drag slider with the saved
      * value so a touch on the slider starts from the real brightness,
      * not the GUI Guider default of 50.
@@ -651,21 +668,28 @@ void update_current(float current)
 void update_speed(float speed)
 {
     static float old_value = -999.0f;
-    if (speed == old_value) {
+    static int   old_epoch = -1;
+    if (speed == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = speed;
-    
-    int value = speed;
+    old_epoch = s_units_epoch;
+
+    int value = speed;  /* canonical km/h — drives the bar + atomic snapshot */
 
     /* Cockpit: Speed_meter removed — needle/arc no longer needed. */
     // lv_meter_set_indicator_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_ndline_0, value);
     // lv_meter_set_indicator_end_value(guider_ui.dashboard_Speed_meter, guider_ui.dashboard_Speed_meter_scale_0_arc_0, value);
 
-    /* Cockpit: zero-padded 2-digit format (32, 05) and horizontal bar fill. */
+    /* Cockpit: zero-padded 2-digit format (32, 05) and horizontal bar fill.
+     * The printed digits honour the km/miles toggle; the bar + atomic
+     * snapshot stay in canonical km/h (bar scale is fixed 0..60 km/h and the
+     * AA HUD reader converts on its own). */
+    int disp = (int)settings_wrapper_speed_to_display(speed);
     char text[10];
-    int v_clamped = value < 0 ? 0 : (value > 999 ? 999 : value);
-    snprintf(text, sizeof(text), "%02d", v_clamped);
+    int v_clamped    = value < 0 ? 0 : (value > 999 ? 999 : value);
+    int disp_clamped = disp  < 0 ? 0 : (disp  > 999 ? 999 : disp);
+    snprintf(text, sizeof(text), "%02d", disp_clamped);
     lv_label_set_text(guider_ui.dashboard_Speed_text, text);
     cockpit_paint_speed_bar(value, 60);
     atomic_store(&s_cockpit_speed_value, v_clamped);
@@ -677,15 +701,17 @@ void update_cruise_speed(float speed)
         return;
     }
     static float old_value = -999.0f;
-    if (speed == old_value) {
+    static int   old_epoch = -1;
+    if (speed == old_value && old_epoch == s_units_epoch) {
         return;
     }
     if (speed < 0) {
         return;
     }
     old_value = speed;
+    old_epoch = s_units_epoch;
 
-    int value = speed;
+    int value = (int)settings_wrapper_speed_to_display(speed);
     /* Cockpit: write cruise target speed into Speed_cc_text. The widget is
      * shown/hidden by update_cruise_control_status(); here we only update
      * the value so it is ready when CC engages. */
@@ -726,38 +752,44 @@ void update_battery_proc(float battery_proc)
 void update_trip(float trip_distance)
 {
     static float old_value = -999.0f;
-    if (trip_distance == old_value) {
+    static int   old_epoch = -1;
+    if (trip_distance == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = trip_distance;
-    
+    old_epoch = s_units_epoch;
+
     char text[10];
-    sprintf(text,"%0.1f", trip_distance);
+    sprintf(text,"%0.1f", settings_wrapper_dist_to_display(trip_distance));
     lv_label_set_text(guider_ui.dashboard_TRIP_text,text);
 }
 
 void update_range(float range_distance)
 {
     static float old_value = -999.0f;
-    if (range_distance == old_value) {
+    static int   old_epoch = -1;
+    if (range_distance == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = range_distance;
-    
+    old_epoch = s_units_epoch;
+
     char text[10];
-    sprintf(text,"%.1f", range_distance);
+    sprintf(text,"%.1f", settings_wrapper_dist_to_display(range_distance));
     lv_label_set_text(guider_ui.dashboard_Range_text,text);
 }
 
 void update_temp_fet(float temp_fet)
 {
     static float old_value = -999.0f;
-    if (temp_fet == old_value) {
+    static int   old_epoch = -1;
+    if (temp_fet == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = temp_fet;
-    
-    int value = temp_fet;
+    old_epoch = s_units_epoch;
+
+    int value = (int)settings_wrapper_temp_to_display(temp_fet);
     char text[10];
     sprintf(text,"%d", value);
     lv_label_set_text(guider_ui.dashboard_temp_esc_text,text);
@@ -766,12 +798,14 @@ void update_temp_fet(float temp_fet)
 void update_temp_motor(float temp_motor)
 {
     static float old_value = -999.0f;
-    if (temp_motor == old_value) {
+    static int   old_epoch = -1;
+    if (temp_motor == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = temp_motor;
-    
-    int value = temp_motor;
+    old_epoch = s_units_epoch;
+
+    int value = (int)settings_wrapper_temp_to_display(temp_motor);
     char text[10];
     sprintf(text,"%d", value);
     lv_label_set_text(guider_ui.dashboard_temp_mot_text,text);
@@ -828,16 +862,43 @@ void update_battery_voltage(float battery_voltage)
 void update_odometer(float odometer)
 {
     static float old_value = -999.0f;
-    if (odometer == old_value) {
+    static int   old_epoch = -1;
+    if (odometer == old_value && old_epoch == s_units_epoch) {
         return;
     }
     old_value = odometer;
-    
-    int value = odometer;   
+    old_epoch = s_units_epoch;
+
+    int value = (int)settings_wrapper_dist_to_display(odometer);
     char text[10];
     sprintf(text,"%05d", value);
 
     lv_label_set_text(guider_ui.dashboard_odo_text,text);
+}
+
+void dashboard_units_changed(void)
+{
+    /* Force the value setters to re-format on their next push even though the
+     * canonical km/km-h numbers haven't changed. */
+    s_units_epoch++;
+
+    /* Static unit captions are GUI-Guider-generated; we only retext them at
+     * runtime so a regen of setup_scr_dashboard.c never has to be touched.
+     * AVG column is hidden, Range shows a bare number after first update —
+     * neither needs a caption flip. */
+    bool imperial = settings_wrapper_get_use_imperial();
+    if (guider_ui.dashboard_speed_label)
+        lv_label_set_text(guider_ui.dashboard_speed_label,
+                          imperial ? "SPEED · MPH" : "SPEED · KM/H");
+    if (guider_ui.dashboard_col_trip_unit)
+        lv_label_set_text(guider_ui.dashboard_col_trip_unit, settings_wrapper_dist_unit());
+    if (guider_ui.dashboard_col_odo_unit)
+        lv_label_set_text(guider_ui.dashboard_col_odo_unit, settings_wrapper_dist_unit());
+    /* Temperature captions (motor / controller). */
+    if (guider_ui.dashboard_col_mtmp_unit)
+        lv_label_set_text(guider_ui.dashboard_col_mtmp_unit, settings_wrapper_temp_unit());
+    if (guider_ui.dashboard_col_ctmp_unit)
+        lv_label_set_text(guider_ui.dashboard_col_ctmp_unit, settings_wrapper_temp_unit());
 }
 
 void update_fps(int fps)
@@ -1485,6 +1546,40 @@ static void aa_autoconnect_switch_event_cb(lv_event_t *e) {
         lv_obj_t *obj = lv_event_get_target(e);
         bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
         settings_wrapper_set_aa_autoconnect(checked);
+    }
+}
+
+// Event handler for Units switch. OFF = metric (km, km/h), ON = imperial
+// (miles, mph). Persists immediately and re-skins every speed/distance readout
+// + the static unit captions via dashboard_units_changed().
+static void units_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *obj = lv_event_get_target(e);
+        bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        settings_wrapper_set_use_imperial(checked);
+        dashboard_units_changed();
+        if (settings_info_label) {
+            lv_label_set_text(settings_info_label,
+                              checked ? "Units: miles / mph" : "Units: km / km/h");
+        }
+    }
+}
+
+// Event handler for Temperature units switch. OFF = Celsius, ON = Fahrenheit.
+// Persists immediately and re-skins the temperature readouts + captions via
+// dashboard_units_changed() (shared epoch with the km/miles toggle).
+static void temp_unit_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        lv_obj_t *obj = lv_event_get_target(e);
+        bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
+        settings_wrapper_set_use_fahrenheit(checked);
+        dashboard_units_changed();
+        if (settings_info_label) {
+            lv_label_set_text(settings_info_label,
+                              checked ? "Temperature: Fahrenheit" : "Temperature: Celsius");
+        }
     }
 }
 
@@ -2454,6 +2549,56 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_pos(settings_aa_autoconnect_hint, 250, y_pos + 22);
     lv_obj_set_style_text_color(settings_aa_autoconnect_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_aa_autoconnect_hint, &lv_font_montserrat_14, 0);
+
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Units Switch ==========
+    // OFF = metric (km, km/h), ON = imperial (miles, mph). Applies live across
+    // the dashboard, AA HUD overlay and trip statistics.
+    settings_units_label = settings_heading_create(ui->settings, y_pos, "Units (miles)");
+
+    settings_units_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_units_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_units_switch, 60, 30);
+    if (settings_wrapper_get_use_imperial()) {
+        lv_obj_add_state(settings_units_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_units_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_units_switch, lv_color_hex(0x00a9ff),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_units_switch, units_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    settings_units_hint = lv_label_create(ui->settings);
+    lv_label_set_text(settings_units_hint, "Off = km / km/h, On = miles / mph");
+    lv_obj_set_pos(settings_units_hint, 230, y_pos + 22);
+    lv_obj_set_style_text_color(settings_units_hint, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(settings_units_hint, &lv_font_montserrat_14, 0);
+
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Temperature Units Switch ==========
+    // OFF = Celsius, ON = Fahrenheit. Applies live to the dashboard motor /
+    // controller temperatures and the trip-statistics temperature chart.
+    settings_temp_unit_label = settings_heading_create(ui->settings, y_pos, "Temperature (F)");
+
+    settings_temp_unit_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_temp_unit_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_temp_unit_switch, 60, 30);
+    if (settings_wrapper_get_use_fahrenheit()) {
+        lv_obj_add_state(settings_temp_unit_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_temp_unit_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_temp_unit_switch, lv_color_hex(0x00a9ff),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_temp_unit_switch, temp_unit_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    settings_temp_unit_hint = lv_label_create(ui->settings);
+    lv_label_set_text(settings_temp_unit_hint, "Off = Celsius, On = Fahrenheit");
+    lv_obj_set_pos(settings_temp_unit_hint, 230, y_pos + 22);
+    lv_obj_set_style_text_color(settings_temp_unit_hint, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(settings_temp_unit_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
     /*

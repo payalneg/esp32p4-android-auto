@@ -9,5 +9,5 @@ idf_component_register(
     SRCS "trip_log.c"
     INCLUDE_DIRS "include"
     REQUIRES vesc_can
-    PRIV_REQUIRES esp_partition esp_timer freertos dev_settings
+    PRIV_REQUIRES esp_partition esp_timer freertos dev_settings nvs_flash
 )

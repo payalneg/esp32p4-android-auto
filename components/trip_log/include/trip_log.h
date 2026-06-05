@@ -35,6 +35,14 @@ void trip_log_new_trip(void);
 uint32_t trip_log_first_trip_id(void);
 uint32_t trip_log_current_trip_id(void);
 
+/* Soft-delete (hide) a trip from the statistics list. The record data stays on
+ * the circular flash log, but the id is kept in an NVS hidden-set: the reader
+ * filters it out and it no longer counts toward the MAX_TRIPS history window,
+ * so deleting frees a slot for an older trip. Persists across reboots. The
+ * current (live) trip cannot be hidden. Safe to call from any task. */
+void trip_log_delete_trip(uint32_t trip_id);
+bool trip_log_is_trip_deleted(uint32_t trip_id);
+
 /* ---- Reader API (for the trip-statistics UI / analyzer) ----
  *
  * Both functions are synchronous, read-only and safe to call from any task

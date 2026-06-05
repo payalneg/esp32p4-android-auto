@@ -31,6 +31,8 @@ static struct {
     float                power_max_kw;
     bool                 vesc_emulator;
     bool                 aa_autoconnect;
+    bool                 use_imperial;
+    bool                 use_fahrenheit;
 } s_cache;
 
 static settings_can_speed_cb_t     s_can_speed_cb;
@@ -78,6 +80,8 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "show_fps",    &u8 ) == ESP_OK) s_cache.show_fps          = (u8 != 0);
     if (nvs_get_u8 (h, "vesc_sim",    &u8 ) == ESP_OK) s_cache.vesc_emulator     = (u8 != 0);
     if (nvs_get_u8 (h, "aa_autocon",  &u8 ) == ESP_OK) s_cache.aa_autoconnect    = (u8 != 0);
+    if (nvs_get_u8 (h, "use_imp",     &u8 ) == ESP_OK) s_cache.use_imperial      = (u8 != 0);
+    if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
 
@@ -126,6 +130,8 @@ void settings_init(void) {
     s_cache.power_max_kw      = 4.5f;
     s_cache.vesc_emulator     = false;
     s_cache.aa_autoconnect    = true;
+    s_cache.use_imperial      = false;
+    s_cache.use_fahrenheit    = false;
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -148,6 +154,8 @@ uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_
 float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 bool                settings_get_vesc_emulator(void)     { return s_cache.vesc_emulator; }
 bool                settings_get_aa_autoconnect(void)    { return s_cache.aa_autoconnect; }
+bool                settings_get_use_imperial(void)      { return s_cache.use_imperial; }
+bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
 
 /* ---------------- setters ---------------- */
 
@@ -224,6 +232,24 @@ void settings_set_show_fps(bool show) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "show_fps", show ? 1 : 0);
+    commit(h);
+}
+
+void settings_set_use_imperial(bool on) {
+    if (s_cache.use_imperial == on) return;
+    s_cache.use_imperial = on;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "use_imp", on ? 1 : 0);
+    commit(h);
+}
+
+void settings_set_use_fahrenheit(bool on) {
+    if (s_cache.use_fahrenheit == on) return;
+    s_cache.use_fahrenheit = on;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "use_fahr", on ? 1 : 0);
     commit(h);
 }
 

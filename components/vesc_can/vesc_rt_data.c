@@ -8,6 +8,7 @@
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_io_data.h"
 #include "sdkconfig.h"
 
 #include "esp_err.h"
@@ -88,13 +89,17 @@ void vesc_rt_data_request(void)
         MASK_AMP_HOURS |
         MASK_TEMP_MOS |
         MASK_TEMP_MOTOR |
+        MASK_CURRENT_MOTOR |
         MASK_CURRENT_IN |
+        MASK_DUTY_NOW |
+        MASK_RPM |
         MASK_BATTERY_LEVEL |
         MASK_SPEED |
         MASK_V_IN |
         MASK_WATT_HOURS |
         MASK_WATT_HOURS_CHARGED |
         MASK_TACHOMETER_ABS |
+        MASK_FAULT_CODE |
         MASK_BATTERY_WH |
         MASK_ODOMETER |
         MASK_UPTIME_MS;
@@ -256,6 +261,7 @@ static void rt_task(void *arg)
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
         vesc_lisp_poll_loop();
 #endif
+        vesc_io_data_loop();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
