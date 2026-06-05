@@ -354,8 +354,8 @@ scripts/build_board.sh jc4880 -p <PORT> flash monitor   # Guition JC4880P443C, 1
 - **sdkconfig-оверлеи** задают флеш, имя партишен-файла, CAN-пины, выбор борда:
   `sdkconfig.defaults.waveshare` (32 МБ, `partitions.csv`, CAN 48/47) и
   `sdkconfig.defaults.jc4880` (16 МБ, `partitions_16mb.csv`, CAN 51/52).
-- **JC = 16 МБ** → отдельная `partitions_16mb.csv`: OTA 6 МБ ×2 + storage 1 МБ +
-  triplog ~2.9 МБ. Образ ~5.3 МБ → запас в слоте ~0.7 МБ, следить за ростом.
+- **JC = 16 МБ** → отдельная `partitions_16mb.csv`: OTA 5 МБ ×2 + storage 1 МБ +
+  triplog ~4.9 МБ. Образ ~3.8 МБ → запас в слоте ~1.2 МБ (24%), следить за ростом.
 - **JC пины** (свободный хедер): BT-агент `TX=33 RX=31 RST=30 IO0=29`,
   CAN `RX=52 TX=51`, подсветка LCD `23`, reset LCD `5`. Дисплей ST7701S,
   DPI 34 МГц, vendor-init по умолчанию драйвера; WiFi (SDIO→C6), I2C тача,

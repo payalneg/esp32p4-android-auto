@@ -5,18 +5,21 @@
 # bootloader_mmap bug — espressif/esp-idf#18051, stale cache for addrs >= 0x01000000
 # during OTA verify — cannot be hit here):
 #   0x00000..0x12000   bootloader + nvs + otadata + phy_init
-#   0x20000..0x620000  ota_0   (6 MB)
-#   0x620000..0xC20000 ota_1   (6 MB)
-#   0xC20000..0xD20000 storage (LittleFS, 1 MB — VESC config backups only)
-#   0xD20000..0x1000000 triplog (~2.875 MB raw circular trip log, via esp_partition)
+#   0x20000..0x520000  ota_0   (5 MB)
+#   0x520000..0xA20000 ota_1   (5 MB)
+#   0xA20000..0xB20000 storage (LittleFS, 1 MB — VESC config backups only)
+#   0xB20000..0x1000000 triplog (~4.875 MB raw circular trip log, via esp_partition)
 #
-# NOTE: the app image is ~5.3 MB and growing — a 6 MB OTA slot leaves ~0.7 MB of
-# headroom. If the JC build outgrows 6 MB, OTA/flash will fail; rebalance this
-# table (shrink storage/triplog, or bump slots to 6.5 MB) at that point.
+# NOTE: the app image is ~3.8 MB — a 5 MB OTA slot leaves ~1.2 MB of headroom.
+# If the JC build outgrows 5 MB, OTA/flash will fail; rebalance this table
+# (shrink storage/triplog, or bump the slots back up) at that point. trip_log
+# reads the partition size dynamically (esp_partition), so resizing triplog
+# needs no code change — but it does require a full reflash (the partition
+# table can't be changed over OTA), which wipes existing storage + triplog.
 nvs,        data, nvs,      0x9000,    0x6000
 otadata,    data, ota,      0xf000,    0x2000
 phy_init,   data, phy,      0x11000,   0x1000
-ota_0,      app,  ota_0,    0x20000,   0x600000
-ota_1,      app,  ota_1,    0x620000,  0x600000
-storage,    data, spiffs,   0xC20000,  0x100000
-triplog,    data, 0x40,     0xD20000,  0x2E0000
+ota_0,      app,  ota_0,    0x20000,   0x500000
+ota_1,      app,  ota_1,    0x520000,  0x500000
+storage,    data, spiffs,   0xA20000,  0x100000
+triplog,    data, 0x40,     0xB20000,  0x4E0000

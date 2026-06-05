@@ -263,9 +263,9 @@ choice (`CONFIG_BOARD_WAVESHARE_43` / `CONFIG_BOARD_JC4880P443C`); see the
 
 **JC4880P443C pin map** (free-header pins): BT-agent UART `TX=33 RX=31`,
 `RST=30 IO0=29`; CAN `RX=52 TX=51`; LCD backlight `23`, reset `5`.
-The 16 MB layout fits two 6 MB OTA slots + 1 MB storage + ~2.9 MB trip log —
-the app image (~5.3 MB) has ~0.7 MB of headroom in each slot, so watch the
-size as the firmware grows.
+The 16 MB layout fits two 5 MB OTA slots + 1 MB storage + ~4.9 MB trip log —
+the app image (~3.8 MB) has ~1.2 MB (24%) of headroom in each slot, so watch
+the size as the firmware grows.
 
 ### 2. (Optional) BT agent firmware — D1 Mini ESP32
 
