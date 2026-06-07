@@ -96,6 +96,20 @@ the BT path on every boot.
 
 <!-- TODO: close-up photo of the J3 header with VESC + D1 Mini wired in -->
 
+**Pinout depends on the board.** The diagrams below are drawn for the
+**Waveshare 4.3"** (the default board). For the **Guition JC4880P443C** take the
+numbers from the JC4880 column; power, signal directions and the CAN RX divider
+are the same on both boards.
+
+| Signal | Waveshare 4.3" | JC4880P443C |
+|---|---|---|
+| CAN TX → transceiver TXD | GPIO 48 | GPIO 51 |
+| CAN RX ← transceiver RXD | GPIO 47 | GPIO 52 |
+| BT agent: P4 TX → WROOM RX | GPIO 22 | GPIO 33 |
+| BT agent: P4 RX ← WROOM TX | GPIO 21 | GPIO 31 |
+| BT agent RST → WROOM EN | GPIO 24 | GPIO 30 |
+| BT agent IO0 → WROOM GPIO 0 | GPIO 25 | GPIO 29 |
+
 ### 1. Power chain
 
 ```mermaid
@@ -208,16 +222,16 @@ flowchart LR
 
     subgraph P4J3["ESP32-P4 (J3 header)"]
         direction TB
-        P22(["GPIO 22 — UART1 RX (in)"])
-        P21(["GPIO 21 — UART1 TX (out)"])
+        P22(["GPIO 22 — UART1 TX (out)"])
+        P21(["GPIO 21 — UART1 RX (in)"])
         P24(["GPIO 24 — drives WROOM RST"])
         P25(["GPIO 25 — drives WROOM IO0"])
         P3V3(["3V3 out"])
         PGND(["GND"])
     end
 
-    W17 -->|UART data| P22
-    P21 -->|UART data| W16
+    P22 -->|UART data| W16
+    W17 -->|UART data| P21
     P24 -->|reset pulse| WEN
     P25 -->|boot select| WIO0
     P3V3 -->|3.3V power| W3V3
@@ -289,8 +303,9 @@ and the partition table. The board is chosen by the Kconfig `BOARD_MODEL`
 choice (`CONFIG_BOARD_WAVESHARE_43` / `CONFIG_BOARD_JC4880P443C`); see the
 `#if CONFIG_BOARD_JC4880P443C` branches in the BSP and `main/bt_link.h`.
 
-**JC4880P443C pin map** (free-header pins): BT-agent UART `TX=33 RX=31`,
-`RST=30 IO0=29`; CAN `RX=52 TX=51`; LCD backlight `23`, reset `5`.
+The pins you actually wire (CAN transceiver and BT agent) are in the table under
+**🔌 Wiring** above. JC4880's internal panel pins (LCD backlight `23`, reset `5`)
+are set in the BSP — you don't solder those.
 The 16 MB layout fits two 5 MB OTA slots + 1 MB storage + ~4.9 MB trip log —
 the app image (~3.8 MB) has ~1.2 MB (24%) of headroom in each slot, so watch
 the size as the firmware grows.
