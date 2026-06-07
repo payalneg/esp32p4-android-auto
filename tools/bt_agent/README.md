@@ -14,16 +14,31 @@ J3 header on the bottom edge:
 ```
 D1 Mini side             ESP32-P4 (J3)
 ─────────────────────────────────────────
-GPIO 17 (TX2)   ────►    GPIO 22  (RX)
-GPIO 16 (RX2)   ◄────    GPIO 21  (TX)
+GPIO 1 (TX0)    ────►    GPIO 21  (RX)
+GPIO 3 (RX0)    ◄────    GPIO 22  (TX)
 GND             ────     GND
 5V (or VBUS)    ◄────    5V
 ```
 
-GPIO 21/22 are free expansion pins, so the USB-C debug console on P4
+The agent talks over **UART0** (the standard USB-Serial pins, GPIO 1/3).
+The UART2 pads (GPIO 16/17) didn't reliably drive a 3.3 V signal on this
+D1 Mini clone — on some clones those pins route to the CH9102 auto-program
+circuit — so UART0 is the only path that moves data in both directions.
+Trade-off: the on-board CH9102 USB-to-UART bridge shares these lines, so
+the USB console and the P4 link both ride GPIO 1/3.
+
+GPIO 21/22 on P4 are free expansion pins, so the USB-C debug console on P4
 (GPIO 37/38) stays usable while the agent is wired up.
 
 ## Build & flash
+
+The agent's UART link to P4 rides the same GPIO 1 (TX0) / GPIO 3 (RX0)
+pins as the on-board CH9102 USB-Serial bridge, so the wires to P4 and the
+USB-C cable fight over those lines. Flash in this order:
+
+1. unplug the wires from P4 (GPIO 1 / GPIO 3 / GND / 5V)
+2. plug in USB-C, run `idf.py flash` below
+3. unplug USB-C, reconnect the wires to P4
 
 Plug the D1 Mini into your laptop via its **USB-C** port. Find the serial
 port (usually `/dev/cu.usbserial-XXXX` on macOS), then from this directory:
