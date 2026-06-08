@@ -413,8 +413,12 @@
  *Compiler error will be triggered if a font needs it.*/
 #define LV_FONT_FMT_TXT_LARGE 1
 
-/*Enables/disables support for compressed fonts.*/
-#define LV_USE_FONT_COMPRESSED 0
+/*Enables/disables support for compressed fonts.
+ *ON: the large cockpit fonts (Antonio/DSEG7 @64 and @200) ship RLE-compressed
+ *by regen_cockpit_fonts.py — DSEG7@200 115->15 KB, Antonio@200 57->13 KB, lossless
+ *(bpp4). Decode runs once per glyph per label redraw (invalidation-based, not per
+ *frame), cheap at the dashboard's update rate. Small fonts stay uncompressed.*/
+#define LV_USE_FONT_COMPRESSED 1
 
 /*Enable subpixel rendering*/
 #define LV_USE_FONT_SUBPX 0

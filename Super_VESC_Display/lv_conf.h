@@ -363,8 +363,10 @@
  *Compiler error will be triggered if a font needs it.*/
 #define LV_FONT_FMT_TXT_LARGE 1
 
-/*Enables/disables support for compressed fonts.*/
-#define LV_USE_FONT_COMPRESSED 0
+/*Enables/disables support for compressed fonts.
+ *Must match main/lv_conf.h — the large cockpit fonts (@64/@200) ship
+ *RLE-compressed from regen_cockpit_fonts.py; the simulator must decode them too.*/
+#define LV_USE_FONT_COMPRESSED 1
 
 /*Enable subpixel rendering*/
 #define LV_USE_FONT_SUBPX 0
