@@ -212,8 +212,8 @@ pins. The USB-C debug console (GPIO 37/38) stays usable while this is wired up.
 flowchart LR
     subgraph WROOM["ESP32-WROOM-32<br/>(bare module or D1 Mini dev board)"]
         direction TB
-        W17(["GPIO 17 (TX2) — UART TX (out)"])
-        W16(["GPIO 16 (RX2) — UART RX (in)"])
+        W1(["GPIO 1 (TX0) — UART TX (out)"])
+        W3(["GPIO 3 (RX0) — UART RX (in)"])
         WEN(["EN — chip reset (input)"])
         WIO0(["GPIO 0 — BOOT-mode select (input)"])
         W3V3(["3V3 (power in)"])
@@ -230,8 +230,8 @@ flowchart LR
         PGND(["GND"])
     end
 
-    P22 -->|UART data| W16
-    W17 -->|UART data| P21
+    P22 -->|UART data| W3
+    W1 -->|UART data| P21
     P24 -->|reset pulse| WEN
     P25 -->|boot select| WIO0
     P3V3 -->|3.3V power| W3V3

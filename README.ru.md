@@ -215,8 +215,8 @@ USB-C debug консоль (GPIO 37/38) остаётся свободной пр
 flowchart LR
     subgraph WROOM["ESP32-WROOM-32<br/>(голый модуль или D1 Mini плата)"]
         direction TB
-        W17(["GPIO 17 (TX2) — UART TX (выход)"])
-        W16(["GPIO 16 (RX2) — UART RX (вход)"])
+        W1(["GPIO 1 (TX0) — UART TX (выход)"])
+        W3(["GPIO 3 (RX0) — UART RX (вход)"])
         WEN(["EN — reset чипа (вход)"])
         WIO0(["GPIO 0 — выбор boot-режима (вход)"])
         W3V3(["3V3 (вход питания)"])
@@ -233,8 +233,8 @@ flowchart LR
         PGND(["GND"])
     end
 
-    P22 -->|UART данные| W16
-    W17 -->|UART данные| P21
+    P22 -->|UART данные| W3
+    W1 -->|UART данные| P21
     P24 -->|импульс reset| WEN
     P25 -->|выбор boot| WIO0
     P3V3 -->|3.3В питание| W3V3
