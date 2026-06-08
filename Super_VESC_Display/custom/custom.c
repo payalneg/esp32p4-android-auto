@@ -21,6 +21,7 @@
 #include "settings_wrapper.h"
 #include "dashboard_theme.h"
 #include "theme_ref.h"
+#include "theme_dashboard_amber.h"
 
 #ifdef LV_REALDEVICE
 #include "log_capture.h"
@@ -3098,8 +3099,10 @@ void custom_init_once(void)
     }
 #endif
 
-    dashboard_theme_register(&cockpit_theme);
-    theme_ref_register();   /* scaffold/reference theme — see theme_ref.c */
+    dashboard_theme_register(&cockpit_theme);   /* idx 0 (default) */
+    theme_ref_register();   /* idx 1 — scaffold/reference theme, see theme_ref.c */
+    /* Append new themes at the END so saved NVS theme indices stay stable. */
+    theme_dashboard_amber_register();   /* idx 2 — "Cockpit (Amber)", see theme_dashboard_amber.c */
 }
 
 /* Simulator / desktop-port entry point. setup_ui() already built and loaded the

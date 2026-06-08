@@ -1,0 +1,109 @@
+/* ===== Cyberpunk amber VESC dashboard — shared styles ===== */
+
+@font-face {
+  font-family: "DSEG7";
+  src: url("https://cdn.jsdelivr.net/npm/@fontsource/dseg7-classic@5.2.5/files/dseg7-classic-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DSEG7";
+  src: url("https://cdn.jsdelivr.net/npm/@fontsource/dseg7-classic@5.2.5/files/dseg7-classic-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --bg: #0a0806;
+  --bg-panel: #100b07;
+  --amber: #ff7a1a;
+  --amber-bright: #ffb35c;
+  --amber-hot: #ffe6c2;
+  --amber-deep: #c8470a;
+  --amber-dim: rgba(255, 122, 26, 0.09);
+  --amber-dim2: rgba(255, 122, 26, 0.16);
+  --grid-line: rgba(255, 122, 26, 0.14);
+  --red: #ff3b2f;
+  --label: rgba(255, 176, 110, 0.55);
+  --label-dim: rgba(255, 176, 110, 0.35);
+  --glow-s: 0 0 6px rgba(255, 122, 26, .55), 0 0 16px rgba(255, 90, 0, .35);
+  --glow-m: 0 0 10px rgba(255, 138, 30, .6), 0 0 30px rgba(255, 90, 0, .4);
+  --glow-l: 0 0 16px rgba(255, 150, 40, .7), 0 0 50px rgba(255, 90, 0, .45), 0 0 90px rgba(255,70,0,.25);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ---- the 800x480 screen shell ---- */
+.scr {
+  width: 800px;
+  height: 480px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 80% at 50% 18%, rgba(255, 90, 0, 0.10), transparent 60%),
+    radial-gradient(100% 120% at 50% 120%, rgba(255, 60, 0, 0.07), transparent 55%),
+    var(--bg);
+  color: var(--amber-bright);
+  font-family: "Chakra Petch", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+/* faint scanline + vignette overlay applied per-variant via .fx */
+.fx::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none; z-index: 50;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.16) 2px 3px),
+    radial-gradient(130% 100% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%);
+  mix-blend-mode: normal;
+}
+
+/* ---- 7-seg readout with ghost (off segments) ---- */
+.seg { font-family: "DSEG7", monospace; position: relative; display: inline-block; line-height: 1; }
+.seg .ghost {
+  position: absolute; inset: 0; color: var(--amber-dim);
+  text-shadow: none; z-index: 0; pointer-events: none;
+}
+.seg .val { position: relative; z-index: 1; color: var(--amber-bright); text-shadow: var(--glow-m); }
+.seg.hot .val { color: var(--amber-hot); text-shadow: var(--glow-l); }
+.seg.warn .val { color: var(--red); text-shadow: 0 0 10px rgba(255,59,47,.7), 0 0 28px rgba(255,40,0,.4); }
+
+/* ---- labels ---- */
+.lbl {
+  font-family: "Chakra Petch", sans-serif;
+  text-transform: uppercase;
+  color: var(--label);
+  letter-spacing: 0.18em;
+  font-weight: 600;
+}
+.unit { color: var(--label); font-weight: 600; letter-spacing: .08em; }
+
+/* ---- top status bar ---- */
+.topbar { display: flex; align-items: center; }
+.navitem, .topbar .navitem { font-family: "Chakra Petch"; font-weight: 700; letter-spacing: .12em; white-space: nowrap; }
+.navitem.active, .topbar .navitem.active { color: var(--amber-bright); text-shadow: var(--glow-s); }
+.navitem.idle, .topbar .navitem.idle { color: var(--label-dim); }
+
+/* ---- segmented vertical bar ---- */
+.segbar { display: flex; flex-direction: column-reverse; gap: 4px; }
+.segbar .cell {
+  background: var(--amber-dim);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255,122,26,0.06);
+}
+.segbar .cell.on {
+  background: linear-gradient(90deg, var(--amber-deep), var(--amber));
+  box-shadow: var(--glow-s), inset 0 0 4px rgba(255,220,160,.4);
+}
+.segbar .cell.warn.on {
+  background: linear-gradient(90deg, #9c1500, var(--red));
+  box-shadow: 0 0 8px rgba(255,59,47,.6);
+}
+
+/* ---- thin divider ---- */
+.divln { background: var(--grid-line); }
+
+/* small dot indicators */
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber-dim2); }
+.dot.on { background: var(--amber); box-shadow: var(--glow-s); }
+.dot.bt.on { background: #2aa9ff; box-shadow: 0 0 8px rgba(42,169,255,.7); }

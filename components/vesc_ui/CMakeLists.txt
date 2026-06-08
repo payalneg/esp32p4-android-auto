@@ -34,12 +34,30 @@ file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
 # Needs node/npx; when absent the tool copies the committed subsets as fallback
 # so CI / clean checkouts still link. Keep COCKPIT_FONT_NAMES in sync with JOBS
 # in tools/regen_cockpit_fonts.py.
-list(FILTER SVD_FONTS EXCLUDE REGEX "/lv_font_Antonio_Regular_[0-9]+\\.c$")
+# Also drop the DSEG7/DSEG14 segment fonts (amber theme): GUI Guider's full
+# export is even larger (DSEG7_200 = 9.7 MB; DSEG14 carries A-Z too).
+# regen_cockpit_fonts.py rebuilds subsets (digit-only for the big numeric sizes,
+# full charset for the small label sizes) into the build dir, same mechanism as
+# Antonio. DSEG7 is no longer referenced by the amber screen (now all-DSEG14) but
+# kept here so the subset still builds if any screen reintroduces it.
+list(FILTER SVD_FONTS EXCLUDE REGEX "/lv_font_(Antonio_Regular|DSEG7Classic_Regular|DSEG14Classic_Regular)_[0-9]+\\.c$")
 
 set(COCKPIT_FONT_NAMES
     lv_font_Antonio_Regular_200 lv_font_Antonio_Regular_50
     lv_font_Antonio_Regular_40  lv_font_Antonio_Regular_22
-    lv_font_Antonio_Regular_64  lv_font_Antonio_Regular_32)
+    lv_font_Antonio_Regular_64  lv_font_Antonio_Regular_32
+    lv_font_DSEG7Classic_Regular_200 lv_font_DSEG7Classic_Regular_64
+    lv_font_DSEG7Classic_Regular_40  lv_font_DSEG7Classic_Regular_32
+    lv_font_DSEG7Classic_Regular_24
+    # DSEG14 Classic — the amber dashboard's single 14-segment font (labels +
+    # numbers). Letter sizes (full charset) + numeric-only big sizes.
+    lv_font_DSEG14Classic_Regular_11  lv_font_DSEG14Classic_Regular_12
+    lv_font_DSEG14Classic_Regular_16  lv_font_DSEG14Classic_Regular_18
+    lv_font_DSEG14Classic_Regular_20  lv_font_DSEG14Classic_Regular_22
+    lv_font_DSEG14Classic_Regular_24  lv_font_DSEG14Classic_Regular_25
+    lv_font_DSEG14Classic_Regular_26  lv_font_DSEG14Classic_Regular_50
+    lv_font_DSEG14Classic_Regular_64  lv_font_DSEG14Classic_Regular_180
+    lv_font_DSEG14Classic_Regular_200)
 set(COCKPIT_FONT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cockpit_fonts")
 set(COCKPIT_FONT_SRCS "")
 foreach(_cf ${COCKPIT_FONT_NAMES})

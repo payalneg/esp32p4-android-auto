@@ -121,6 +121,105 @@ typedef struct
 	bool settings_del;
 	lv_obj_t *settings_exit_button;
 	lv_obj_t *settings_exit_button_label;
+	lv_obj_t *dashboard_amber;
+	bool dashboard_amber_del;
+	lv_obj_t *dashboard_amber_statusbar_sep;
+	lv_obj_t *dashboard_amber_status_vesc;
+	lv_obj_t *dashboard_amber_mode_text;
+	lv_obj_t *dashboard_amber_uptime_text;
+	lv_obj_t *dashboard_amber_status_bt;
+	lv_obj_t *dashboard_amber_battery_sep;
+	lv_obj_t *dashboard_amber_battery_label;
+	lv_obj_t *dashboard_amber_Battery_proc_text;
+	lv_obj_t *dashboard_amber_battery_pct;
+	lv_obj_t *dashboard_amber_batt_seg_00;
+	lv_obj_t *dashboard_amber_batt_seg_01;
+	lv_obj_t *dashboard_amber_batt_seg_02;
+	lv_obj_t *dashboard_amber_batt_seg_03;
+	lv_obj_t *dashboard_amber_batt_seg_04;
+	lv_obj_t *dashboard_amber_batt_seg_05;
+	lv_obj_t *dashboard_amber_batt_seg_06;
+	lv_obj_t *dashboard_amber_batt_seg_07;
+	lv_obj_t *dashboard_amber_batt_seg_08;
+	lv_obj_t *dashboard_amber_batt_seg_09;
+	lv_obj_t *dashboard_amber_batt_seg_10;
+	lv_obj_t *dashboard_amber_batt_seg_11;
+	lv_obj_t *dashboard_amber_batt_seg_12;
+	lv_obj_t *dashboard_amber_batt_seg_13;
+	lv_obj_t *dashboard_amber_battery_range_label;
+	lv_obj_t *dashboard_amber_Range_text;
+	lv_obj_t *dashboard_amber_speed_label;
+	lv_obj_t *dashboard_amber_Speed_text;
+	lv_obj_t *dashboard_amber_speed_seg_00;
+	lv_obj_t *dashboard_amber_speed_seg_01;
+	lv_obj_t *dashboard_amber_speed_seg_02;
+	lv_obj_t *dashboard_amber_speed_seg_03;
+	lv_obj_t *dashboard_amber_speed_seg_04;
+	lv_obj_t *dashboard_amber_speed_seg_05;
+	lv_obj_t *dashboard_amber_speed_seg_06;
+	lv_obj_t *dashboard_amber_speed_seg_07;
+	lv_obj_t *dashboard_amber_speed_seg_08;
+	lv_obj_t *dashboard_amber_speed_seg_09;
+	lv_obj_t *dashboard_amber_speed_seg_10;
+	lv_obj_t *dashboard_amber_speed_seg_11;
+	lv_obj_t *dashboard_amber_speed_min;
+	lv_obj_t *dashboard_amber_speed_max;
+	lv_obj_t *dashboard_amber_power_sep;
+	lv_obj_t *dashboard_amber_power_label;
+	lv_obj_t *dashboard_amber_power_value;
+	lv_obj_t *dashboard_amber_power_unit;
+	lv_obj_t *dashboard_amber_Current_text;
+	lv_obj_t *dashboard_amber_power_seg_00;
+	lv_obj_t *dashboard_amber_power_seg_01;
+	lv_obj_t *dashboard_amber_power_seg_02;
+	lv_obj_t *dashboard_amber_power_seg_03;
+	lv_obj_t *dashboard_amber_power_seg_04;
+	lv_obj_t *dashboard_amber_power_seg_05;
+	lv_obj_t *dashboard_amber_power_seg_06;
+	lv_obj_t *dashboard_amber_power_seg_07;
+	lv_obj_t *dashboard_amber_power_seg_08;
+	lv_obj_t *dashboard_amber_power_seg_09;
+	lv_obj_t *dashboard_amber_power_seg_10;
+	lv_obj_t *dashboard_amber_power_seg_11;
+	lv_obj_t *dashboard_amber_power_seg_12;
+	lv_obj_t *dashboard_amber_power_seg_13;
+	lv_obj_t *dashboard_amber_power_max_label;
+	lv_obj_t *dashboard_amber_power_max_val;
+	lv_obj_t *dashboard_amber_bottom_bg;
+	lv_obj_t *dashboard_amber_bottom_top_sep;
+	lv_obj_t *dashboard_amber_bottom_col_sep_0;
+	lv_obj_t *dashboard_amber_bottom_col_sep_1;
+	lv_obj_t *dashboard_amber_bottom_col_sep_2;
+	lv_obj_t *dashboard_amber_bottom_col_sep_3;
+	lv_obj_t *dashboard_amber_col_trip_label;
+	lv_obj_t *dashboard_amber_TRIP_text;
+	lv_obj_t *dashboard_amber_col_trip_unit;
+	lv_obj_t *dashboard_amber_col_odo_label;
+	lv_obj_t *dashboard_amber_odo_text;
+	lv_obj_t *dashboard_amber_col_odo_unit;
+	lv_obj_t *dashboard_amber_col_mtmp_label;
+	lv_obj_t *dashboard_amber_temp_mot_text;
+	lv_obj_t *dashboard_amber_col_mtmp_unit;
+	lv_obj_t *dashboard_amber_col_ctmp_label;
+	lv_obj_t *dashboard_amber_temp_esc_text;
+	lv_obj_t *dashboard_amber_col_ctmp_unit;
+	lv_obj_t *dashboard_amber_col_avg_label;
+	lv_obj_t *dashboard_amber_col_avg_value;
+	lv_obj_t *dashboard_amber_col_avg_unit;
+	lv_obj_t *dashboard_amber_cruise_control_img;
+	lv_obj_t *dashboard_amber_esc_not_connected_text;
+	lv_obj_t *dashboard_amber_Ah_text;
+	lv_obj_t *dashboard_amber_Speed_cc_text;
+	lv_obj_t *dashboard_amber_Settings_text;
+	lv_obj_t *dashboard_amber_song_title_label;
+	lv_obj_t *dashboard_amber_col_v_label;
+	lv_obj_t *dashboard_amber_Voltage_text;
+	lv_obj_t *dashboard_amber_col_voltage_label;
+	lv_obj_t *dashboard_amber_cur_time_label;
+	lv_obj_t *dashboard_amber_brightness_slider;
+	lv_obj_t *dashboard_amber_music_info;
+	lv_obj_t *dashboard_amber_music_info_tile;
+	lv_obj_t *dashboard_amber_statistics_button;
 }lv_ui;
 
 typedef void (*ui_setup_scr_t)(lv_ui * ui);
@@ -146,6 +245,8 @@ extern lv_ui guider_ui;
 
 void setup_scr_dashboard(lv_ui *ui);
 void setup_scr_settings(lv_ui *ui);
+void setup_scr_dashboard_amber(lv_ui *ui);
+LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 
 LV_FONT_DECLARE(lv_font_montserratMedium_16)
@@ -163,6 +264,15 @@ LV_FONT_DECLARE(lv_font_Antonio_Regular_32)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_22)
 LV_FONT_DECLARE(lv_font_montserratMedium_25)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_50)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_16)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_20)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_24)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_50)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_22)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_18)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_12)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_180)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_11)
 
 
 #ifdef __cplusplus
