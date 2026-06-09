@@ -2157,6 +2157,21 @@ static void reset_button_event_cb(lv_event_t *e) {
     }
 }
 
+/* On-device file browser — strong impl lives in main/files_screen.c (pulled
+ * in via files_screen_link_anchor referenced from main.c). The weak stub below
+ * keeps vesc_ui linkable on its own and lets the desktop simulator build (it
+ * just logs a tap). */
+__attribute__((weak)) void files_screen_show(void)
+{
+    printf("files_screen_show (no impl linked)\n");
+}
+
+static void settings_files_button_event_cb(lv_event_t *e)
+{
+    (void)e;
+    files_screen_show();
+}
+
 // Initialize settings UI - called from custom_init or when settings screen loads
 void settings_ui_init(lv_ui *ui) {
     if (!ui || !ui->settings) {
@@ -2913,6 +2928,21 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_reset_trip_button, 8, 0);
     lv_obj_set_style_border_width(settings_reset_trip_button, 0, 0);
     lv_obj_add_event_cb(settings_reset_trip_button, reset_trip_button_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    // ========== Files browser (same row as Reset trip, second slot) =====
+    lv_obj_t *files_btn = lv_btn_create(ui->settings);
+    lv_obj_t *files_lbl = lv_label_create(files_btn);
+    lv_label_set_text(files_lbl, "Files");
+    lv_obj_align(files_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_pos(files_btn, 281, y_pos);
+    lv_obj_set_size(files_btn, 245, 50);
+    lv_obj_set_style_bg_color(files_btn, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(files_btn, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(files_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_radius(files_btn, 8, 0);
+    lv_obj_set_style_border_width(files_btn, 0, 0);
+    lv_obj_add_event_cb(files_btn, settings_files_button_event_cb,
                         LV_EVENT_CLICKED, NULL);
 
     y_pos += SETTINGS_ROW_H;

@@ -242,3 +242,15 @@ CONFIG_ESP_VBAT_BROWNOUT_DET_LVL_SEL_7=y
 # ignores (10-byte JFIF / 8-byte PNG signatures never collide with raw
 # pixels).
 CONFIG_ESP_LVGL_ADAPTER_ENABLE_DECODER=y
+
+# FAT long filenames on the microSD card. IDF defaults FATFS to 8.3 short
+# names (FATFS_LFN_NONE), so a file like "my recording 2024.mp4" shows up
+# mangled ("MYRECO~1.MP4") and long-named files can't be created — both the
+# on-device file browser and the BLE file manager hit this on /sdcard.
+# Heap-backed LFN buffer (STACK would put ~1 KB on whatever task runs FAT ops
+# and risk the ble_files / files_screen worker stacks); UTF-8 API so non-ASCII
+# (e.g. Cyrillic) names round-trip with the phone, which speaks UTF-8.
+# /vescfs (LittleFS) already supports long names, so this is FAT-only.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_FATFS_API_ENCODING_UTF_8=y

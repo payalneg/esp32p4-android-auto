@@ -8,6 +8,7 @@ import '../bridge/notification_bridge.dart';
 import '../i18n/strings.dart';
 import 'about_screen.dart';
 import 'app_filter_screen.dart';
+import 'device_files_screen.dart';
 import 'firmware_update_screen.dart';
 import 'pairing_screen.dart';
 import 'test_panel.dart';
@@ -198,6 +199,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+          // Device file browser — only when connected to a head unit whose
+          // firmware exposes the file-manager characteristics.
+          StreamBuilder<BleConnState>(
+            stream: BleService.instance.state,
+            initialData: BleService.instance.currentState,
+            builder: (ctx, snap) {
+              final connected = snap.data == BleConnState.connected;
+              if (!connected || !BleService.instance.supportsFileManager) {
+                return const SizedBox.shrink();
+              }
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.folder_open),
+                  title: Text(t(context, 'home.files.title')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const DeviceFilesScreen()),
+                  ),
+                ),
+              );
+            },
+          ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.info_outline),

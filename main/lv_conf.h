@@ -629,10 +629,13 @@
     #define LV_FS_STDIO_CACHE_SIZE 0    /*>0 to cache this number of bytes in lv_fs_read()*/
 #endif
 
-/*API for open, read, etc*/
-#define LV_USE_FS_POSIX 0
+/*API for open, read, etc — drive letter 'S' (e.g. "S:/vescfs/foo.png").
+ * Used by the on-device file browser (image preview) and the boot splash
+ * (lv_gif_set_src). Anything after "S:" is fed verbatim to open(2), so the
+ * full absolute POSIX path works for both /vescfs (LittleFS) and /sdcard. */
+#define LV_USE_FS_POSIX 1
 #if LV_USE_FS_POSIX
-    #define LV_FS_POSIX_LETTER '\0'     /*Set an upper cased letter on which the drive will accessible (e.g. 'A')*/
+    #define LV_FS_POSIX_LETTER 'S'      /*Set an upper cased letter on which the drive will accessible (e.g. 'A')*/
     #define LV_FS_POSIX_PATH ""         /*Set the working directory. File/directory paths will be appended to it.*/
     #define LV_FS_POSIX_CACHE_SIZE 0    /*>0 to cache this number of bytes in lv_fs_read()*/
 #endif
@@ -671,8 +674,9 @@
  * Split JPG is a custom format optimized for embedded systems. */
 #define LV_USE_SJPG 0
 
-/*GIF decoder library*/
-#define LV_USE_GIF 0
+/*GIF decoder library — boot splash animation (S:/vescfs/splash.gif),
+ * see main/splash_screen.c. Reads via the LV_USE_FS_POSIX 'S' driver above.*/
+#define LV_USE_GIF 1
 
 /*QR code library*/
 #define LV_USE_QRCODE 1

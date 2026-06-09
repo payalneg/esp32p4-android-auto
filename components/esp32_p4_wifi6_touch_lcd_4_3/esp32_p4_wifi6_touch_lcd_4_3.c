@@ -203,6 +203,13 @@ static esp_err_t bsp_i2c_device_probe(uint8_t addr)
 
 esp_err_t bsp_sdcard_mount(void)
 {
+    /* Idempotent: a second mount must NOT re-run sd_pwr_ctrl_new_on_chip_ldo()
+     * (channel 4 is already taken → it errors out before esp_vfs_fat_sdmmc_mount
+     * is ever reached, so callers can't tell "already mounted" from "no card").
+     * Once bsp_sdcard is set the card is up — just say so. Lets the on-device
+     * browser and the BLE file manager both call this freely. */
+    if (bsp_sdcard) return ESP_OK;
+
     const esp_vfs_fat_sdmmc_mount_config_t mount_config = {
 #ifdef CONFIG_BSP_SD_FORMAT_ON_MOUNT_FAIL
         .format_if_mount_failed = true,
@@ -236,7 +243,16 @@ esp_err_t bsp_sdcard_mount(void)
         .flags = 0,
     };
 
-    return esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host, &slot_config, &mount_config, &bsp_sdcard);
+    esp_err_t mret = esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host,
+                                             &slot_config, &mount_config, &bsp_sdcard);
+    if (mret != ESP_OK) {
+        /* Free the LDO so a later retry (e.g. card inserted after the first
+         * no-card attempt) can re-create it on channel 4 — otherwise every
+         * subsequent mount fails at sd_pwr_ctrl_new_on_chip_ldo and the card
+         * never shows up even once it's present. */
+        sd_pwr_ctrl_del_on_chip_ldo(pwr_ctrl_handle);
+    }
+    return mret;
 }
 
 esp_err_t bsp_sdcard_unmount(void)

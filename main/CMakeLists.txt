@@ -19,6 +19,7 @@ idf_component_register(
         "ble_nus.c"
         "notif_bridge.c"
         "ble_ota.c"
+        "ble_files.c"
         "notif_toast.c"
         "music_info_view.c"
         "fonts/aabridge_font_24.c"
@@ -36,6 +37,8 @@ idf_component_register(
         "vesc_ui_updater.c"
         "vesc_sim.c"
         "vbat_routing.c"
+        "files_screen.c"
+        "splash_screen.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -70,6 +73,7 @@ idf_component_register(
         dev_settings
         log_capture
         trip_log
+        joltwallet__littlefs
 )
 
 # Reroute mbedTLS's UTCTime parser to our offset-tolerant wrapper. Required

@@ -55,6 +55,7 @@ void port_start_app_hook(void)
 #include "display_video.h"
 #include "h264_pipe.h"
 #include "idle_screen.h"
+#include "splash_screen.h"
 #include "log_capture.h"
 #include "mdns_advertise.h"
 #include "ota_http.h"
@@ -78,6 +79,21 @@ void port_start_app_hook(void)
 #include "wifi_manager.h"
 
 static const char *TAG = "main";
+
+/* Force ld to pull main/files_screen.c.o out of libmain.a so its strong
+ * files_screen_show() overrides the weak printf stub in
+ * components/vesc_ui/custom.c (kept so vesc_ui links standalone and the
+ * desktop simulator still builds). libvesc_ui.a comes earlier on the link
+ * line, so its weak definition would otherwise satisfy custom.c's call and
+ * files_screen.c.o would never be pulled in. files_screen.c exports a unique
+ * non-weak anchor symbol; referencing it by address here makes ld follow the
+ * strong undefined ref into libmain.a, dragging the strong files_screen_show
+ * along to win the weak-vs-strong tie-break. */
+extern const int files_screen_link_anchor;
+__attribute__((used))
+static const int *const force_link_main_strongs[] = {
+    &files_screen_link_anchor,
+};
 
 /* ---- Custom LVGL touch indev fed by touch_input.c ----
  *
@@ -285,6 +301,12 @@ void app_main(void)
      * draws. Brightness callback persists future changes from the slider. */
     bsp_display_brightness_set(settings_get_screen_brightness());
     settings_register_brightness_cb(on_brightness_changed);
+
+    /* Boot splash GIF (if /vescfs/splash.gif exists). Top-layer overlay that
+     * covers the ~5 s dashboard build below; hidden once the dashboard is up
+     * (splash_screen_hide after ui_mode_init), with a safety auto-hide. */
+    splash_screen_show();
+
     /* idle first, ota second so the OTA overlay sits on top in z-order
      * (children of lv_scr_act() are stacked in creation order). */
     idle_screen_init();
@@ -314,6 +336,10 @@ void app_main(void)
     if (wdt_paused) {
         esp_task_wdt_add(idle0);
     }
+
+    /* Dashboard (or idle, on failure) is now the live screen underneath —
+     * drop the boot splash overlay. No-op if no splash was shown. */
+    splash_screen_hide();
     if (ui_err == ESP_OK) {
         /* 3-finger gesture toggles between VESC dashboard and AA projection.
          * Only meaningful once the AA stack is up. The GT911 polling task

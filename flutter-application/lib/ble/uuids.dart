@@ -28,4 +28,15 @@ class NotifBridgeUuids {
   /// WRITE_NO_RSP. BLE OTA data channel: raw firmware bytes streamed
   /// sequentially after the BEGIN/READY handshake on [charOtaCtrl].
   static const charOtaData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e0008';
+
+  /// WRITE | NOTIFY. File-manager control channel: the phone writes
+  /// list/download/upload/delete/rename/mkdir opcodes, the head unit notifies
+  /// status and streams listing/download payload (PDU_TYPE_FILE chunks).
+  /// Optional — absent on firmware without the file manager. See
+  /// lib/ble/file_ops.dart + file_manager.dart.
+  static const charFileCtrl = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e0009';
+
+  /// WRITE_NO_RSP. File-manager data channel: raw upload bytes streamed after
+  /// the UPLOAD/READY handshake on [charFileCtrl].
+  static const charFileData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000a';
 }

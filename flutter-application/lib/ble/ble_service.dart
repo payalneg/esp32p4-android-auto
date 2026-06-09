@@ -48,6 +48,10 @@ class BleService {
   // Present together; drive the over-BLE firmware flash (see bleOta).
   BluetoothCharacteristic? _otaCtrl;
   BluetoothCharacteristic? _otaData;
+  // Optional — null when the firmware predates the file manager (...0009/...000a).
+  // Present together; drive the device file browser (see FileManager).
+  BluetoothCharacteristic? _fileCtrl;
+  BluetoothCharacteristic? _fileData;
   Timer? _clockTimer;
   StreamSubscription<List<int>>? _outSub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
@@ -179,12 +183,16 @@ class BleService {
     _otaInfo = null;
     _otaCtrl = null;
     _otaData = null;
+    _fileCtrl = null;
+    _fileData = null;
     for (final c in svc.characteristics) {
       final u = c.uuid.toString().toLowerCase();
       if (u == NotifBridgeUuids.charTime) _time = c;
       if (u == NotifBridgeUuids.charOtaInfo) _otaInfo = c;
       if (u == NotifBridgeUuids.charOtaCtrl) _otaCtrl = c;
       if (u == NotifBridgeUuids.charOtaData) _otaData = c;
+      if (u == NotifBridgeUuids.charFileCtrl) _fileCtrl = c;
+      if (u == NotifBridgeUuids.charFileData) _fileData = c;
     }
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
@@ -407,8 +415,20 @@ class BleService {
     _otaInfo = null;
     _otaCtrl = null;
     _otaData = null;
+    _fileCtrl = null;
+    _fileData = null;
     _setState(BleConnState.idle);
   }
+
+  /// Whether the connected head unit exposes the file manager (...0009/...000a).
+  bool get supportsFileManager => _fileCtrl != null && _fileData != null;
+
+  /// File-manager characteristics + link facts for FileManager. Null/false
+  /// when not connected or unsupported.
+  BluetoothCharacteristic? get fileCtrlChar => _fileCtrl;
+  BluetoothCharacteristic? get fileDataChar => _fileData;
+  bool get isConnected => _state == BleConnState.connected;
+  int get negotiatedMtu => _device?.mtuNow ?? 247;
 
   Future<void> sendNotification(NotificationMsg n) =>
       _send(PduType.notification, n.encode());

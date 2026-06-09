@@ -18,6 +18,7 @@
 
 #include "notif_bridge.h"
 #include "ble_ota.h"
+#include "ble_files.h"
 #include "board.h"
 
 #include <string.h>
@@ -92,6 +93,17 @@ static const ble_uuid128_t NB_OTA_CTRL_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t NB_OTA_DATA_UUID = BLE_UUID128_INIT(
     0x08, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+/* FILE-CTRL / FILE-DATA chars — browse + transfer the device filesystem from
+ * the phone (list/download/upload/delete/rename/mkdir over /vescfs and /sdcard).
+ * CTRL carries request opcodes and notifies status + bulk listing/download
+ * payload; DATA carries raw upload bytes. See ble_files.c for the protocol.
+ * Optional/probed by the app — older firmware just won't expose ...0009/...000A. */
+static const ble_uuid128_t NB_FILE_CTRL_UUID = BLE_UUID128_INIT(
+    0x09, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+static const ble_uuid128_t NB_FILE_DATA_UUID = BLE_UUID128_INIT(
+    0x0A, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 
 /* ---------- PDU layer ---------- */
 
@@ -119,6 +131,7 @@ static const ble_uuid128_t NB_OTA_DATA_UUID = BLE_UUID128_INIT(
 
 static uint16_t s_in_handle, s_out_handle, s_st_handle, s_time_handle, s_ota_handle;
 static uint16_t s_ota_ctrl_handle, s_ota_data_handle;
+static uint16_t s_file_ctrl_handle, s_file_data_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 
 /* Phone-pushed wall clock. The app writes [hour, minute] every 15 s; we
@@ -482,6 +495,20 @@ static int access_cb(uint16_t conn, uint16_t attr,
         else                           ble_ota_data_write(buf, out_len);
         return 0;
     }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
+        (attr == s_file_ctrl_handle || attr == s_file_data_handle)) {
+        /* File manager control / upload-data channel. Same flatten-and-forward
+         * shape as OTA; FS work + notifies happen on ble_files' worker task. */
+        uint8_t  buf[260];
+        uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        uint16_t out_len = 0;
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
+        if (attr == s_file_ctrl_handle) ble_files_ctrl_write(buf, out_len);
+        else                            ble_files_data_write(buf, out_len);
+        return 0;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_ota_handle) {
         /* "<ip>\n<port>\n<ssid>\n<password>\n<version>\n<board-model>" — the
          * app joins the SoftAP and POSTs the matching firmware image to
@@ -564,6 +591,18 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
                 .val_handle = &s_ota_data_handle,
             },
+            {
+                .uuid       = &NB_FILE_CTRL_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_file_ctrl_handle,
+            },
+            {
+                .uuid       = &NB_FILE_DATA_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                .val_handle = &s_file_data_handle,
+            },
             { 0 },
         },
     },
@@ -586,10 +625,12 @@ void notif_bridge_gatts_register_cb(struct ble_gatt_register_ctxt *ctxt, void *a
 void notif_bridge_on_connect(uint16_t conn) {
     s_conn_handle = conn;
     ble_ota_set_link(conn, s_ota_ctrl_handle);
+    ble_files_set_link(conn, s_file_ctrl_handle);
 }
 void notif_bridge_on_disconnect(void) {
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     ble_ota_on_disconnect();
+    ble_files_on_disconnect();
     reasm_reset();
 }
 
@@ -689,5 +730,6 @@ void notif_bridge_init(void)
     s_out_q = xQueueCreate(8, sizeof(outbound_cmd_t));
     xTaskCreatePinnedToCore(out_task, "notif_out", 4096, NULL, 5, &s_out_task, 0);
     ble_ota_init();
+    ble_files_init();
     ESP_LOGI(TAG, "notif_bridge ready");
 }

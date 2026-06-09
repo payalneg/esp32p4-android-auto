@@ -89,9 +89,17 @@ class FirmwareUpdater {
   Stream<UpdateState> get state => _ctrl.stream;
 
   void _emit(UpdatePhase p,
-          {double progress = 0, String? messageKey, Map<String, String>? args}) =>
-      _ctrl.add(UpdateState(p,
-          progress: progress, messageKey: messageKey, args: args));
+      {double progress = 0, String? messageKey, Map<String, String>? args}) {
+    // The update screen closes this controller in dispose(); if the user
+    // navigates away / backgrounds the app mid-flash, the in-flight transfer
+    // keeps running (foreground service) and its progress callbacks must not
+    // crash on a closed stream — that "Cannot add new events after calling
+    // close" exception was aborting the OTA. Drop late emits silently; the
+    // transfer still completes and reboots the head unit.
+    if (_ctrl.isClosed) return;
+    _ctrl.add(UpdateState(p,
+        progress: progress, messageKey: messageKey, args: args));
+  }
 
   /// POST the bundled image to http://[host]/ota. [model] selects which board's
   /// image to send (from the head unit's reported board model); null falls back

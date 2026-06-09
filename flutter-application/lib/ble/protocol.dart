@@ -21,7 +21,8 @@ enum PduType {
   albumArt(4),
   command(5),
   ack(6),
-  keepalive(7);
+  keepalive(7),
+  file(8);
 
   final int code;
   const PduType(this.code);
