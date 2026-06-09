@@ -131,11 +131,16 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(t(context, 'fw.title'))),
+      // SafeArea keeps the bottom "Flash" button clear of the system
+      // navigation bar / gesture pill (the Column pins it to the bottom with a
+      // Spacer, so without this it sits under the nav buttons).
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : Padding(
-              padding: const EdgeInsets.all(16),
-              child: _body(context),
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _body(context),
+              ),
             ),
     );
   }

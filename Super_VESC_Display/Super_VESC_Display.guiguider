@@ -15456,7 +15456,7 @@
 					"id": "am000029",
 					"type": "label",
 					"left": 620,
-					"top": 83,
+					"top": 77,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -19054,7 +19054,7 @@
 					"id": "am000090",
 					"type": "label",
 					"left": 20,
-					"top": 82,
+					"top": 77,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -40956,7 +40956,7 @@
 						"flag": [],
 						"pos": [
 							20,
-							82
+							77
 						],
 						"size": [
 							116,
@@ -44662,7 +44662,7 @@
 						"flag": [],
 						"pos": [
 							620,
-							83
+							77
 						],
 						"size": [
 							126,

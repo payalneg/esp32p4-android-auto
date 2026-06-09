@@ -198,7 +198,7 @@ void setup_scr_dashboard_Amber(lv_ui *ui)
     ui->dashboard_Amber_Battery_proc_text = lv_label_create(ui->dashboard_Amber);
     lv_label_set_text(ui->dashboard_Amber_Battery_proc_text, "73");
     lv_label_set_long_mode(ui->dashboard_Amber_Battery_proc_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Amber_Battery_proc_text, 20, 82);
+    lv_obj_set_pos(ui->dashboard_Amber_Battery_proc_text, 20, 77);
     lv_obj_set_size(ui->dashboard_Amber_Battery_proc_text, 116, 70);
 
     //Write style for dashboard_Amber_Battery_proc_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1124,7 +1124,7 @@ void setup_scr_dashboard_Amber(lv_ui *ui)
     ui->dashboard_Amber_power_value = lv_label_create(ui->dashboard_Amber);
     lv_label_set_text(ui->dashboard_Amber_power_value, "-2.8");
     lv_label_set_long_mode(ui->dashboard_Amber_power_value, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Amber_power_value, 620, 83);
+    lv_obj_set_pos(ui->dashboard_Amber_power_value, 620, 77);
     lv_obj_set_size(ui->dashboard_Amber_power_value, 126, 70);
 
     //Write style for dashboard_Amber_power_value, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
