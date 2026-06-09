@@ -271,8 +271,9 @@ LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_50)
 LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_22)
 LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_18)
 LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_12)
-LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_180)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_160)
 LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_11)
+LV_FONT_DECLARE(lv_font_DSEG14Classic_Regular_30)
 
 
 #ifdef __cplusplus

@@ -9977,7 +9977,8 @@
 					"bg_img_recolor": "#000000",
 					"bg_img_recolor_opa": 0
 				}
-			]
+			],
+			"layerName": "dashboard_Classic"
 		},
 		{
 			"name": "settings",
@@ -10243,7 +10244,8 @@
 					"bg_img_recolor": "#ffffff",
 					"bg_img_recolor_opa": 0
 				}
-			]
+			],
+			"layerName": "settings"
 		},
 		{
 			"name": "dashboard_Amber",
@@ -11244,7 +11246,7 @@
 							"radius": 0,
 							"text_color": "#FFE6C2",
 							"text_opa": 255,
-							"font": 50,
+							"font": 30,
 							"text_align": "LV_TEXT_ALIGN_RIGHT",
 							"font_family": "DSEG14Classic_Regular",
 							"letter_space": 0,
@@ -17154,7 +17156,7 @@
 					"id": "am000088",
 					"type": "label",
 					"left": 180,
-					"top": 90,
+					"top": 80,
 					"visible": true,
 					"isLock": false,
 					"flag": [],
@@ -17178,7 +17180,7 @@
 							"radius": 0,
 							"text_color": "#FFE6C2",
 							"text_opa": 255,
-							"font": 180,
+							"font": 160,
 							"text_align": "LV_TEXT_ALIGN_CENTER",
 							"font_family": "DSEG14Classic_Regular",
 							"letter_space": 0,
@@ -40954,7 +40956,7 @@
 						"flag": [],
 						"pos": [
 							20,
-							75
+							82
 						],
 						"size": [
 							116,
@@ -42911,7 +42913,7 @@
 						"flag": [],
 						"pos": [
 							180,
-							90
+							80
 						],
 						"size": [
 							440,
@@ -42935,7 +42937,7 @@
 								"radius": 0,
 								"text_color": "#FFE6C2",
 								"text_opa": 255,
-								"font": 180,
+								"font": 160,
 								"text_align": "LV_TEXT_ALIGN_CENTER",
 								"font_family": "DSEG14Classic_Regular",
 								"letter_space": 0,
@@ -44660,7 +44662,7 @@
 						"flag": [],
 						"pos": [
 							620,
-							75
+							83
 						],
 						"size": [
 							126,
@@ -49053,7 +49055,7 @@
 								"radius": 0,
 								"text_color": "#FFE6C2",
 								"text_opa": 255,
-								"font": 50,
+								"font": 30,
 								"text_align": "LV_TEXT_ALIGN_RIGHT",
 								"font_family": "DSEG14Classic_Regular",
 								"letter_space": 0,

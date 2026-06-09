@@ -114,9 +114,11 @@ JOBS = [
     ("lv_font_DSEG14Classic_Regular_24",  24, _DSEG14_FULL, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_25",  25, _DSEG14_FULL, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_26",  26, _DSEG14_FULL, DSEG14_TTF),
-    # Numeric-only big readouts — cheap digit subset.
+    # Numeric-only readouts (speed / cruise / battery% / power) — digit subset.
+    ("lv_font_DSEG14Classic_Regular_30",  30, _DSEG14_DIG, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_50",  50, _DSEG14_DIG, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_64",  64, _DSEG14_DIG, DSEG14_TTF),
+    ("lv_font_DSEG14Classic_Regular_160", 160, _DSEG14_DIG, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_180", 180, _DSEG14_DIG, DSEG14_TTF),
     ("lv_font_DSEG14Classic_Regular_200", 200, _DSEG14_DIG, DSEG14_TTF),
 ]

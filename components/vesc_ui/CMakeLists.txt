@@ -55,9 +55,10 @@ set(COCKPIT_FONT_NAMES
     lv_font_DSEG14Classic_Regular_16  lv_font_DSEG14Classic_Regular_18
     lv_font_DSEG14Classic_Regular_20  lv_font_DSEG14Classic_Regular_22
     lv_font_DSEG14Classic_Regular_24  lv_font_DSEG14Classic_Regular_25
-    lv_font_DSEG14Classic_Regular_26  lv_font_DSEG14Classic_Regular_50
-    lv_font_DSEG14Classic_Regular_64  lv_font_DSEG14Classic_Regular_180
-    lv_font_DSEG14Classic_Regular_200)
+    lv_font_DSEG14Classic_Regular_26  lv_font_DSEG14Classic_Regular_30
+    lv_font_DSEG14Classic_Regular_50
+    lv_font_DSEG14Classic_Regular_64  lv_font_DSEG14Classic_Regular_160
+    lv_font_DSEG14Classic_Regular_180 lv_font_DSEG14Classic_Regular_200)
 set(COCKPIT_FONT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cockpit_fonts")
 set(COCKPIT_FONT_SRCS "")
 foreach(_cf ${COCKPIT_FONT_NAMES})
