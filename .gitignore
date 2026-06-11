@@ -25,7 +25,10 @@ tools/bt_agent/sdkconfig.old
 tools/bt_agent/.cache/
 
 # Claude Code local settings + scheduler lock — per-machine, not shared.
-.claude/
+# Skills under .claude/skills/ ARE shared (committed) — they document
+# project-specific workflows for the agent.
+.claude/*
+!.claude/skills/
 
 # research/_sources/ are clones of upstream reference repos
 # (aasdk, openauto, headunit, waveshare_p4_4_3, WirelessAndroidAutoDongle).
