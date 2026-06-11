@@ -15,8 +15,10 @@ the ESP32-P4). It does three things that the dashboard relies on:
    (left-edge swipe). This script is the *server* for it: the P4 asks
    "describe your controls" and we answer with a list the firmware renders
    (toggles / buttons / numbers / read-only values); interactions come back
-   here. The starter set is **Throttle on/off** and **Traction Control**
-   (toggle + a sensitivity number).
+   here. The starter set: **Throttle on/off**, a **Beep** button, a **Beep Vol**
+   number, **Play Melody** (the motor plays a tune) and its **Melody Vol** — both
+   volumes persisted on shutdown. A **Traction Control** toggle + sensitivity is
+   included but commented out (single motor → native VESC TC is a no-op).
 
 Without this script the dashboard still shows live telemetry (battery,
 speed, voltage, temps over standard VESC CAN), but the cruise indicator,
@@ -28,6 +30,104 @@ The drawer is **data-driven**: this script tells the P4 *what controls to draw*,
 the P4 renders them and sends back interactions. Nothing about the menu is
 hard-coded in the firmware, so you change the menu by editing LISP only — no
 firmware rebuild.
+
+> **New here? Read "Add a control — the simple version" just below.** The
+> byte-level sections after it are reference — you rarely need them.
+
+### Add a control — the simple version
+
+A control = one row in the drawer. You describe it in LISP, the P4 draws it.
+Four kinds: **toggle** (on/off), **button** (press once), **number**
+(−/value/+), **label** (read-only readout).
+
+To add one, edit **3 spots** near the bottom of this file, all keyed by a
+unique **id** number:
+
+1. `panel-send-ui`    — bump the count, add one "describe" line.
+2. `panel-send-state` — add its live value (skip for buttons).
+3. `panel-action`     — say what happens when tapped (skip for labels).
+
+Copy-paste templates — replace `ID`, `"Label"`, `myvar`, and the action:
+
+```lisp
+; TOGGLE  (on/off; myvar is 0 or 1)
+;  ui:     (pu8 ID) (pu8 1) (pstr "Label") (pu8 myvar)
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (if (> val 0.5) 1 0)))
+
+; BUTTON  (momentary)
+;  ui:     (pu8 ID) (pu8 2) (pstr "Label")
+;  state:  — none —
+;  action: ((= cid ID) (do-something))
+
+; NUMBER  (−/value/+; this one is 0..100 step 5)
+;  ui:     (pu8 ID) (pu8 3) (pstr "Label")
+;          (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* myvar 1000)) (pstr "")
+;          ;        ^min×1000     ^max×1000   ^step×1000 ^value×1000 ^unit
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (to-i32 val)))
+
+; LABEL   (read-only; e.g. a live temperature)
+;  ui:     (pu8 ID) (pu8 4) (pstr "Label") (pi32 (* (get-temp-mot) 1000)) (pstr "C")
+;  state:  (pu8 ID) (pi32 (* (get-temp-mot) 1000))
+;  action: — none —
+```
+
+Rules of thumb:
+- **count** is the byte right after `0x81` (in `panel-send-ui`) / `0x82` (in
+  `panel-send-state`). It must equal how many controls you actually list — add
+  one, bump both.
+- **id** is just a label; keep each unique, order doesn't matter.
+- Numbers travel ×1000 (so `50` → `(pi32 (* 50 1000))`) — that's how decimals
+  survive as whole numbers; the P4 divides back. Strings: `(pstr "...")`, empty
+  unit = `(pstr "")`.
+
+### Добавить контрол — по-простому
+
+Контрол = одна строка в выезжающей панели. Ты описываешь её в LISP, а P4 рисует.
+Четыре вида: **toggle** (вкл/выкл), **button** (нажал один раз), **number**
+(−/значение/+), **label** (просто показать, без нажатия).
+
+Чтобы добавить, правишь **3 места** внизу файла, всё завязано на уникальный
+номер **id**:
+
+1. `panel-send-ui`    — увеличь счётчик и добавь одну строку-«описание».
+2. `panel-send-state` — добавь живое значение (для кнопки — не нужно).
+3. `panel-action`     — что делать при нажатии (для label — не нужно).
+
+Шаблоны — подставь `ID`, `"Название"`, `myvar` и действие:
+
+```lisp
+; TOGGLE  (вкл/выкл; myvar = 0 или 1)
+;  ui:     (pu8 ID) (pu8 1) (pstr "Название") (pu8 myvar)
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (if (> val 0.5) 1 0)))
+
+; BUTTON  (разовое нажатие)
+;  ui:     (pu8 ID) (pu8 2) (pstr "Название")
+;  state:  — нет —
+;  action: ((= cid ID) (что-то-сделать))
+
+; NUMBER  (−/значение/+; тут 0..100 шаг 5)
+;  ui:     (pu8 ID) (pu8 3) (pstr "Название")
+;          (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* myvar 1000)) (pstr "")
+;          ;        ^мин×1000     ^макс×1000  ^шаг×1000  ^знач×1000  ^единица
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (to-i32 val)))
+
+; LABEL   (только показать; напр. температуру)
+;  ui:     (pu8 ID) (pu8 4) (pstr "Название") (pi32 (* (get-temp-mot) 1000)) (pstr "C")
+;  state:  (pu8 ID) (pi32 (* (get-temp-mot) 1000))
+;  action: — нет —
+```
+
+Памятка:
+- **count** — это байт сразу после `0x81` (в `panel-send-ui`) / `0x82` (в
+  `panel-send-state`). Он должен равняться числу реально перечисленных контролов:
+  добавил один — увеличь оба.
+- **id** — просто метка; держи уникальным, порядок не важен.
+- Числа едут ×1000 (`50` → `(pi32 (* 50 1000))`) — так дроби переживают пересылку
+  целыми, P4 делит обратно. Строки: `(pstr "...")`, пустая единица = `(pstr "")`.
 
 ### How the conversation works
 
@@ -112,42 +212,12 @@ just leave them out of `STATE`.
 **ACTION value semantics** (what arrives in `panel-action`): toggle → `0.0`/`1.0`,
 button → `1.0` (a press), number → the new value in real units (e.g. `55.0`).
 
-### Recipe: add a control
-
-Touch the same three functions, all near the bottom of `main.lisp`:
-
-1. **`panel-send-ui`** — bump the `count` byte and append the descriptor.
-2. **`panel-send-state`** — bump its `count` and append `(pu8 id) (pi32 value*1000)`
-   (skip for buttons).
-3. **`panel-action`** — add a `((= cid <id>) …)` branch that does the work
-   (skip for read-only labels).
-
-Keep the `id`s unique and stable; the P4 matches `STATE`/`ACTION` to controls by
-`id`, not by position.
-
-The starter menu already ships four controls — Throttle (id 1), Traction
-Control (id 2), TC Sens (id 3) and a Beep button (id 4). Here's how you'd add a
-fifth: a read-only "Motor temp" readout.
-
-```lisp
-; --- in panel-send-ui: change (pu8 4) [count] to (pu8 5), then append: ---
-; id=5 Motor temp (read-only label, suffix "C")
-(pu8 5) (pu8 4) (pstr "Motor temp") (pi32 (* (get-temp-mot) 1000.0)) (pstr "C")
-
-; --- in panel-send-state: change (pu8 3) [count] to (pu8 4), then append: ---
-; (push its live value so the readout refreshes ~5x/s while the drawer is open)
-(pu8 5) (pi32 (* (get-temp-mot) 1000.0))
-
-; --- panel-action: nothing to add — a read-only label takes no interaction. ---
-```
-
-For a button instead (like the built-in Beep, id 4), the descriptor is just
-`(pu8 <id>) (pu8 2) (pstr "<label>")` with no tail and no `STATE` entry, and you
-add a `((= cid <id>) <do-something>)` branch to `panel-action`.
-
-> The starter **throttle-disable** (`app-disable-output`) and **traction-control**
-> (`monitor-traction`) mechanics are a working *template* — tune them to your
-> app type (ADC / PPM / UART) and vehicle.
+> Step-by-step with copy-paste templates is in **"Add a control — the simple
+> version"** above. The current `main.lisp` panel is a live worked example:
+> Throttle (toggle, id 1), Beep (button, id 4), Beep Vol (number, id 5),
+> Play Melody (toggle, id 6), Melody Vol (number, id 7) — both volumes persisted
+> on shutdown. Traction Control (ids 2/3) is there but commented out — a ready
+> template to copy.
 
 ## How to flash
 
@@ -163,5 +233,8 @@ survives reboot.
   table.
 - Throttle/brake deadzones — `monitor-throttle-brake`.
 - Quick-action panel controls — the `panel-*` functions at the bottom (see
-  "Quick-action panel protocol" above). Traction-control aggressiveness —
-  the `limit` formula in `monitor-traction`.
+  "Add a control — the simple version" above).
+- Melody — replace the `(def melody '(...))` list (each entry `(freq-hz dur-s)`,
+  `0` = rest); volume follows the Beep Vol control.
+- Traction-control template — uncomment the TC controls + `monitor-traction`
+  spawn; tune the `limit` formula. (Multi-motor only; no-op on a single motor.)

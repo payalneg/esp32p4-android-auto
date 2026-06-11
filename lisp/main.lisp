@@ -26,8 +26,20 @@
 (def throttle-on 1)   ; 1 = motor responds to the throttle, 0 = output disabled
 (def tc-on 0)         ; 1 = traction-control slip limiter active
 (def tc-sens 50.0)    ; traction-control sensitivity 0..100 (higher = earlier cut)
-(def pbuf (bufcreate 96))  ; scratch buffer for panel replies (zero-filled)
+(def pbuf (bufcreate 128)) ; scratch buffer for panel replies (zero-filled)
 (def pi 0)                 ; running write index into pbuf
+
+; Tone volumes = the foc-play-tone voltage (range 0..50). Persisted in emulated
+; eeprom (eeprom-read-i returns nil if never written → fall back to a default).
+(def beep-vol-addr 0)         ; eeprom slot 0
+(def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
+                (if (and v (>= v 0) (<= v 50)) v 30)))
+(def beep-vol-dirty 0)        ; 1 = changed this session → written to eeprom on shutdown
+(def melody-vol-addr 1)       ; eeprom slot 1
+(def melody-vol (let ((v (eeprom-read-i melody-vol-addr)))
+                  (if (and v (>= v 0) (<= v 50)) v 40)))
+(def melody-vol-dirty 0)
+(def melody-playing 0)        ; 1 = the motor is playing the melody (Play Melody toggle)
 
 ; Function to stop tone playback after delay
 (defun play-stop () {
@@ -357,29 +369,44 @@
 (defun pi32 (v) { (bufset-i32 pbuf pi (to-i32 v)) (setq pi (+ pi 4)) })
 (defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
 
-; Describe the panel: 2 toggles + 1 number + 1 button. ver=1, count=4.
+; Describe the panel: 1 toggle + 1 button + 1 number. ver=1, count=3.
+; Traction Control (id 2) + TC Sens (id 3) are commented out — single motor,
+; native VESC TC is a no-op. To bring them back: uncomment below, bump the count,
+; and re-enable their lines in panel-send-state / panel-action and the
+; monitor-traction spawn at the bottom.
 (defun panel-send-ui (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 4)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 5)
     ; id=1 Throttle (toggle)
     (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
-    ; id=2 Traction Control (toggle)
-    (pu8 2) (pu8 1) (pstr "Traction Control") (pu8 (if (= tc-on 1) 1 0))
-    ; id=3 TC Sens (number, 0..100, step 5, no suffix)
-    (pu8 3) (pu8 3) (pstr "TC Sens")
-    (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* tc-sens 1000.0)) (pstr "")
+    ; id=2 Traction Control (toggle) — DISABLED
+    ; (pu8 2) (pu8 1) (pstr "Traction Control") (pu8 (if (= tc-on 1) 1 0))
+    ; id=3 TC Sens (number, 0..100, step 5, no suffix) — DISABLED
+    ; (pu8 3) (pu8 3) (pstr "TC Sens")
+    ; (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* tc-sens 1000.0)) (pstr "")
     ; id=4 Beep (button — momentary, no tail)
     (pu8 4) (pu8 2) (pstr "Beep")
+    ; id=5 Beep Vol (number, 0..50, step 5)
+    (pu8 5) (pu8 3) (pstr "Beep Vol")
+    (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* beep-vol 1000)) (pstr "")
+    ; id=6 Play Melody (toggle — on starts the tune, off stops it)
+    (pu8 6) (pu8 1) (pstr "Play Melody") (pu8 melody-playing)
+    ; id=7 Melody Vol (number, 0..50, step 5)
+    (pu8 7) (pu8 3) (pstr "Melody Vol")
+    (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* melody-vol 1000)) (pstr "")
     (send-data pbuf 2 reply-id)
 })
 
 ; Send the live state of every control (id + i32 value*1000).
 (defun panel-send-state (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 3)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 4)
     (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
-    (pu8 2) (pi32 (* (if (= tc-on 1) 1 0) 1000))
-    (pu8 3) (pi32 (* tc-sens 1000.0))
+    ; (pu8 2) (pi32 (* (if (= tc-on 1) 1 0) 1000))   ; Traction Control — DISABLED
+    ; (pu8 3) (pi32 (* tc-sens 1000.0))              ; TC Sens — DISABLED
+    (pu8 5) (pi32 (* beep-vol 1000))
+    (pu8 6) (pi32 (* melody-playing 1000))
+    (pu8 7) (pi32 (* melody-vol 1000))
     (send-data pbuf 2 reply-id)
 })
 
@@ -401,8 +428,64 @@
 ; foc-play-tone args: (channel freq voltage); play-stop (top of file) does the
 ; (sleep 0.1)(foc-play-stop). Runs on the VESC's FOC tone generator.
 (defun panel-beep () {
-    (foc-play-tone 0 800 30)
+    (foc-play-tone 0 800 beep-vol)
     (spawn 150 play-stop)
+})
+
+; "Dancing Polish Cow" (Cypis — Gdzie jest biały węgorz), monophonic lead
+; extracted from the .mid: each entry is (freq-hz duration-s); freq 0 = a rest.
+; Volume reuses beep-vol. Quoted so the (freq dur) pairs are DATA, not calls.
+(def melody '(
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (262 0.124) (0 0.620) (330 0.124) (0 0.372) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.372) (330 0.124) (0 0.620) (294 0.124) (0 0.372)
+  (294 0.124) (0 0.124) (294 0.124) (0 0.372) (294 0.124) (0 0.372)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (262 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (440 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (262 0.124) (0 0.620) (330 0.124) (0 0.372)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.372) (330 0.124) (0 0.620)
+  (294 0.124) (0 0.372) (294 0.124) (0 0.124) (294 0.124) (0 0.372)
+  (294 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (440 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (262 0.124) (0 0.372) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (440 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (262 0.124) (0 0.620)
+  (330 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.372)
+  (330 0.124) (0 0.620) (294 0.124) (0 0.372) (294 0.124) (0 0.124)
+  (294 0.124) (0 0.372) (294 0.124) (0 0.372) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (440 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (262 0.124) (0 0.372)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (262 0.124) (0 0.620) (330 0.124) (0 0.372) (330 0.124) (0 0.124)
+  (330 0.124) (0 0.372) (330 0.124) (0 0.620) (294 0.124) (0 0.372)
+  (294 0.124) (0 0.124) (294 0.124) (0 0.372) (294 0.124) (0 0.372)
+  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
+  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
+  (262 0.124) (0 0.372) (330 0.124)
+))
+
+; Play the melody on the motor (spawned thread). Stops early if melody-playing
+; is cleared (the Play Melody toggle turned off). Each note: foc-play-tone at the
+; current beep-vol, freq 0 = silence (rest), then sleep its duration.
+(defun play-melody () {
+    (setq melody-playing 1)
+    (let ((n (length melody)) (i 0)) {
+        (loopwhile (and (< i n) (= melody-playing 1)) {
+            (let ((note (ix melody i))) {
+                (let ((f (ix note 0)) (d (ix note 1))) {
+                    (if (> f 0) (foc-play-tone 0 f melody-vol) (foc-play-stop))
+                    (sleep d)
+                })
+            })
+            (setq i (+ i 1))
+        })
+    })
+    (foc-play-stop)
+    (setq melody-playing 0)   ; mark finished so the toggle flips back off
 })
 
 ; Traction-control toggle.
@@ -430,9 +513,21 @@
 (defun panel-action (cid val) {
     (cond
         ((= cid 1) (panel-set-throttle (if (> val 0.5) 1 0)))
-        ((= cid 2) (setq tc-on (if (> val 0.5) 1 0)))
-        ((= cid 3) (setq tc-sens val))
-        ((= cid 4) (panel-beep)))
+        ; ((= cid 2) (setq tc-on (if (> val 0.5) 1 0)))   ; Traction Control — DISABLED
+        ; ((= cid 3) (setq tc-sens val))                  ; TC Sens — DISABLED
+        ((= cid 4) (panel-beep))
+        ((= cid 5) {                                      ; Beep Vol — change in RAM, saved on shutdown
+            (setq beep-vol (to-i32 val))
+            (setq beep-vol-dirty 1)
+        })
+        ((= cid 6)                                        ; Play Melody — on=start, off=stop
+            (if (> val 0.5)
+                (if (= melody-playing 0) (spawn 200 play-melody))
+                (setq melody-playing 0)))
+        ((= cid 7) {                                      ; Melody Vol — change in RAM, saved on shutdown
+            (setq melody-vol (to-i32 val))
+            (setq melody-vol-dirty 1)
+        }))
 })
 
 ; Parse one inbound frame from the P4.
@@ -476,19 +571,39 @@
     })
 })
 
-; Event loop: deliver every COMM_CUSTOM_APP_DATA frame to panel-handle.
+; Persist the beep volume when the controller is powered off. event-shutdown
+; fires on a soft-power-button shutdown; shutdown-hold delays the actual power
+; cut so the (brief, motor-stopping) eeprom write completes. Only write if the
+; value actually changed this session, to spare flash. NB: hold takes t/nil —
+; do NOT pass 0 for "release", since in LBM 0 is truthy and would hold forever.
+(defun panel-on-shutdown () {
+    (if (or (= beep-vol-dirty 1) (= melody-vol-dirty 1)) {
+        (shutdown-hold t)
+        (if (= beep-vol-dirty 1) {
+            (eeprom-store-i beep-vol-addr beep-vol) (setq beep-vol-dirty 0) })
+        (if (= melody-vol-dirty 1) {
+            (eeprom-store-i melody-vol-addr melody-vol) (setq melody-vol-dirty 0) })
+        (shutdown-hold nil)
+    })
+})
+
+; Event loop: deliver every COMM_CUSTOM_APP_DATA frame to panel-handle, and save
+; the beep volume on shutdown.
 ; NB: event-data-rx is delivered as a CONS (event-data-rx . <bytearray>), so the
 ; pattern must be dotted — `(event-data-rx . (? data))`, NOT the list form
 ; `(event-data-rx (? data))` (which silently never matches and the frame falls
-; through to (_ nil) — that was why REQ_UI/ACTION did nothing).
+; through to (_ nil) — that was why REQ_UI/ACTION did nothing). event-shutdown
+; carries no data, so it's matched as the bare symbol.
 (defun panel-event-loop () {
     (loopwhile t {
         (recv ((event-data-rx . (? data)) (panel-handle data))
+              (event-shutdown               (panel-on-shutdown))
               (_ nil))
     })
 })
 
 (event-register-handler (spawn panel-event-loop))
 (event-enable 'event-data-rx)
-(spawn 150 monitor-traction)
+(event-enable 'event-shutdown)
+; (spawn 150 monitor-traction)   ; Traction-control slip limiter — DISABLED
 
