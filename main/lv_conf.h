@@ -19,6 +19,10 @@
 
 #include <stdint.h>
 
+/* Pull in CONFIG_* so a few LVGL features can be gated by Kconfig
+ * (e.g. LV_USE_SNAPSHOT for the UART debug bridge). */
+#include "sdkconfig.h"
+
 /*====================
    COLOR SETTINGS
  *====================*/
@@ -721,7 +725,13 @@
  *----------*/
 
 /*1: Enable API to take snapshot for object*/
-#define LV_USE_SNAPSHOT 0
+/* Driven by Kconfig: the UART debug bridge needs lv_snapshot to capture the
+ * screen. Production builds without it keep this off and pay nothing. */
+#ifdef CONFIG_DEBUG_UART_BRIDGE
+    #define LV_USE_SNAPSHOT 1
+#else
+    #define LV_USE_SNAPSHOT 0
+#endif
 
 /*1: Enable Monkey test*/
 #define LV_USE_MONKEY 0

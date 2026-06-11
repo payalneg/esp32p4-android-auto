@@ -48,6 +48,20 @@ void show_realtime_viewer(void);
  * custom/lisp_editor.c. */
 void show_lisp_editor(void);
 
+/* LISP quick-action panel — a left-docked drawer whose controls (toggles /
+ * buttons / numbers / read-only values) are described at runtime by the master
+ * LISP script on the VESC over COMM_CUSTOM_APP_DATA (see
+ * components/vesc_can/vesc_lisp_panel.h). Opened by a left-edge swipe on the
+ * dashboard. Defined in custom/lisp_panel.c.
+ *  - show_lisp_panel()      : open now (must run on the LVGL task).
+ *  - lisp_panel_close()     : slide out + tear down (LVGL task).
+ *  - lisp_panel_open_async(): thread-safe entry — marshals to the LVGL task and
+ *                             opens only if the dashboard is the active screen.
+ *                             Registered as the touch edge-swipe callback. */
+void show_lisp_panel(void);
+void lisp_panel_close(void);
+void lisp_panel_open_async(void);
+
 void update_current(float current);
 void update_speed(float speed);
 void update_battery_proc(float battery_proc);

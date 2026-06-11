@@ -31,10 +31,17 @@ static const char *TAG = "touch_input";
 #define GESTURE_FINGERS     3
 #define GESTURE_HOLD_MS     100  /* dwell before firing toggle */
 
+/* Left-edge swipe → dashboard quick-action panel. Measured in LVGL landscape
+ * space (x = panel_y). The press must start within START_PX of the left edge
+ * and travel at least DIST_PX to the right to fire (once per touch). */
+#define EDGE_SWIPE_START_PX 40
+#define EDGE_SWIPE_DIST_PX  100
+
 static TaskHandle_t      s_task;
 static touch_send_fn     s_aa_cb;
 static void             *s_aa_ctx;
 static touch_gesture_fn  s_gest_cb;
+static touch_gesture_fn  s_edge_swipe_cb;
 
 /* Mode flag — default LVGL because the dashboard is the active screen at
  * boot. Flipped to AA by ui_mode_set when the user triple-taps. */
@@ -45,6 +52,25 @@ static _Atomic int       s_mode = TOUCH_MODE_LVGL;
 static _Atomic uint16_t  s_lvgl_x;
 static _Atomic uint16_t  s_lvgl_y;
 static _Atomic bool      s_lvgl_pressed;
+
+/* Synthetic injection override (debug bridge). While s_inject_active and the
+ * current time is below s_inject_expiry_us, poll_task skips writing real GT911
+ * coords and touch_input_lvgl_read returns the injected sample. The expiry is
+ * a watchdog: a host that dies mid-gesture can't strand the panel — the
+ * override lapses on its own and the real finger takes over again. */
+static _Atomic bool      s_inject_active;
+static _Atomic uint16_t  s_inject_x;
+static _Atomic uint16_t  s_inject_y;
+static _Atomic bool      s_inject_pressed;
+static _Atomic int64_t   s_inject_expiry_us;
+
+/* True iff an injection sample is currently authoritative. Reads the expiry
+ * after the active flag so we never honour a stale deadline. */
+static inline bool inject_live(void)
+{
+    return atomic_load(&s_inject_active) &&
+           esp_timer_get_time() < atomic_load(&s_inject_expiry_us);
+}
 
 static void poll_task(void *arg)
 {
@@ -61,6 +87,12 @@ static void poll_task(void *arg)
     uint16_t last_x = 0, last_y = 0;
     bool gesture_latched = false;   /* latched until all fingers lift */
     int64_t gesture_armed_us = 0;
+
+    /* Left-edge swipe state (LVGL mode). */
+    bool     edge_prev_pressed = false; /* effective-touch pressed last cycle */
+    bool     edge_candidate    = false; /* this touch began at the left edge */
+    bool     edge_fired        = false; /* swipe already fired this touch */
+    uint16_t edge_start_x      = 0;
 
     /* The polling task lives for the lifetime of the program. We used to
      * tear it down on AA disconnect via touch_input_stop, but that left the
@@ -136,22 +168,65 @@ static void poll_task(void *arg)
             prev_cnt = cnt;
 
             if (mode == TOUCH_MODE_LVGL) {
-                /* Rotate panel-native portrait (480x800) to LVGL landscape
-                 * (800x480) — matches BSP's ESP_LV_ADAPTER_ROTATE_90.
-                 *  lx = panel_y, ly = (PANEL_NATIVE_W - 1) - panel_x. */
-                if (single) {
-                    uint16_t lvgl_x = panel_y;
-                    uint16_t lvgl_y = (PANEL_NATIVE_W - 1) - panel_x;
-                    if (lvgl_x >= AA_W) lvgl_x = AA_W - 1;
-                    if (lvgl_y >= AA_H) lvgl_y = AA_H - 1;
-                    atomic_store(&s_lvgl_x, lvgl_x);
-                    atomic_store(&s_lvgl_y, lvgl_y);
+                /* Debug injection wins: while a synthetic sample is live, leave
+                 * the LVGL atomics untouched so the injected (x, y, pressed)
+                 * survives and the real finger is ignored. Clear an expired
+                 * override here so it never lingers past its deadline. */
+                if (inject_live()) {
+                    was_pressed = false;
+                } else {
+                    if (atomic_load(&s_inject_active)) {
+                        atomic_store(&s_inject_active, false);
+                    }
+                    /* Rotate panel-native portrait (480x800) to LVGL landscape
+                     * (800x480) — matches BSP's ESP_LV_ADAPTER_ROTATE_90.
+                     *  lx = panel_y, ly = (PANEL_NATIVE_W - 1) - panel_x. */
+                    if (single) {
+                        uint16_t lvgl_x = panel_y;
+                        uint16_t lvgl_y = (PANEL_NATIVE_W - 1) - panel_x;
+                        if (lvgl_x >= AA_W) lvgl_x = AA_W - 1;
+                        if (lvgl_y >= AA_H) lvgl_y = AA_H - 1;
+                        atomic_store(&s_lvgl_x, lvgl_x);
+                        atomic_store(&s_lvgl_y, lvgl_y);
+                    }
+                    atomic_store(&s_lvgl_pressed, single);
                 }
-                atomic_store(&s_lvgl_pressed, single);
                 /* AA-side state must not survive a mode flip — reset every
                  * cycle so the next AA session starts clean. */
                 was_pressed = false;
+
+                /* --- left-edge swipe detector (opens the LISP panel) ---
+                 * Runs on the effective landscape coords reported to LVGL this
+                 * cycle (real finger OR a live injection), so UI-test swipes
+                 * trigger it the same as a real one. Landscape x = panel_y. */
+                bool     eff_pressed;
+                uint16_t eff_x;
+                if (inject_live()) {
+                    eff_pressed = atomic_load(&s_inject_pressed);
+                    eff_x       = atomic_load(&s_inject_x);
+                } else {
+                    eff_pressed = single;
+                    eff_x       = panel_y;
+                }
+                if (eff_pressed && !edge_prev_pressed) {
+                    edge_candidate = (eff_x < EDGE_SWIPE_START_PX);
+                    edge_fired     = false;
+                    edge_start_x   = eff_x;
+                } else if (eff_pressed && edge_candidate && !edge_fired &&
+                           (int)eff_x - (int)edge_start_x >= EDGE_SWIPE_DIST_PX) {
+                    edge_fired = true;
+                    if (s_edge_swipe_cb) s_edge_swipe_cb();
+                } else if (!eff_pressed) {
+                    edge_candidate = false;
+                    edge_fired     = false;
+                }
+                edge_prev_pressed = eff_pressed;
             } else {
+                /* AA mode: drop any half-tracked edge swipe so it can't carry
+                 * across a mode flip into the dashboard. */
+                edge_prev_pressed = false;
+                edge_candidate    = false;
+                edge_fired        = false;
                 /* TOUCH_MODE_AA: same rotation, plus PRESS/DRAG/RELEASE state
                  * machine. Multi-touch (>=2) suppresses AA events. */
                 if (single) {
@@ -231,6 +306,11 @@ void touch_input_set_gesture_cb(touch_gesture_fn cb)
     s_gest_cb = cb;
 }
 
+void touch_input_set_edge_swipe_cb(touch_gesture_fn cb)
+{
+    s_edge_swipe_cb = cb;
+}
+
 void touch_input_stop(void)
 {
     /* Clear cb first (close the gate), then ctx — a poll-task read that
@@ -254,7 +334,36 @@ void touch_input_set_mode(touch_mode_t mode)
 
 void touch_input_lvgl_read(uint16_t *out_x, uint16_t *out_y, bool *out_pressed)
 {
+    /* Honour a live injection override regardless of what poll_task last
+     * wrote — this is the read-side half of the override (poll_task's skip is
+     * the write-side half that keeps the real finger from racing the write). */
+    if (inject_live()) {
+        if (out_pressed) *out_pressed = atomic_load(&s_inject_pressed);
+        if (out_x)       *out_x       = atomic_load(&s_inject_x);
+        if (out_y)       *out_y       = atomic_load(&s_inject_y);
+        return;
+    }
     if (out_pressed) *out_pressed = atomic_load(&s_lvgl_pressed);
     if (out_x)       *out_x       = atomic_load(&s_lvgl_x);
     if (out_y)       *out_y       = atomic_load(&s_lvgl_y);
+}
+
+void touch_input_inject(uint16_t x, uint16_t y, bool pressed, uint32_t hold_ms)
+{
+    if (x >= AA_W) x = AA_W - 1;
+    if (y >= AA_H) y = AA_H - 1;
+    /* Order matters: stash the sample + deadline first, flip active last, so a
+     * concurrent reader never sees active=true paired with a stale coord or
+     * expiry. (Mirror of inject_live() reading active before expiry.) */
+    atomic_store(&s_inject_x, x);
+    atomic_store(&s_inject_y, y);
+    atomic_store(&s_inject_pressed, pressed);
+    atomic_store(&s_inject_expiry_us,
+                 esp_timer_get_time() + (int64_t)hold_ms * 1000);
+    atomic_store(&s_inject_active, true);
+}
+
+void touch_input_inject_clear(void)
+{
+    atomic_store(&s_inject_active, false);
 }

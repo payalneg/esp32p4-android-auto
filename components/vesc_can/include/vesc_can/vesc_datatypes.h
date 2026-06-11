@@ -83,6 +83,7 @@ typedef enum {
     COMM_REBOOT                     = 29,
     COMM_ALIVE                      = 30,
     COMM_FORWARD_CAN                = 34,
+    COMM_CUSTOM_APP_DATA            = 36,
     COMM_GET_VALUES_SETUP           = 47,
     COMM_GET_VALUES_SELECTIVE       = 50,
     COMM_GET_VALUES_SETUP_SELECTIVE = 51,

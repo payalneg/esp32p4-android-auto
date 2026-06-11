@@ -8,6 +8,7 @@ idf_component_register(
         "vesc_lisp_poll.c"
         "vesc_io_data.c"
         "vesc_lisp_code.c"
+        "vesc_lisp_panel.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

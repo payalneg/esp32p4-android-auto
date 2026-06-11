@@ -19,6 +19,16 @@
 (def first-profile-init 1)  ; Flag to skip beep on first initialization
 (def rpm-per-ms 0.0)  ; RPM per m/s ratio (cached to avoid recalculation)
 
+; ---- Quick-action panel state (rendered by the ESP32-P4 dashboard) ----
+; The P4 opens a swipe-out drawer and asks this script to describe its controls
+; over COMM_CUSTOM_APP_DATA; we answer with (send-data ... 2 reply-can-id).
+; Protocol mirror of components/vesc_can/vesc_lisp_panel.h. See bottom of file.
+(def throttle-on 1)   ; 1 = motor responds to the throttle, 0 = output disabled
+(def tc-on 0)         ; 1 = traction-control slip limiter active
+(def tc-sens 50.0)    ; traction-control sensitivity 0..100 (higher = earlier cut)
+(def pbuf (bufcreate 96))  ; scratch buffer for panel replies (zero-filled)
+(def pi 0)                 ; running write index into pbuf
+
 ; Function to stop tone playback after delay
 (defun play-stop () {
     (sleep 0.1)
@@ -93,7 +103,9 @@
 
 ; Function to activate cruise control
 (defun activate-cruise-control () {
-    (if (= cruise-active 0) {
+    ; Don't engage cruise while the panel has the throttle disabled — they both
+    ; drive app-disable-output, so honouring throttle-on keeps the two coherent.
+    (if (and (= cruise-active 0) (= throttle-on 1)) {
         ; Read current RPM
         (setq cruise-rpm (get-rpm))
         ; Only activate if speed is above zero
@@ -324,4 +336,123 @@
 (spawn 150 monitor-tx-button)
 ; Start monitoring throttle and brake in separate thread
 (spawn 150 monitor-throttle-brake)
+
+; =====================================================================
+;  Quick-action panel server (talks to the ESP32-P4 swipe-out drawer)
+; ---------------------------------------------------------------------
+;  Wire protocol (app payload; the COMM_CUSTOM_APP_DATA byte is added/
+;  stripped by the firmware on both ends — see vesc_lisp_panel.h):
+;
+;    P4 -> us : [0x56 0x50][msg][reply-can-id] (+ [ctrl-id][i32 val] for ACTION)
+;    us -> P4 : [0x56 0x50][msg][...]   via (send-data buf 2 reply-can-id)
+;
+;  All floats travel as int32 = round(value * 1000), big-endian.
+;  This is a working TEMPLATE — the throttle-disable and traction-control
+;  mechanics below are deliberately simple and should be tuned to the
+;  actual app (ADC / PPM / UART) and vehicle.
+; =====================================================================
+
+; --- little-endian-free append helpers over pbuf/pi (big-endian, scale 1000) ---
+(defun pu8  (v) { (bufset-u8  pbuf pi v) (setq pi (+ pi 1)) })
+(defun pi32 (v) { (bufset-i32 pbuf pi (to-i32 v)) (setq pi (+ pi 4)) })
+(defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
+
+; Describe the panel: 2 toggles + 1 number. ver=1, count=3.
+(defun panel-send-ui (reply-id) {
+    (setq pi 0)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 3)
+    ; id=1 Throttle (toggle)
+    (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
+    ; id=2 Traction Control (toggle)
+    (pu8 2) (pu8 1) (pstr "Traction Control") (pu8 (if (= tc-on 1) 1 0))
+    ; id=3 TC Sens (number, 0..100, step 5, no suffix)
+    (pu8 3) (pu8 3) (pstr "TC Sens")
+    (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* tc-sens 1000.0)) (pstr "")
+    (send-data pbuf 2 reply-id)
+})
+
+; Send the live state of every control (id + i32 value*1000).
+(defun panel-send-state (reply-id) {
+    (setq pi 0)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 3)
+    (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
+    (pu8 2) (pi32 (* (if (= tc-on 1) 1 0) 1000))
+    (pu8 3) (pi32 (* tc-sens 1000.0))
+    (send-data pbuf 2 reply-id)
+})
+
+; Throttle master switch — off disables app output (motor ignores the grip),
+; on returns control. Mirrors what cruise control does with app-disable-output.
+(defun panel-set-throttle (on) {
+    (if (= on 0) {
+        ; Cleanly drop cruise first so its re-attach can't race our disable.
+        (if (= cruise-active 1) (deactivate-cruise-control))
+        (app-disable-output -1)  ; -1 = disable until re-enabled
+        (setq throttle-on 0)
+    } {
+        (app-disable-output 0)   ; 0 = enable now
+        (setq throttle-on 1)
+    })
+})
+
+; Apply one control interaction from the panel.
+(defun panel-action (cid val) {
+    (cond
+        ((= cid 1) (panel-set-throttle (if (> val 0.5) 1 0)))
+        ((= cid 2) (setq tc-on (if (> val 0.5) 1 0)))
+        ((= cid 3) (setq tc-sens val)))
+})
+
+; Parse one inbound frame from the P4.
+(defun panel-handle (data) {
+    (if (and (>= (buflen data) 4)
+             (= (bufget-u8 data 0) 0x56)
+             (= (bufget-u8 data 1) 0x50))
+        (let ((msg (bufget-u8 data 2))
+              (reply-id (bufget-u8 data 3))) {
+            (cond
+                ((= msg 0x01) (panel-send-ui reply-id))      ; REQ_UI
+                ((= msg 0x03) (panel-send-state reply-id))   ; REQ_STATE
+                ((= msg 0x02)                                ; ACTION
+                    (let ((cid (bufget-u8 data 4))
+                          (val (/ (bufget-i32 data 5) 1000.0))) {
+                        (panel-action cid val)
+                        (panel-send-state reply-id)          ; echo new state
+                    })))
+        }))
+})
+
+; Traction control — TEMPLATE slip limiter. Watches ERPM acceleration; if the
+; wheel spins up faster than `limit` (derived from tc-sens) it momentarily cuts
+; torque. Real TC needs proper slip estimation; tune for your vehicle.
+(defun monitor-traction () {
+    (let ((last-erpm 0.0)) {
+        (loopwhile t {
+            (if (= tc-on 1) {
+                (let ((erpm (get-rpm))) {
+                    (let ((accel (- (abs erpm) (abs last-erpm)))
+                          (limit (- 5000.0 (* tc-sens 40.0)))) {
+                        (if (> accel limit) (set-current 0))
+                    })
+                    (setq last-erpm erpm)
+                })
+            } {
+                (setq last-erpm (get-rpm))
+            })
+            (sleep 0.02)  ; 50 Hz
+        })
+    })
+})
+
+; Event loop: deliver every COMM_CUSTOM_APP_DATA frame to panel-handle.
+(defun panel-event-loop () {
+    (loopwhile t {
+        (recv ((event-data-rx (? data)) (panel-handle data))
+              (_ nil))
+    })
+})
+
+(event-register-handler (spawn panel-event-loop))
+(event-enable 'event-data-rx)
+(spawn 150 monitor-traction)
 

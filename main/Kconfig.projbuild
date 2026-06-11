@@ -149,4 +149,26 @@ menu "Android Auto Head Unit"
 
     endmenu
 
+    config DEBUG_UART_BRIDGE
+        bool "UART0 debug bridge (screenshot + touch injection)"
+        default n
+        help
+            Registers esp_console commands on the UART0 console for host-driven
+            UI test automation (scripts/uart_debug.py):
+              screenshot  — capture lv_scr_act() and stream it back as a
+                            base64-framed JPEG (HW-encoded) or raw RGB565,
+                            with logging muted during the transfer.
+              tap / swipe / touchdown|up|move — inject synthetic LVGL pointer
+                            events in landscape coords (0..799 x 0..479).
+
+            Costs flash (esp_console + JPEG encoder) and ~1 MB PSRAM (lazily
+            allocated on first screenshot). Also forces LV_USE_SNAPSHOT on.
+            Leave OFF for production / OTA-tight builds (e.g. jc4880).
+
+    config DEBUG_UART_BRIDGE_JPEG_QUALITY
+        int "Default screenshot JPEG quality (1-100)"
+        depends on DEBUG_UART_BRIDGE
+        default 80
+        range 1 100
+
 endmenu

@@ -283,6 +283,11 @@ void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
                           send_buffer, ind);
 }
 
+uint8_t comm_can_get_local_id(void)
+{
+    return s_can_config.controller_id;
+}
+
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type)
 {
     if (!s_init_done) return false;

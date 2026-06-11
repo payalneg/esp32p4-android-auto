@@ -64,6 +64,7 @@ void port_start_app_hook(void)
 #include "tcp_server.h"
 #include "touch_input.h"
 #include "ui_mode.h"
+#include "debug_uart_bridge.h"
 #include "vbat_routing.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_battery_calc.h"
@@ -71,6 +72,7 @@ void port_start_app_hook(void)
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_io_data.h"
 #include "vesc_can/vesc_lisp_code.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_config/vesc_config.h"
 #include "vesc_config/vesc_config_transport.h"
 #include "vesc_sim.h"
@@ -95,6 +97,12 @@ __attribute__((used))
 static const int *const force_link_main_strongs[] = {
     &files_screen_link_anchor,
 };
+
+/* Defined in Super_VESC_Display/custom/lisp_panel.c (vesc_ui component). Opens
+ * the LISP quick-action panel; safe to call from any task — it marshals onto
+ * the LVGL thread and no-ops unless the dashboard is the live screen. Declared
+ * here to avoid pulling the heavy gui_guider/custom.h into the firmware side. */
+extern void lisp_panel_open_async(void);
 
 /* ---- Custom LVGL touch indev fed by touch_input.c ----
  *
@@ -169,6 +177,9 @@ static void vesc_packet_dispatch(const uint8_t *data, unsigned int len)
     /* Config GET/SET/FW_VERSION replies (COMM ids 0, 13-18). Gates on data[0]
      * and ignores packets it doesn't own. */
     vesc_config_transport_process_response(data, len);
+    /* LISP quick-action panel UI_DESC/STATE replies (COMM_CUSTOM_APP_DATA +
+     * 'VP' magic). Gates internally; ignores everything else. */
+    vesc_lisp_panel_process_response(data, len);
     ble_nus_forward_response(data, (uint16_t)len);
 }
 
@@ -229,6 +240,7 @@ static void on_target_id_changed(uint8_t new_id)
 #endif
     vesc_io_data_init(new_id, 150);
     vesc_lisp_code_set_target(new_id);
+    vesc_lisp_panel_set_target(new_id);
     ESP_LOGI(TAG, "VESC target ID → %u", new_id);
 }
 
@@ -346,6 +358,10 @@ void app_main(void)
          * Only meaningful once the AA stack is up. The GT911 polling task
          * starts unconditionally so LVGL touch keeps working. */
         touch_input_set_gesture_cb(ui_mode_toggle);
+        /* Left-edge swipe opens the LISP quick-action panel. The handler
+         * marshals to the LVGL task and no-ops unless the dashboard is the
+         * live screen, so registering it unconditionally is safe. */
+        touch_input_set_edge_swipe_cb(lisp_panel_open_async);
         touch_input_start(NULL, NULL);
 
         /* The phone-side music tile is now attached by the dashboard-theme
@@ -353,6 +369,13 @@ void app_main(void)
          * theme build inside ui_mode_init — no manual attach needed here, and
          * it re-homes correctly across live theme switches. */
     }
+
+    /* Debug bridge over UART0 console: host-driven screenshot + touch
+     * injection for UI test automation. No-op stub unless built with
+     * CONFIG_DEBUG_UART_BRIDGE. Needs the display + indev up (done above). */
+#if CONFIG_DEBUG_UART_BRIDGE
+    debug_uart_bridge_init();
+#endif
 
     /* VESC CAN bring-up. Independent from the AA pipeline — runs the
      * second the dashboard is alive so RT data starts streaming even
@@ -381,6 +404,9 @@ void app_main(void)
         vesc_io_data_init(tgt_id, 150);
         /* LISP code upload/read worker (used by the LISP editor screen). */
         vesc_lisp_code_init(tgt_id);
+        /* LISP quick-action panel (swipe-out drawer driven by the master
+         * LISP script). Reply CAN id is fetched live from comm_can. */
+        vesc_lisp_panel_init(tgt_id);
         comm_can_set_packet_handler(vesc_packet_dispatch);
         vesc_rt_data_start();
         vesc_rt_data_start_task();

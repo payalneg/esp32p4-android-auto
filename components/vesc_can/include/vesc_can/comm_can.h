@@ -31,6 +31,11 @@ esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps);
 /* Raw transmit (extended ID). */
 void comm_can_transmit_eid(uint32_t id, const uint8_t *data, uint8_t len);
 
+/* This node's own VESC-CAN controller ID (the sender ID embedded in every
+ * comm_can_send_buffer frame). Useful when a remote needs to address a reply
+ * back to us at the application layer — e.g. a LISP (send-data … 2 id). */
+uint8_t comm_can_get_local_id(void);
+
 /* Send a VESC-protocol payload to a node, fragmenting if >6 bytes.
  * `send` selects the response routing: 0 = wait + reply via CAN, 1 =
  * reply over UART, 3 = no reply expected. The display polls with 0. */

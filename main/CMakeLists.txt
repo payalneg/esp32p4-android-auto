@@ -40,6 +40,7 @@ idf_component_register(
         "vbat_routing.c"
         "files_screen.c"
         "splash_screen.c"
+        "debug_uart_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -61,6 +62,7 @@ idf_component_register(
         mdns
         mbedtls
         driver
+        console
         app_update
         esp_http_server
         c6_ota_partition
