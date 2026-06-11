@@ -357,10 +357,10 @@
 (defun pi32 (v) { (bufset-i32 pbuf pi (to-i32 v)) (setq pi (+ pi 4)) })
 (defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
 
-; Describe the panel: 2 toggles + 1 number. ver=1, count=3.
+; Describe the panel: 2 toggles + 1 number + 1 button. ver=1, count=4.
 (defun panel-send-ui (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 3)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 4)
     ; id=1 Throttle (toggle)
     (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
     ; id=2 Traction Control (toggle)
@@ -368,6 +368,8 @@
     ; id=3 TC Sens (number, 0..100, step 5, no suffix)
     (pu8 3) (pu8 3) (pstr "TC Sens")
     (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* tc-sens 1000.0)) (pstr "")
+    ; id=4 Beep (button — momentary, no tail)
+    (pu8 4) (pu8 2) (pstr "Beep")
     (send-data pbuf 2 reply-id)
 })
 
@@ -395,12 +397,42 @@
     })
 })
 
+; Momentary "Beep" — play a short tone, then stop it after a beat.
+; foc-play-tone args: (channel freq voltage); play-stop (top of file) does the
+; (sleep 0.1)(foc-play-stop). Runs on the VESC's FOC tone generator.
+(defun panel-beep () {
+    (foc-play-tone 0 800 30)
+    (spawn 150 play-stop)
+})
+
+; Traction-control toggle.
+; NOTE: this single-motor build uses our own slip limiter (monitor-traction).
+; VESC's BUILT-IN traction control is the app-config flag `app_adc_conf.tc`
+; (+ app_adc_conf.tc_max_diff) — the one you tick in VESC Tool → App Settings.
+; It is MULTI-ESC ONLY: it limits on the ERPM difference between motors on the
+; CAN bus, so on a single motor it does nothing. On a multi-motor rig you'd skip
+; the slip limiter and flip the native flag instead. There's no documented
+; conf-set symbol for the ADC app's tc (only the VESC Remote app exposes
+; 'vr-tc / 'vr-tc-max-diff), so toggling app_adc_conf.tc live from here is best
+; done by writing the app config — e.g. via the head unit's on-device VESC Tool
+; config menu. Sketch for a VESC-Remote-app rig (commented — needs FW 6.05+):
+;   (defun panel-set-tc (on) {
+;       (conf-set 'vr-tc on)          ; native multi-ESC traction control
+;       (setq tc-on on)
+;       ; (conf-store)                ; uncomment to persist across reboots
+;   })
+;   (defun panel-set-tc-sens (v) {
+;       (conf-set 'vr-tc-max-diff (* (- 100.0 v) 100.0))  ; map 0..100 → erpm diff
+;       (setq tc-sens v)
+;   })
+
 ; Apply one control interaction from the panel.
 (defun panel-action (cid val) {
     (cond
         ((= cid 1) (panel-set-throttle (if (> val 0.5) 1 0)))
         ((= cid 2) (setq tc-on (if (> val 0.5) 1 0)))
-        ((= cid 3) (setq tc-sens val)))
+        ((= cid 3) (setq tc-sens val))
+        ((= cid 4) (panel-beep)))
 })
 
 ; Parse one inbound frame from the P4.
@@ -445,9 +477,13 @@
 })
 
 ; Event loop: deliver every COMM_CUSTOM_APP_DATA frame to panel-handle.
+; NB: event-data-rx is delivered as a CONS (event-data-rx . <bytearray>), so the
+; pattern must be dotted — `(event-data-rx . (? data))`, NOT the list form
+; `(event-data-rx (? data))` (which silently never matches and the frame falls
+; through to (_ nil) — that was why REQ_UI/ACTION did nothing).
 (defun panel-event-loop () {
     (loopwhile t {
-        (recv ((event-data-rx (? data)) (panel-handle data))
+        (recv ((event-data-rx . (? data)) (panel-handle data))
               (_ nil))
     })
 })
