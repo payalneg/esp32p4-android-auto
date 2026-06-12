@@ -9,6 +9,7 @@
 #include "vesc_can/comm_can.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_io_data.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "sdkconfig.h"
 
 #include "esp_err.h"
@@ -109,8 +110,10 @@ void vesc_rt_data_request(void)
     send_buffer[ind++] = COMM_GET_VALUES_SETUP_SELECTIVE;
     buffer_append_uint32(send_buffer, mask, &ind);
 
-    /* send=0: VESC will reply over CAN (PROCESS_*_BUFFER) */
-    comm_can_send_buffer(s_target_vesc_id, send_buffer, ind, 0);
+    /* send=0: VESC will reply over CAN (PROCESS_*_BUFFER). Synced so this
+     * reply can't interleave with the LISP-stats / IO-decode polls' replies
+     * in the shared per-id reassembly buffer. */
+    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
 }
 
 void vesc_rt_data_process_response(const uint8_t *data, unsigned int len)
@@ -259,9 +262,20 @@ static void rt_task(void *arg)
     for (;;) {
         vesc_rt_data_loop();
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
-        vesc_lisp_poll_loop();
+        /* COMM_LISP_GET_STATS — no longer feeds the dashboard (its 18-var cap
+         * dropped cruise/profile); cruise + profile now come via the DASH packet
+         * below. Kept behind its Kconfig for a future generic stats viewer, but
+         * skipped here so it doesn't burn a serialised CAN slot for nothing. */
+        (void)0;
 #endif
         vesc_io_data_loop();
+        /* Dashboard cruise/profile stats over the panel's COMM_CUSTOM_APP_DATA
+         * channel — replaces COMM_LISP_GET_STATS (capped at 18 vars). Always on. */
+        vesc_lisp_panel_dash_loop();
+        /* Quick-action panel polling lives on THIS task too (no-op unless the
+         * drawer is open) so its multi-frame UI_DESC/STATE replies can't race
+         * the polls above into the shared per-id CAN reassembly buffer. */
+        vesc_lisp_panel_poll_loop();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

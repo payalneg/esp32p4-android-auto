@@ -53,9 +53,11 @@ extern "C" {
 #define VLP_MSG_REQ_UI    0x01u
 #define VLP_MSG_ACTION    0x02u
 #define VLP_MSG_REQ_STATE 0x03u
+#define VLP_MSG_REQ_DASH  0x04u   /* request dashboard stats (cruise + profile) */
 /* LISP -> P4 */
 #define VLP_MSG_UI_DESC   0x81u
 #define VLP_MSG_STATE     0x82u
+#define VLP_MSG_DASH      0x84u   /* dashboard stats, fixed layout (see vlp_dash_t) */
 
 /* Fixed-point scale for all on-wire float values. */
 #define VLP_SCALE       1000.0f
@@ -88,15 +90,48 @@ typedef struct {
     uint32_t   state_epoch;  /* bumped on each UI_DESC or STATE (value change) */
 } vlp_model_t;
 
+/* Dashboard cruise/profile stats. Delivered over this same COMM_CUSTOM_APP_DATA
+ * channel rather than COMM_LISP_GET_STATS, whose monitor is hard-capped at 18
+ * variables by the VESC firmware — once the Lisp script has more globals than
+ * that, the dashboard's values fall out of the reported set. This packet has a
+ * fixed layout and no such limit. Decoded from the on-wire i32 (×1000) values. */
+typedef struct {
+    bool  valid;            /* false until the first DASH reply has arrived */
+    bool  cruise_active;
+    float cruise_rpm;
+    int   current_profile;
+    float rpm_per_ms;
+} vlp_dash_t;
+
 /* target_vesc_id = the VESC node running the master LISP script. The reply
  * CAN id we ask the script to answer on is fetched live from comm_can. Safe
  * to call repeatedly (mirrors vesc_lisp_poll_init). */
 void vesc_lisp_panel_init(uint8_t target_vesc_id);
 void vesc_lisp_panel_set_target(uint8_t target_vesc_id);
 
-/* Outgoing requests/commands (run from the LVGL task; non-blocking). */
+/* Enable/disable the panel's CAN polling. Set from the LVGL task when the
+ * drawer opens/closes; the actual requests are issued from the CAN poll task
+ * (see vesc_lisp_panel_poll_loop) so all polls stay single-threaded. */
+void vesc_lisp_panel_set_enabled(bool enabled);
+
+/* Drive the panel's UI_DESC / STATE polling. MUST be called from the single
+ * CAN poll task (vesc_rt_data's rt_task), alongside the RT/LISP/IO polls, so
+ * their replies can't interleave in the shared reassembly buffer. No-ops while
+ * the drawer is closed. Also flushes any queued button/slider actions. */
+void vesc_lisp_panel_poll_loop(void);
+
+/* UI_DESC / STATE requests — issued from the CAN poll task via poll_loop. */
 void vesc_lisp_panel_request_ui(void);
 void vesc_lisp_panel_request_state(void);
+
+/* Dashboard cruise/profile stats — independent of the drawer (the dashboard
+ * always needs them). Poll from the single CAN poll task (rt_task) regardless
+ * of whether the panel is open. get_dash returns false until the first reply. */
+void vesc_lisp_panel_request_dash(void);
+void vesc_lisp_panel_dash_loop(void);
+bool vesc_lisp_panel_get_dash(vlp_dash_t *out);
+/* Button/toggle/slider action. Safe to call from the LVGL task (a tap handler):
+ * it just queues the action; poll_loop sends it from the CAN poll task. */
 void vesc_lisp_panel_send_action(uint8_t ctrl_id, float value);
 
 /* Fan-out hook — call from vesc_packet_dispatch. Gates on COMM_CUSTOM_APP_DATA

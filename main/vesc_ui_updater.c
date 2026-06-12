@@ -12,6 +12,7 @@
 #include "ui_mode.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_trip_persist.h"
 #include "vesc_head2.h"
@@ -131,40 +132,35 @@ static void push_rt_locked(void)
     update_uptime(trip_persist_get_uptime_ms());
 }
 
-/* Pull cruise-control state out of the periodic COMM_LISP_GET_STATS reply.
- * The Lisp app on the VESC publishes these names (see main.lisp in the
- * Super_VESC_Display repo). Variables stay absent until the first valid
- * response arrives — the getters return false in that case and the
- * dashboard keeps showing CC off, which is the right default. */
+/* Pull cruise-control + ride-profile state from the Lisp app. These used to
+ * come from COMM_LISP_GET_STATS, but the VESC caps that monitor at 18 variables
+ * and the script has more globals than that, so the values we need fell out of
+ * the reported set. They now arrive over the panel's COMM_CUSTOM_APP_DATA
+ * channel (DASH packet) which has no such limit — see vesc_lisp_panel.
+ * get_dash returns false until the first reply, in which case the dashboard
+ * keeps showing CC off, which is the right default. */
 static void push_cruise_locked(void)
 {
-    /* Current ride profile (eco / normal / sport, etc.) — Lisp publishes
-     * `current-profile` as an int; the dashboard maps the index to a label
-     * via update_mode_text. Independent of CC state, so update before the
-     * CC block. */
-    int32_t current_profile = 0;
-    if (vesc_lisp_poll_get_variable_int("current-profile", &current_profile)) {
-        update_mode_text((uint8_t)current_profile);
+    vlp_dash_t d;
+    if (!vesc_lisp_panel_get_dash(&d)) {
+        /* No Lisp cruise/profile data — e.g. a plain VESC without lisp/main.lisp.
+         * Cruise + ride-mode simply don't exist there, so hide both widgets
+         * instead of leaving the "MODE" placeholder; the rest of the dashboard
+         * (speed/battery/… from COMM_GET_VALUES) works on any VESC regardless. */
+        hide_mode_text();
+        update_cruise_control_status(false);
+        return;
     }
 
-    int32_t cc_active = 0;
-    if (vesc_lisp_poll_get_variable_int("cruise-active", &cc_active)) {
-        update_cruise_control_status(cc_active != 0);
+    /* Current ride profile (eco / normal / sport, …) → label. */
+    update_mode_text((uint8_t)d.current_profile);
 
-        /* Speed text only matters when CC is engaged. Conversion mirrors
-         * the original Arduino impl: speed_kmh = rpm / rpm-per-ms * 3.6.
-         * rpm-per-ms is also Lisp-published and depends on motor poles /
-         * wheel diameter, so we let the VESC tell us instead of duplicating
-         * the math here. */
-        if (cc_active) {
-            float cc_rpm    = 0.0f;
-            float rpm_per_ms = 0.0f;
-            if (vesc_lisp_poll_get_variable_float("cruise-rpm",  &cc_rpm) &&
-                vesc_lisp_poll_get_variable_float("rpm-per-ms",  &rpm_per_ms) &&
-                rpm_per_ms > 0.1f) {
-                update_cruise_speed(cc_rpm / rpm_per_ms * 3.6f);
-            }
-        }
+    update_cruise_control_status(d.cruise_active);
+
+    /* Speed text only matters when CC is engaged. speed_kmh = rpm / rpm-per-ms
+     * * 3.6; rpm-per-ms is computed on the VESC (motor poles / wheel diameter). */
+    if (d.cruise_active && d.rpm_per_ms > 0.1f) {
+        update_cruise_speed(d.cruise_rpm / d.rpm_per_ms * 3.6f);
     }
 }
 

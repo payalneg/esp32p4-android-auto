@@ -60,7 +60,7 @@ static void paint_v_bar(lv_obj_t *const *segs, int count, int filled, lv_color_t
     for (int i = 0; i < count; i++) {
         if (!segs[i]) continue;
         bool lit = (count - 1 - i) < filled;
-        lv_obj_set_style_bg_color(segs[i], lit ? on : GEN_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], lit ? on : GEN_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -71,7 +71,7 @@ static void paint_h_bar(lv_obj_t *const *segs, int count, int filled, lv_color_t
     if (filled > count) filled = count;
     for (int i = 0; i < count; i++) {
         if (!segs[i]) continue;
-        lv_obj_set_style_bg_color(segs[i], (i < filled) ? on : GEN_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], (i < filled) ? on : GEN_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -83,8 +83,8 @@ static void render_power(void)
     if (s_w->power_value) {
         char text[16];
         snprintf(text, sizeof(text), "%.1f", power_kw);
-        lv_label_set_text(s_w->power_value, text);
-        lv_obj_set_style_text_color(s_w->power_value, color, LV_PART_MAIN);
+        dash_label_set(s_w->power_value, text);
+        dash_set_text_color(s_w->power_value, color, LV_PART_MAIN);
     }
     if (s_w->power_seg_n > 0) {
         float pmax = settings_wrapper_get_power_max_kw();
@@ -106,7 +106,7 @@ static void g_speed(float speed)
     if (s_w->speed_text) {
         char text[10];
         snprintf(text, sizeof(text), "%02d", disp);
-        lv_label_set_text(s_w->speed_text, text);
+        dash_label_set(s_w->speed_text, text);
     }
     if (s_w->speed_seg_n > 0) {
         int smax = 60;
@@ -122,7 +122,7 @@ static void g_current(float current)
     if (s_w->current_text) {
         char text[12];
         snprintf(text, sizeof(text), "%.1f A", current);
-        lv_label_set_text(s_w->current_text, text);
+        dash_label_set(s_w->current_text, text);
     }
     render_power();
 }
@@ -134,7 +134,7 @@ static void g_battery_voltage(float v)
     if (s_w->voltage_text) {
         char text[10];
         snprintf(text, sizeof(text), "%.1f", v);
-        lv_label_set_text(s_w->voltage_text, text);
+        dash_label_set(s_w->voltage_text, text);
     }
     render_power();
 }
@@ -146,8 +146,8 @@ static void g_battery_proc(float pct)
     if (s_w->batt_pct_text) {
         char text[8];
         snprintf(text, sizeof(text), "%d", v);
-        lv_label_set_text(s_w->batt_pct_text, text);
-        lv_obj_set_style_text_color(s_w->batt_pct_text, batt_color(v), LV_PART_MAIN);
+        dash_label_set(s_w->batt_pct_text, text);
+        dash_set_text_color(s_w->batt_pct_text, batt_color(v), LV_PART_MAIN);
     }
     if (s_w->batt_seg_n > 0) {
         int filled = (v * s_w->batt_seg_n + 50) / 100;
@@ -160,7 +160,7 @@ static void g_temp_fet(float c)
     if (!s_w || !s_w->temp_fet_text) return;
     char text[8];
     snprintf(text, sizeof(text), "%d", (int)settings_wrapper_temp_to_display(c));
-    lv_label_set_text(s_w->temp_fet_text, text);
+    dash_label_set(s_w->temp_fet_text, text);
 }
 
 static void g_temp_motor(float c)
@@ -168,7 +168,7 @@ static void g_temp_motor(float c)
     if (!s_w || !s_w->temp_motor_text) return;
     char text[8];
     snprintf(text, sizeof(text), "%d", (int)settings_wrapper_temp_to_display(c));
-    lv_label_set_text(s_w->temp_motor_text, text);
+    dash_label_set(s_w->temp_motor_text, text);
 }
 
 static void g_trip(float km)
@@ -176,7 +176,7 @@ static void g_trip(float km)
     if (!s_w || !s_w->trip_text) return;
     char text[10];
     snprintf(text, sizeof(text), "%.1f", settings_wrapper_dist_to_display(km));
-    lv_label_set_text(s_w->trip_text, text);
+    dash_label_set(s_w->trip_text, text);
 }
 
 static void g_range(float km)
@@ -184,7 +184,7 @@ static void g_range(float km)
     if (!s_w || !s_w->range_text) return;
     char text[10];
     snprintf(text, sizeof(text), "%.1f", settings_wrapper_dist_to_display(km));
-    lv_label_set_text(s_w->range_text, text);
+    dash_label_set(s_w->range_text, text);
 }
 
 static void g_odometer(float km)
@@ -192,7 +192,7 @@ static void g_odometer(float km)
     if (!s_w || !s_w->odo_text) return;
     char text[10];
     snprintf(text, sizeof(text), "%05d", (int)settings_wrapper_dist_to_display(km));
-    lv_label_set_text(s_w->odo_text, text);
+    dash_label_set(s_w->odo_text, text);
 }
 
 static void g_amp_hours(float ah)
@@ -200,7 +200,7 @@ static void g_amp_hours(float ah)
     if (!s_w || !s_w->ah_text) return;
     char text[16];
     snprintf(text, sizeof(text), "%.1f Ah", ah);
-    lv_label_set_text(s_w->ah_text, text);
+    dash_label_set(s_w->ah_text, text);
 }
 
 static void g_uptime(uint32_t ms)
@@ -209,15 +209,24 @@ static void g_uptime(uint32_t ms)
     int v = ms / 1000;
     char text[20];
     snprintf(text, sizeof(text), "%02d:%02d:%02d", v / 3600, (v % 3600) / 60, v % 60);
-    lv_label_set_text(s_w->uptime_text, text);
+    dash_label_set(s_w->uptime_text, text);
+}
+
+static void g_hide_mode_text(void)
+{
+    if (!s_w || !s_w->mode_text) return;
+    if (!lv_obj_has_flag(s_w->mode_text, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_add_flag(s_w->mode_text, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void g_mode_text(uint8_t mode)
 {
     if (!s_w || !s_w->mode_text) return;
+    if (lv_obj_has_flag(s_w->mode_text, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_clear_flag(s_w->mode_text, LV_OBJ_FLAG_HIDDEN);   /* re-show after no-Lisp */
     char text[16];
     snprintf(text, sizeof(text), "MODE %d", mode + 1);
-    lv_label_set_text(s_w->mode_text, text);
+    dash_label_set(s_w->mode_text, text);
 }
 
 static void g_cur_time(int hour, int minute, int second)
@@ -225,7 +234,7 @@ static void g_cur_time(int hour, int minute, int second)
     if (!s_w || !s_w->time_label) return;
     char text[12];
     snprintf(text, sizeof(text), "%02d:%02d:%02d", hour, minute, second);
-    lv_label_set_text(s_w->time_label, text);
+    dash_label_set(s_w->time_label, text);
 }
 
 static void g_cur_time_hm(int hour, int minute)
@@ -233,7 +242,7 @@ static void g_cur_time_hm(int hour, int minute)
     if (!s_w || !s_w->time_label) return;
     char text[8];
     snprintf(text, sizeof(text), "%02d:%02d", hour, minute);
-    lv_label_set_text(s_w->time_label, text);
+    dash_label_set(s_w->time_label, text);
     if (lv_obj_has_flag(s_w->time_label, LV_OBJ_FLAG_HIDDEN))
         lv_obj_clear_flag(s_w->time_label, LV_OBJ_FLAG_HIDDEN);
 }
@@ -248,7 +257,7 @@ static void g_hide_cur_time(void)
 static void g_ble_status(bool connected)
 {
     if (!s_w || !s_w->status_bt) return;
-    lv_obj_set_style_text_color(s_w->status_bt, connected ? GEN_BT_ON : GEN_BT_OFF, LV_PART_MAIN);
+    dash_set_text_color(s_w->status_bt, connected ? GEN_BT_ON : GEN_BT_OFF, LV_PART_MAIN);
     lv_obj_set_style_text_opa(s_w->status_bt, connected ? LV_OPA_COVER : LV_OPA_50, LV_PART_MAIN);
 }
 
@@ -265,6 +274,7 @@ const dashboard_theme_ops_t dashboard_generic_ops = {
     .amp_hours       = g_amp_hours,
     .uptime          = g_uptime,
     .mode_text       = g_mode_text,
+    .hide_mode_text  = g_hide_mode_text,
     .cur_time        = g_cur_time,
     .cur_time_hm     = g_cur_time_hm,
     .hide_cur_time   = g_hide_cur_time,

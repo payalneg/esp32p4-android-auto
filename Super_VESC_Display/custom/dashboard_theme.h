@@ -43,6 +43,39 @@ extern "C" {
 #include "lvgl.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
+
+/* ---- Invalidation-deduping setters --------------------------------------
+ * The display runs in DOUBLE_FULL / full_refresh (TRIPLE_PARTIAL freezes on
+ * P4 — see main/display_init.c), so ANY widget invalidation re-renders the
+ * whole 800×480 screen in software. The 10 Hz data pump re-sets ~15 labels
+ * every cycle even when the displayed digits are identical, forcing a full
+ * re-render ~10×/s at rest. These helpers skip the LVGL call (and its
+ * invalidation) when the value is unchanged, so a steady dashboard produces
+ * zero re-renders. Drop-in: same arg order as the lv_* funcs they replace.
+ * Only valid for default-state (part-only) selectors — all dashboard setters
+ * use LV_PART_MAIN/INDICATOR, never LV_STATE_* bits. */
+static inline void dash_label_set(lv_obj_t *label, const char *txt)
+{
+    if (!label) return;
+    const char *cur = lv_label_get_text(label);
+    if (cur && strcmp(cur, txt) == 0) return;
+    lv_label_set_text(label, txt);
+}
+
+static inline void dash_set_bg_color(lv_obj_t *obj, lv_color_t c, lv_style_selector_t sel)
+{
+    if (!obj) return;
+    if (lv_obj_get_style_bg_color(obj, sel).full == c.full) return;
+    lv_obj_set_style_bg_color(obj, c, sel);
+}
+
+static inline void dash_set_text_color(lv_obj_t *obj, lv_color_t c, lv_style_selector_t sel)
+{
+    if (!obj) return;
+    if (lv_obj_get_style_text_color(obj, sel).full == c.full) return;
+    lv_obj_set_style_text_color(obj, c, sel);
+}
 
 /* Render operations — same canonical values the data feed produces. Every hook
  * is optional: a NULL slot means "this theme doesn't show that field" and the
@@ -70,6 +103,7 @@ typedef struct {
     void (*cur_time)(int hour, int minute, int second);
     void (*cur_time_hm)(int hour, int minute);
     void (*hide_cur_time)(void);
+    void (*hide_mode_text)(void);   /* hide the ride-mode label (no Lisp data) */
     void (*navigation_icon)(const uint8_t *img_data, uint32_t data_size,
                             uint16_t width, uint16_t height, lv_img_cf_t cf);
     void (*navigation_text)(const char *text);

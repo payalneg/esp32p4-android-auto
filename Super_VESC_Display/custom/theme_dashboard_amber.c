@@ -88,7 +88,7 @@ static void amber_paint_battery_bar(int pct)
     for (int i = 0; i < 14; i++) {
         if (!segs[i]) continue;
         bool on = (14 - 1 - i) < filled;
-        lv_obj_set_style_bg_color(segs[i], on ? fill : AMBER_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], on ? fill : AMBER_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -135,7 +135,7 @@ static void amber_init_flat_cells(lv_obj_t **segs, int n)
     for (int i = 0; i < n; i++) {
         if (!segs[i]) continue;
         lv_obj_set_style_bg_grad_dir(segs[i], LV_GRAD_DIR_NONE, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(segs[i], AMBER_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], AMBER_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -166,7 +166,7 @@ static void amber_paint_power_bar(float power_kw, float power_max_kw)
     for (int i = 0; i < 14; i++) {
         if (!segs[i]) continue;
         bool on = (14 - 1 - i) < filled;
-        lv_obj_set_style_bg_color(segs[i], on ? color : AMBER_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], on ? color : AMBER_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -182,7 +182,7 @@ static void amber_paint_speed_bar(int speed_kmh, int speed_max_kmh)
      * lights first. */
     for (int i = 0; i < 12; i++) {
         if (!segs[i]) continue;
-        lv_obj_set_style_bg_color(segs[i], (i < filled) ? AMBER_ACCENT : AMBER_SEG_OFF, LV_PART_MAIN);
+        dash_set_bg_color(segs[i], (i < filled) ? AMBER_ACCENT : AMBER_SEG_OFF, LV_PART_MAIN);
     }
 }
 
@@ -191,7 +191,7 @@ static void amber_refresh_power_max_label(void)
     if (!guider_ui.dashboard_Amber_power_max_val) return;
     char text[16];
     snprintf(text, sizeof(text), "%.1f KW", settings_wrapper_get_power_max_kw());
-    lv_label_set_text(guider_ui.dashboard_Amber_power_max_val, text);
+    dash_label_set(guider_ui.dashboard_Amber_power_max_val, text);
 }
 
 static void amber_update_power(void)
@@ -200,8 +200,8 @@ static void amber_update_power(void)
     if (guider_ui.dashboard_Amber_power_value) {
         char text[16];
         snprintf(text, sizeof(text), "%.1f", power_kw);
-        lv_label_set_text(guider_ui.dashboard_Amber_power_value, text);
-        lv_obj_set_style_text_color(guider_ui.dashboard_Amber_power_value,
+        dash_label_set(guider_ui.dashboard_Amber_power_value, text);
+        dash_set_text_color(guider_ui.dashboard_Amber_power_value,
                                     (power_kw < 0.0f) ? AMBER_REGEN : AMBER_ACCENT,
                                     LV_PART_MAIN);
     }
@@ -219,7 +219,7 @@ static void amber_speed(float speed)
     if (disp < 0) disp = 0; else if (disp > 999) disp = 999;
     char text[10];
     snprintf(text, sizeof(text), "%02d", disp);
-    lv_label_set_text(guider_ui.dashboard_Amber_Speed_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Speed_text, text);
     amber_paint_speed_bar((int)speed, 60);
 }
 
@@ -230,7 +230,7 @@ static void amber_current(float current)
     old = current;
     char text[12];
     snprintf(text, sizeof(text), "%.1f A", current);
-    lv_label_set_text(guider_ui.dashboard_Amber_Current_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Current_text, text);
     s_amber_last_current_a = current;
     amber_update_power();
 }
@@ -243,8 +243,8 @@ static void amber_battery_proc(float pct)
     int v = (int)pct; if (v > 99) v = 99; else if (v < 0) v = 0;
     char text[8];
     snprintf(text, sizeof(text), "%d", v);
-    lv_label_set_text(guider_ui.dashboard_Amber_Battery_proc_text, text);
-    lv_obj_set_style_text_color(guider_ui.dashboard_Amber_Battery_proc_text,
+    dash_label_set(guider_ui.dashboard_Amber_Battery_proc_text, text);
+    dash_set_text_color(guider_ui.dashboard_Amber_Battery_proc_text,
                                 amber_battery_color(v), LV_PART_MAIN);
     amber_paint_battery_bar(v);
 }
@@ -256,7 +256,7 @@ static void amber_battery_voltage(float v)
     old = v;
     char text[10];
     snprintf(text, sizeof(text), "%.1f", v);
-    lv_label_set_text(guider_ui.dashboard_Amber_Voltage_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Voltage_text, text);
     s_amber_last_voltage_v = v;
     amber_update_power();
 }
@@ -269,7 +269,7 @@ static void amber_temp_fet(float c)
     old = v; oe = s_amber_units_epoch;
     char text[8];
     snprintf(text, sizeof(text), "%d", v);
-    lv_label_set_text(guider_ui.dashboard_Amber_temp_esc_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_temp_esc_text, text);
 }
 
 static void amber_temp_motor(float c)
@@ -280,7 +280,7 @@ static void amber_temp_motor(float c)
     old = v; oe = s_amber_units_epoch;
     char text[8];
     snprintf(text, sizeof(text), "%d", v);
-    lv_label_set_text(guider_ui.dashboard_Amber_temp_mot_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_temp_mot_text, text);
 }
 
 static void amber_trip(float km)
@@ -290,7 +290,7 @@ static void amber_trip(float km)
     old = km; oe = s_amber_units_epoch;
     char text[10];
     snprintf(text, sizeof(text), "%.1f", settings_wrapper_dist_to_display(km));
-    lv_label_set_text(guider_ui.dashboard_Amber_TRIP_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_TRIP_text, text);
 }
 
 static void amber_range(float km)
@@ -300,7 +300,7 @@ static void amber_range(float km)
     old = km; oe = s_amber_units_epoch;
     char text[10];
     snprintf(text, sizeof(text), "%.1f", settings_wrapper_dist_to_display(km));
-    lv_label_set_text(guider_ui.dashboard_Amber_Range_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Range_text, text);
 }
 
 static void amber_odometer(float km)
@@ -310,7 +310,7 @@ static void amber_odometer(float km)
     old = km; oe = s_amber_units_epoch;
     char text[10];
     snprintf(text, sizeof(text), "%05d", (int)settings_wrapper_dist_to_display(km));
-    lv_label_set_text(guider_ui.dashboard_Amber_odo_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_odo_text, text);
 }
 
 static void amber_amp_hours(float ah)
@@ -320,7 +320,7 @@ static void amber_amp_hours(float ah)
     old = ah;
     char text[16];
     snprintf(text, sizeof(text), "%.1f Ah", ah);
-    lv_label_set_text(guider_ui.dashboard_Amber_Ah_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Ah_text, text);
 }
 
 static void amber_uptime(uint32_t ms)
@@ -331,17 +331,27 @@ static void amber_uptime(uint32_t ms)
     old = v;
     char text[20];
     snprintf(text, sizeof(text), "%02d:%02d:%02d", v / 3600, (v % 3600) / 60, v % 60);
-    lv_label_set_text(guider_ui.dashboard_Amber_uptime_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_uptime_text, text);
+}
+
+static void amber_hide_mode_text(void)
+{
+    lv_obj_t *lbl = guider_ui.dashboard_Amber_mode_text;
+    if (lbl && !lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void amber_mode_text(uint8_t mode)
 {
+    lv_obj_t *lbl = guider_ui.dashboard_Amber_mode_text;
+    if (lbl && lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);   /* re-show after no-Lisp */
     static int old = -1;
     if (mode == old) return;
     old = mode;
     char text[16];
     snprintf(text, sizeof(text), "MODE %d", mode + 1);
-    lv_label_set_text(guider_ui.dashboard_Amber_mode_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_mode_text, text);
 }
 
 static void amber_units_changed(void)
@@ -349,16 +359,16 @@ static void amber_units_changed(void)
     s_amber_units_epoch++;
     bool imperial = settings_wrapper_get_use_imperial();
     if (guider_ui.dashboard_Amber_speed_label)
-        lv_label_set_text(guider_ui.dashboard_Amber_speed_label,
+        dash_label_set(guider_ui.dashboard_Amber_speed_label,
                           imperial ? "SPEED · MPH" : "SPEED · KM/H");
     if (guider_ui.dashboard_Amber_col_trip_unit)
-        lv_label_set_text(guider_ui.dashboard_Amber_col_trip_unit, settings_wrapper_dist_unit());
+        dash_label_set(guider_ui.dashboard_Amber_col_trip_unit, settings_wrapper_dist_unit());
     if (guider_ui.dashboard_Amber_col_odo_unit)
-        lv_label_set_text(guider_ui.dashboard_Amber_col_odo_unit, settings_wrapper_dist_unit());
+        dash_label_set(guider_ui.dashboard_Amber_col_odo_unit, settings_wrapper_dist_unit());
     if (guider_ui.dashboard_Amber_col_mtmp_unit)
-        lv_label_set_text(guider_ui.dashboard_Amber_col_mtmp_unit, settings_wrapper_temp_unit());
+        dash_label_set(guider_ui.dashboard_Amber_col_mtmp_unit, settings_wrapper_temp_unit());
     if (guider_ui.dashboard_Amber_col_ctmp_unit)
-        lv_label_set_text(guider_ui.dashboard_Amber_col_ctmp_unit, settings_wrapper_temp_unit());
+        dash_label_set(guider_ui.dashboard_Amber_col_ctmp_unit, settings_wrapper_temp_unit());
 }
 
 static void amber_cur_time(int hour, int minute, int second)
@@ -366,7 +376,7 @@ static void amber_cur_time(int hour, int minute, int second)
     if (!guider_ui.dashboard_Amber_cur_time_label) return;
     char text[12];
     snprintf(text, sizeof(text), "%02d:%02d:%02d", hour, minute, second);
-    lv_label_set_text(guider_ui.dashboard_Amber_cur_time_label, text);
+    dash_label_set(guider_ui.dashboard_Amber_cur_time_label, text);
 }
 
 static void amber_cur_time_hm(int hour, int minute)
@@ -375,7 +385,7 @@ static void amber_cur_time_hm(int hour, int minute)
     if (!lbl) return;
     char text[8];
     snprintf(text, sizeof(text), "%02d:%02d", hour, minute);
-    lv_label_set_text(lbl, text);
+    dash_label_set(lbl, text);
     if (lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN))
         lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
 }
@@ -393,7 +403,7 @@ static void amber_ble_status(bool connected)
     if ((int)connected == old) return;
     old = connected;
     if (!guider_ui.dashboard_Amber_status_bt) return;
-    lv_obj_set_style_text_color(guider_ui.dashboard_Amber_status_bt,
+    dash_set_text_color(guider_ui.dashboard_Amber_status_bt,
                                 connected ? AMBER_BRIGHT : AMBER_DIM, LV_PART_MAIN);
     lv_obj_set_style_text_opa(guider_ui.dashboard_Amber_status_bt,
                               connected ? LV_OPA_COVER : LV_OPA_50, LV_PART_MAIN);
@@ -422,7 +432,7 @@ static void amber_cruise_speed(float speed)
     if (!guider_ui.dashboard_Amber_Speed_cc_text) return;
     char text[8];
     snprintf(text, sizeof(text), "%d", (int)settings_wrapper_speed_to_display(speed));
-    lv_label_set_text(guider_ui.dashboard_Amber_Speed_cc_text, text);
+    dash_label_set(guider_ui.dashboard_Amber_Speed_cc_text, text);
 }
 
 static void amber_esc_connection_status(bool connected)
@@ -572,6 +582,7 @@ static const dashboard_theme_ops_t amber_ops = {
     .amp_hours             = amber_amp_hours,
     .uptime                = amber_uptime,
     .mode_text             = amber_mode_text,
+    .hide_mode_text        = amber_hide_mode_text,
     .units_changed         = amber_units_changed,
     .cur_time              = amber_cur_time,
     .cur_time_hm           = amber_cur_time_hm,

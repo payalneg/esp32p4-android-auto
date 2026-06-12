@@ -1,0 +1,3 @@
+[submodule "scripts/midi-parser"]
+	path = scripts/midi-parser
+	url = https://github.com/abique/midi-parser

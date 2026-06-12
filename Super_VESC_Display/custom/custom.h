@@ -86,6 +86,7 @@ void update_uptime(uint32_t uptime);
 void update_cur_time(int hour, int minute, int second);
 void update_cur_time_hm(int hour, int minute);
 void hide_cur_time(void);
+void hide_mode_text(void);
 
 /* Called from events_init.c when the invisible dashboard brightness
  * slider (full-screen drag area) changes value. Applies the brightness

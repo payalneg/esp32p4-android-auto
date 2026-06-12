@@ -333,6 +333,7 @@ void lisp_panel_close(void)
 {
     if (!s_open) return;
     s_open = false;
+    vesc_lisp_panel_set_enabled(false);   /* stop the CAN poll task polling */
     if (s_timer) { lv_timer_del(s_timer); s_timer = NULL; }
     if (s_drawer) {
         slide_drawer(DRAWER_ON_X, DRAWER_OFF_X, lv_anim_path_ease_in,
@@ -358,11 +359,12 @@ static void poll_cb(lv_timer_t *t)
      * lv_layer_top() so it would otherwise float over the new screen. */
     if (lv_scr_act() != vesc_ui_get_screen()) { lisp_panel_close(); return; }
 
+    /* This timer only renders from the model snapshot now; the CAN poll task
+     * (vesc_lisp_panel_poll_loop) issues the UI_DESC/STATE requests that keep
+     * the model fresh — so the LVGL task never blocks on CAN. */
     vlp_model_t m;
     if (!vesc_lisp_panel_get_model(&m)) {
-        /* No UI yet — keep nudging the script until it answers. */
-        vesc_lisp_panel_request_ui();
-        return;
+        return;   /* no UI descriptor yet — the poll task is still asking */
     }
     if (m.ui_epoch != s_seen_ui_epoch) {
         rebuild_controls(&m);
@@ -372,8 +374,6 @@ static void poll_cb(lv_timer_t *t)
         refresh_values(&m);
         s_seen_state_epoch = m.state_epoch;
     }
-    /* Poll live values for the next tick. */
-    vesc_lisp_panel_request_state();
 }
 
 static void do_open(void)
@@ -431,7 +431,7 @@ static void do_open(void)
     s_seen_ui_epoch    = 0;   /* force a rebuild from whatever the model holds */
     s_seen_state_epoch = 0;
 
-    vesc_lisp_panel_request_ui();
+    vesc_lisp_panel_set_enabled(true);   /* CAN poll task starts requesting UI/state */
     slide_drawer(DRAWER_OFF_X, DRAWER_ON_X, lv_anim_path_ease_out, NULL);
     s_timer = lv_timer_create(poll_cb, 200, NULL);
     poll_cb(s_timer);  /* paint last-known model instantly if we have one */

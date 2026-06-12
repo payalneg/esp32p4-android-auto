@@ -46,3 +46,6 @@ __pycache__/
 # use to temporarily flip back to AP mode without losing the creds.
 main/bench_wifi.h*
 logs/
+
+# Compiled host tool (source is scripts/mid2melody.c)
+scripts/mid2melody

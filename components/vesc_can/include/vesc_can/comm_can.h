@@ -42,6 +42,18 @@ uint8_t comm_can_get_local_id(void);
 void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
                           unsigned int len, uint8_t send);
 
+/* Like comm_can_send_buffer, but blocks (up to reply_timeout_ms) until the
+ * VESC's reply has been reassembled and delivered. Use for continuous CAN
+ * polls so two multi-frame replies from the same node can't interleave in the
+ * shared per-id reassembly buffer (which corrupts both → PROCESS_RX_BUFFER CRC
+ * mismatch). MUST be called only from the single CAN poll task (vesc_rt_data's
+ * rt_task): there is no lock — serialisation comes from every continuous poll
+ * (RT data, LISP stats, IO decode, the quick-action panel) living on that one
+ * task and waiting here for each reply before sending the next. Use `send`=0. */
+void comm_can_send_buffer_sync(uint8_t controller_id, const uint8_t *data,
+                               unsigned int len, uint8_t send,
+                               uint32_t reply_timeout_ms);
+
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type);
 
 /* Convenience setters (translated to fragments+forward-CAN if needed). */

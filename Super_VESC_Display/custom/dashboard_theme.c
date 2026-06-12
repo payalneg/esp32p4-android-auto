@@ -152,6 +152,7 @@ DISPATCH1(update_navigation_text,       navigation_text,       const char *)
 DISPATCH1(update_music_text,            music_text,            const char *)
 DISPATCH0(dashboard_units_changed,      units_changed)
 DISPATCH0(hide_cur_time,                hide_cur_time)
+DISPATCH0(hide_mode_text,               hide_mode_text)
 DISPATCH2(update_cur_time_hm,           cur_time_hm,           int, int)
 DISPATCH3(update_cur_time,              cur_time,              int, int, int)
 

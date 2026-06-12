@@ -49,8 +49,10 @@ static void send_cmd(uint8_t cmd)
 {
     uint8_t send_buffer[1];
     send_buffer[0] = cmd;
-    /* send=0: VESC replies over CAN (PROCESS_*_BUFFER) */
-    comm_can_send_buffer(s_target_vesc_id, send_buffer, 1, 0);
+    /* send=0: VESC replies over CAN (PROCESS_*_BUFFER). Synced so the two
+     * back-to-back ADC/PPM polls (and the RT/LISP polls) don't race each
+     * other's reply into the shared per-id reassembly buffer. */
+    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, 1, 0, 60);
 }
 
 void vesc_io_data_loop(void)

@@ -56,35 +56,35 @@ static lv_obj_t *ref_create(void)
     lv_obj_t *scr = lv_obj_create(NULL);
     s_screen = scr;
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(scr, REF_BG, LV_PART_MAIN);
+    dash_set_bg_color(scr, REF_BG, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(scr, 0, LV_PART_MAIN);
 
     /* Title marker so the theme is unmistakable at a glance. */
     lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "MINIMAL");
-    lv_obj_set_style_text_color(title, REF_DIM, LV_PART_MAIN);
+    dash_label_set(title, "MINIMAL");
+    dash_set_text_color(title, REF_DIM, LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 24);
 
     /* Big centred speed. */
     s_speed = lv_label_create(scr);
-    lv_label_set_text(s_speed, "0");
-    lv_obj_set_style_text_color(s_speed, REF_TEXT, LV_PART_MAIN);
+    dash_label_set(s_speed, "0");
+    dash_set_text_color(s_speed, REF_TEXT, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_speed, &lv_font_Antonio_Regular_64, LV_PART_MAIN);
     lv_obj_align(s_speed, LV_ALIGN_CENTER, 0, -40);
 
     s_speed_unit = lv_label_create(scr);
-    lv_label_set_text(s_speed_unit, settings_wrapper_speed_unit());
-    lv_obj_set_style_text_color(s_speed_unit, REF_ACCENT, LV_PART_MAIN);
+    dash_label_set(s_speed_unit, settings_wrapper_speed_unit());
+    dash_set_text_color(s_speed_unit, REF_ACCENT, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_speed_unit, &lv_font_montserrat_24, LV_PART_MAIN);
     lv_obj_align_to(s_speed_unit, s_speed, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
 
     /* Live current under the speed, small. */
     s_current = lv_label_create(scr);
-    lv_label_set_text(s_current, "0.0 A");
-    lv_obj_set_style_text_color(s_current, REF_DIM, LV_PART_MAIN);
+    dash_label_set(s_current, "0.0 A");
+    dash_set_text_color(s_current, REF_DIM, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_current, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(s_current, LV_ALIGN_CENTER, 0, 40);
 
@@ -94,15 +94,15 @@ static lv_obj_t *ref_create(void)
     lv_obj_align(s_batt_bar, LV_ALIGN_BOTTOM_MID, 0, -64);
     lv_bar_set_range(s_batt_bar, 0, 100);
     lv_bar_set_value(s_batt_bar, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_batt_bar, REF_BAR_BG, LV_PART_MAIN);
+    dash_set_bg_color(s_batt_bar, REF_BAR_BG, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_batt_bar, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(s_batt_bar, 6, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_batt_bar, REF_ACCENT, LV_PART_INDICATOR);
+    dash_set_bg_color(s_batt_bar, REF_ACCENT, LV_PART_INDICATOR);
     lv_obj_set_style_radius(s_batt_bar, 6, LV_PART_INDICATOR);
 
     s_batt_lbl = lv_label_create(scr);
-    lv_label_set_text(s_batt_lbl, "0%");
-    lv_obj_set_style_text_color(s_batt_lbl, REF_TEXT, LV_PART_MAIN);
+    dash_label_set(s_batt_lbl, "0%");
+    dash_set_text_color(s_batt_lbl, REF_TEXT, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_batt_lbl, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align_to(s_batt_lbl, s_batt_bar, LV_ALIGN_OUT_TOP_MID, 0, -4);
 
@@ -110,12 +110,12 @@ static lv_obj_t *ref_create(void)
     lv_obj_t *btn = lv_btn_create(scr);
     lv_obj_set_size(btn, 140, 44);
     lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_obj_set_style_bg_color(btn, REF_BAR_BG, LV_PART_MAIN);
+    dash_set_bg_color(btn, REF_BAR_BG, LV_PART_MAIN);
     lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
     lv_obj_add_event_cb(btn, ref_settings_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *btn_lbl = lv_label_create(btn);
-    lv_label_set_text(btn_lbl, "SETTINGS");
-    lv_obj_set_style_text_color(btn_lbl, REF_TEXT, LV_PART_MAIN);
+    dash_label_set(btn_lbl, "SETTINGS");
+    dash_set_text_color(btn_lbl, REF_TEXT, LV_PART_MAIN);
     lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_center(btn_lbl);
 
@@ -129,14 +129,16 @@ static void ref_destroy(void)
     s_speed = s_speed_unit = s_batt_bar = s_batt_lbl = s_current = NULL;
 }
 
-/* --- render ops (no per-field dedup — at 10 Hz lv_label_set_text is cheap) --- */
+/* --- render ops (dedup is centralized in dash_label_set: at 10 Hz the
+ *     label text is cheap, but under full_refresh a needless invalidation
+ *     re-renders the whole screen, so skip writing unchanged text) --- */
 
 static void ref_speed(float kmh)
 {
     if (!s_speed) return;
     char t[12];
     snprintf(t, sizeof(t), "%d", (int)settings_wrapper_speed_to_display(kmh));
-    lv_label_set_text(s_speed, t);
+    dash_label_set(s_speed, t);
 }
 
 static void ref_current(float a)
@@ -144,7 +146,7 @@ static void ref_current(float a)
     if (!s_current) return;
     char t[16];
     snprintf(t, sizeof(t), "%.1f A", a);
-    lv_label_set_text(s_current, t);
+    dash_label_set(s_current, t);
 }
 
 static void ref_battery_proc(float pct)
@@ -155,13 +157,13 @@ static void ref_battery_proc(float pct)
     if (s_batt_lbl) {
         char t[8];
         snprintf(t, sizeof(t), "%d%%", v);
-        lv_label_set_text(s_batt_lbl, t);
+        dash_label_set(s_batt_lbl, t);
     }
 }
 
 static void ref_units_changed(void)
 {
-    if (s_speed_unit) lv_label_set_text(s_speed_unit, settings_wrapper_speed_unit());
+    if (s_speed_unit) dash_label_set(s_speed_unit, settings_wrapper_speed_unit());
 }
 
 static const dashboard_theme_ops_t ref_ops = {

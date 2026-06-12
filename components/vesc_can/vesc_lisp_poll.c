@@ -53,7 +53,10 @@ void vesc_lisp_poll_loop(void)
     int32_t ind = 0;
     send_buffer[ind++] = COMM_LISP_GET_STATS;
     send_buffer[ind++] = 1; /* poll_all */
-    comm_can_send_buffer(s_target_vesc_id, send_buffer, ind, 0);
+    /* Synced: the stats reply is the big multi-frame one (hundreds of bytes);
+     * letting it overlap the RT-data poll's reply is exactly what corrupted the
+     * reassembly buffer and dropped cruise/mode values. */
+    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
 }
 
 void vesc_lisp_poll_process_response(const uint8_t *data, unsigned int len)

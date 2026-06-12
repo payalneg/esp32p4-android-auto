@@ -1028,14 +1028,28 @@ static void cockpit_hide_cur_time(void)
     }
 }
 
+static void cockpit_hide_mode_text(void)
+{
+    lv_obj_t *lbl = guider_ui.dashboard_Classic_mode_text;
+    if (lbl && !lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void cockpit_mode_text(uint8_t mode)
 {
+    /* Re-show in case it was hidden while Lisp data was absent (no script). */
+    lv_obj_t *lbl = guider_ui.dashboard_Classic_mode_text;
+    if (lbl && lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+
     static uint8_t old_mode = -1;
     if (mode == old_mode) {
         return;
     }
     old_mode = mode;
-    
+
     char text[20];
     sprintf(text,"MODE %d", mode+1);
     lv_label_set_text(guider_ui.dashboard_Classic_mode_text,text);
@@ -3141,6 +3155,7 @@ static const dashboard_theme_ops_t cockpit_ops = {
     .cur_time              = cockpit_cur_time,
     .cur_time_hm           = cockpit_cur_time_hm,
     .hide_cur_time         = cockpit_hide_cur_time,
+    .hide_mode_text        = cockpit_hide_mode_text,
     .navigation_icon       = cockpit_navigation_icon,
     .navigation_text       = cockpit_navigation_text,
     .music_text            = cockpit_music_text,

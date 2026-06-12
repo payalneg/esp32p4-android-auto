@@ -7,6 +7,7 @@
 #include "lvgl.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_datatypes.h"
 
@@ -284,12 +285,11 @@ void aa_overlay_draw(uint16_t *fb)
         int b = (int)(pct + 0.5f);
         batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
     }
-    /* Cruise indicator — independent of vesc_rt_data freshness; Lisp poll
-     * has its own pump and may report CC active even if the RT poll just
-     * gapped a frame. */
-    int32_t cc_val = 0;
-    if (vesc_lisp_poll_get_variable_int("cruise-active", &cc_val)) {
-        cc_active = (cc_val != 0);
+    /* Cruise indicator — from the Lisp DASH packet (its own pump), so it may
+     * report CC active even if the RT poll just gapped a frame. */
+    vlp_dash_t dash;
+    if (vesc_lisp_panel_get_dash(&dash)) {
+        cc_active = dash.cruise_active;
     }
 
     char speed_buf[8];

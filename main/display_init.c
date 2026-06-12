@@ -17,7 +17,20 @@ esp_err_t display_init(void)
     }
 
     /* Rotate 90° clockwise so the 800×480 panel reads landscape (480 high
-     * × 800 wide on the user side). */
+     * × 800 wide on the user side).
+     *
+     * DOUBLE_FULL (not TRIPLE_PARTIAL): the partial-rotate path freezes the
+     * screen on P4. It hangs on TWO infinite waits, and only one is fixable
+     * by a patch:
+     *   1. PPA SRM rotate ISR loss — FIXED by the Espressif PPA patch
+     *      (sr_macro_bk_ro_bypass in ppa_srm.c).
+     *   2. DMA2D front→back copy ISR loss (lvgl_bridge_v8.c
+     *      copy_unrendered_area_from_front_to_back → display_bridge_dma2d_copy_sync,
+     *      portMAX_DELAY) — NOT covered by the patch, still hangs.
+     * Re-tested 2026-06-12 WITH the PPA patch applied: still froze on spinbox
+     * taps. So partial rendering is off the table until #2 has a fix too.
+     * Cost of DOUBLE_FULL: full 800×480 software re-render on every dirty
+     * frame — mitigate by deduping the UI setters, not by switching modes. */
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
         .rotation = ESP_LV_ADAPTER_ROTATE_90,

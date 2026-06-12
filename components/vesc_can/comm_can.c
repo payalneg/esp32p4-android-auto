@@ -45,6 +45,15 @@ static volatile bool s_rx_running    = false;
 
 static SemaphoreHandle_t s_ping_sem;
 static SemaphoreHandle_t s_send_mutex;
+/* Completion signal for reply-expecting polls. The VESC streams its reply back
+ * as a FILL_RX_BUFFER…PROCESS_RX_BUFFER sequence that we reassemble into a
+ * per-sender slot keyed only by CAN id; two such replies in flight from the
+ * same node clobber each other's slot → CRC mismatch and a dropped packet. We
+ * avoid that not with a lock but by keeping ALL continuous polls on a single
+ * task (vesc_rt_data's rt_task): it sends one request, waits on this semaphore
+ * until the reply is reassembled and delivered, then fires the next. So this is
+ * a "reply arrived" signal, not a mutex. (See comm_can_send_buffer_sync.) */
+static SemaphoreHandle_t s_rx_done_sem;
 static volatile HW_TYPE  s_ping_hw_last = HW_TYPE_VESC;
 
 static uint8_t          s_rx_buffer[RX_BUFFER_NUM][RX_BUFFER_SIZE];
@@ -112,9 +121,13 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
     set_timing_for_speed(can_speed_kbps);
 
     if (!s_sem_init_done) {
-        s_ping_sem   = xSemaphoreCreateBinary();
-        s_send_mutex = xSemaphoreCreateMutex();
-        xTaskCreatePinnedToCore(process_task, "can_proc", 3072, NULL, 8, NULL, 0);
+        s_ping_sem    = xSemaphoreCreateBinary();
+        s_send_mutex  = xSemaphoreCreateMutex();
+        s_rx_done_sem = xSemaphoreCreateBinary();
+        /* 4096: the dispatch chain fans out to every *_process_response handler
+         * (RT data, LISP stats, IO, config, LISP code, quick-action panel); a
+         * couple of them parse multi-hundred-byte frames. 3072 was marginal. */
+        xTaskCreatePinnedToCore(process_task, "can_proc", 4096, NULL, 8, NULL, 0);
         s_sem_init_done = true;
     }
 
@@ -281,6 +294,24 @@ void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
     comm_can_transmit_eid(controller_id |
                           ((uint32_t)CAN_PACKET_PROCESS_RX_BUFFER << 8),
                           send_buffer, ind);
+}
+
+void comm_can_send_buffer_sync(uint8_t controller_id, const uint8_t *data,
+                               unsigned int len, uint8_t send,
+                               uint32_t reply_timeout_ms)
+{
+    if (!s_init_done || !s_rx_done_sem) {
+        comm_can_send_buffer(controller_id, data, len, send);
+        return;
+    }
+    /* Call ONLY from the single CAN poll task (vesc_rt_data's rt_task) — that
+     * single-threadedness is what serialises requests; there is no lock here.
+     * Drain any stale completion, send, then wait (bounded) for this request's
+     * reply to be reassembled and delivered before returning, so the caller
+     * won't fire the next poll while this reply is still streaming in. */
+    xSemaphoreTake(s_rx_done_sem, 0);
+    comm_can_send_buffer(controller_id, data, len, send);
+    xSemaphoreTake(s_rx_done_sem, pdMS_TO_TICKS(reply_timeout_ms));
 }
 
 uint8_t comm_can_get_local_id(void)
@@ -476,6 +507,9 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
                 ESP_LOGW(TAG, "PROCESS_RX_BUFFER CRC mismatch (id=%u len=%d)", id, rxbuf_len);
             }
             s_rx_buffer_device_id[buf_ind] = -1;
+            /* Transaction finished (delivered or CRC-dropped) — wake any waiter
+             * so the next reply-expecting poll can go out (comm_can_send_buffer_sync). */
+            if (s_rx_done_sem) xSemaphoreGive(s_rx_done_sem);
         } break;
 
         case CAN_PACKET_PROCESS_SHORT_BUFFER: {
@@ -490,6 +524,7 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
             if (s_packet_handler) {
                 s_packet_handler(data8 + ind, len - ind);
             }
+            if (s_rx_done_sem) xSemaphoreGive(s_rx_done_sem);
         } break;
 
         case CAN_PACKET_PING: {
