@@ -24,6 +24,12 @@
                   (if (and v (>= v 0) (<= v 50)) v 40)))
 (def melody-vol-dirty 0)
 (def playing-idx -1)
+; @const-start flashes every definition below, freeing the cons heap. Without it
+; all the defun bodies live in RAM and exhaust the heap — panel-event-loop then
+; OOMs at runtime and the display goes blank while motor control keeps running.
+; Everything mutable MUST stay above this line: setq'd scalars, and especially
+; the pbuf buffer (a flashed buffer is read-only, bufset would fail/crash).
+@const-start
 (defun play-stop () {
     (sleep 0.1)
     (foc-play-stop)
@@ -283,10 +289,17 @@
         (setq throttle-on 1)
     })
 })
-(defun panel-beep () {
+(defun two-beeps () {
     (foc-play-tone 0 800 beep-vol)
-    (spawn 150 play-stop)
+    (sleep 0.1)
+    (foc-play-stop)
+    (sleep 0.06)
+    (foc-play-tone 0 900 beep-vol)
+    (sleep 0.1)
+    (foc-play-stop)
 })
+; Run the sequence in its own thread so the sleeps don't block panel-event-loop.
+(defun panel-beep () (spawn 150 two-beeps))
 (defun play-list (idx lst) {
     (setq playing-idx idx)
     (let ((n (length lst))) {
@@ -374,6 +387,21 @@
         (shutdown-hold nil)
     })
 })
+; Volumes change via the panel slider (many intermediate values per drag) and
+; must survive a reboot. Persisting only in panel-on-shutdown was unreliable:
+; event-shutdown fires only on a real power-off, not on a bench / USB / re-flash
+; reboot, so eeprom-store-i never ran. Flush the dirty volumes on a slow timer
+; instead — coalesces a drag into ~one flash write and does not depend on a
+; clean shutdown. panel-on-shutdown stays as a final flush.
+(defun persist-volumes-loop () {
+    (loopwhile t {
+        (if (= beep-vol-dirty 1) {
+            (eeprom-store-i beep-vol-addr beep-vol) (setq beep-vol-dirty 0) })
+        (if (= melody-vol-dirty 1) {
+            (eeprom-store-i melody-vol-addr melody-vol) (setq melody-vol-dirty 0) })
+        (sleep 2)
+    })
+})
 (defun panel-event-loop () {
     (loopwhile t {
         (recv ((event-data-rx . (? data)) (panel-handle data))
@@ -381,10 +409,6 @@
               (_ nil))
     })
 })
-(event-register-handler (spawn panel-event-loop))
-(event-enable 'event-data-rx)
-(event-enable 'event-shutdown)
-@const-start
 (def melody '(
   (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
   (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
@@ -427,56 +451,17 @@
   (784 0.304) (0 0.043) (698 0.304) (587 0.043) (698 0.174) (784 0.304)
   (698 0.174) (587 0.043) (784 0.304) (0 0.043) (698 0.304) (587 0.043)
   (784 0.478) (0 0.043) (932 0.304) (784 0.174) (0 0.043) (932 0.304)
-  (784 0.174) (0 0.043) (932 0.304) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.130) (932 0.217) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.130) (932 0.217) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.130) (932 0.217) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.130) (932 0.217) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.130) (932 0.217) (784 0.130) (932 0.217) (784 0.130)
-  (932 0.217) (784 0.174) (0 0.043) (698 0.261) (784 0.217) (698 0.130)
-  (784 0.217) (698 0.130) (784 0.217) (698 0.130) (784 0.217) (698 0.130)
-  (784 0.217) (698 0.130) (784 0.217) (698 0.130) (784 0.217) (698 0.130)
-  (784 0.217) (698 0.130) (784 0.217) (698 0.130) (784 0.217) (698 0.130)
-  (784 0.217) (698 0.130) (784 0.217) (698 0.130) (784 0.217) (698 0.130)
-  (784 0.217) (698 0.130) (784 0.217) (698 0.130) (784 0.217) (698 0.130)
-  (784 0.391) (0 0.043) (784 0.304) (0 0.043) (784 0.304) (587 0.043)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.304) (440 0.043) (466 0.391) (392 0.087) (294 0.043) (466 0.391)
-  (392 0.043) (466 0.087) (587 0.217) (466 0.043) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.130) (698 0.217) (587 0.130) (698 0.217) (587 0.130)
-  (698 0.217) (587 0.348) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.043) (587 0.217) (523 0.043) (587 0.217) (523 0.043) (587 0.217)
-  (523 0.217) (587 0.304) (0 0.043) (587 0.304) (0 0.043) (587 0.304)
-  (0 0.043) (523 0.087) (587 0.217) (523 0.087) (466 0.348) (392 0.087)
-  (294 0.043) (466 0.391) (392 0.130) (466 0.391) (392 0.087) (294 0.043)
-  (466 0.391) (392 0.130) (466 0.217) (392 0.130) (466 0.217) (392 0.087)
-  (349 0.043) (392 0.304) (0 0.043) (392 0.217) (349 0.130) (392 0.217)
-  (349 0.130) (392 0.217) (349 0.130) (392 0.304) (0 0.043) (392 0.217)
-  (349 0.130) (392 0.217) (349 0.130) (392 0.087) (466 0.217) (392 0.348)
-  (0 0.043) (392 0.217) (349 0.130) (392 0.217) (349 0.130) (392 0.087)
-  (466 0.217) (392 0.348) (0 0.043) (392 0.217) (349 0.130) (392 0.217)
-  (349 0.130) (392 0.087) (466 0.217) (392 0.348) (0 0.043) (392 0.217)
-  (349 0.043) (466 0.217) (392 0.174) (0 0.043) (392 0.217) (349 0.043)
-  (466 0.217) (392 0.174) (0 0.043) (392 0.217) (349 0.043) (466 0.217)
-  (392 0.174) (0 0.217) (587 0.478) (466 0.043) (587 0.478) (466 0.043)
-  (587 0.478) (466 0.043) (587 0.478) (466 0.043) (587 0.478) (466 0.043)
-  (587 0.478) (466 0.043) (587 0.478) (466 0.043) (587 0.478) (466 0.043)
-  (587 0.304) (0 0.043) (554 0.478) (523 0.348) (494 0.348) (466 0.043)
-  (587 0.478) (466 0.043) (587 0.478) (466 0.043) (698 0.652) (587 0.522)
-  (523 0.522) (466 0.174) (392 0.174) (0 0.043) (392 0.174) (466 0.304)
-  (392 0.174) (0 0.043) (392 0.174) (466 0.304) (392 0.174) (0 0.043)
-  (466 0.304) (392 0.174) (0 0.043) (294 0.174) (392 0.304) (294 0.043)
-  (349 0.174) (392 0.478) (0 0.043) (392 0.304) (0 0.043) (349 0.304)
-  (294 0.043) (349 0.174) (392 0.304) (349 0.174) (294 0.043) (392 0.304)
-  (0 0.043) (349 0.304) (294 0.043) (392 0.478) (0 0.043) (466 0.304)
+  (784 0.174)
 ))
+
+; Spawn threads and enable events LAST — after melody/melody2 (defined just above)
+; are bound. panel-event-loop calls panel-action, which references melody2 (cid 8);
+; spawned earlier, an incoming panel command during load would hit melody2 while
+; still unbound → the handler thread dies → panel/melodies dead.
+; These are plain expressions (not definitions), so @const-start does not flash
+; them — they just execute here, which is exactly what we want.
+(event-register-handler (spawn panel-event-loop))
+(event-enable 'event-data-rx)
+(event-enable 'event-shutdown)
+(spawn 150 persist-volumes-loop)
 @const-end
