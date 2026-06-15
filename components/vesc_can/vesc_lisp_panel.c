@@ -280,16 +280,6 @@ static void parse_dash(const uint8_t *data, unsigned int len, int32_t ind)
         s_dash.rpm_per_ms      = rpm;
         xSemaphoreGive(s_lock);
     }
-    /* DIAGNOSTIC (throttled): confirm the new channel is live and what it carries. */
-    {
-        static uint32_t s_ms;
-        uint32_t now = millis_now();
-        if (now - s_ms > 2000) {
-            s_ms = now;
-            ESP_LOGW(TAG, "DASH rx: cruise=%d rpm=%.0f profile=%d rpm/ms=%.3f",
-                     ca != 0, (double)cr, cp / 1000, (double)rpm);
-        }
-    }
 }
 
 void vesc_lisp_panel_process_response(const uint8_t *data, unsigned int len)

@@ -737,6 +737,13 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
             .ver_res = BSP_LCD_V_RES,
             .buffer_height = 50,
             .use_psram = false,
+            /* PPA draw acceleration OFF for now: gain was modest (~15%, full
+             * frame 60->51 ms) because the dashboard cost is text glyphs (masked
+             * -> stay on CPU). Turned off to isolate the DOUBLE_DIRECT partial-
+             * render experiment (see display_init.c) — partial draws are tiny, so
+             * PPA fill barely matters there, and this keeps any freeze/corruption
+             * attributable to one change. Re-enable (with the display_init.c
+             * draw_ctx re-init) if we go back to full-frame and want the 15%. */
             .enable_ppa_accel = false,
             .require_double_buffer = false,
         },

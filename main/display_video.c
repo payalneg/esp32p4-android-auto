@@ -119,6 +119,7 @@ static struct {
     int64_t  window_start_us;
 } s_lv_stats;
 
+__attribute__((unused))
 static void lv_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
 {
     s_lv_stats.refreshes++;
@@ -215,11 +216,12 @@ esp_err_t display_video_init(void)
         ESP_LOGW(TAG, "no LVGL display — video will be silent");
         return ESP_ERR_INVALID_STATE;
     }
-    /* Hook the LVGL-side render-time monitor. The adapter doesn't use
-     * monitor_cb itself (verified), so it's free for our timing log. */
-    if (s_disp->driver) {
-        s_disp->driver->monitor_cb = lv_monitor_cb;
-    }
+    /* NOTE: monitor_cb is now owned by display_init.c (the dashboard render-perf
+     * logger). Do NOT install lv_monitor_cb here — it would clobber that one
+     * (this runs after display_init), which silently blinded the perf logger
+     * from boot onward (looked like "0 fps" while LVGL was really rendering).
+     * lv_monitor_cb is kept above for future AA-vs-LVGL timing comparison; if
+     * you re-enable it, chain to display_init's cb instead of overwriting. */
 
     s_panel = bsp_display_get_panel_handle();
     if (!s_panel) {
