@@ -17,6 +17,7 @@
 #include "vesc_trip_persist.h"
 #include "vesc_head2.h"
 #include "trip_log.h"
+#include "dashboard_theme.h"
 
 /* GUI Guider's custom.h is generated C++-friendly but pure C. The
  * widget update functions live in Super_VESC_Display/custom/custom.c
@@ -170,6 +171,20 @@ static void push_cruise_locked(void)
 static void updater_lv_timer_cb(lv_timer_t *t)
 {
     (void)t;
+
+    /* Only write dashboard widgets while the dashboard is the active screen.
+     * These setters target widgets that live on the dashboard screen; when
+     * Settings / Statistics / the LISP editor / AA video / idle is showing,
+     * writing them invalidates off-screen dashboard widgets. In full-refresh
+     * mode that was just wasted work, but in DIRECT (partial) mode the adapter
+     * redraws those dirty regions and the dashboard values bleed through the
+     * active screen ("values appear/disappear" over Settings). Skip entirely
+     * when off-dashboard; on return, lv_scr_load repaints the dashboard fully
+     * and the next tick (100 ms) refreshes the numbers. */
+    if (lv_scr_act() != dashboard_theme_active_screen()) {
+        return;
+    }
+
     /* BT icon reflects the real NimBLE host state regardless of demo —
      * cockpit_demo_tick no longer touches it, so no writer conflict.
      * update_ble_status dedups internally. */

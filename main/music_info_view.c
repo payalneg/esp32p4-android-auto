@@ -191,6 +191,13 @@ static void set_container_visible(bool on)
 static void poll_cb(lv_timer_t *t)
 {
     (void)t;
+    /* The music tile lives on the dashboard screen. Don't update it while a
+     * different screen is active — in DIRECT (partial) render mode writing an
+     * off-screen widget invalidates its region and bleeds onto the active
+     * screen. On return the dashboard repaints and the next poll catches up. */
+    if (!s_root || lv_obj_get_screen(s_root) != lv_scr_act()) {
+        return;
+    }
     const media_state_t *m = notif_bridge_get_media();
 
     if (m->title[0] == 0 && m->artist[0] == 0) {

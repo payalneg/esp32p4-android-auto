@@ -75,7 +75,7 @@ _DSEG14_DIG  = "0x20,0x2D,0x2E,0x30-0x3A"
 # (trip/odo/voltage/units) — hence the threshold. Requires LV_USE_FONT_COMPRESSED=1
 # in main/lv_conf.h + Super_VESC_Display/lv_conf.h (set), else compressed glyphs
 # render blank.
-COMPRESS_MIN_PX = 64
+COMPRESS_MIN_PX = 10000
 
 JOBS = [
     # dashboard_Speed_text — snprintf "%02d", clamped 0..999. Digits only;

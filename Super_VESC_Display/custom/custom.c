@@ -535,6 +535,12 @@ static void cockpit_screen_init(lv_ui *ui)
 static void cockpit_demo_tick(lv_timer_t * t)
 {
     (void)t;
+    /* Same guard as vesc_ui_updater: don't drive dashboard widgets while another
+     * screen is active, or in DIRECT (partial) render mode the demo values bleed
+     * through Settings/Statistics. */
+    if (lv_scr_act() != guider_ui.dashboard_Classic) {
+        return;
+    }
     static uint32_t tick = 0;
     tick++;
     float ts = tick * 0.25f;  /* seconds */
