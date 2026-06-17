@@ -21,7 +21,7 @@ static lv_display_t *s_display;
  * DOUBLE_FULL/full_refresh path).
  *
  * Flip DISPLAY_PERF_LOG to 0 to silence once the cause is found. */
-#define DISPLAY_PERF_LOG 1
+#define DISPLAY_PERF_LOG 0
 
 #if DISPLAY_PERF_LOG
 /* monitor_cb only fires when LVGL actually renders (something invalidated), so
@@ -66,6 +66,48 @@ static void display_perf_timer_cb(void *arg)
              (unsigned)(tsum / 10));   /* tsum ms out of the ~1000 ms window */
 }
 #endif /* DISPLAY_PERF_LOG */
+
+/* ---- Stale-region scrub after screen transitions ---------------------------
+ * DOUBLE_DIRECT keeps two framebuffers and only copies invalidated regions
+ * into them. A screen-load *animation* (lv_scr_load_anim) repaints the new
+ * screen frame-by-frame; on the frames whose dirty area spans the whole width
+ * the adapter's flush takes the SKIP_COPY path and writes only ONE buffer, so
+ * the animation's penultimate frame stays behind in the buffer that wasn't its
+ * final target. That buffer is hidden until the next partial flush toggles it
+ * back onto the panel — which is why the old dashboard ("power") flashed
+ * through Statistics about once a second (its live-totals timer ticks at 1 Hz).
+ *
+ * Fix: watch the active screen and, once a transition has settled (longer than
+ * the 200 ms load anim), force ONE full-screen invalidate. A full repaint goes
+ * through the adapter's PART_COPY path, which writes the whole screen into BOTH
+ * framebuffers in a single flush, so no stale region survives. Costs one extra
+ * full frame on a rare, user-initiated transition — imperceptible. Centralised
+ * here so it covers every screen switch without touching the call sites. */
+#define SCR_SCRUB_PERIOD_MS   50
+#define SCR_SCRUB_DELAY_TICKS 6     /* ~300 ms — outlasts the 200 ms screen-load anim */
+
+static void scr_scrub_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    static lv_obj_t *last_scr;
+    static int       ticks = -1;    /* -1 = idle; else ticks since last screen change */
+
+    lv_obj_t *act = lv_scr_act();
+    if (act != last_scr) {
+        last_scr = act;
+        ticks = 0;
+        return;
+    }
+    if (ticks < 0) {
+        return;
+    }
+    if (++ticks >= SCR_SCRUB_DELAY_TICKS) {
+        if (act) {
+            lv_obj_invalidate(act);
+        }
+        ticks = -1;
+    }
+}
 
 esp_err_t display_init(void)
 {
@@ -183,6 +225,10 @@ esp_err_t display_init(void)
             ESP_LOGI(TAG, "draw_ctx re-init (PPA accel hook install)");
         }
     }
+
+    /* Scrub stale framebuffer regions left by screen-load animations (see
+     * scr_scrub_timer_cb). Runs on the LVGL task; created under the lock. */
+    lv_timer_create(scr_scrub_timer_cb, SCR_SCRUB_PERIOD_MS, NULL);
 
     bsp_display_unlock();
 

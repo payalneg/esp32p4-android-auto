@@ -290,9 +290,14 @@
  *-----------*/
 
 /*1: Show CPU usage and FPS count*/
-/* TEMPORARY: on while measuring dashboard render cost (FPS + %CPU overlay,
- * bottom-right). Revert to 0 before release. */
-#define LV_USE_PERF_MONITOR 1
+/* OFF: this draws an FPS/%CPU overlay in the bottom-right corner — visible on
+ * the dashboard ("fps на экране"). It also invalidates its corner on EVERY
+ * refresh (REFR_PERIOD 10 ms → ~100 flush/s even on a static screen), which
+ * keeps the DOUBLE_DIRECT two-framebuffer toggle running non-stop and lets a
+ * post-transition buffer mismatch (e.g. the old dashboard "power" widget) keep
+ * being re-displayed over the new screen — the stale-region ghosting flagged in
+ * display_init.c. Turn back on only for short render-cost measurements. */
+#define LV_USE_PERF_MONITOR 0
 #if LV_USE_PERF_MONITOR
     #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
 #endif
