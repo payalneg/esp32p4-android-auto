@@ -28,9 +28,8 @@ void  battery_calc_reset(float current_battery_percent, float battery_capacity);
  * call after boot pulls remaining_ah from NVS (or seeds it from the current
  * controller reading); subsequent calls subtract the delta in net Ah, where
  * net = rt->amp_hours − rt->amp_hours_charged (so regen credits Ah back).
- * If the controller %  jumps up by >5 % vs. the saved value, treats it as a
- * charge/swap and resets. Falls back to controller_battery_level*100 on bad
- * inputs (capacity <= 0). */
+ * Charge/swap detection no longer lives here — see battery_calc_voltage_boot_check.
+ * Falls back to controller_battery_level*100 on bad inputs (capacity <= 0). */
 float battery_calc_get_smart_percentage(float controller_battery_level,
                                         float controller_amp_hours,
                                         float controller_amp_hours_charged,
@@ -54,6 +53,14 @@ void  battery_calc_capacity_changed(void);
  * a trip persistence layer lands it will reset trip / Ah / uptime. Kept as
  * the public API used by Super_VESC_Display/custom/custom.c. */
 void  battery_calc_reset_trip_and_ah(void);
+
+/* Once-per-boot charge/swap detector. Pass the live pack voltage (rt->v_in);
+ * the first valid call compares it against the voltage saved at the previous
+ * power-on and, if it rose by more than VIN_CHARGE_PCT_THRESHOLD percent, rolls
+ * the trip over via battery_calc_reset_trip_and_ah(). Records this boot's
+ * voltage as the next power-on's baseline. Saves and compares ONLY at startup —
+ * later calls in the same session are no-ops. Works in both Direct and Smart. */
+void  battery_calc_voltage_boot_check(float v_in);
 
 /* Remaining capacity in Ah — useful for range estimation. */
 float battery_calc_get_remaining_ah(void);

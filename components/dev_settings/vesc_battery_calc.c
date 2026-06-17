@@ -5,8 +5,9 @@
     Port of Super_VESC_Display/src/vesc_battery_calc.cpp. Arduino Preferences
     swapped for esp-idf nvs_flash; millis() swapped for esp_timer_get_time().
     Behaviour matches the original: a single ESP32 owns one battery's worth
-    of state at a time, charge/swap detected by a > +5 % jump in the
-    controller-reported percentage.
+    of state at a time. Charge/swap is detected at boot by a > +5 % jump in the
+    pack voltage (v_in) versus the value saved at the previous power-on — see
+    battery_calc_voltage_boot_check(). The save/compare happens only at startup.
 */
 
 #include "vesc_battery_calc.h"
@@ -25,13 +26,20 @@ static const char *TAG = "batt_calc";
 
 #define NVS_NAMESPACE             "battery_calc"
 #define KEY_REMAINING_AH          "remaining_ah"
-#define KEY_LAST_PERCENT          "last_percent"
+#define KEY_LAST_VIN              "last_vin"
 #define KEY_LAST_CAPACITY         "last_capacity"
 
-/* Charge/swap heuristic: if controller % jumps by more than this between
- * the previously saved value and the next boot/reading, treat it as the
- * pack having been topped up or replaced. Same number the original used. */
-#define CHARGING_DETECT_THRESHOLD 5.0f
+/* Charge/swap heuristic: compare the pack voltage saved at the previous
+ * power-on against this boot's voltage. A jump up of more than this (percent,
+ * relative) means the pack was topped up or swapped while we were off, so the
+ * trip is rolled over. Voltage (not the controller %) is the signal because it
+ * is available in both Direct and Smart modes and doesn't lean on the
+ * controller's own state-of-charge estimate. Same 5 % the original used. */
+#define VIN_CHARGE_PCT_THRESHOLD  5.0f
+
+/* Below this the v_in reading is "no valid pack voltage yet" (ESC not really
+ * up): skip the boot check and retry on the next tick. */
+#define VIN_VALID_MIN             1.0f
 
 /* NVS write throttle. Flushing every tick would wear flash and hurt
  * latency for no benefit. 30 s matches the Arduino original. */
@@ -39,13 +47,13 @@ static const char *TAG = "batt_calc";
 
 static bool     s_initialized;
 static float    s_remaining_ah;
-static float    s_last_saved_percent;
 static float    s_last_saved_capacity;
 static float    s_last_net_ah;            /* last (discharged − charged) reading */
 static float    s_last_controller_percent;
 static bool     s_first_calculation = true;
 static bool     s_capacity_changed_flag;
 static int64_t  s_last_save_us;
+static bool     s_vin_boot_checked;       /* voltage charge-detect runs once per boot */
 
 static esp_err_t open_rw(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READWRITE, h); }
 static esp_err_t open_ro(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READONLY,  h); }
@@ -64,11 +72,11 @@ static void save_state(void)
     ESP_LOGD(TAG, "state saved: %.2f Ah of %.1f Ah", s_remaining_ah, s_last_saved_capacity);
 }
 
-static void save_percent(void)
+static void save_vin(float v_in)
 {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
-    nvs_set_blob(h, KEY_LAST_PERCENT, &s_last_saved_percent, sizeof(s_last_saved_percent));
+    nvs_set_blob(h, KEY_LAST_VIN, &v_in, sizeof(v_in));
     nvs_commit(h);
     nvs_close(h);
 }
@@ -95,16 +103,16 @@ static bool load_state(void)
     return true;
 }
 
-static bool load_percent(void)
+static bool load_vin(float *out)
 {
     nvs_handle_t h;
     if (open_ro(&h) != ESP_OK) return false;
     size_t sz = sizeof(float);
     float v = -1.0f;
-    nvs_get_blob(h, KEY_LAST_PERCENT, &v, &sz);
+    nvs_get_blob(h, KEY_LAST_VIN, &v, &sz);
     nvs_close(h);
-    if (v < 0.0f) return false;
-    s_last_saved_percent = v;
+    if (v < VIN_VALID_MIN) return false;
+    *out = v;
     return true;
 }
 
@@ -115,6 +123,7 @@ void battery_calc_init(void)
     s_first_calculation     = true;
     s_capacity_changed_flag = false;
     s_last_save_us          = 0;
+    s_vin_boot_checked      = false;
     ESP_LOGI(TAG, "init (initialized=%d)", s_initialized);
 }
 
@@ -125,7 +134,6 @@ void battery_calc_reset(float current_battery_percent, float battery_capacity)
      * than the voltage-based controller estimate, so treating reset as
      * "we know it's full" matches user intent (capacity change / charge). */
     s_remaining_ah            = battery_capacity;
-    s_last_saved_percent      = current_battery_percent;
     s_last_saved_capacity     = battery_capacity;
     s_last_controller_percent = current_battery_percent;
     s_last_net_ah             = 0.0f;
@@ -133,7 +141,6 @@ void battery_calc_reset(float current_battery_percent, float battery_capacity)
     s_capacity_changed_flag   = false;
     s_initialized             = true;
     save_state();
-    save_percent();
     ESP_LOGI(TAG, "reset: %.1f%% = %.2f Ah of %.1f Ah",
              current_battery_percent, s_remaining_ah, battery_capacity);
 }
@@ -168,23 +175,14 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
         return current_controller_percent;
     }
 
-    /* First call after boot: decide whether to continue from NVS state
-     * or assume the pack was charged/swapped while we were off. */
+    /* First call after boot: continue from the NVS remaining-Ah estimate, or
+     * seed from the controller if we have no saved state. Charge/swap is no
+     * longer detected here — battery_calc_voltage_boot_check() owns that, keyed
+     * off the pack voltage and run once per boot in both Direct and Smart. */
     if (!s_initialized || s_first_calculation) {
         if (s_initialized) {
-            load_percent();
-            float diff = current_controller_percent - s_last_saved_percent;
-            s_last_saved_percent = current_controller_percent;
-            save_percent();
-            if (diff > CHARGING_DETECT_THRESHOLD) {
-                ESP_LOGI(TAG, "charge detected at boot: saved %.1f%%, now %.1f%% (+%.1f) — reset",
-                         s_last_saved_percent, current_controller_percent, diff);
-                battery_calc_reset(current_controller_percent, battery_capacity);
-                battery_calc_reset_trip_and_ah();
-                return current_controller_percent;
-            }
-            ESP_LOGI(TAG, "continuing: %.2f Ah remain (saved %.1f%%, now %.1f%%)",
-                     s_remaining_ah, s_last_saved_percent, current_controller_percent);
+            ESP_LOGI(TAG, "continuing: %.2f Ah remain (controller now %.1f%%)",
+                     s_remaining_ah, current_controller_percent);
             s_last_controller_percent = current_controller_percent;
             /* Seed the net-Ah baseline to the current reading so the first
              * delta below is ~0. Without this, s_last_net_ah is still 0 (set
@@ -264,6 +262,35 @@ void battery_calc_reset_trip_and_ah(void)
                                                : settings_get_battery_capacity();
     battery_calc_reset(s_last_controller_percent, cap);
     ESP_LOGI(TAG, "reset_trip_and_ah → trip + battery to full (%.1f Ah)", cap);
+}
+
+void battery_calc_voltage_boot_check(float v_in)
+{
+    /* Runs once per boot. The first valid reading is compared against the pack
+     * voltage stored at the previous power-on; a jump up beyond the threshold
+     * means the battery was charged or swapped while we were off → roll the
+     * trip over. Either way, this boot's voltage becomes the next boot's
+     * baseline. Independent of the Direct/Smart percentage path. */
+    if (s_vin_boot_checked) return;
+    if (v_in < VIN_VALID_MIN) return;   /* ESC not really up yet — retry next tick */
+
+    float saved = 0.0f;
+    if (load_vin(&saved)) {
+        float change_pct = (v_in - saved) / saved * 100.0f;
+        if (change_pct > VIN_CHARGE_PCT_THRESHOLD) {
+            ESP_LOGI(TAG, "charge detected at boot: pack %.1f V → %.1f V (+%.1f%%) — reset trip",
+                     saved, v_in, change_pct);
+            battery_calc_reset_trip_and_ah();
+        } else {
+            ESP_LOGI(TAG, "no charge at boot: pack %.1f V → %.1f V (%+.1f%%) — keep trip",
+                     saved, v_in, change_pct);
+        }
+    } else {
+        ESP_LOGI(TAG, "no saved pack voltage — baseline set to %.1f V", v_in);
+    }
+
+    save_vin(v_in);            /* baseline for the next power-on */
+    s_vin_boot_checked = true;
 }
 
 float battery_calc_get_remaining_ah(void)

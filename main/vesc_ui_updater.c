@@ -104,6 +104,13 @@ static void push_rt_locked(void)
 
     const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
 
+    /* Once per boot, on the first valid reading: if the pack voltage jumped up
+     * since the last power-on, the battery was charged/swapped → roll the trip
+     * over. Saves/compares the voltage only at startup; no-op afterwards. Runs
+     * before trip_persist_update so the reset establishes this session's
+     * baseline before the first raw counters are folded in. */
+    battery_calc_voltage_boot_check(rt->v_in);
+
     /* Feed trip-persist before reading any persistent counter — that way
      * trip_persist sees the latest raw VESC values and we get monotonic
      * totals back on the line below. tachometer_abs is meters; rt->amp_hours
