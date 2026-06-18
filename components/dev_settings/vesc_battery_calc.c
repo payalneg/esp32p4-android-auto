@@ -34,8 +34,10 @@ static const char *TAG = "batt_calc";
  * relative) means the pack was topped up or swapped while we were off, so the
  * trip is rolled over. Voltage (not the controller %) is the signal because it
  * is available in both Direct and Smart modes and doesn't lean on the
- * controller's own state-of-charge estimate. Same 5 % the original used. */
-#define VIN_CHARGE_PCT_THRESHOLD  5.0f
+ * controller's own state-of-charge estimate. 1 % relative ≈ a few tenths of a
+ * volt on a typical pack — enough to clear normal rest-vs-sag jitter between
+ * power-ons while still catching a top-up. */
+#define VIN_CHARGE_PCT_THRESHOLD  1.0f
 
 /* Below this the v_in reading is "no valid pack voltage yet" (ESC not really
  * up): skip the boot check and retry on the next tick. */
