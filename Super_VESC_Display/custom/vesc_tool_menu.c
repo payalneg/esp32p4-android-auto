@@ -448,7 +448,12 @@ static void build_numeric_row(vt_row_t *r, const vc_param_t *p)
     r->decimals = p->decimals;
     const char *suf = vesc_config_pool(s_kind, p->suffix_off);
     if (r->as_pct) {
-        r->disp_min = 0.0; r->disp_max = 100.0; r->disp_step = 1.0;
+        /* percentage of max — mirror ParamEditDouble.qml: realFrom = min/max*100,
+         * realTo = 100. throttle_exp / throttle_exp_brake have min=-max, so their
+         * curve range is -100..100, not 0..100. */
+        r->disp_min = (p->max != 0.0f) ? (double)p->min / (double)p->max * 100.0 : 0.0;
+        r->disp_max = 100.0;
+        r->disp_step = 1.0;
         snprintf(r->suffix, sizeof r->suffix, " %%");
     } else {
         r->disp_min = (double)p->min * r->editor_scale;
