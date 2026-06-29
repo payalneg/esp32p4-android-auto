@@ -62,6 +62,14 @@ void show_lisp_panel(void);
 void lisp_panel_close(void);
 void lisp_panel_open_async(void);
 
+/* Pedal-assist (PAS) settings screen. Opened from the Settings screen. Lets the
+ * rider pair a BLE cadence sensor (the head unit connects to it directly),
+ * tune the assist (enable, reverse, level, max current, mode, start/stop/ramp,
+ * cadence thresholds) and watch live signed cadence. Talks to the PAS backend
+ * (main/pas.h) and BLE cadence client (main/ble_cadence_client.h) directly — no
+ * phone involvement. Defined in custom/pas_screen.c. */
+void show_pas_settings(void);
+
 void update_current(float current);
 void update_speed(float speed);
 void update_battery_proc(float battery_proc);

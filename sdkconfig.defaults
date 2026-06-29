@@ -188,11 +188,15 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 # Same reasoning for ESP-Hosted's own helper tasks (RPC + default
 # task, 2×5 KiB).
 CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
-# We're a peripheral that advertises a GATT server — don't pull in
-# Central / Observer roles.
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-CONFIG_BT_NIMBLE_GATT_CLIENT=n
+# Dual-role: we advertise a GATT server (peripheral, for the phone) AND act
+# as a central/GATT-client to connect to an external BLE cadence sensor for
+# the pedal-assist (PAS) feature — scan (OBSERVER) + connect (CENTRAL) +
+# service discovery / subscribe (GATT_CLIENT). The C6 controller is role-
+# agnostic so no slave rebuild is needed. MAX_CONNECTIONS≥2 (phone + sensor).
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_GATT_CLIENT=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 
 # ===== H.264 SW decoder =====
 # IRAM-resident hot path (~22 KiB) leaves too little internal SRAM heap

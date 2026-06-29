@@ -43,6 +43,7 @@ void port_start_app_hook(void)
 #include "ble_nus.h"
 #include "notif_bridge.h"
 #include "notif_toast.h"
+#include "pas.h"
 #include "music_info_view.h"
 #include "gui_guider.h"
 #include "dashboard_theme.h"
@@ -466,6 +467,11 @@ void app_main(void)
      * notif_bridge_init for the GATT plumbing; this one wires the LVGL
      * toast widget on top so incoming notifications actually appear. */
     notif_toast_init();
+
+    /* Pedal-assist: load settings + bound cadence sensor from NVS and start the
+     * control task. Safe to call regardless of CAN state — it only forwards a
+     * current setpoint to the LISP arbiter when the CAN poll task is running. */
+    pas_init();
 
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");
 

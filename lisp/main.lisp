@@ -24,6 +24,11 @@
                   (if (and v (>= v 0) (<= v 50)) v 40)))
 (def melody-vol-dirty 0)
 (def playing-idx -1)
+; Pedal-assist setpoint from the head unit (over COMM_CUSTOM_APP_DATA, msg 0x05).
+; pas-amps is the requested motor current (A); pas-seen is the (systime) of the
+; last frame, for a staleness check. setq'd at runtime → MUST stay above @const.
+(def pas-amps 0.0)
+(def pas-seen 0)
 ; @const-start flashes every definition below, freeing the cons heap. Without it
 ; all the defun bodies live in RAM and exhaust the heap — panel-event-loop then
 ; OOMs at runtime and the display goes blank while motor control keeps running.
@@ -374,6 +379,12 @@
                 ((= msg 0x01) (panel-send-ui reply-id))
                 ((= msg 0x03) (panel-send-state reply-id))
                 ((= msg 0x04) (panel-send-dash reply-id))
+                ((= msg 0x05) {
+                    ; Pedal-assist setpoint (fire-and-forget, no reply). i32 mA at
+                    ; byte 4 (after magic[0,1], msg[2], reply-id[3]).
+                    (setq pas-amps (/ (bufget-i32 data 4) 1000.0))
+                    (setq pas-seen (systime))
+                })
                 ((= msg 0x02)
                     (let ((cid (bufget-u8 data 4))
                           (val (/ (bufget-i32 data 5) 1000.0))) {
@@ -398,6 +409,29 @@
             })
             (sleep 0.02)
         })
+    })
+})
+; Pedal-assist arbiter. Runs only when cruise is OFF and the panel throttle
+; master is ON: cruise (set-rpm) owns the motor while active and pedaling must
+; not disturb it; throttle-on=0 means the user disabled output via the panel, so
+; leave it. Throttle-override: a touched throttle hands the motor straight back
+; to the native ADC app (with its throttle curve); on a released throttle while
+; pedaling we suppress the ADC app (so its loop can't fight us) and inject the
+; PAS current, clamped to the active profile's l-current-max. A stale setpoint
+; (sensor dropped) backs off — the P4 watchdog also sends 0.
+(defun pas-control-loop () {
+    (loopwhile t {
+        (if (and (= cruise-active 0) (= throttle-on 1))
+            (let ((thr (get-adc-decoded 0))
+                  (stale (> (secs-since pas-seen) 0.4))
+                  (lim (conf-get 'l-current-max)))
+                (if (> thr 0.05)
+                    (app-disable-output 0)
+                    (if (and (not stale) (> pas-amps 0.0))
+                        { (app-disable-output 100)
+                          (set-current (if (> pas-amps lim) lim pas-amps) 0.1) }
+                        (app-disable-output 0)))))
+        (sleep 0.05)
     })
 })
 (defun panel-on-shutdown () {
@@ -513,4 +547,5 @@
 (event-enable 'event-data-rx)
 (event-enable 'event-shutdown)
 (spawn 150 persist-volumes-loop)
+(spawn 150 pas-control-loop)
 @const-end

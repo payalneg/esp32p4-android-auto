@@ -276,6 +276,10 @@ static void rt_task(void *arg)
          * drawer is open) so its multi-frame UI_DESC/STATE replies can't race
          * the polls above into the shared per-id CAN reassembly buffer. */
         vesc_lisp_panel_poll_loop();
+        /* PAS setpoint forwarding + watchdog — on this same serialised CAN task.
+         * Re-sends the pedal-assist current to the LISP arbiter at ~20 Hz and
+         * sends 0 once if the setpoint goes stale (sensor dropped). */
+        vesc_lisp_panel_pas_loop();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
