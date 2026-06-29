@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../ble/ble_service.dart';
+import '../ble/ble_proxy.dart';
 import '../firmware/firmware_updater.dart';
 import '../i18n/strings.dart';
 
@@ -61,12 +61,12 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
     final bundled = await FirmwareUpdater.bundledVersion();
     // Best-effort: show the running version if BLE exposes it. Not required
     // for flashing.
-    final info = BleService.instance.supportsOta
-        ? await BleService.instance.readOtaInfo()
+    final info = BleProxy.instance.supportsOta
+        ? await BleProxy.instance.readOtaInfo()
         : null;
     if (!mounted) return;
     final detected = info?.model;
-    final bleOta = BleService.instance.supportsBleOta;
+    final bleOta = BleProxy.instance.supportsBleOta;
     setState(() {
       _bundled = bundled;
       _deviceVersion = info?.version;

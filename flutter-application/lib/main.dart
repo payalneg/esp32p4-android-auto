@@ -1,53 +1,52 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'app.dart';
-import 'ble/ble_service.dart';
+import 'ble/ble_proxy.dart';
 import 'bridge/foreground_bridge.dart';
-import 'coordinator.dart';
 import 'i18n/strings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (kDebugMode) {
-    // Floods logcat with FBP's internal state — what we actually need to
-    // diagnose why a scan / connect tantrum failed on real hardware.
-    FlutterBluePlus.setLogLevel(LogLevel.verbose, color: false);
-  }
+  // Must run before addTaskDataCallback / sendDataToTask can reach the
+  // background BLE isolate.
+  FlutterForegroundTask.initCommunicationPort();
   if (Platform.isAndroid) {
     // Android 13+ blocks every notification until the user grants
-    // POST_NOTIFICATIONS at runtime. Ask once on first launch — without
-    // this the foreground-service pill silently never appears (the
-    // process is alive, the system just drops every notify call).
+    // POST_NOTIFICATIONS at runtime. Ask once on first launch — without this
+    // the foreground-service pill silently never appears.
     await Permission.notification.request();
-    // Android 14+ refuses to start a `connectedDevice` FGS unless the
-    // caller already holds BLUETOOTH_CONNECT (or another allow-listed
-    // permission). Without this the very first startForeground() throws
-    // SecurityException and kills the process before the UI ever paints.
+    // Android 14+ refuses to start a `connectedDevice` FGS unless the caller
+    // already holds BLUETOOTH_CONNECT. Without this the first startForeground()
+    // throws SecurityException and kills the process before the UI paints.
     await [
       Permission.bluetoothConnect,
       Permission.bluetoothScan,
     ].request();
+    // Without an ignore-battery-optimizations grant, OEM power managers
+    // (Xiaomi/Samsung/Huawei/OnePlus…) reap the foreground service after a
+    // while in the background — the BLE link dies and never comes back. Prompt
+    // for the exemption until it's granted.
+    if (!await Permission.ignoreBatteryOptimizations.isGranted) {
+      await Permission.ignoreBatteryOptimizations.request();
+    }
   }
-  await Coordinator.instance.start();
+  // Wire up the UI side of the port and prime the saved-device id so the home
+  // screen shows it at first paint.
+  await BleProxy.instance.init();
   final locale = LocaleNotifier();
   await locale.load();
-  // Start the foreground service after permissions are resolved so the
-  // `connectedDevice` type validates. BleService upgrades the text to
-  // "Connected" as soon as the link comes up.
+  // Start the foreground service — this launches the background isolate
+  // (ble_host.startBleTask), which owns the connection + notification/media
+  // pump and re-arms auto-connect. It survives the UI being closed.
   if (Platform.isAndroid &&
       await Permission.bluetoothConnect.isGranted) {
     unawaited(ForegroundBridge().start());
   }
-  // Fire-and-forget — if a head unit is saved, kick off the OS-level
-  // autoConnect immediately. The UI shows "connecting…" until the link
-  // comes up, no scanner step required.
-  BleService.instance.resumeIfPaired();
   runApp(LocaleScope(
     notifier: locale,
     child: const AaBridgeApp(),

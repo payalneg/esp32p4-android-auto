@@ -70,6 +70,13 @@ class Coordinator {
 
   AppFilter? get filter => _filter;
 
+  /// Re-read the per-app notification filter from prefs. The filter UI lives in
+  /// the app (UI) isolate and writes the prefs directly; this lets the running
+  /// pump (in the background isolate) pick up the change without a restart.
+  Future<void> reloadFilter() async {
+    _filter = await AppFilter.load();
+  }
+
   // The head unit's LVGL toast font (aabridge_fonts) covers ASCII +
   // Cyrillic but not the exotic Unicode spaces Google Maps slips between
   // a distance and its unit (e.g. "40 м" / U+202F narrow no-break

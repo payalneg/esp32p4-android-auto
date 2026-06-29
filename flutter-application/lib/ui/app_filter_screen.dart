@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../ble/ble_proxy.dart';
 import '../bridge/notification_bridge.dart';
-import '../coordinator.dart';
 import '../i18n/strings.dart';
 import '../settings/app_filter.dart';
 
@@ -26,7 +26,9 @@ class _AppFilterScreenState extends State<AppFilterScreen> {
 
   Future<void> _load() async {
     final apps = await _bridge.listInstalledApps();
-    final filter = Coordinator.instance.filter ?? await AppFilter.load();
+    // The pump (with its own AppFilter copy) lives in the background isolate
+    // now; load our own copy here and tell it to reload after each edit.
+    final filter = await AppFilter.load();
     if (!mounted) return;
     setState(() {
       _apps = apps;
@@ -75,6 +77,8 @@ class _AppFilterScreenState extends State<AppFilterScreen> {
                   value: enabled,
                   onChanged: (v) async {
                     await _filter!.setEnabled(a.package, v ?? false);
+                    // Push the change to the running pump in the BLE isolate.
+                    BleProxy.instance.reloadFilter();
                     setState(() {});
                   },
                 );

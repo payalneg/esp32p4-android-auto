@@ -22,7 +22,7 @@
 
     <application
         android:label="AA Bridge"
-        android:name="${applicationName}"
+        android:name=".AaBridgeApplication"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
 
@@ -55,22 +55,18 @@
             </intent-filter>
         </service>
 
+        <!-- Sticky foreground service from flutter_foreground_task. Keeps the
+             app process (and the BLE link it holds) alive far more reliably
+             than a bare Service: holds a wakelock, auto-restarts after a kill
+             (RestartReceiver) and re-runs on boot / package-replace
+             (RebootReceiver) — both receivers are merged in from the
+             package's own manifest. We must declare the service ourselves to
+             stamp the Android 14+ foregroundServiceType. Do NOT rename. -->
         <service
-            android:name=".BleForegroundService"
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice"/>
-
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-            </intent-filter>
-        </receiver>
 
         <meta-data
             android:name="flutterEmbedding"

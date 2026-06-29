@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../ble/ble_service.dart';
+import '../ble/ble_proxy.dart';
 import '../ble/messages.dart';
 import '../cache/icon_hash.dart';
 import '../i18n/strings.dart';
@@ -31,11 +31,11 @@ class _TestPanelState extends State<TestPanel> {
   int _positionMs = 0;
 
   bool get _connected =>
-      BleService.instance.currentState == BleConnState.connected;
+      BleProxy.instance.currentState == BleConnState.connected;
 
   Future<void> _sendNotif(NotificationMsg n) async {
     if (!_connected) return _toast(t(context, 'test.not_connected'));
-    await BleService.instance.sendNotification(n);
+    await BleProxy.instance.sendNotification(n);
     _toast('${t(context, 'test.sent')}${n.title}');
   }
 
@@ -47,14 +47,14 @@ class _TestPanelState extends State<TestPanel> {
   Future<int> _pushTestIcon(Color color, String letter) async {
     final png = await makeIconPng(color, letter);
     final hash = fnv1a32(png);
-    await BleService.instance.sendIcon(IconMsg(hash: hash, png: png));
+    await BleProxy.instance.sendIcon(IconMsg(hash: hash, png: png));
     return hash;
   }
 
   Future<void> _sendMedia() async {
     if (!_connected) return _toast(t(context, 'test.not_connected'));
     final tr = _tracks[_trackIdx];
-    await BleService.instance.sendMedia(MediaMsg(
+    await BleProxy.instance.sendMedia(MediaMsg(
       title: tr.title,
       artist: tr.artist,
       album: tr.album,

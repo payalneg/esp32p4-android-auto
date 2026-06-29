@@ -5,7 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../ble/file_manager.dart';
+import '../ble/ble_proxy.dart';
 import '../ble/file_ops.dart';
 import '../i18n/strings.dart';
 
@@ -17,7 +17,7 @@ class DeviceFilesScreen extends StatefulWidget {
 }
 
 class _DeviceFilesScreenState extends State<DeviceFilesScreen> {
-  final _fm = FileManager.instance;
+  final _fm = FileManagerProxy.instance;
   String _cwd = '/';
   List<RemoteEntry> _entries = const [];
   bool _loading = true;
@@ -83,16 +83,18 @@ class _DeviceFilesScreenState extends State<DeviceFilesScreen> {
   // ---- actions ----
 
   Future<void> _doUpload() async {
-    final picked = await FilePicker.platform.pickFiles(withData: true);
+    // Pick by path (not withData): the file is read in the background isolate
+    // that owns the BLE link, so we don't shove its bytes through the port.
+    final picked = await FilePicker.platform.pickFiles();
     if (picked == null || picked.files.isEmpty) return;
     final f = picked.files.first;
-    final bytes = f.bytes;
-    if (bytes == null) return;
+    final src = f.path;
+    if (src == null) return;
     final dest = _join(_cwd, f.name);
     await _runTransfer(
       title: t(context, 'files.uploading'),
       task: (onProgress) =>
-          _fm.uploadFile(dest, Uint8List.fromList(bytes), onProgress: onProgress),
+          _fm.uploadLocalFile(dest, src, onProgress: onProgress),
     );
     await _reload();
   }

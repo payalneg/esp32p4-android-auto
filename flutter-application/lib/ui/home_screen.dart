@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../ble/ble_service.dart';
+import '../ble/ble_proxy.dart';
 import '../bridge/notification_bridge.dart';
 import '../i18n/strings.dart';
 import 'about_screen.dart';
@@ -66,7 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (ok == true) {
-      await BleService.instance.forget();
+      await BleProxy.instance.forget();
     }
   }
 
@@ -102,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final saved = BleService.instance.savedRemoteId;
+    final saved = BleProxy.instance.savedRemoteId;
     return Scaffold(
       appBar: AppBar(
         title: Text(t(context, 'app.title')),
@@ -203,11 +203,11 @@ class _HomeScreenState extends State<HomeScreen> {
           // Device file browser — only when connected to a head unit whose
           // firmware exposes the file-manager characteristics.
           StreamBuilder<BleConnState>(
-            stream: BleService.instance.state,
-            initialData: BleService.instance.currentState,
+            stream: BleProxy.instance.state,
+            initialData: BleProxy.instance.currentState,
             builder: (ctx, snap) {
               final connected = snap.data == BleConnState.connected;
-              if (!connected || !BleService.instance.supportsFileManager) {
+              if (!connected || !BleProxy.instance.supportsFileManager) {
                 return const SizedBox.shrink();
               }
               return Column(
@@ -266,12 +266,12 @@ class _StatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<BleConnState>(
-      stream: BleService.instance.state,
-      initialData: BleService.instance.currentState,
+      stream: BleProxy.instance.state,
+      initialData: BleProxy.instance.currentState,
       builder: (ctx, snap) {
         final state = snap.data ?? BleConnState.idle;
         final connected = state == BleConnState.connected;
-        final hasSaved = BleService.instance.savedRemoteId != null;
+        final hasSaved = BleProxy.instance.savedRemoteId != null;
         return Card(
           color: connected
               ? Colors.green.withValues(alpha: 0.15)

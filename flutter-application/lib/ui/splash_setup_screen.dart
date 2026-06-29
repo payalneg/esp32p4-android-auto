@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
-import '../ble/file_manager.dart';
+import '../ble/ble_proxy.dart';
 import '../ble/file_ops.dart';
 import '../i18n/strings.dart';
 import '../splash/splash_builder.dart';
@@ -22,7 +22,7 @@ class SplashSetupScreen extends StatefulWidget {
 }
 
 class _SplashSetupScreenState extends State<SplashSetupScreen> {
-  final _fm = FileManager.instance;
+  final _fm = FileManagerProxy.instance;
   bool _busy = false;
 
   Future<Uint8List?> _pickGif() async {

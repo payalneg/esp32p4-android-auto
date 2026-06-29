@@ -11,10 +11,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/services.dart' show rootBundle;
 
-import '../ble/ble_service.dart';
+import '../ble/ble_proxy.dart';
 
 enum UpdatePhase { idle, uploading, verifying, done, error }
 
@@ -72,10 +71,16 @@ class FirmwareUpdater {
   /// Resolve the bundled firmware asset for a given board model. The APK ships
   /// one image per board; falls back to the default board when [model] is null
   /// or unrecognised.
-  static String _assetFor(String? model) {
+  static String assetFor(String? model) {
     final m = boards.contains(model) ? model! : defaultModel;
     return 'assets/firmware/esp32p4_android_auto-$m.bin';
   }
+
+  /// Load the bundled firmware image bytes for [model]. Usable from the
+  /// background isolate (rootBundle works there too) — the BLE OTA flash now
+  /// runs in the task isolate that owns the link, so it loads the image itself.
+  static Future<Uint8List> imageFor(String? model) async =>
+      (await rootBundle.load(assetFor(model))).buffer.asUint8List();
 
   /// Default OTA host — the head unit's mDNS name (AA_MDNS_HOSTNAME + .local).
   static const defaultHost = 'android-auto.local';
@@ -108,7 +113,7 @@ class FirmwareUpdater {
   Future<bool> run({String host = defaultHost, String? model}) async {
     final url = 'http://$host/ota';
     try {
-      final bytes = (await rootBundle.load(_assetFor(model))).buffer.asUint8List();
+      final bytes = (await rootBundle.load(assetFor(model))).buffer.asUint8List();
       _emit(UpdatePhase.uploading, progress: 0,
           messageKey: 'fw.ota.uploading.wifi',
           args: {'size': (bytes.length / 1024).round().toString()});
@@ -133,17 +138,13 @@ class FirmwareUpdater {
   /// the bool result.
   Future<bool> runBle({String? model}) async {
     try {
-      final bytes = (await rootBundle.load(_assetFor(model))).buffer.asUint8List();
       _emit(UpdatePhase.uploading, progress: 0,
-          messageKey: 'fw.ota.uploading.ble',
-          args: {'size': (bytes.length / 1024).round().toString()});
-      // Hashing ~4 MB is quick but blocks the isolate; nudge it off the
-      // current microtask so the initial frame paints first.
-      final digest = await Future(
-          () => Uint8List.fromList(sha256.convert(bytes).bytes));
-      final res = await BleService.instance.bleOta(
-        bytes,
-        digest,
+          messageKey: 'fw.ota.uploading.ble');
+      // The flash runs in the background isolate that owns the BLE link: it
+      // loads the bundled image, hashes it and streams it. We just relay its
+      // progress / verify / result over the port.
+      final res = await BleProxy.instance.bleOta(
+        model,
         onUpload: (f) => _emit(UpdatePhase.uploading, progress: f),
         onVerify: () => _emit(UpdatePhase.verifying,
             progress: 1, messageKey: 'fw.ota.verifying.device'),

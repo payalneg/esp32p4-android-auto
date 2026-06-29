@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show PlatformException;
@@ -61,6 +62,16 @@ class BleService {
   // don't fight the user's intent.
   String? _savedRemoteId;
   bool _userInitiatedDisconnect = false;
+
+  // Reconnect state machine. The OS-level autoConnect link can come up
+  // (ACL connected) without the GATT handshake succeeding — and once it's
+  // up, the stack will NOT re-emit `connected`, so a failed handshake
+  // would wedge us in `disconnected` forever while the radio link stays
+  // alive (the "reconnects but no data" symptom). We retry the handshake
+  // and, if it still won't complete, force a clean disconnect+reconnect.
+  bool _handshaking = false;
+  int _reconnectAttempt = 0;
+  Timer? _reconnectTimer;
 
   Stream<BleConnState> get state => _stateCtrl.stream;
   Stream<InboundCommand> get commands => _cmdCtrl.stream;
@@ -160,6 +171,28 @@ class BleService {
     _savedRemoteId = device.remoteId.str;
 
     await _fg.start();
+  }
+
+  /// Connect by remote id. Used by the background task isolate, which receives
+  /// only the serializable id over the port (not the BluetoothDevice object).
+  Future<void> connectById(String remoteId) =>
+      connect(BluetoothDevice.fromId(remoteId));
+
+  /// Send a pre-encoded PDU body for the given kind. The background task gets
+  /// the already-`encode()`d message bytes over the port and forwards them
+  /// here, so this just maps the kind back to its [PduType].
+  Future<void> sendRaw(String kind, Uint8List body) {
+    switch (kind) {
+      case 'notif':
+        return _send(PduType.notification, body);
+      case 'media':
+        return _send(PduType.media, body);
+      case 'icon':
+        return _send(PduType.icon, body);
+      case 'albumArt':
+        return _send(PduType.albumArt, body);
+    }
+    return Future.value();
   }
 
   Future<void> _completeHandshake(BluetoothDevice device) async {
@@ -364,27 +397,90 @@ class BleService {
 
   void _onConnectionStateChanged(BluetoothConnectionState s) {
     if (s == BluetoothConnectionState.connected && _device != null) {
-      // The OS-level link just came up — discover services, request the
-      // larger MTU, subscribe to NOTIFY. Resolves the pending pairing
-      // completer if this is the first time, or just refreshes handles
-      // after an autoConnect reconnect.
-      _completeHandshake(_device!).then((_) {
-        _fg.start();
-        _firstHandshake?.complete();
-      }).catchError((e, st) {
-        _setState(BleConnState.disconnected);
-        _firstHandshake?.completeError(e, st);
-      });
+      // The OS-level ACL link just came up (first connect or an autoConnect
+      // reconnect). Run the GATT handshake on top of it.
+      _handleLinkUp(_device!);
     } else if (s == BluetoothConnectionState.disconnected) {
       _setState(BleConnState.disconnected);
-      // autoConnect:true keeps the OS-level reconnect queue active by
-      // itself; nothing to retry here. If the user explicitly disconnected
-      // (forget device) we stop the foreground service so the persistent
-      // notification goes away.
-      if (_userInitiatedDisconnect) {
-        _fg.stop();
-      }
+      // autoConnect:true keeps the OS-level reconnect queue active by itself;
+      // nothing to retry here. The foreground service stays up regardless (it
+      // hosts this whole BLE isolate — see ble_host.dart) so the link can come
+      // back, or the user can re-pair, without relaunching the app.
     }
+  }
+
+  /// Discover services, request the larger MTU and subscribe to NOTIFY on
+  /// top of a freshly-up ACL link. Retries a few times, then — if the
+  /// handshake still won't complete — forces a clean disconnect+reconnect.
+  ///
+  /// This is the fix for "BLE reconnects but no data flows": with
+  /// autoConnect:true the stack reconnects the ACL link but never re-emits
+  /// `connected`, so a single failed handshake (a transient GATT error, or
+  /// a stale service cache after the head unit rebooted) used to leave us
+  /// stuck in `disconnected` while the radio link was up — every _send()
+  /// then silently no-ops. Now we never give up while a paired device is
+  /// reachable; we keep cycling the link until the handshake takes.
+  Future<void> _handleLinkUp(BluetoothDevice device) async {
+    // Ignore duplicate `connected` events / overlapping attempts.
+    if (_handshaking) return;
+    _handshaking = true;
+    try {
+      Object? lastErr;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        if (_userInitiatedDisconnect) return;
+        try {
+          await _completeHandshake(device);
+          _reconnectAttempt = 0; // success — reset the backoff
+          _fg.start();
+          _firstHandshake?.complete();
+          return;
+        } catch (e) {
+          lastErr = e;
+          await Future.delayed(Duration(milliseconds: 300 * (attempt + 1)));
+        }
+      }
+      // Handshake won't complete on this link.
+      _setState(BleConnState.disconnected);
+      final fh = _firstHandshake;
+      if (fh != null && !fh.isCompleted) {
+        // First interactive connect() owns its own 20 s timeout + teardown;
+        // surface the error there instead of force-looping underneath it.
+        fh.completeError(lastErr ?? StateError('handshake failed'));
+        return;
+      }
+      // Background auto-reconnect: drop the link and reconnect cleanly so
+      // Android re-runs service discovery (autoConnect alone won't).
+      _scheduleForceReconnect();
+    } finally {
+      _handshaking = false;
+    }
+  }
+
+  /// Tear the current link down and re-arm autoConnect after a backoff, so
+  /// the next `connected` event runs a fresh GATT discovery. On Android we
+  /// also flush the GATT cache first — after the head unit reboots, the
+  /// stack can otherwise hand back stale attribute handles and every write
+  /// lands nowhere (link up, no data). Capped backoff covers a head unit
+  /// that's still booting.
+  void _scheduleForceReconnect() {
+    if (_userInitiatedDisconnect || _savedRemoteId == null) return;
+    _reconnectAttempt++;
+    final delayMs = (500 * _reconnectAttempt).clamp(500, 8000);
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(milliseconds: delayMs), () async {
+      if (_userInitiatedDisconnect || _savedRemoteId == null) return;
+      final dev = _device;
+      if (dev != null && Platform.isAndroid) {
+        try {
+          await dev.clearGattCache();
+        } catch (_) {}
+      }
+      try {
+        await dev?.disconnect();
+      } catch (_) {}
+      if (_userInitiatedDisconnect || _savedRemoteId == null) return;
+      _attachKnownDevice(_savedRemoteId!);
+    });
   }
 
   /// User-initiated "forget device" — drops the persisted remote id and
@@ -395,10 +491,15 @@ class BleService {
     await p.remove(_prefSavedId);
     _savedRemoteId = null;
     await _teardown();
-    await _fg.stop();
+    // Keep the foreground service alive: it hosts this isolate, and the user
+    // may re-pair right away. The notification just flips to "disconnected".
   }
 
   Future<void> _teardown() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    _handshaking = false;
     _clockTimer?.cancel();
     _clockTimer = null;
     await _connSub?.cancel();

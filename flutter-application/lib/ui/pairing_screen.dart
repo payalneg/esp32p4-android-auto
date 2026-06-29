@@ -1,8 +1,10 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../ble/ble_service.dart';
+import '../ble/ble_proxy.dart';
+import '../bridge/foreground_bridge.dart';
 import '../i18n/strings.dart';
 
 class PairingScreen extends StatefulWidget {
@@ -12,7 +14,7 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  List<ScanResult> _results = [];
+  List<ScanDevice> _results = [];
   bool _scanning = false;
   String? _error;
 
@@ -28,7 +30,15 @@ class _PairingScreenState extends State<PairingScreen> {
         Permission.locationWhenInUse,
       ].request();
       debugPrint('[pairing] perms granted: $perms');
-      final r = await BleService.instance.scan();
+      // Make sure the background BLE isolate is running before we talk to it:
+      // if BLUETOOTH_CONNECT was denied at app launch, the foreground service
+      // (and the task that owns BLE) was never started. Idempotent.
+      if (Platform.isAndroid &&
+          await Permission.bluetoothConnect.isGranted) {
+        await ForegroundBridge().start();
+      }
+      // Scan runs in the background BLE isolate; we get back serializable hits.
+      final r = await BleProxy.instance.scan();
       debugPrint('[pairing] scan returned ${r.length} results');
       if (!mounted) return;
       setState(() => _results = r);
@@ -40,10 +50,10 @@ class _PairingScreenState extends State<PairingScreen> {
     }
   }
 
-  Future<void> _connect(BluetoothDevice d) async {
-    debugPrint('[pairing] connect → ${d.remoteId} (${d.platformName})');
+  Future<void> _connect(ScanDevice d) async {
+    debugPrint('[pairing] connect → ${d.remoteId} (${d.name})');
     try {
-      await BleService.instance.connect(d);
+      await BleProxy.instance.connect(d.remoteId);
       debugPrint('[pairing] connect OK');
       if (!mounted) return;
       Navigator.pop(context);
@@ -89,16 +99,13 @@ class _PairingScreenState extends State<PairingScreen> {
               itemCount: _results.length,
               itemBuilder: (_, i) {
                 final r = _results[i];
-                final name = r.advertisementData.advName.isNotEmpty
-                    ? r.advertisementData.advName
-                    : (r.device.platformName.isNotEmpty
-                        ? r.device.platformName
-                        : t(context, 'pairing.unnamed'));
+                final name =
+                    r.name.isNotEmpty ? r.name : t(context, 'pairing.unnamed');
                 return ListTile(
                   leading: const Icon(Icons.bluetooth),
                   title: Text(name),
-                  subtitle: Text('${r.device.remoteId} · rssi ${r.rssi} dBm'),
-                  onTap: () => _connect(r.device),
+                  subtitle: Text('${r.remoteId} · rssi ${r.rssi} dBm'),
+                  onTap: () => _connect(r),
                 );
               },
             ),
