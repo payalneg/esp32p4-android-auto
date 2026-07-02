@@ -2,10 +2,17 @@
 (def cruise-rpm 0)
 (def rx-button-state 1)
 (def tx-button-state 1)
-(def old-throttle 0.0)
-(def old-brake 0.0)
-(def app-output-disabled 0)
-(def adc-detached 0)
+; Motor arbiter state (motor-control-loop). setq'd at runtime → above @const.
+(def out-rel 0.0)     ; throttle slew-limiter state (relative current 0..1)
+(def cruise-i 0.0)    ; cruise PI integrator (A), seeded on activation (bumpless)
+(def armed 0)         ; safe-start: throttle must be seen released once after boot
+(def cruise-kp 0.02)  ; cruise PI: A per ERPM of error (tune via panel)
+(def cruise-ki 0.05)  ; cruise PI: A/s per ERPM of error (tune via panel)
+; Throttle feel constants (setq'd never, but kept here with the other knobs).
+(def thr-curve-accel 0.0)  ; throttle-curve accel const, -1..1 (0 = linear)
+(def thr-curve-mode 0)     ; 0 exponential, 1 natural, 2 polynomial
+(def ramp-pos-s 0.4)       ; seconds from 0 to full throttle (like ADC-app ramp+)
+(def ramp-neg-s 0.2)       ; seconds from full throttle to 0 (like ADC-app ramp-)
 (def current-profile 0)
 (def num-profiles 3)
 (def first-profile-init 1)
@@ -13,7 +20,7 @@
 (def throttle-on 1)
 (def tc-on 0)
 (def tc-sens 50.0)
-(def pbuf (bufcreate 128))
+(def pbuf (bufcreate 192)) ; UI descriptor is ~156 B with 7 controls — keep headroom
 (def pi 0)
 (def beep-vol-addr 0)
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
@@ -39,21 +46,24 @@
     (sleep 0.1)
     (foc-play-stop)
 })
+; Profiles scale the current limit instead of overwriting it: Motor Current Max
+; in VESC Tool stays the master value (applied live, no LISP restart) and each
+; profile is a fraction of it. Braking is never scaled — always full.
 (defun apply-profile (profile-index) {
     (if (= profile-index 0) {
         (conf-set 'max-speed (/ 25.0 3.6))
-        (conf-set 'l-current-max 45.0)
-        (print "Profile 0: Slow (25 km/h, 45 A)")
+        (conf-set 'l-current-max-scale 0.5)
+        (print "Profile 0: Slow (25 km/h, 50% current)")
     } {
         (if (= profile-index 1) {
             (conf-set 'max-speed (/ 40.0 3.6))
-            (conf-set 'l-current-max 60.0)
-            (print "Profile 1: Medium (40 km/h, 60 A)")
+            (conf-set 'l-current-max-scale 0.67)
+            (print "Profile 1: Medium (40 km/h, 67% current)")
         } {
             (if (= profile-index 2) {
                 (conf-set 'max-speed (/ 60.0 3.6))
-                (conf-set 'l-current-max 90.0)
-                (print "Profile 2: Fast (60 km/h, 90 A)")
+                (conf-set 'l-current-max-scale 1.0)
+                (print "Profile 2: Fast (60 km/h, 100% current)")
             })
         })
     })
@@ -90,15 +100,18 @@
         (sleep 0.2)
     })
 })
+; Cruise is a PI speed controller with a CURRENT output inside the motor
+; arbiter — not the firmware speed PID. No set-rpm mode switch, so engaging
+; can't jerk: the integrator is seeded with the actual motor current and the
+; loop keeps commanding current smoothly. (De)activation just flips state; the
+; arbiter (motor-control-loop) does everything else.
 (defun activate-cruise-control () {
     (if (and (= cruise-active 0) (= throttle-on 1)) {
         (setq cruise-rpm (get-rpm))
         (if (> (abs cruise-rpm) 0) {
-            (app-disable-output -1)
-            (setq app-output-disabled 1)
+            (setq cruise-i (get-current))   ; bumpless transfer
             (setq cruise-active 1)
             (print (str-merge "Cruise control activated at RPM: " (to-str cruise-rpm)))
-            (set-rpm cruise-rpm)
         } {
             (print "Cannot activate cruise control: speed is zero")
         })
@@ -109,49 +122,7 @@
         (setq cruise-active 0)
         (setq cruise-rpm 0)
         (setq rpm-per-ms 0.0)
-        (if (= app-output-disabled 1) {
-            (if (= adc-detached 0) {
-                (app-adc-detach 1 1)
-                (setq adc-detached 1)
-            })
-            (app-adc-detach 1 0)
-            (set-current 0)
-            (sleep 0.05)
-            (app-disable-output 0)
-            (setq app-output-disabled 0)
-            (app-adc-detach 1 0)
-            (setq adc-detached 0)
-        })
         (print "Cruise control deactivated")
-    })
-})
-(defun monitor-throttle-brake () {
-    (loopwhile t {
-        (if (= cruise-active 1) {
-            (let ((throttle-value (get-adc-decoded 0))) {
-                (if (and (> throttle-value 0.05) (<= old-throttle 0.05)) {
-                    (deactivate-cruise-control)
-                })
-                (setq old-throttle throttle-value)
-            })
-            (let ((brake-value (get-adc-decoded 1))) {
-                (if (and (> brake-value 0.05) (<= old-brake 0.05)) {
-                    (deactivate-cruise-control)
-                })
-                (setq old-brake brake-value)
-            })
-            (if (= cruise-active 1) {
-                (set-rpm cruise-rpm)
-            })
-        } {
-            (let ((throttle-value (get-adc-decoded 0))) {
-                (setq old-throttle throttle-value)
-            })
-            (let ((brake-value (get-adc-decoded 1))) {
-                (setq old-brake brake-value)
-            })
-        })
-        (sleep 0.05)
     })
 })
 (defun increase-cruise-speed () {
@@ -165,7 +136,6 @@
                         } {
                             (setq cruise-rpm new-rpm)
                         })
-                        (set-rpm cruise-rpm)
                         (print (str-merge "Cruise speed increased to RPM: " (to-str cruise-rpm)))
                     })
                 })
@@ -177,7 +147,6 @@
                 } {
                     (setq cruise-rpm (+ cruise-rpm rpm-increment))
                 })
-                (set-rpm cruise-rpm)
                 (print (str-merge "Cruise speed increased to RPM: " (to-str cruise-rpm)))
             })
         })
@@ -217,7 +186,6 @@
                             } {
                                 (setq cruise-rpm new-rpm)
                             })
-                            (set-rpm cruise-rpm)
                             (print (str-merge "Cruise speed decreased to RPM: " (to-str cruise-rpm)))
                         })
                     } {
@@ -251,31 +219,36 @@
 (spawn 150 update-rpm-per-ms)
 (spawn 150 monitor-rx-button)
 (spawn 150 monitor-tx-button)
-(spawn 150 monitor-throttle-brake)
 (defun pu8  (v) { (bufset-u8  pbuf pi v) (setq pi (+ pi 1)) })
 (defun pi32 (v) { (bufset-i32 pbuf pi (to-i32 v)) (setq pi (+ pi 4)) })
 (defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
+; Cruise Kp/Ki are exposed in MILLI-units (panel renders at most 1 decimal, so
+; 0.02 would show as "0.0"): wire value = gain × 1e6 (milli-gain × VLP_SCALE).
 (defun panel-send-ui (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 6)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 7)
     (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
     (pu8 4) (pu8 2) (pstr "Beep")
     (pu8 5) (pu8 3) (pstr "Beep Vol")
     (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* beep-vol 1000)) (pstr "")
     (pu8 6) (pu8 1) (pstr "Polish Cow") (pu8 (if (= playing-idx 0) 1 0))
-    (pu8 8) (pu8 1) (pstr "Free Bird") (pu8 (if (= playing-idx 1) 1 0))
     (pu8 7) (pu8 3) (pstr "Melody Vol")
     (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* melody-vol 1000)) (pstr "")
+    (pu8 8) (pu8 3) (pstr "Cruise Kp")
+    (pi32 0) (pi32 200000) (pi32 1000) (pi32 (* cruise-kp 1000000)) (pstr "m")
+    (pu8 9) (pu8 3) (pstr "Cruise Ki")
+    (pi32 0) (pi32 500000) (pi32 5000) (pi32 (* cruise-ki 1000000)) (pstr "m")
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-state (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 5)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 6)
     (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
     (pu8 5) (pi32 (* beep-vol 1000))
     (pu8 6) (pi32 (* (if (= playing-idx 0) 1 0) 1000))
-    (pu8 8) (pi32 (* (if (= playing-idx 1) 1 0) 1000))
     (pu8 7) (pi32 (* melody-vol 1000))
+    (pu8 8) (pi32 (* cruise-kp 1000000))
+    (pu8 9) (pi32 (* cruise-ki 1000000))
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-dash (reply-id) {
@@ -287,13 +260,13 @@
     (pi32 (* rpm-per-ms 1000.0))
     (send-data pbuf 2 reply-id)
 })
+; Master enable is just a flag now — the motor arbiter owns all output and
+; coasts (set-current 0) while throttle-on = 0. No app juggling needed.
 (defun panel-set-throttle (on) {
     (if (= on 0) {
         (if (= cruise-active 1) (deactivate-cruise-control))
-        (app-disable-output -1)
         (setq throttle-on 0)
     } {
-        (app-disable-output 0)
         (setq throttle-on 1)
     })
 })
@@ -360,14 +333,13 @@
             (if (> val 0.5)
                 (if (not (= playing-idx 0)) { (setq playing-idx 0) (spawn 200 play-list 0 melody) })
                 (if (= playing-idx 0) (setq playing-idx -1))))
-        ((= cid 8)
-            (if (> val 0.5)
-                (if (not (= playing-idx 1)) { (setq playing-idx 1) (spawn 200 play-list 1 melody2) })
-                (if (= playing-idx 1) (setq playing-idx -1))))
         ((= cid 7) {
             (setq melody-vol (to-i32 val))
             (setq melody-vol-dirty 1)
-        }))
+        })
+        ; val arrives as wire/1000 = milli-gain; engineering gain = val/1000.
+        ((= cid 8) (setq cruise-kp (/ val 1000.0)))
+        ((= cid 9) (setq cruise-ki (/ val 1000.0))))
 })
 (defun panel-handle (data) {
     (if (and (>= (buflen data) 4)
@@ -411,26 +383,72 @@
         })
     })
 })
-; Pedal-assist arbiter. Runs only when cruise is OFF and the panel throttle
-; master is ON: cruise (set-rpm) owns the motor while active and pedaling must
-; not disturb it; throttle-on=0 means the user disabled output via the panel, so
-; leave it. Throttle-override: a touched throttle hands the motor straight back
-; to the native ADC app (with its throttle curve); on a released throttle while
-; pedaling we suppress the ADC app (so its loop can't fight us) and inject the
-; PAS current, clamped to the active profile's l-current-max. A stale setpoint
-; (sensor dropped) backs off — the P4 watchdog also sends 0.
-(defun pas-control-loop () {
+(defun clampf (v lo hi) (if (< v lo) lo (if (> v hi) hi v)))
+; Throttle output: VESC-Tool-style curve, then a slew limit toward the target
+; (replaces the ADC app's pos/neg ramping), then RELATIVE current — scales live
+; with l-current-max × profile scale and the thermal derating, so changing
+; Motor Current Max in VESC Tool takes effect immediately.
+(defun throttle-out (thr) {
+    (let ((target (throttle-curve thr thr-curve-accel 0.0 thr-curve-mode)))
+        (if (> target out-rel)
+            (setq out-rel (clampf (+ out-rel (/ 0.05 ramp-pos-s)) 0.0 target))
+            (setq out-rel (clampf (- out-rel (/ 0.05 ramp-neg-s)) target 1.0))))
+    (set-current-rel out-rel 0.2)
+})
+; Cruise output: PI on ERPM error → current. Integrator anti-windup-clamped to
+; the live limit (l-current-max × profile scale, both read fresh each tick so a
+; VESC Tool write or profile switch applies immediately; the firmware control
+; loop additionally clamps for thermal derating). Sign-aware for reverse cruise.
+(defun cruise-out () {
+    (let ((err (- cruise-rpm (get-rpm)))
+          (imax (* (conf-get 'l-current-max) (conf-get 'l-current-max-scale)))) {
+        (if (>= cruise-rpm 0) {
+            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err 0.05)) 0.0 imax))
+            (set-current (clampf (+ (* cruise-kp err) cruise-i) 0.0 imax) 0.2)
+        } {
+            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err 0.05)) (- imax) 0.0))
+            (set-current (clampf (+ (* cruise-kp err) cruise-i) (- imax) 0.0) 0.2)
+        })
+    })
+})
+; THE motor arbiter — the only place that commands the motor. The native ADC
+; app stays configured (its thread keeps decoding the throttle/brake pots for
+; get-adc-decoded, and VESC Tool keeps its calibration UI) but its OUTPUT is
+; suppressed with a rolling 1.5 s disable that this loop keeps extending. If
+; this script ever dies: motor stops via the motor-command timeout (every
+; set-* here feeds it), and ~1.5 s later the stock ADC throttle comes back —
+; the bike stays rideable (without cruise/PAS) instead of bricking.
+; Priority: master-off > brake > throttle > cruise > PAS > coast.
+(defun motor-control-loop () {
     (loopwhile t {
-        (if (and (= cruise-active 0) (= throttle-on 1))
-            (let ((thr (get-adc-decoded 0))
-                  (stale (> (secs-since pas-seen) 0.4))
-                  (lim (conf-get 'l-current-max)))
-                (if (> thr 0.05)
-                    (app-disable-output 0)
-                    (if (and (not stale) (> pas-amps 0.0))
-                        { (app-disable-output 100)
-                          (set-current (if (> pas-amps lim) lim pas-amps) 0.1) }
-                        (app-disable-output 0)))))
+        (app-disable-output 1500)
+        (let ((thr   (get-adc-decoded 0))
+              (brake (get-adc-decoded 1))) {
+            ; Safe start: no output until the throttle has been seen released
+            ; once (protects against a stuck/held throttle at script start).
+            (if (< thr 0.05) (setq armed 1))
+            (cond
+                ((= throttle-on 0) {          ; panel master switch — coast
+                    (setq out-rel 0.0)
+                    (set-current 0) })
+                ((> brake 0.05) {             ; 1. brake — full range, unscaled
+                    (deactivate-cruise-control)
+                    (setq out-rel 0.0)
+                    (set-brake-rel brake) })
+                ((and (> thr 0.05) (= armed 1)) {  ; 2. throttle
+                    (deactivate-cruise-control)
+                    (throttle-out thr) })
+                ((= cruise-active 1)          ; 3. cruise (PI → current)
+                    (cruise-out))
+                ((and (> pas-amps 0.0)        ; 4. pedal assist from head unit
+                      (< (secs-since pas-seen) 0.4))
+                    ; Stale setpoint (sensor/link dropped) falls through to
+                    ; coast — the P4 watchdog also sends an explicit 0.
+                    (set-current pas-amps 0.2))  ; fw clamps to lo_current_max
+                (t {                          ; 5. coast
+                    (setq out-rel 0.0)
+                    (set-current 0) }))
+        })
         (sleep 0.05)
     })
 })
@@ -498,48 +516,10 @@
   (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
   (262 0.124) (0 0.372) (330 0.124)
 ))
-; Free Bird guitar solo (lead line) — from "Free Bird - Lynyrd Skynyrd.mid":
-; track 9, one of the twin harmonized lead guitars (clean monophonic line, no
-; vamp), sped up 20% (durations x0.8). The play-list articulation gap separates
-; the notes. TRIMMED to the opening third (~170 notes) — the full ~470-note
-; version pushed the load-time cons heap over the ceiling (the reader builds the
-; whole quoted list in the heap before @const flashes it), which killed the
-; panel spawn at the end of the file → "no buttons". Keep this short; if you
-; re-extend it, watch for the panel/melodies dying at upload.
-(def melody2 '(
-  (659 0.207) (880 0.207) (659 0.207) (880 1.242) (784 0.207) (659 0.207)
-  (784 0.207) (880 0.207) (784 0.207) (659 0.207) (880 0.414) (784 0.207)
-  (659 0.207) (880 0.621) (1047 0.207) (880 0.414) (1047 0.207) (880 0.414)
-  (1047 0.207) (880 0.621) (659 0.207) (880 0.207) (659 0.207) (880 1.242)
-  (784 0.207) (659 0.207) (784 0.207) (880 0.207) (784 0.207) (659 0.207)
-  (880 0.414) (784 0.207) (659 0.207) (880 0.621) (1047 0.207) (880 0.414)
-  (1047 0.207) (880 0.414) (1047 0.207) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (880 0.310)
-  (1047 0.103) (880 0.310) (1047 0.103) (880 0.310) (1047 0.103) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (659 0.069) (784 0.069) (880 0.069) (784 0.069)
-  (659 0.069) (784 0.069) (880 0.069) (784 0.069) (659 0.069) (784 0.069)
-  (880 0.069) (784 0.069) (880 0.207) (784 0.207) (659 0.207) (880 0.827)
-))
 
-; Spawn threads and enable events LAST — after melody/melody2 (defined just above)
-; are bound. panel-event-loop calls panel-action, which references melody2 (cid 8);
-; spawned earlier, an incoming panel command during load would hit melody2 while
+; Spawn threads and enable events LAST — after melody (defined just above)
+; is bound. panel-event-loop calls panel-action, which references melody (cid 6);
+; spawned earlier, an incoming panel command during load would hit melody while
 ; still unbound → the handler thread dies → panel/melodies dead.
 ; These are plain expressions (not definitions), so @const-start does not flash
 ; them — they just execute here, which is exactly what we want.
@@ -547,5 +527,5 @@
 (event-enable 'event-data-rx)
 (event-enable 'event-shutdown)
 (spawn 150 persist-volumes-loop)
-(spawn 150 pas-control-loop)
+(spawn 150 motor-control-loop)
 @const-end
