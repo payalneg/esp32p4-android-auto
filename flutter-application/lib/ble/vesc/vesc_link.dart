@@ -60,6 +60,19 @@ class VescLink {
     }
   }
 
+  /// Run a long transfer at high BLE connection priority (Android drops the
+  /// connection interval from ~45 ms to 7.5-15 ms), restoring balanced after.
+  /// Dozens of serialized round-trips otherwise spend most of their time
+  /// waiting out the interval.
+  Future<T> _fastLink<T>(Future<T> Function() op) async {
+    await BleService.instance.setLinkSpeed(fast: true);
+    try {
+      return await op();
+    } finally {
+      await BleService.instance.setLinkSpeed(fast: false);
+    }
+  }
+
   Future<void> _ensureSubscribed() async {
     final tx = BleService.instance.nusTxChar;
     final rx = BleService.instance.nusRxChar;
@@ -137,7 +150,7 @@ class VescLink {
 
   /// Read the LISP script currently stored on the VESC and return its text.
   Future<String> readCode({void Function(double)? onProgress}) =>
-      _serial(() async {
+      _serial(() => _fastLink(() async {
         await _ensureSubscribed();
         var total = -1;
         final buf = BytesBuilder();
@@ -168,12 +181,12 @@ class VescLink {
             ? Uint8List.sublistView(data, 0, total)
             : data;
         return unpackLispCode(trimmed);
-      });
+      }));
 
   /// Erase + write [code] to the VESC, optionally starting it afterwards.
   Future<void> uploadCode(String code,
           {bool run = false, void Function(double)? onProgress}) =>
-      _serial(() async {
+      _serial(() => _fastLink(() async {
         await _ensureSubscribed();
         final packed = packLispCode(code);
         final blob = buildUploadBlob(packed);
@@ -203,7 +216,7 @@ class VescLink {
         }
 
         if (run) await _setRunningBestEffort(true);
-      });
+      }));
 
   /// Start (true) / stop (false) the stored script.
   Future<void> setRunning(bool run) => _serial(() async {

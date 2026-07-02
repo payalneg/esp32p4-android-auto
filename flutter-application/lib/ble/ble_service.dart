@@ -589,6 +589,23 @@ class BleService {
   bool get isConnected => _state == BleConnState.connected;
   int get negotiatedMtu => _device?.mtuNow ?? 247;
 
+  /// Ask Android for a faster (high-priority, 7.5-15 ms interval) or normal
+  /// (balanced) connection. Long LISP code transfers are dozens of serialized
+  /// round-trips, and the Android default ~45 ms interval dominates their
+  /// wall-clock time — high priority speeds them up several times over.
+  /// Best-effort: silently a no-op off-Android or when disconnected.
+  Future<void> setLinkSpeed({required bool fast}) async {
+    final dev = _device;
+    if (dev == null || !isConnected) return;
+    try {
+      await dev.requestConnectionPriority(
+          connectionPriorityRequest:
+              fast ? ConnectionPriority.high : ConnectionPriority.balanced);
+    } catch (_) {
+      // android-only API / device just disconnected — speed is a hint anyway
+    }
+  }
+
   Future<void> sendNotification(NotificationMsg n) =>
       _send(PduType.notification, n.encode());
 
