@@ -7,18 +7,18 @@
 (def brk-rel 0.0)     ; brake slew-limiter state (relative brake current 0..1)
 (def cruise-i 0.0)    ; cruise PI integrator (A), seeded on activation (bumpless)
 (def armed 0)         ; safe-start: throttle must be seen released once after boot
-(def cruise-kp 0.02)  ; cruise PI: A per ERPM of error (tune via panel)
-(def cruise-ki 0.05)  ; cruise PI: A/s per ERPM of error (tune via panel)
-; Throttle/brake feel knobs. ctl-dt is the arbiter tick — 100 Hz like Vedder's
+; Cruise PI gains are HARDCODED here (edit + re-upload to tune): the firmware
+; speed-PID gains (s-pid-kp/ki in VESC Tool) are NOT exposed to LISP conf-get,
+; so there is nothing to read them from. Ramping times, by contrast, ARE read
+; live from the VESC Tool ADC app page — see throttle-out/brake-out.
+(def cruise-kp 0.02)  ; cruise PI: A per ERPM of error
+(def cruise-ki 0.05)  ; cruise PI: A/s per ERPM of error
+; Throttle feel knobs. ctl-dt is the arbiter tick — 100 Hz like Vedder's
 ; vl_bike pkg: at 20 Hz the ramp advanced in 12.5%-of-max current steps, which
 ; the FOC loop executes instantly → felt like jerks, not a ramp.
 (def ctl-dt 0.01)          ; arbiter period (s)
 (def thr-curve-accel 0.0)  ; throttle-curve accel const, -1..1 (0 = linear)
 (def thr-curve-mode 0)     ; 0 exponential, 1 natural, 2 polynomial
-(def ramp-pos-s 0.4)       ; seconds 0 → full throttle (tune via panel)
-(def ramp-neg-s 0.2)       ; seconds full throttle → 0 (tune via panel)
-(def brk-ramp-pos-s 0.2)   ; seconds 0 → full brake (fast but not a hit)
-(def brk-ramp-neg-s 0.1)   ; seconds full brake → 0
 (def current-profile 0)
 (def num-profiles 3)
 (def first-profile-init 1)
@@ -26,7 +26,7 @@
 (def throttle-on 1)
 (def tc-on 0)
 (def tc-sens 50.0)
-(def pbuf (bufcreate 256)) ; UI descriptor is ~212 B with 9 controls — keep headroom
+(def pbuf (bufcreate 128))
 (def pi 0)
 (def beep-vol-addr 0)
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
@@ -228,11 +228,9 @@
 (defun pu8  (v) { (bufset-u8  pbuf pi v) (setq pi (+ pi 1)) })
 (defun pi32 (v) { (bufset-i32 pbuf pi (to-i32 v)) (setq pi (+ pi 4)) })
 (defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
-; Cruise Kp/Ki are exposed in MILLI-units (panel renders at most 1 decimal, so
-; 0.02 would show as "0.0"): wire value = gain × 1e6 (milli-gain × VLP_SCALE).
 (defun panel-send-ui (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 7)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 5)
     (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
     (pu8 4) (pu8 2) (pstr "Beep")
     (pu8 5) (pu8 3) (pstr "Beep Vol")
@@ -240,27 +238,15 @@
     (pu8 6) (pu8 1) (pstr "Polish Cow") (pu8 (if (= playing-idx 0) 1 0))
     (pu8 7) (pu8 3) (pstr "Melody Vol")
     (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* melody-vol 1000)) (pstr "")
-    (pu8 8) (pu8 3) (pstr "Cruise Kp")
-    (pi32 0) (pi32 200000) (pi32 1000) (pi32 (* cruise-kp 1000000)) (pstr "m")
-    (pu8 9) (pu8 3) (pstr "Cruise Ki")
-    (pi32 0) (pi32 500000) (pi32 5000) (pi32 (* cruise-ki 1000000)) (pstr "m")
-    (pu8 10) (pu8 3) (pstr "Ramp Up")
-    (pi32 100) (pi32 2000) (pi32 50) (pi32 (* ramp-pos-s 1000)) (pstr "s")
-    (pu8 11) (pu8 3) (pstr "Ramp Down")
-    (pi32 100) (pi32 2000) (pi32 50) (pi32 (* ramp-neg-s 1000)) (pstr "s")
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-state (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 8)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 4)
     (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
     (pu8 5) (pi32 (* beep-vol 1000))
     (pu8 6) (pi32 (* (if (= playing-idx 0) 1 0) 1000))
     (pu8 7) (pi32 (* melody-vol 1000))
-    (pu8 8) (pi32 (* cruise-kp 1000000))
-    (pu8 9) (pi32 (* cruise-ki 1000000))
-    (pu8 10) (pi32 (* ramp-pos-s 1000))
-    (pu8 11) (pi32 (* ramp-neg-s 1000))
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-dash (reply-id) {
@@ -348,13 +334,7 @@
         ((= cid 7) {
             (setq melody-vol (to-i32 val))
             (setq melody-vol-dirty 1)
-        })
-        ; val arrives as wire/1000 = milli-gain; engineering gain = val/1000.
-        ((= cid 8) (setq cruise-kp (/ val 1000.0)))
-        ((= cid 9) (setq cruise-ki (/ val 1000.0)))
-        ; Ramp times arrive as seconds directly (wire = s × 1000).
-        ((= cid 10) (setq ramp-pos-s (clampf val 0.05 5.0)))
-        ((= cid 11) (setq ramp-neg-s (clampf val 0.05 5.0))))
+        }))
 })
 (defun panel-handle (data) {
     (if (and (>= (buflen data) 4)
@@ -404,6 +384,12 @@
     (if (> target v)
         (clampf (+ v (/ ctl-dt pos-s)) 0.0 target)
         (clampf (- v (/ ctl-dt neg-s)) target 1.0)))
+; Ramping times come LIVE from the VESC Tool ADC app page (App Settings → ADC
+; → Ramping Time Positive/Negative) — same knobs that shaped the stock throttle,
+; so tuning stays in VESC Tool and applies instantly. Clamped away from 0 so a
+; zero in the config can't divide-by-zero and kill the arbiter thread.
+(defun ramp-pos () (clampf (conf-get 'adc-ramp-time-pos) 0.05 5.0))
+(defun ramp-neg () (clampf (conf-get 'adc-ramp-time-neg) 0.05 5.0))
 ; Throttle output: VESC-Tool-style curve, then a slew limit toward the target
 ; (replaces the ADC app's pos/neg ramping), then RELATIVE current — scales live
 ; with l-current-max × profile scale and the thermal derating, so changing
@@ -414,14 +400,15 @@
     (let ((target (if (> thr 0.05)
                       (throttle-curve thr thr-curve-accel 0.0 thr-curve-mode)
                       0.0)))
-        (setq out-rel (slew out-rel target ramp-pos-s ramp-neg-s)))
+        (setq out-rel (slew out-rel target (ramp-pos) (ramp-neg))))
     (set-current-rel out-rel 0.2)
 })
-; Brake output, same shape: slewed so grabbing the lever is a fast ramp, not an
-; instant regen hit, and releasing it tails off instead of stepping to 0.
+; Brake output, same shape and same ADC ramp times (the stock ADC app ramped
+; the brake with them too): grabbing the lever is a fast ramp, not an instant
+; regen hit, and releasing it tails off instead of stepping to 0.
 (defun brake-out (brk) {
     (let ((target (if (> brk 0.05) brk 0.0)))
-        (setq brk-rel (slew brk-rel target brk-ramp-pos-s brk-ramp-neg-s)))
+        (setq brk-rel (slew brk-rel target (ramp-pos) (ramp-neg))))
     (set-brake-rel brk-rel)
 })
 ; Cruise output: PI on ERPM error → current. Integrator anti-windup-clamped to
