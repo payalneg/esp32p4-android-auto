@@ -4,15 +4,21 @@
 (def tx-button-state 1)
 ; Motor arbiter state (motor-control-loop). setq'd at runtime → above @const.
 (def out-rel 0.0)     ; throttle slew-limiter state (relative current 0..1)
+(def brk-rel 0.0)     ; brake slew-limiter state (relative brake current 0..1)
 (def cruise-i 0.0)    ; cruise PI integrator (A), seeded on activation (bumpless)
 (def armed 0)         ; safe-start: throttle must be seen released once after boot
 (def cruise-kp 0.02)  ; cruise PI: A per ERPM of error (tune via panel)
 (def cruise-ki 0.05)  ; cruise PI: A/s per ERPM of error (tune via panel)
-; Throttle feel constants (setq'd never, but kept here with the other knobs).
+; Throttle/brake feel knobs. ctl-dt is the arbiter tick — 100 Hz like Vedder's
+; vl_bike pkg: at 20 Hz the ramp advanced in 12.5%-of-max current steps, which
+; the FOC loop executes instantly → felt like jerks, not a ramp.
+(def ctl-dt 0.01)          ; arbiter period (s)
 (def thr-curve-accel 0.0)  ; throttle-curve accel const, -1..1 (0 = linear)
 (def thr-curve-mode 0)     ; 0 exponential, 1 natural, 2 polynomial
-(def ramp-pos-s 0.4)       ; seconds from 0 to full throttle (like ADC-app ramp+)
-(def ramp-neg-s 0.2)       ; seconds from full throttle to 0 (like ADC-app ramp-)
+(def ramp-pos-s 0.4)       ; seconds 0 → full throttle (tune via panel)
+(def ramp-neg-s 0.2)       ; seconds full throttle → 0 (tune via panel)
+(def brk-ramp-pos-s 0.2)   ; seconds 0 → full brake (fast but not a hit)
+(def brk-ramp-neg-s 0.1)   ; seconds full brake → 0
 (def current-profile 0)
 (def num-profiles 3)
 (def first-profile-init 1)
@@ -20,7 +26,7 @@
 (def throttle-on 1)
 (def tc-on 0)
 (def tc-sens 50.0)
-(def pbuf (bufcreate 192)) ; UI descriptor is ~156 B with 7 controls — keep headroom
+(def pbuf (bufcreate 256)) ; UI descriptor is ~212 B with 9 controls — keep headroom
 (def pi 0)
 (def beep-vol-addr 0)
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
@@ -238,17 +244,23 @@
     (pi32 0) (pi32 200000) (pi32 1000) (pi32 (* cruise-kp 1000000)) (pstr "m")
     (pu8 9) (pu8 3) (pstr "Cruise Ki")
     (pi32 0) (pi32 500000) (pi32 5000) (pi32 (* cruise-ki 1000000)) (pstr "m")
+    (pu8 10) (pu8 3) (pstr "Ramp Up")
+    (pi32 100) (pi32 2000) (pi32 50) (pi32 (* ramp-pos-s 1000)) (pstr "s")
+    (pu8 11) (pu8 3) (pstr "Ramp Down")
+    (pi32 100) (pi32 2000) (pi32 50) (pi32 (* ramp-neg-s 1000)) (pstr "s")
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-state (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 6)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 8)
     (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
     (pu8 5) (pi32 (* beep-vol 1000))
     (pu8 6) (pi32 (* (if (= playing-idx 0) 1 0) 1000))
     (pu8 7) (pi32 (* melody-vol 1000))
     (pu8 8) (pi32 (* cruise-kp 1000000))
     (pu8 9) (pi32 (* cruise-ki 1000000))
+    (pu8 10) (pi32 (* ramp-pos-s 1000))
+    (pu8 11) (pi32 (* ramp-neg-s 1000))
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-dash (reply-id) {
@@ -339,7 +351,10 @@
         })
         ; val arrives as wire/1000 = milli-gain; engineering gain = val/1000.
         ((= cid 8) (setq cruise-kp (/ val 1000.0)))
-        ((= cid 9) (setq cruise-ki (/ val 1000.0))))
+        ((= cid 9) (setq cruise-ki (/ val 1000.0)))
+        ; Ramp times arrive as seconds directly (wire = s × 1000).
+        ((= cid 10) (setq ramp-pos-s (clampf val 0.05 5.0)))
+        ((= cid 11) (setq ramp-neg-s (clampf val 0.05 5.0))))
 })
 (defun panel-handle (data) {
     (if (and (>= (buflen data) 4)
@@ -384,16 +399,30 @@
     })
 })
 (defun clampf (v lo hi) (if (< v lo) lo (if (> v hi) hi v)))
+; Slew v toward target: up at 1/pos-s per second, down at 1/neg-s per second.
+(defun slew (v target pos-s neg-s)
+    (if (> target v)
+        (clampf (+ v (/ ctl-dt pos-s)) 0.0 target)
+        (clampf (- v (/ ctl-dt neg-s)) target 1.0)))
 ; Throttle output: VESC-Tool-style curve, then a slew limit toward the target
 ; (replaces the ADC app's pos/neg ramping), then RELATIVE current — scales live
 ; with l-current-max × profile scale and the thermal derating, so changing
-; Motor Current Max in VESC Tool takes effect immediately.
+; Motor Current Max in VESC Tool takes effect immediately. A released throttle
+; (thr <= 0.05) ramps DOWN through the same slew — the arbiter keeps calling
+; this until out-rel reaches 0 instead of cutting the current instantly.
 (defun throttle-out (thr) {
-    (let ((target (throttle-curve thr thr-curve-accel 0.0 thr-curve-mode)))
-        (if (> target out-rel)
-            (setq out-rel (clampf (+ out-rel (/ 0.05 ramp-pos-s)) 0.0 target))
-            (setq out-rel (clampf (- out-rel (/ 0.05 ramp-neg-s)) target 1.0))))
+    (let ((target (if (> thr 0.05)
+                      (throttle-curve thr thr-curve-accel 0.0 thr-curve-mode)
+                      0.0)))
+        (setq out-rel (slew out-rel target ramp-pos-s ramp-neg-s)))
     (set-current-rel out-rel 0.2)
+})
+; Brake output, same shape: slewed so grabbing the lever is a fast ramp, not an
+; instant regen hit, and releasing it tails off instead of stepping to 0.
+(defun brake-out (brk) {
+    (let ((target (if (> brk 0.05) brk 0.0)))
+        (setq brk-rel (slew brk-rel target brk-ramp-pos-s brk-ramp-neg-s)))
+    (set-brake-rel brk-rel)
 })
 ; Cruise output: PI on ERPM error → current. Integrator anti-windup-clamped to
 ; the live limit (l-current-max × profile scale, both read fresh each tick so a
@@ -403,10 +432,10 @@
     (let ((err (- cruise-rpm (get-rpm)))
           (imax (* (conf-get 'l-current-max) (conf-get 'l-current-max-scale)))) {
         (if (>= cruise-rpm 0) {
-            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err 0.05)) 0.0 imax))
+            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err ctl-dt)) 0.0 imax))
             (set-current (clampf (+ (* cruise-kp err) cruise-i) 0.0 imax) 0.2)
         } {
-            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err 0.05)) (- imax) 0.0))
+            (setq cruise-i (clampf (+ cruise-i (* cruise-ki err ctl-dt)) (- imax) 0.0))
             (set-current (clampf (+ (* cruise-kp err) cruise-i) (- imax) 0.0) 0.2)
         })
     })
@@ -427,16 +456,21 @@
             ; Safe start: no output until the throttle has been seen released
             ; once (protects against a stuck/held throttle at script start).
             (if (< thr 0.05) (setq armed 1))
+            (if (= armed 0) (setq thr 0.0))
+            ; A branch stays selected while its slew tails off (out-rel /
+            ; brk-rel > 0), so releasing throttle or brake ramps down smoothly
+            ; instead of stepping the current to 0.
             (cond
                 ((= throttle-on 0) {          ; panel master switch — coast
                     (setq out-rel 0.0)
+                    (setq brk-rel 0.0)
                     (set-current 0) })
-                ((> brake 0.05) {             ; 1. brake — full range, unscaled
-                    (deactivate-cruise-control)
-                    (setq out-rel 0.0)
-                    (set-brake-rel brake) })
-                ((and (> thr 0.05) (= armed 1)) {  ; 2. throttle
-                    (deactivate-cruise-control)
+                ((or (> brake 0.05) (> brk-rel 0.001)) {  ; 1. brake
+                    (if (> brake 0.05) (deactivate-cruise-control))
+                    (setq out-rel 0.0)        ; throttle cut is fine under brake
+                    (brake-out brake) })      ; full range, never profile-scaled
+                ((or (> thr 0.05) (> out-rel 0.001)) {    ; 2. throttle
+                    (if (> thr 0.05) (deactivate-cruise-control))
                     (throttle-out thr) })
                 ((= cruise-active 1)          ; 3. cruise (PI → current)
                     (cruise-out))
@@ -445,11 +479,10 @@
                     ; Stale setpoint (sensor/link dropped) falls through to
                     ; coast — the P4 watchdog also sends an explicit 0.
                     (set-current pas-amps 0.2))  ; fw clamps to lo_current_max
-                (t {                          ; 5. coast
-                    (setq out-rel 0.0)
-                    (set-current 0) }))
+                (t                            ; 5. coast
+                    (set-current 0)))
         })
-        (sleep 0.05)
+        (sleep ctl-dt)
     })
 })
 (defun panel-on-shutdown () {
