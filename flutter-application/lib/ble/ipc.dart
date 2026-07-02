@@ -18,6 +18,7 @@ class IpcCmd {
   static const readOtaInfo = 'readOtaInfo';
   static const bleOta = 'bleOta'; // {model}
   static const reloadFilter = 'reloadFilter';
+  static const bleRestart = 'bleRestart'; // force a clean reconnect
 
   // File manager.
   static const fileList = 'fileList'; // {path}
@@ -27,6 +28,14 @@ class IpcCmd {
   static const fileDelete = 'fileDelete'; // {path}
   static const fileMkdir = 'fileMkdir'; // {path}
   static const fileRename = 'fileRename'; // {src, dst}
+
+  // LISP editor (VESC over the NUS bridge).
+  static const lispRead = 'lispRead'; // → reply {code}
+  static const lispUpload = 'lispUpload'; // {code, run}
+  static const lispRun = 'lispRun';
+  static const lispStop = 'lispStop';
+  static const lispStatsStart = 'lispStatsStart'; // begin GET_STATS polling
+  static const lispStatsStop = 'lispStatsStop';
 }
 
 /// task → UI: every message carries `t`.
@@ -37,6 +46,7 @@ class IpcEvt {
   static const progress = 'progress'; // {id, frac}
   static const otaUpload = 'otaUpload'; // {id, frac}
   static const otaVerify = 'otaVerify'; // {id}
+  static const lispStats = 'lispStats'; // {stats} — unsolicited, while polling
 }
 
 /// Error `kind`s carried on an [IpcEvt.err]: lets the proxy rebuild the right
@@ -44,4 +54,5 @@ class IpcEvt {
 class IpcErrKind {
   static const generic = 'generic';
   static const fileOp = 'fileOp'; // → FileOpException(key, notReady)
+  static const lispOp = 'lispOp'; // → LispException(key)
 }

@@ -53,6 +53,11 @@ class BleService {
   // Present together; drive the device file browser (see FileManager).
   BluetoothCharacteristic? _fileCtrl;
   BluetoothCharacteristic? _fileData;
+  // Optional — the head unit's separate Nordic UART Service (VESC-Tool bridge).
+  // Present together; drive the LISP editor (see lib/ble/vesc/). Absent on
+  // firmware without the bridge.
+  BluetoothCharacteristic? _nusRx;
+  BluetoothCharacteristic? _nusTx;
   Timer? _clockTimer;
   StreamSubscription<List<int>>? _outSub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
@@ -226,6 +231,17 @@ class BleService {
       if (u == NotifBridgeUuids.charOtaData) _otaData = c;
       if (u == NotifBridgeUuids.charFileCtrl) _fileCtrl = c;
       if (u == NotifBridgeUuids.charFileData) _fileData = c;
+    }
+    // Separate NUS service (VESC-Tool bridge) for the LISP editor — optional.
+    _nusRx = null;
+    _nusTx = null;
+    for (final s in services) {
+      if (s.uuid.toString().toLowerCase() != NusUuids.service) continue;
+      for (final c in s.characteristics) {
+        final u = c.uuid.toString().toLowerCase();
+        if (u == NusUuids.rx) _nusRx = c;
+        if (u == NusUuids.tx) _nusTx = c;
+      }
     }
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
@@ -495,6 +511,39 @@ class BleService {
     // may re-pair right away. The notification just flips to "disconnected".
   }
 
+  /// User-initiated "restart BLE" — force a clean reconnect of the saved
+  /// device without forgetting it. Unsticks a wedged GATT link (e.g. the app
+  /// can't tell which board is connected because a stale service cache handed
+  /// back the wrong attributes): drop the link, flush the Android GATT cache
+  /// so discovery re-runs, then re-attach. No-op if no device is paired.
+  Future<void> restart() async {
+    final id = _savedRemoteId;
+    if (id == null) return;
+    _userInitiatedDisconnect = false;
+    _handshaking = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempt = 0;
+    _clockTimer?.cancel();
+    await _outSub?.cancel();
+    _outSub = null;
+    await _connSub?.cancel();
+    _connSub = null;
+    _setState(BleConnState.connecting);
+    final dev = _device;
+    if (dev != null && Platform.isAndroid) {
+      try {
+        await dev.clearGattCache();
+      } catch (_) {}
+    }
+    try {
+      await dev?.disconnect();
+    } catch (_) {}
+    // Let the OS tear the ACL link fully down before re-arming autoConnect.
+    await Future.delayed(const Duration(milliseconds: 500));
+    _attachKnownDevice(id);
+  }
+
   Future<void> _teardown() async {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -518,16 +567,25 @@ class BleService {
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;
+    _nusRx = null;
+    _nusTx = null;
     _setState(BleConnState.idle);
   }
 
   /// Whether the connected head unit exposes the file manager (...0009/...000a).
   bool get supportsFileManager => _fileCtrl != null && _fileData != null;
 
+  /// Whether the connected head unit exposes the NUS bridge (LISP editor).
+  bool get supportsLisp => _nusRx != null && _nusTx != null;
+
   /// File-manager characteristics + link facts for FileManager. Null/false
   /// when not connected or unsupported.
   BluetoothCharacteristic? get fileCtrlChar => _fileCtrl;
   BluetoothCharacteristic? get fileDataChar => _fileData;
+
+  /// NUS bridge characteristics for the LISP editor (see lib/ble/vesc/).
+  BluetoothCharacteristic? get nusRxChar => _nusRx;
+  BluetoothCharacteristic? get nusTxChar => _nusTx;
   bool get isConnected => _state == BleConnState.connected;
   int get negotiatedMtu => _device?.mtuNow ?? 247;
 
