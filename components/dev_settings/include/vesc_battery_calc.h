@@ -65,6 +65,16 @@ void  battery_calc_voltage_boot_check(float v_in);
 /* Remaining capacity in Ah — useful for range estimation. */
 float battery_calc_get_remaining_ah(void);
 
+/* Snapshot for the trip log: remaining Ah + the reset epoch, taken atomically.
+ * Stamped into every 10 s trip record so the smart-battery state persists via
+ * the (pre-erased, GC-free) triplog partition instead of periodic NVS writes. */
+void  battery_calc_get_persist(float *remaining_ah, uint32_t *epoch);
+
+/* Boot-time seed from the newest trip-log record. Accepted only when `epoch`
+ * matches the NVS reset epoch — a mismatch means a reset/capacity change
+ * happened after that record, and the NVS value written by the reset wins. */
+void  battery_calc_seed_remaining(float remaining_ah, uint32_t epoch);
+
 #ifdef __cplusplus
 }
 #endif
