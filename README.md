@@ -122,14 +122,12 @@ are the same on both boards.
 
 ### 1. Power chain
 
-```mermaid
-flowchart LR
-    BAT["🔋 12V battery<br/>/ VESC bus"]
-    DCDC["DC-DC<br/>12V → 5V<br/>≥1 A"]
-    P4["Waveshare<br/>ESP32-P4 board<br/>(USB-C / 5V pin)"]
-    V3V3["3V3 rail<br/>(J3 header)"]
-    WROOM["(optional)<br/>WROOM 3V3 pin"]
-    BAT -->|+12V| DCDC -->|+5V| P4 -->|on-board LDO| V3V3 --> WROOM
+```text
+ 12 V battery        ┌────────────┐       ┌──────────────────┐        ┌────────────┐
+ (VESC bus)  ───────▶│   DC-DC    │──────▶│  ESP32-P4 board  │───────▶│ WROOM 3V3  │
+              +12 V  │ 12 V → 5 V │ +5 V  │  USB-C / 5V pin  │  3V3   │ (optional) │
+                     │   ≥ 1 A    │       │  (on-board LDO)  │  (J3)  └────────────┘
+                     └────────────┘       └──────────────────┘
 ```
 
 > ⚠️ If you wire up a D1 Mini for the AA bonus, **power it from the P4's
@@ -139,38 +137,20 @@ flowchart LR
 
 ### 2. VESC CAN bus (primary)
 
-```mermaid
-flowchart LR
-    subgraph P4["ESP32-P4 (3.3V GPIO)"]
-        direction TB
-        P48(["GPIO 48 — TWAI TX (output)"])
-        P47(["GPIO 47 — TWAI RX (input)"])
-        P5V(["5V"])
-        PGND(["GND"])
-    end
-
-    subgraph XCVR["TJA1051 (prefer T/3 variant)"]
-        direction TB
-        TXD(["TXD (input)"])
-        RXD(["RXD (output)"])
-        VCC(["VCC"])
-        XGND(["GND"])
-        CANH(["CANH"])
-        CANL(["CANL"])
-    end
-
-    subgraph BUS["CAN bus"]
-        VESC["VESC controller"]
-        TERM["120Ω resistor<br/>across CANH ↔ CANL"]
-    end
-
-    P48 -->|"3.3V drives TXD directly"| TXD
-    RXD -->|"5V — divider 1.8k + 3.3k → 3.3V"| P47
-    P5V --> VCC
-    PGND --- XGND
-    CANH <--> VESC
-    CANL <--> VESC
-    CANH -.- TERM -.- CANL
+```text
+  ESP32-P4                        TJA1051 (prefer T/3)        CAN bus
+ ┌─────────────────┐            ┌───────────────┐
+ │                 │            │               │
+ │ GPIO 48 (TX) ───┼───────────▶│ TXD           │           ┌─────────────┐
+ │                 │            │               │           │             │
+ │ GPIO 47 (RX) ◀──┼─┬─[1.8kΩ]──┤ RXD      CANH ├─────┬─────┤ CANH        │
+ │                 │ │          │               │  [120 Ω]  │    VESC     │
+ │                 │[3.3kΩ]     │          CANL ├─────┴─────┤ CANL        │
+ │                 │ │          │               │           │             │
+ │            GND ─┼─┴──────────┤ GND           │           └─────────────┘
+ │                 │            │               │
+ │             5V ─┼───────────▶│ VCC           │
+ └─────────────────┘            └───────────────┘
 ```
 
 Pin direction is from the MCU's perspective (NXP convention): on the
@@ -178,6 +158,14 @@ TJA1051, **TXD is an input** (MCU drives it), **RXD is an output**
 (transceiver drives the MCU).
 
 - **Divider values on RXD**: 1.8 kΩ (series) + 3.3 kΩ (to GND) — or 10 kΩ + 18 kΩ.
+  The TJA1051 runs off 5 V, so its RXD swings to 5 V — the divider brings it
+  down to a P4-safe 3.3 V. TXD needs nothing: 3.3 V from the P4 drives it fine.
+- **120 Ω terminator** across CANH ↔ CANL is **required** — a CAN bus without
+  termination works flaky or not at all. Most TJA1051 breakout modules already
+  have it soldered on board (look for a resistor marked `121` between the CANH
+  and CANL terminals, or measure CANH↔CANL with the module unpowered: ~120 Ω =
+  present, open = missing). If your module doesn't have it, **solder a 120 Ω
+  resistor across CANH ↔ CANL** as shown in the diagram.
 - **TJA1051 vs TJA1051T/3**: if you can choose, get the **T/3** variant — it
   has a dedicated `VIO` pin you can tie to 3.3 V and you can skip the divider
   entirely on RXD.
@@ -218,34 +206,16 @@ What you get on a dual board:
 The P4 board exposes a `J3` header on the bottom edge with the free expansion
 pins. The USB-C debug console (GPIO 37/38) stays usable while this is wired up.
 
-```mermaid
-flowchart LR
-    subgraph WROOM["ESP32-WROOM-32<br/>(bare module or D1 Mini dev board)"]
-        direction TB
-        W1(["GPIO 1 (TX0) — UART TX (out)"])
-        W3(["GPIO 3 (RX0) — UART RX (in)"])
-        WEN(["EN — chip reset (input)"])
-        WIO0(["GPIO 0 — BOOT-mode select (input)"])
-        W3V3(["3V3 (power in)"])
-        WGND(["GND"])
-    end
-
-    subgraph P4J3["ESP32-P4 (J3 header)"]
-        direction TB
-        P22(["GPIO 22 — UART1 TX (out)"])
-        P21(["GPIO 21 — UART1 RX (in)"])
-        P24(["GPIO 24 — drives WROOM RST"])
-        P25(["GPIO 25 — drives WROOM IO0"])
-        P3V3(["3V3 out"])
-        PGND(["GND"])
-    end
-
-    P22 -->|UART data| W3
-    W1 -->|UART data| P21
-    P24 -->|reset pulse| WEN
-    P25 -->|boot select| WIO0
-    P3V3 -->|3.3V power| W3V3
-    PGND --- WGND
+```text
+  ESP32-P4 (J3 header)             ESP32-WROOM-32 / D1 Mini
+ ┌─────────────────────┐          ┌─────────────────────────┐
+ │ GPIO 22 (UART1 TX) ─┼─────────▶│ GPIO 3 (RX0)            │
+ │ GPIO 21 (UART1 RX) ◀┼──────────┤ GPIO 1 (TX0)            │
+ │ GPIO 24 ────────────┼─────────▶│ EN     — chip reset     │
+ │ GPIO 25 ────────────┼─────────▶│ GPIO 0 — boot select    │
+ │ 3V3 (out) ──────────┼─────────▶│ 3V3    — power in       │
+ │ GND ────────────────┼──────────┤ GND                     │
+ └─────────────────────┘          └─────────────────────────┘
 ```
 
 `EN` / `GPIO 0` are the standard ESP32 reset + boot-mode pins — same combo
