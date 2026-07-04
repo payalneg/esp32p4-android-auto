@@ -17,6 +17,10 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "vesc_trip_persist.h"
@@ -28,6 +32,7 @@ static const char *TAG = "batt_calc";
 #define KEY_REMAINING_AH          "remaining_ah"
 #define KEY_LAST_VIN              "last_vin"
 #define KEY_LAST_CAPACITY         "last_capacity"
+#define KEY_RESET_EPOCH           "reset_epoch"
 
 /* Charge/swap heuristic: compare the pack voltage saved at the previous
  * power-on against this boot's voltage. A jump up of more than this (percent,
@@ -43,9 +48,14 @@ static const char *TAG = "batt_calc";
  * up): skip the boot check and retry on the next tick. */
 #define VIN_VALID_MIN             1.0f
 
-/* NVS write throttle. Flushing every tick would wear flash and hurt
- * latency for no benefit. 30 s matches the Arduino original. */
-#define SAVE_INTERVAL_US          (30ULL * 1000 * 1000)
+/* NVS write throttle. The primary persistence path is now the trip log: every
+ * 10 s record carries remaining_ah + reset epoch (written into pre-erased
+ * triplog sectors — no NVS page churn, no GC erase). NVS here is only the
+ * fallback for when the triplog is absent/dead, so a long interval is fine.
+ * (At the old 30 s cadence the 6-entry save filled a 126-entry NVS page every
+ * ~10 min → a GC page-copy + 4 KB erase stalling both cores' cache that
+ * often.) */
+#define SAVE_INTERVAL_US          (600ULL * 1000 * 1000)
 
 static bool     s_initialized;
 static float    s_remaining_ah;
@@ -56,31 +66,81 @@ static bool     s_first_calculation = true;
 static bool     s_capacity_changed_flag;
 static int64_t  s_last_save_us;
 static bool     s_vin_boot_checked;       /* voltage charge-detect runs once per boot */
+/* Bumped on every reset / capacity change and stamped into trip-log records.
+ * On boot the trip log offers its last record's remaining_ah as a seed; it is
+ * accepted only if the record's epoch matches ours — otherwise a reset
+ * happened after that record was written and the NVS value is the truth. */
+static uint32_t s_reset_epoch;
 
 static esp_err_t open_rw(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READWRITE, h); }
 static esp_err_t open_ro(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READONLY,  h); }
 
-static void save_state(void)
+/* Deferred NVS writer. nvs_commit costs ~100 ms on this board (flash suspend
+ * unavailable, so a flash write stalls cache on both cores — see
+ * sdkconfig.defaults), and the percentage getters run on the LVGL thread and
+ * inside the AA video frame draw: committing there freezes rendering, touch
+ * and the video pipe. The getters only snapshot values into this queue; a
+ * low-priority task does the actual flash I/O (same pattern as trip_log). */
+typedef struct {
+    bool     is_state;      /* true: remaining_ah + capacity, false: v_in */
+    bool     with_epoch;    /* also persist the reset epoch (reset paths only) */
+    float    remaining_ah;
+    float    capacity;
+    float    v_in;
+    uint32_t epoch;
+} save_msg_t;
+
+static QueueHandle_t     s_save_q;
+/* Recursive: the getters are called from the LVGL thread AND the AA video
+ * task, and the public functions nest (voltage_boot_check → reset_trip_and_ah
+ * → reset). */
+static SemaphoreHandle_t s_lock;
+
+static void lock(void)   { if (s_lock) xSemaphoreTakeRecursive(s_lock, portMAX_DELAY); }
+static void unlock(void) { if (s_lock) xSemaphoreGiveRecursive(s_lock); }
+
+static void save_task(void *arg)
 {
-    nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) {
-        ESP_LOGW(TAG, "open RW failed — state not saved");
-        return;
+    (void)arg;
+    save_msg_t m;
+    for (;;) {
+        if (xQueueReceive(s_save_q, &m, portMAX_DELAY) != pdTRUE) continue;
+        nvs_handle_t h;
+        if (open_rw(&h) != ESP_OK) {
+            ESP_LOGW(TAG, "open RW failed — state not saved");
+            continue;
+        }
+        if (m.is_state) {
+            nvs_set_blob(h, KEY_REMAINING_AH,  &m.remaining_ah, sizeof(m.remaining_ah));
+            nvs_set_blob(h, KEY_LAST_CAPACITY, &m.capacity,     sizeof(m.capacity));
+        } else {
+            nvs_set_blob(h, KEY_LAST_VIN, &m.v_in, sizeof(m.v_in));
+        }
+        if (m.with_epoch) nvs_set_u32(h, KEY_RESET_EPOCH, m.epoch);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGD(TAG, "saved: %s", m.is_state ? "state" : "vin");
     }
-    nvs_set_blob(h, KEY_REMAINING_AH,  &s_remaining_ah,        sizeof(s_remaining_ah));
-    nvs_set_blob(h, KEY_LAST_CAPACITY, &s_last_saved_capacity, sizeof(s_last_saved_capacity));
-    nvs_commit(h);
-    nvs_close(h);
-    ESP_LOGD(TAG, "state saved: %.2f Ah of %.1f Ah", s_remaining_ah, s_last_saved_capacity);
+}
+
+/* Enqueue-only; called with s_lock held. If the queue is momentarily full the
+ * save is skipped — the next throttled tick retries with fresher values. */
+static void save_state(bool with_epoch)
+{
+    save_msg_t m = { .is_state     = true,
+                     .with_epoch   = with_epoch,
+                     .remaining_ah = s_remaining_ah,
+                     .capacity     = s_last_saved_capacity,
+                     .epoch        = s_reset_epoch };
+    if (!s_save_q || xQueueSend(s_save_q, &m, 0) != pdTRUE)
+        ESP_LOGW(TAG, "save queue unavailable — state save skipped");
 }
 
 static void save_vin(float v_in)
 {
-    nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
-    nvs_set_blob(h, KEY_LAST_VIN, &v_in, sizeof(v_in));
-    nvs_commit(h);
-    nvs_close(h);
+    save_msg_t m = { .is_state = false, .v_in = v_in };
+    if (!s_save_q || xQueueSend(s_save_q, &m, 0) != pdTRUE)
+        ESP_LOGW(TAG, "save queue unavailable — vin save skipped");
 }
 
 static bool load_state(void)
@@ -93,6 +153,7 @@ static bool load_state(void)
     float cap = -1.0f;
     nvs_get_blob(h, KEY_REMAINING_AH,  &rem, &sz); sz = sizeof(float);
     nvs_get_blob(h, KEY_LAST_CAPACITY, &cap, &sz);
+    nvs_get_u32(h, KEY_RESET_EPOCH, &s_reset_epoch);   /* stays 0 if never saved */
     nvs_close(h);
 
     if (rem < 0.0f) {
@@ -120,17 +181,29 @@ static bool load_vin(float *out)
 
 void battery_calc_init(void)
 {
+    if (!s_lock) s_lock = xSemaphoreCreateRecursiveMutex();
+    if (!s_save_q) {
+        s_save_q = xQueueCreate(4, sizeof(save_msg_t));
+        if (!s_save_q || xTaskCreate(save_task, "batt_sav", 4096, NULL, 2, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "save task/queue init failed — battery state won't persist");
+            if (s_save_q) { vQueueDelete(s_save_q); s_save_q = NULL; }
+        }
+    }
+
+    lock();
     s_initialized           = load_state();
     s_last_net_ah           = 0.0f;
     s_first_calculation     = true;
     s_capacity_changed_flag = false;
     s_last_save_us          = 0;
     s_vin_boot_checked      = false;
+    unlock();
     ESP_LOGI(TAG, "init (initialized=%d)", s_initialized);
 }
 
 void battery_calc_reset(float current_battery_percent, float battery_capacity)
 {
+    lock();
     /* Original semantics: reset always lands at full pack, not at the
      * controller %. The whole point of smart calc is to be more accurate
      * than the voltage-based controller estimate, so treating reset as
@@ -142,15 +215,20 @@ void battery_calc_reset(float current_battery_percent, float battery_capacity)
     s_first_calculation       = true;
     s_capacity_changed_flag   = false;
     s_initialized             = true;
-    save_state();
-    ESP_LOGI(TAG, "reset: %.1f%% = %.2f Ah of %.1f Ah",
-             current_battery_percent, s_remaining_ah, battery_capacity);
+    /* New epoch: trip-log records written before this reset must not seed
+     * remaining_ah on the next boot — the NVS value saved here wins. */
+    s_reset_epoch++;
+    save_state(true);
+    unlock();
+    ESP_LOGI(TAG, "reset: %.1f%% = %.2f Ah of %.1f Ah (epoch %u)",
+             current_battery_percent, s_remaining_ah, battery_capacity,
+             (unsigned)s_reset_epoch);
 }
 
-float battery_calc_get_smart_percentage(float controller_battery_level,
-                                        float controller_amp_hours,
-                                        float controller_amp_hours_charged,
-                                        float battery_capacity)
+static float smart_percentage_locked(float controller_battery_level,
+                                     float controller_amp_hours,
+                                     float controller_amp_hours_charged,
+                                     float battery_capacity)
 {
     if (battery_capacity <= 0.0f) {
         ESP_LOGW(TAG, "invalid capacity %.1f — falling back to direct", battery_capacity);
@@ -218,9 +296,23 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
 
     int64_t now_us = esp_timer_get_time();
     if (now_us - s_last_save_us >= SAVE_INTERVAL_US) {
-        save_state();
+        save_state(false);
         s_last_save_us = now_us;
     }
+    return pct;
+}
+
+float battery_calc_get_smart_percentage(float controller_battery_level,
+                                        float controller_amp_hours,
+                                        float controller_amp_hours_charged,
+                                        float battery_capacity)
+{
+    lock();
+    float pct = smart_percentage_locked(controller_battery_level,
+                                        controller_amp_hours,
+                                        controller_amp_hours_charged,
+                                        battery_capacity);
+    unlock();
     return pct;
 }
 
@@ -248,13 +340,16 @@ bool battery_calc_is_initialized(void)
 
 void battery_calc_capacity_changed(void)
 {
+    lock();
     s_capacity_changed_flag = true;
+    unlock();
     ESP_LOGI(TAG, "capacity change flagged");
 }
 
 void battery_calc_reset_trip_and_ah(void)
 {
     trip_persist_reset();
+    lock();
     /* Smart % is consumption-based (remaining_ah / capacity); zeroing the
      * consumed capacity treats the pack as full again, so the percentage
      * returns to 100 %. battery_calc_reset() always lands at full pack.
@@ -263,6 +358,7 @@ void battery_calc_reset_trip_and_ah(void)
     float cap = (s_last_saved_capacity > 0.1f) ? s_last_saved_capacity
                                                : settings_get_battery_capacity();
     battery_calc_reset(s_last_controller_percent, cap);
+    unlock();
     ESP_LOGI(TAG, "reset_trip_and_ah → trip + battery to full (%.1f Ah)", cap);
 }
 
@@ -275,6 +371,9 @@ void battery_calc_voltage_boot_check(float v_in)
      * baseline. Independent of the Direct/Smart percentage path. */
     if (s_vin_boot_checked) return;
     if (v_in < VIN_VALID_MIN) return;   /* ESC not really up yet — retry next tick */
+
+    lock();
+    if (s_vin_boot_checked) { unlock(); return; }   /* lost the race — already done */
 
     float saved = 0.0f;
     if (load_vin(&saved)) {
@@ -293,9 +392,51 @@ void battery_calc_voltage_boot_check(float v_in)
 
     save_vin(v_in);            /* baseline for the next power-on */
     s_vin_boot_checked = true;
+    unlock();
 }
 
 float battery_calc_get_remaining_ah(void)
 {
-    return s_remaining_ah;
+    lock();
+    float rem = s_remaining_ah;
+    unlock();
+    return rem;
+}
+
+void battery_calc_get_persist(float *remaining_ah, uint32_t *epoch)
+{
+    lock();
+    if (remaining_ah) *remaining_ah = s_remaining_ah;
+    if (epoch)        *epoch        = s_reset_epoch;
+    unlock();
+}
+
+void battery_calc_seed_remaining(float remaining_ah, uint32_t epoch)
+{
+    lock();
+    if (!s_initialized) {
+        /* No NVS state at all → no capacity/epoch baseline to validate the
+         * seed against; let the first calculation seed from the controller. */
+        unlock();
+        ESP_LOGI(TAG, "seed skipped — no saved state");
+        return;
+    }
+    if (epoch != s_reset_epoch) {
+        /* A reset/capacity change happened after this record was written;
+         * the NVS value saved by that reset is the fresher truth. */
+        unlock();
+        ESP_LOGI(TAG, "seed skipped — epoch %u != %u (reset since)",
+                 (unsigned)epoch, (unsigned)s_reset_epoch);
+        return;
+    }
+    if (remaining_ah < 0.0f ||
+        (s_last_saved_capacity > 0.0f && remaining_ah > s_last_saved_capacity + 0.01f)) {
+        unlock();
+        ESP_LOGW(TAG, "seed skipped — implausible %.2f Ah", remaining_ah);
+        return;
+    }
+    s_remaining_ah = remaining_ah;
+    unlock();
+    ESP_LOGI(TAG, "seeded from trip log: %.2f Ah remain (epoch %u)",
+             remaining_ah, (unsigned)epoch);
 }

@@ -8,11 +8,15 @@
  *
  * Erase strategy: a flash erase stalls the LVGL render task (cache off for all
  * cores; the DSI DMA keeps the last frame from PSRAM so no blackout, but a
- * visible hitch). To keep erases off the ride, the writer pre-erases a runway
- * of sectors AHEAD on boot (BOOT_PREERASE_SECTORS ≈ 11 h of logging). Then,
- * before crossing into each fresh sector, it checks whether that sector is
- * already clean (the runway made it so) and erases only if it is not — so a
- * mid-ride erase happens at most once the runway is exhausted.
+ * visible hitch). To keep erases off the ride, the writer maintains a runway
+ * of pre-erased sectors AHEAD of the head (RUNWAY_TARGET_SECTORS ≈ 11 h of
+ * logging). At boot only a minimal runway is guaranteed (RUNWAY_BOOT_MIN — the
+ * old erase-64-sectors-up-front made every cold boot after a long ride jerky
+ * for seconds); the rest is trickled in one sector at a time from the writer's
+ * idle loop, and only while the bike is standing still (speed ~0 or no ESC),
+ * so the ~50 ms cache-stall of each erase never lands mid-ride. Before
+ * crossing into a fresh sector the writer still checks it is clean and erases
+ * just-in-time if not — that only happens if the runway was exhausted.
  *
  * All flash I/O runs on a dedicated low-priority writer task; trip_log_tick()
  * (called from the UI updater) only builds a record and queues it.
@@ -23,6 +27,7 @@
 #include "vesc_battery_calc.h"
 #include "vesc_head2.h"
 #include "vesc_can/crc.h"
+#include "vesc_can/vesc_rt_data.h"
 
 #include "esp_log.h"
 #include "esp_partition.h"
@@ -39,7 +44,7 @@ static const char *TAG = "trip_log";
 
 #define TRIPLOG_LABEL      "triplog"
 #define REC_MAGIC          0x5452       /* "TR" */
-#define REC_VER            2            /* v2 adds 2nd-head temps in the reserved area */
+#define REC_VER            3            /* v2: 2nd-head temps; v3: smart-battery state */
 #define REC_TYPE_SAMPLE    0
 #define REC_TYPE_TRIP_START 1
 #define REC_SIZE           64
@@ -48,7 +53,9 @@ static const char *TAG = "trip_log";
 #define SAMPLE_INTERVAL_US (10ULL * 1000 * 1000)
 #define QUEUE_DEPTH        8
 #define MAX_TRIPS          50          /* logical history window, enforced at boot only */
-#define BOOT_PREERASE_SECTORS 64       /* runway erased ahead at boot (~11 h of log) */
+#define RUNWAY_TARGET_SECTORS 64       /* clean sectors kept ahead of the head (~11 h) */
+#define RUNWAY_BOOT_MIN       2        /* erased synchronously at boot (~21 min of log) */
+#define RUNWAY_TRICKLE_MS     3000     /* idle-loop period for background runway erases */
 
 /* Soft-delete: trip ids the user hid from the statistics UI. Kept in NVS (the
  * circular flash log has no per-record rewrite), filtered out of the reader,
@@ -77,7 +84,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  fault;
     int16_t  temp_motor2_dc;/* 2nd head motor °C * 10 (ver>=2; 0 = no 2nd head) */
     int16_t  temp_fet2_dc;  /* 2nd head FET   °C * 10 (ver>=2) */
-    uint8_t  reserved[12];
+    float    batt_remaining_ah; /* smart-battery tracker state (ver>=3; boot seed) */
+    uint32_t batt_epoch;    /* battery reset epoch — seed only if it matches NVS */
+    uint8_t  reserved[4];
     uint32_t crc;          /* crc32c over the first REC_SIZE-4 bytes */
 } trip_rec_t;
 
@@ -182,6 +191,12 @@ static void boot_scan(void)
     /* Resume the dashboard running totals from the last record. */
     trip_persist_seed_totals(last.distance_m, last.ah, last.uptime_ms);
 
+    /* Resume the smart-battery tracker too (10 s freshness vs the rare NVS
+     * fallback). battery_calc validates the epoch and rejects stale seeds. */
+    if (last.ver >= 3) {
+        battery_calc_seed_remaining(last.batt_remaining_ah, last.batt_epoch);
+    }
+
     ESP_LOGI(TAG, "resumed: trip=%u seq=%u head=%u dist=%um ah=%.2f",
              (unsigned)s_trip_id, (unsigned)s_seq, (unsigned)s_head,
              (unsigned)last.distance_m, last.ah);
@@ -207,41 +222,79 @@ static bool sector_is_clean(uint32_t sec)
     return magic == 0xFFFF;
 }
 
-/* Erase a runway of sectors ahead of the head once, on boot, so the upcoming
- * ride writes into already-clean flash without a mid-ride erase. The head's
- * current sector is left alone (it may hold the resumed trip's recent records);
- * the next sector onward is fair game (old data there is evicted ring-style). */
-static void preerase_runway(void)
-{
-    uint32_t sectors  = s_total_recs / RECS_PER_SECTOR;
-    uint32_t head_sec = s_head / RECS_PER_SECTOR;
-    bool partial      = (s_head % RECS_PER_SECTOR) != 0;
-    uint32_t first    = partial ? (head_sec + 1) : head_sec;   /* first fresh sector */
-    uint32_t k        = BOOT_PREERASE_SECTORS;
-    if (k > sectors) k = sectors;
+/* ---- runway bookkeeping (see the erase-strategy note at the top) ---- */
+static uint32_t s_runway_next;   /* next sector the trickle will make clean */
 
-    for (uint32_t i = 0; i < k; i++) {
-        uint32_t sec = (first + i) % sectors;
-        if (!sector_is_clean(sec)) erase_sector(sec);
-        /* Yield so the LVGL render task draws a frame between erases — turns one
-         * long boot freeze into brief, interleaved hitches. */
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
-    ESP_LOGI(TAG, "pre-erased %u-sector runway from sector %u", (unsigned)k, (unsigned)first);
+static uint32_t sectors_total(void) { return s_total_recs / RECS_PER_SECTOR; }
+
+/* First sector the writer will need clean next: the head's own sector when the
+ * head sits on a sector boundary, otherwise the following one (the head's
+ * current sector holds the resumed trip's records and is left alone). */
+static uint32_t head_fresh_sector(void)
+{
+    uint32_t sec = s_head / RECS_PER_SECTOR;
+    return (s_head % RECS_PER_SECTOR == 0) ? sec : (sec + 1) % sectors_total();
+}
+
+static uint32_t ring_dist(uint32_t from, uint32_t to)
+{
+    uint32_t n = sectors_total();
+    return (to + n - from) % n;
+}
+
+/* An erase is only allowed while the bike is standing still (or no ESC is
+ * talking at all) so its cache-stall hitch never lands mid-ride. */
+static bool bike_is_idle(void)
+{
+    if (!vesc_rt_data_is_fresh()) return true;
+    float kmh = vesc_rt_data_get_speed_kmh();
+    return kmh > -1.0f && kmh < 1.0f;
 }
 
 static void writer_task(void *arg)
 {
     (void)arg;
-    preerase_runway();   /* prepare the runway before the first sample */
+
+    /* Fast-forward the runway pointer past whatever last boot left clean
+     * (2-byte reads, no erases), then guarantee a minimal runway before the
+     * first sample. Everything beyond RUNWAY_BOOT_MIN is trickled from the
+     * idle loop below — boot stays smooth even when the whole ring is dirty. */
+    s_runway_next = head_fresh_sector();
+    while (ring_dist(head_fresh_sector(), s_runway_next) < RUNWAY_TARGET_SECTORS &&
+           sector_is_clean(s_runway_next)) {
+        s_runway_next = (s_runway_next + 1) % sectors_total();
+    }
+    while (ring_dist(head_fresh_sector(), s_runway_next) < RUNWAY_BOOT_MIN) {
+        erase_sector(s_runway_next);
+        s_runway_next = (s_runway_next + 1) % sectors_total();
+        /* Yield so the LVGL render task draws a frame between erases. */
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    ESP_LOGI(TAG, "runway: %u clean sectors ahead of sector %u",
+             (unsigned)ring_dist(head_fresh_sector(), s_runway_next),
+             (unsigned)head_fresh_sector());
 
     trip_rec_t rec;
     for (;;) {
-        if (xQueueReceive(s_queue, &rec, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(s_queue, &rec, pdMS_TO_TICKS(RUNWAY_TRICKLE_MS)) != pdTRUE) {
+            /* Idle tick — extend the runway one sector at a time while parked. */
+            uint32_t dist = ring_dist(head_fresh_sector(), s_runway_next);
+            if (dist > RUNWAY_TARGET_SECTORS) {
+                /* Head overtook the pointer (a ride with no standstill long
+                 * enough to trickle) — restart the runway just ahead of it. */
+                s_runway_next = head_fresh_sector();
+                dist = 0;
+            }
+            if (dist < RUNWAY_TARGET_SECTORS && bike_is_idle()) {
+                if (!sector_is_clean(s_runway_next)) erase_sector(s_runway_next);
+                s_runway_next = (s_runway_next + 1) % sectors_total();
+            }
+            continue;
+        }
 
         /* Entering a fresh sector → check it's clean, erase only if it isn't.
-         * The runway pre-erase makes this a no-op for the whole ride; an erase
-         * here only happens once the runway is exhausted (~11 h). */
+         * The runway trickle makes this a no-op in practice; a just-in-time
+         * erase here only happens if the runway was exhausted. */
         if (s_head % RECS_PER_SECTOR == 0) {
             uint32_t sec = s_head / RECS_PER_SECTOR;
             if (!sector_is_clean(sec)) erase_sector(sec);
@@ -330,6 +383,13 @@ void trip_log_tick(const vesc_setup_values_t *rt)
      * controller level — so the statistics chart matches the dashboard. */
     rec.batt_pct      = (uint8_t)(battery_calc_display_percentage(
                                       rt->battery_level, rt->amp_hours, rt->amp_hours_charged) + 0.5f);
+    /* Smart-battery tracker state rides along in every record — this IS its
+     * persistence (NVS only backs up rarely); seeded back in boot_scan. */
+    float    batt_rem   = 0.0f;
+    uint32_t batt_epoch = 0;
+    battery_calc_get_persist(&batt_rem, &batt_epoch);
+    rec.batt_remaining_ah = batt_rem;
+    rec.batt_epoch        = batt_epoch;
     rec.fault         = rt->fault_code;
     /* seq + crc are filled by the writer task */
 
