@@ -42,6 +42,7 @@ static struct {
     uint8_t second_head_id;
     uint8_t dashboard_theme;
     uint8_t splash_loops;
+    bool display_flip;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -61,6 +62,7 @@ static struct {
     .second_head_id = 11,
     .dashboard_theme = 0,
     .splash_loops = 1,
+    .display_flip = false,
 };
 #endif
 
@@ -432,6 +434,22 @@ void settings_wrapper_set_splash_loops(uint8_t loops) {
     sim_settings.splash_loops = loops;
 #else
     settings_set_splash_loops(loops);
+#endif
+}
+
+bool settings_wrapper_get_display_flip(void) {
+#if SIMULATOR_MODE
+    return sim_settings.display_flip;
+#else
+    return settings_get_display_flip();
+#endif
+}
+
+void settings_wrapper_set_display_flip(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.display_flip = on;
+#else
+    settings_set_display_flip(on);
 #endif
 }
 

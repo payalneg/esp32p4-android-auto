@@ -1,6 +1,8 @@
 #include "display_init.h"
 
 #include "bsp/esp-bsp.h"
+#include "dev_settings.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
@@ -149,6 +151,14 @@ esp_err_t display_init(void)
         return ESP_FAIL;
     }
 
+    /* Upside-down mounting: flip the panel scan direction before the
+     * backlight comes on, so the very first visible frame (boot splash
+     * included) is already oriented right. settings_init() has run by now
+     * (main calls it before display_init). */
+    if (settings_get_display_flip()) {
+        display_set_flip(true);
+    }
+
 #if DISPLAY_PERF_LOG
     /* Attach the render-time monitor. The adapter sets flush_cb / full_refresh
      * but never touches monitor_cb, and lv_refr.c re-reads driver->monitor_cb
@@ -245,4 +255,24 @@ esp_err_t display_init(void)
 struct _lv_display_t *display_get(void)
 {
     return (struct _lv_display_t *)s_display;
+}
+
+esp_err_t display_set_flip(bool flip)
+{
+    esp_lcd_panel_handle_t panel = bsp_display_get_panel_handle();
+    if (!panel) {
+        ESP_LOGE(TAG, "flip: no panel handle (display not started)");
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* st7701 driver maps mirror_x to the SDIR source-scan bit and mirror_y
+     * to MADCTL's ML gate-scan bit; both together = 180° rotation. Commands
+     * go out over the DSI-DBI (LP) channel, which is idle after init, so
+     * this is safe while the DPI stream keeps refreshing the panel. */
+    esp_err_t err = esp_lcd_panel_mirror(panel, flip, flip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "flip: esp_lcd_panel_mirror failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "display flip 180: %s", flip ? "on" : "off");
+    return ESP_OK;
 }

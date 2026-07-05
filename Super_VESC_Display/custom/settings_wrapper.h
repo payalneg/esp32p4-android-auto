@@ -98,6 +98,11 @@ void    settings_wrapper_set_dashboard_theme(uint8_t theme);
 uint8_t settings_wrapper_get_splash_loops(void);
 void    settings_wrapper_set_splash_loops(uint8_t loops);
 
+/* Flip the display 180° for upside-down mounting. Hot-applies on device
+ * (panel scan direction + touch inversion); no-op in the simulator. */
+bool settings_wrapper_get_display_flip(void);
+void settings_wrapper_set_display_flip(bool on);
+
 uint32_t settings_wrapper_get_clock_secs_of_day(void);
 void     settings_wrapper_set_clock_secs_of_day(uint32_t secs_of_day);
 

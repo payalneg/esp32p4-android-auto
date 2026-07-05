@@ -178,6 +178,8 @@ static lv_obj_t *settings_theme_dropdown = NULL;
 static lv_obj_t *settings_theme_label = NULL;
 static lv_obj_t *settings_splash_loops_dropdown = NULL;
 static lv_obj_t *settings_splash_loops_label = NULL;
+static lv_obj_t *settings_display_flip_switch = NULL;
+static lv_obj_t *settings_display_flip_label = NULL;
 static lv_obj_t *settings_brightness_slider = NULL;
 static lv_obj_t *settings_brightness_label = NULL;
 static lv_obj_t *settings_controller_id_slider = NULL;
@@ -1309,6 +1311,14 @@ static void splash_loops_dropdown_event_cb(lv_event_t *e) {
     settings_wrapper_set_splash_loops(s_splash_loop_opts[sel]);
 }
 
+// Event handler for the display-flip switch. ON = 180° flip for upside-down
+// mounting; hot-applies through the dev_settings callback wired in main.
+static void display_flip_switch_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_wrapper_set_display_flip(checked);
+}
+
 /* Public entry from the dashboard's invisible full-screen brightness drag
  * slider (events_init_dashboard). Shares the s_brightness_commit debounce
  * timer with the settings-page slider so a fast drag doesn't queue two
@@ -2153,6 +2163,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_power_max_kw(4.5f);
         settings_wrapper_set_dashboard_theme(0); // Cockpit
         settings_wrapper_set_splash_loops(1);     // play boot splash once
+        settings_wrapper_set_display_flip(false); // normal orientation
 
         // Update UI elements
         if (s_target_id_field.label)        num_field_set(&s_target_id_field, 10);
@@ -2168,6 +2179,9 @@ static void reset_button_event_cb(lv_event_t *e) {
         }
         if (settings_splash_loops_dropdown) {
             lv_dropdown_set_selected(settings_splash_loops_dropdown, splash_loops_to_index(1));
+        }
+        if (settings_display_flip_switch) {
+            lv_obj_clear_state(settings_display_flip_switch, LV_STATE_CHECKED);
         }
         dashboard_theme_set(0);   // live-switch back to cockpit
         if (settings_brightness_slider) {
@@ -2363,6 +2377,21 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_splash_loops_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_splash_loops_dropdown, splash_loops_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Flip screen 180 (upside-down mounting) ==========
+    settings_display_flip_label = settings_heading_create(ui->settings, y_pos, "Flip screen 180:");
+    settings_display_flip_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_display_flip_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_display_flip_switch, 60, 30);
+    if (settings_wrapper_get_display_flip()) {
+        lv_obj_add_state(settings_display_flip_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_display_flip_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_display_flip_switch, lv_color_hex(0x00a9ff),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_display_flip_switch, display_flip_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
     y_pos += SETTINGS_ROW_H;
 
     // ========== Battery Capacity ==========

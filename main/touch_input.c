@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
+#include "dev_settings.h"
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -107,6 +108,20 @@ static void poll_task(void *arg)
             uint64_t ts = (uint64_t)esp_timer_get_time();
 
             if (!any) cnt = 0;
+
+            /* Display flipped 180° (upside-down mount): the panel scan is
+             * inverted in display_init.c but GT911 still reports glass-native
+             * coords, so invert both axes here — every consumer below (LVGL
+             * rotate, AA rotate, edge swipe) then matches what's on screen.
+             * Debug-bridge injection is untouched: it's already screen-space. */
+            if (cnt > 0 && settings_get_display_flip()) {
+                for (uint8_t i = 0; i < cnt; i++) {
+                    uint16_t cx = tx[i] < PANEL_NATIVE_W ? tx[i] : PANEL_NATIVE_W - 1;
+                    uint16_t cy = ty[i] < PANEL_NATIVE_H ? ty[i] : PANEL_NATIVE_H - 1;
+                    tx[i] = (PANEL_NATIVE_W - 1) - cx;
+                    ty[i] = (PANEL_NATIVE_H - 1) - cy;
+                }
+            }
 
             /* --- gesture state machine --- */
             if (cnt >= GESTURE_FINGERS) {

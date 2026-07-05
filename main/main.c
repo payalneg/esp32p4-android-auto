@@ -209,6 +209,13 @@ static void on_brightness_changed(uint8_t pct)
     bsp_display_brightness_set(pct);
 }
 
+/* settings_set_display_flip → here. Panel-level 180° flip; touch_input
+ * picks the same setting up on its next poll cycle. */
+static void on_display_flip_changed(bool on)
+{
+    display_set_flip(on);
+}
+
 /* dashboard_theme switch hook → re-home the phone-side music tile onto the
  * active theme's widget (or tear it down when the theme has none). Fires on the
  * first build and on every live theme switch, always on the LVGL thread with
@@ -314,6 +321,9 @@ void app_main(void)
      * draws. Brightness callback persists future changes from the slider. */
     bsp_display_brightness_set(settings_get_screen_brightness());
     settings_register_brightness_cb(on_brightness_changed);
+    /* display_init already applied the persisted flip; this wires the
+     * Settings switch for live toggling. */
+    settings_register_display_flip_cb(on_display_flip_changed);
 
     /* Boot splash GIF (if /vescfs/splash.gif exists). Top-layer overlay that
      * covers the ~5 s dashboard build below; hidden once the dashboard is up
