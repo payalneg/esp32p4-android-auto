@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 #include "aa_overlay.h"
 #include "display_init.h"
+#include "display_init.h"
 #include "ui_mode.h"
 
 static const char *TAG = "display_video";
@@ -630,7 +631,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                 .pic_h       = PANEL_NATIVE_H,
                 .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
             },
-            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+            /* Flipped mounting rotates the other way (see display_init.c). */
+            .rotation_angle = display_flip_active() ? PPA_SRM_ROTATION_ANGLE_90
+                                                    : PPA_SRM_ROTATION_ANGLE_270,
             .scale_x = 1.0f,
             .scale_y = 1.0f,
             .mode    = PPA_TRANS_MODE_BLOCKING,
@@ -720,7 +723,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                 .pic_h       = PANEL_NATIVE_H,
                 .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
             },
-            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+            /* Flipped mounting rotates the other way (see display_init.c). */
+            .rotation_angle = display_flip_active() ? PPA_SRM_ROTATION_ANGLE_90
+                                                    : PPA_SRM_ROTATION_ANGLE_270,
             .scale_x = 1.0f,
             .scale_y = 1.0f,
             .mode    = PPA_TRANS_MODE_BLOCKING,
@@ -930,7 +935,9 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
                 .block_offset_y = 0,
                 .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
             },
-            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,
+            /* Flipped mounting rotates the other way (see display_init.c). */
+            .rotation_angle = display_flip_active() ? PPA_SRM_ROTATION_ANGLE_90
+                                                    : PPA_SRM_ROTATION_ANGLE_270,
             .scale_x = 1.0f,
             .scale_y = 1.0f,
             .mode    = PPA_TRANS_MODE_BLOCKING,

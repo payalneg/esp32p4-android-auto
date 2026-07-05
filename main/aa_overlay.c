@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "dev_settings.h"
+#include "display_init.h"
 #include "lvgl.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
@@ -57,15 +58,25 @@ static const uint8_t bpp4_opa[16] = {
     136, 153, 170, 187, 204, 221, 238, 255
 };
 
+/* Latched once per aa_overlay_draw from display_flip_active() so the
+ * per-pixel hot path below reads a plain static instead of calling out. */
+static bool s_flip;
+
 static inline void blend_user_pixel(uint16_t *fb, int ux, int uy,
                                     uint16_t color, uint8_t alpha)
 {
     if (alpha == 0) return;
     if ((unsigned)ux >= USER_W || (unsigned)uy >= USER_H) return;
     /* User landscape (ux, uy) → panel-native (px, py) for ROTATE_90 CW.
-     * Same mapping touch_input.c uses: px = (USER_H-1) - uy, py = ux. */
+     * Same mapping touch_input.c uses: px = (USER_H-1) - uy, py = ux.
+     * Flipped mounting renders ROTATE_270, which is the same mapping with
+     * both panel axes inverted. */
     int px = (USER_H - 1) - uy;
     int py = ux;
+    if (s_flip) {
+        px = (PANEL_W - 1) - px;
+        py = (PANEL_H - 1) - py;
+    }
     int idx = py * PANEL_W + px;
     if (alpha == 255) { fb[idx] = color; return; }
 
@@ -261,6 +272,8 @@ static void draw_battery_icon(uint16_t *fb, int x, int y, int pct)
 void aa_overlay_draw(uint16_t *fb)
 {
     if (!fb) return;
+
+    s_flip = display_flip_active();
 
     /* Read VESC RT data directly. The cockpit_get_*() cache used to feed
      * this overlay is updated from an lv_timer, which freezes whenever the

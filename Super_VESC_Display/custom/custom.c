@@ -1312,11 +1312,15 @@ static void splash_loops_dropdown_event_cb(lv_event_t *e) {
 }
 
 // Event handler for the display-flip switch. ON = 180° flip for upside-down
-// mounting; hot-applies through the dev_settings callback wired in main.
+// mounting. The LVGL adapter's rotation is fixed at boot, so the new
+// orientation only takes effect after a reboot — tell the user.
 static void display_flip_switch_event_cb(lv_event_t *e) {
     if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
     bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_wrapper_set_display_flip(checked);
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label, "Flip: reboot to apply");
+    }
 }
 
 /* Public entry from the dashboard's invisible full-screen brightness drag
@@ -2380,7 +2384,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += SETTINGS_ROW_H;
 
     // ========== Flip screen 180 (upside-down mounting) ==========
-    settings_display_flip_label = settings_heading_create(ui->settings, y_pos, "Flip screen 180:");
+    settings_display_flip_label = settings_heading_create(ui->settings, y_pos, "Flip screen 180 (reboot):");
     settings_display_flip_switch = lv_switch_create(ui->settings);
     lv_obj_set_pos(settings_display_flip_switch, 730, y_pos + 15);
     lv_obj_set_size(settings_display_flip_switch, 60, 30);

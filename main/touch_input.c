@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
-#include "dev_settings.h"
+#include "display_init.h"
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -109,12 +109,15 @@ static void poll_task(void *arg)
 
             if (!any) cnt = 0;
 
-            /* Display flipped 180° (upside-down mount): the panel scan is
-             * inverted in display_init.c but GT911 still reports glass-native
-             * coords, so invert both axes here — every consumer below (LVGL
-             * rotate, AA rotate, edge swipe) then matches what's on screen.
+            /* Display flipped 180° (upside-down mount): the LVGL adapter
+             * renders ROTATE_270 instead of ROTATE_90 but GT911 still reports
+             * glass-native coords, so invert both axes here — the ROTATE_90
+             * mappings below then land exactly on the ROTATE_270 output.
+             * Reads the boot-latched orientation (display_flip_active), NOT
+             * the raw NVS value: a Settings toggle only takes effect on
+             * reboot, and touch must track what's actually on the panel.
              * Debug-bridge injection is untouched: it's already screen-space. */
-            if (cnt > 0 && settings_get_display_flip()) {
+            if (cnt > 0 && display_flip_active()) {
                 for (uint8_t i = 0; i < cnt; i++) {
                     uint16_t cx = tx[i] < PANEL_NATIVE_W ? tx[i] : PANEL_NATIVE_W - 1;
                     uint16_t cy = ty[i] < PANEL_NATIVE_H ? ty[i] : PANEL_NATIVE_H - 1;

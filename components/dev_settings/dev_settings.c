@@ -45,7 +45,6 @@ static settings_brightness_cb_t    s_brightness_cb;
 static settings_target_id_cb_t     s_target_id_cb;
 static settings_controller_id_cb_t s_controller_id_cb;
 static settings_aa_autoconnect_cb_t s_aa_autoconnect_cb;
-static settings_display_flip_cb_t  s_display_flip_cb;
 
 /* Validate a kbps value (read from NVS / passed by callers). Bad values
  * fall back to the Kconfig default. The UI dropdown can only produce one
@@ -314,11 +313,9 @@ void settings_set_display_flip(bool on) {
     if (s_cache.display_flip == on) return;
     s_cache.display_flip = on;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
-        nvs_set_u8(h, "disp_flip", on ? 1 : 0);
-        commit(h);
-    }
-    if (s_display_flip_cb) s_display_flip_cb(on);
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "disp_flip", on ? 1 : 0);
+    commit(h);
 }
 
 void settings_set_wheel_diameter_mm(uint16_t diameter_mm) {
@@ -491,7 +488,6 @@ void settings_register_brightness_cb(settings_brightness_cb_t cb)       { s_brig
 void settings_register_target_id_cb(settings_target_id_cb_t cb)         { s_target_id_cb     = cb; }
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb) { s_controller_id_cb = cb; }
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb) { s_aa_autoconnect_cb = cb; }
-void settings_register_display_flip_cb(settings_display_flip_cb_t cb)   { s_display_flip_cb  = cb; }
 
 /* ---------------- firmware-version info ----------------
  * Pure RAM, no NVS. Race-tolerant in practice: setters fire once at boot

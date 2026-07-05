@@ -2,7 +2,6 @@
 
 #include "bsp/esp-bsp.h"
 #include "dev_settings.h"
-#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
@@ -13,6 +12,12 @@
 static const char *TAG = "display_init";
 
 static lv_display_t *s_display;
+
+/* Orientation actually applied at bring-up. Latched from NVS once in
+ * display_init() and never changed afterwards — the LVGL adapter's rotation
+ * is start-time-only, so a toggle mid-session must NOT leak into the touch /
+ * video / overlay mappings or they'd flip while the panel doesn't. */
+static bool s_flip_active;
 
 /* ---- Render-performance instrumentation ------------------------------------
  * Hooked onto the LVGL driver's monitor_cb. lv_refr.c calls it once per
@@ -133,11 +138,23 @@ esp_err_t display_init(void)
      * avoided. Still needs HW verification for: (a) no freeze, (b) no stale-region
      * ghosting from the 2-framebuffer sync. Revert to ..._DOUBLE_FULL if it
      * freezes or corrupts. */
+    /* Upside-down mounting is a render-time flip: rotate the LVGL output
+     * 270° instead of 90° (the AA video and splash PPA paths flip their
+     * angle from display_flip_active() the same way). Panel-level mirror
+     * (ST7701 SDIR/MADCTL) was tried first and produced garbage on the
+     * jc4880 panel — the DPI stream's scan order is fixed, so the data has
+     * to be flipped, not the panel. settings_init() has run by now (main
+     * calls it before display_init). */
+    s_flip_active = settings_get_display_flip();
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
-        .rotation = ESP_LV_ADAPTER_ROTATE_90,
+        .rotation = s_flip_active ? ESP_LV_ADAPTER_ROTATE_270
+                                  : ESP_LV_ADAPTER_ROTATE_90,
         .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_DIRECT,
     };
+    if (s_flip_active) {
+        ESP_LOGI(TAG, "display flip 180 active (ROTATE_270)");
+    }
     /* Pin the LVGL worker to core 0. The H.264 decoder library spawns a
      * helper task at priority 17 pinned to core 1 (CONFIG_ESP_H264_DUAL_TASK*)
      * and h264_pipe's wrapper task is also pinned to core 1; without this
@@ -149,14 +166,6 @@ esp_err_t display_init(void)
     if (!s_display) {
         ESP_LOGE(TAG, "bsp_display_start failed");
         return ESP_FAIL;
-    }
-
-    /* Upside-down mounting: flip the panel scan direction before the
-     * backlight comes on, so the very first visible frame (boot splash
-     * included) is already oriented right. settings_init() has run by now
-     * (main calls it before display_init). */
-    if (settings_get_display_flip()) {
-        display_set_flip(true);
     }
 
 #if DISPLAY_PERF_LOG
@@ -257,22 +266,7 @@ struct _lv_display_t *display_get(void)
     return (struct _lv_display_t *)s_display;
 }
 
-esp_err_t display_set_flip(bool flip)
+bool display_flip_active(void)
 {
-    esp_lcd_panel_handle_t panel = bsp_display_get_panel_handle();
-    if (!panel) {
-        ESP_LOGE(TAG, "flip: no panel handle (display not started)");
-        return ESP_ERR_INVALID_STATE;
-    }
-    /* st7701 driver maps mirror_x to the SDIR source-scan bit and mirror_y
-     * to MADCTL's ML gate-scan bit; both together = 180° rotation. Commands
-     * go out over the DSI-DBI (LP) channel, which is idle after init, so
-     * this is safe while the DPI stream keeps refreshing the panel. */
-    esp_err_t err = esp_lcd_panel_mirror(panel, flip, flip);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "flip: esp_lcd_panel_mirror failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    ESP_LOGI(TAG, "display flip 180: %s", flip ? "on" : "off");
-    return ESP_OK;
+    return s_flip_active;
 }

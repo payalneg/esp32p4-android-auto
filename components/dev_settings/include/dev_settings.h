@@ -50,9 +50,11 @@ uint8_t              settings_get_dashboard_theme(void);
  * is revealed. 0 = splash disabled entirely. Default 1. */
 uint8_t              settings_get_splash_loops(void);
 
-/* Flip the display output 180° for upside-down mounting. Applied at the
- * ST7701 panel level (scan direction), so LVGL, AA video and the splash all
- * flip together; touch coords are inverted to match in touch_input.c. */
+/* Flip the display output 180° for upside-down mounting. Render-level:
+ * display_init picks the LVGL adapter rotation (90° vs 270°) from this at
+ * boot, and the AA-video / splash / overlay / touch paths follow via
+ * display_flip_active(). Takes effect on the NEXT reboot — the adapter's
+ * rotation cannot change at runtime. */
 bool                 settings_get_display_flip(void);
 
 /* Wall-clock API. RTC-only — relies on the vbat_experiment poke in
@@ -115,14 +117,12 @@ typedef void (*settings_brightness_cb_t)(uint8_t new_pct);
 typedef void (*settings_target_id_cb_t)(uint8_t new_id);
 typedef void (*settings_controller_id_cb_t)(uint8_t new_id);
 typedef void (*settings_aa_autoconnect_cb_t)(bool on);
-typedef void (*settings_display_flip_cb_t)(bool on);
 
 void settings_register_can_speed_cb(settings_can_speed_cb_t cb);
 void settings_register_brightness_cb(settings_brightness_cb_t cb);
 void settings_register_target_id_cb(settings_target_id_cb_t cb);
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb);
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb);
-void settings_register_display_flip_cb(settings_display_flip_cb_t cb);
 
 /* Firmware-version strings shown on the Settings screen.
  *
