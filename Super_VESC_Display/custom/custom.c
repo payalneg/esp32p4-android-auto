@@ -115,6 +115,32 @@ static void num_field_set(num_field_t *f, int v) {
 static void num_field_inc(num_field_t *f) { num_field_set(f, f->value + f->step); }
 static void num_field_dec(num_field_t *f) { num_field_set(f, f->value - f->step); }
 
+/* Shared +/- button pacing. Returns how many steps this event is worth:
+ * one per short click, then — while the button is held — one per LVGL
+ * long-press repeat (every LV_INDEV_DEF_LONG_PRESS_REP_TIME = 100 ms),
+ * accelerating to 5 after ~2 s and 20 after ~5 s so wide ranges like the
+ * battery-capacity 10..2000 stay crossable in seconds. A single repeat
+ * counter is enough: one finger holds one button at a time, and PRESSED
+ * resets it on every new touch anyway. Callers that must not skip values
+ * (clock wrap) just treat any non-zero return as one step. */
+static int step_btn_steps(lv_event_t *e) {
+    static int rep;
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+        rep = 0;
+        return 0;
+    case LV_EVENT_SHORT_CLICKED:
+        return 1;
+    case LV_EVENT_LONG_PRESSED_REPEAT:
+        rep++;
+        if (rep > 50) return 20;
+        if (rep > 20) return 5;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Compact settings layout: one row per setting, heading on the left,
  * controls clustered on the right edge. */
 #define SETTINGS_ROW_H        60
@@ -138,7 +164,12 @@ static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
     lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    /* SHORT_CLICKED + LONG_PRESSED_REPEAT (not CLICKED: it also fires on
+     * release after a hold, which would add one extra step) — hold-to-repeat
+     * via step_btn_steps(). PRESSED only resets its accel counter. */
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_LONG_PRESSED_REPEAT, NULL);
     return btn;
 }
 
@@ -1233,11 +1264,11 @@ static void target_id_on_change(num_field_t *f) {
 }
 
 static void target_id_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_target_id_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_target_id_field);
 }
 
 static void target_id_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_target_id_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_target_id_field);
 }
 
 // Second head enable toggle — single click, persist immediately (like AA).
@@ -1255,11 +1286,11 @@ static void second_head_id_on_change(num_field_t *f) {
 }
 
 static void second_head_id_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_second_head_id_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_second_head_id_field);
 }
 
 static void second_head_id_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_second_head_id_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_second_head_id_field);
 }
 
 // Event handler for CAN speed dropdown
@@ -1382,11 +1413,11 @@ static void battery_capacity_on_change(num_field_t *f) {
 }
 
 static void battery_capacity_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_battery_capacity_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_battery_capacity_field);
 }
 
 static void battery_capacity_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_battery_capacity_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_battery_capacity_field);
 }
 
 // Event handler for Battery Calculation Mode dropdown
@@ -1420,11 +1451,11 @@ static void power_max_on_change(num_field_t *f) {
 }
 
 static void power_max_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_inc(&s_power_max_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_power_max_field);
 }
 
 static void power_max_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) num_field_dec(&s_power_max_field);
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_power_max_field);
 }
 
 static void clock_apply_from_fields(void) {
@@ -1448,28 +1479,28 @@ static void clock_min_on_change(num_field_t *f) {
 }
 
 static void clock_h_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (step_btn_steps(e) <= 0) return;  /* repeat while held; no accel — wrap fields want precision */
     int v = s_clock_hour_field.value + 1;
     if (v > 23) v = 0;       /* wrap 23→00 */
     num_field_set(&s_clock_hour_field, v);
 }
 
 static void clock_h_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (step_btn_steps(e) <= 0) return;  /* repeat while held; no accel — wrap fields want precision */
     int v = s_clock_hour_field.value - 1;
     if (v < 0) v = 23;       /* wrap 00→23 */
     num_field_set(&s_clock_hour_field, v);
 }
 
 static void clock_m_plus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (step_btn_steps(e) <= 0) return;  /* repeat while held; no accel — wrap fields want precision */
     int v = s_clock_min_field.value + 1;
     if (v > 59) v = 0;
     num_field_set(&s_clock_min_field, v);
 }
 
 static void clock_m_minus_btn_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (step_btn_steps(e) <= 0) return;  /* repeat while held; no accel — wrap fields want precision */
     int v = s_clock_min_field.value - 1;
     if (v < 0) v = 59;
     num_field_set(&s_clock_min_field, v);
