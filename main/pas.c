@@ -117,6 +117,7 @@ static void pas_task(void *arg)
     /* Per-loop state (task-local). */
     float    out_a       = 0.0f;
     bool     engaged     = false;
+    bool     was_active  = false;
     uint32_t first_pedal_ms = 0;
     uint32_t last_pedal_ms  = 0;
 
@@ -196,9 +197,15 @@ static void pas_task(void *arg)
             engaged = false;
         }
 
-        /* Forward to the LISP arbiter (0 when disabled / not assisting → coast,
-         * and keeps the watchdog fed). */
-        vesc_lisp_panel_set_pas(out_a);
+        /* Forward to the LISP arbiter only while commanding torque, plus one
+         * trailing 0 so the VESC coasts right away. When idle (PAS disabled,
+         * sensor not connected, not pedaling) nothing goes out on CAN — the
+         * pas_loop watchdog and the LISP-side staleness check keep coast safe. */
+        bool active = out_a > 0.0f;
+        if (active || was_active) {
+            vesc_lisp_panel_set_pas(out_a);
+        }
+        was_active = active;
 
         portENTER_CRITICAL(&s_mux);
         s_telem.centi_rpm        = cad.centi_rpm;
