@@ -73,6 +73,55 @@ static uint16_t        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static volatile bool   s_tx_subscribed;
 static packet_parser_t s_rx_parser;
 
+/* Two peripheral peers can be connected at once (phone app + VESC Tool),
+ * but NUS is single-owner: replies go to whoever last wrote to RX or
+ * subscribed to TX. Per-conn CCCD state is kept so ownership can switch
+ * back to a peer that subscribed earlier (the app's LISP editor writing
+ * while VESC Tool sits idle-connected, or the other way around). */
+#define NUS_MAX_PEERS 4
+typedef struct { uint16_t conn; bool subscribed; } nus_peer_t;
+static nus_peer_t s_peers[NUS_MAX_PEERS] = {
+    [0 ... NUS_MAX_PEERS - 1] = { .conn = BLE_HS_CONN_HANDLE_NONE },
+};
+
+static nus_peer_t *peer_find(uint16_t conn)
+{
+    for (int i = 0; i < NUS_MAX_PEERS; i++)
+        if (s_peers[i].conn == conn) return &s_peers[i];
+    return NULL;
+}
+
+static void peer_add(uint16_t conn)
+{
+    if (peer_find(conn)) return;
+    nus_peer_t *slot = peer_find(BLE_HS_CONN_HANDLE_NONE);
+    if (!slot) return;                       /* can't happen at 2 links max */
+    slot->conn = conn;
+    slot->subscribed = false;
+}
+
+static void peer_drop(uint16_t conn)
+{
+    nus_peer_t *p = peer_find(conn);
+    if (p) { p->conn = BLE_HS_CONN_HANDLE_NONE; p->subscribed = false; }
+}
+
+static void tx_rb_drain(void);
+
+/* Make `conn` the NUS owner. Resets the RX parser and drops frames queued
+ * for the previous owner (they'd desync the new session — see tx_rb_drain).
+ * Runs on the NimBLE host task, same as every other claimer. */
+static void nus_claim(uint16_t conn)
+{
+    if (s_conn_handle == conn) return;
+    ESP_LOGI(TAG, "NUS owner -> conn=%u", (unsigned)conn);
+    s_conn_handle = conn;
+    packet_parser_init(&s_rx_parser);
+    tx_rb_drain();
+    nus_peer_t *p = peer_find(conn);
+    s_tx_subscribed = p && p->subscribed;
+}
+
 /* A LISP code transfer from the app (read/write/erase through this bridge)
  * is a long chain of round-trips whose READ replies are multi-frame CAN
  * transfers. The RT/LISP pollers produce their own multi-frame replies from
@@ -148,6 +197,10 @@ static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
     }
 
+    /* Whoever writes VESC frames owns NUS — the CAN replies must go back to
+     * this peer, not to whichever one happened to connect last. */
+    nus_claim(conn_handle);
+
     /* VESC Tool negotiates ATT_MTU up to 512, so a single ATT_WRITE can
      * land here with up to MTU-3 = 509 bytes — and SET_MCCONF often comes
      * as a chain of those. The old 256 B stack buffer silently truncated
@@ -217,9 +270,11 @@ void ble_nus_gatts_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
 
 void ble_nus_on_connect(uint16_t conn_handle)
 {
-    s_conn_handle = conn_handle;
-    packet_parser_init(&s_rx_parser);
+    peer_add(conn_handle);
     ESP_LOGI(TAG, "peer connected, conn=%u", (unsigned)conn_handle);
+    /* First peer takes NUS by default; a later peer only takes it over by
+     * actually talking to it (RX write or TX subscribe). */
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) nus_claim(conn_handle);
 }
 
 /* Drop everything currently queued for a peer that just left. Otherwise
@@ -237,9 +292,14 @@ static void tx_rb_drain(void)
     }
 }
 
-void ble_nus_on_disconnect(void)
+void ble_nus_on_disconnect(uint16_t conn_handle)
 {
-    ESP_LOGI(TAG, "peer disconnected");
+    peer_drop(conn_handle);
+    if (conn_handle != s_conn_handle) {
+        ESP_LOGI(TAG, "idle peer disconnected, conn=%u", (unsigned)conn_handle);
+        return;
+    }
+    ESP_LOGI(TAG, "owner disconnected, conn=%u", (unsigned)conn_handle);
     s_conn_handle  = BLE_HS_CONN_HANDLE_NONE;
     s_tx_subscribed = false;
     tx_rb_drain();
@@ -249,13 +309,20 @@ void ble_nus_on_disconnect(void)
     poll_resume_cb(NULL);
 }
 
-void ble_nus_on_subscribe(uint16_t attr_handle, bool cur_notify)
+void ble_nus_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
+                          bool cur_notify)
 {
     /* Only the NUS TX characteristic gates forwarding; ignore CCCD writes on
      * NotifBridge characteristics (the phone subscribes to those, not NUS). */
     if (s_tx_val_handle == 0 || attr_handle != s_tx_val_handle) return;
-    s_tx_subscribed = cur_notify;
-    ESP_LOGI(TAG, "NUS TX notifications %s", cur_notify ? "enabled" : "disabled");
+    peer_add(conn_handle);
+    nus_peer_t *p = peer_find(conn_handle);
+    if (p) p->subscribed = cur_notify;
+    /* Subscribing to TX is how VESC Tool announces itself — take NUS over. */
+    if (cur_notify) nus_claim(conn_handle);
+    if (conn_handle == s_conn_handle) s_tx_subscribed = cur_notify;
+    ESP_LOGI(TAG, "NUS TX notifications %s, conn=%u",
+             cur_notify ? "enabled" : "disabled", (unsigned)conn_handle);
 }
 
 /* Notify one chunk, retrying on transient NimBLE pool pressure. Returns

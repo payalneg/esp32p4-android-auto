@@ -446,10 +446,27 @@ static void reasm_feed(const uint8_t *chunk, uint16_t chunk_len)
 
 /* ---------- GATT access callback ---------- */
 
+/* Bind the bridge (and the OTA / file-manager links riding on it) to the
+ * phone's connection. With two peers connected at once (phone + VESC Tool)
+ * the GAP connect order says nothing about which one is the phone — but a
+ * write to any bridge characteristic does: only the app touches them. */
+static void bridge_bind(uint16_t conn)
+{
+    if (s_conn_handle == conn) return;
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGI(TAG, "bridge re-bound, conn=%u", (unsigned)conn);
+        reasm_reset();
+    }
+    s_conn_handle = conn;
+    ble_ota_set_link(conn, s_ota_ctrl_handle);
+    ble_files_set_link(conn, s_file_ctrl_handle);
+}
+
 static int access_cb(uint16_t conn, uint16_t attr,
                      struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    (void)conn; (void)arg;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) bridge_bind(conn);
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_in_handle) {
         uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
@@ -623,11 +640,13 @@ void notif_bridge_gatts_register_cb(struct ble_gatt_register_ctxt *ctxt, void *a
 }
 
 void notif_bridge_on_connect(uint16_t conn) {
-    s_conn_handle = conn;
-    ble_ota_set_link(conn, s_ota_ctrl_handle);
-    ble_files_set_link(conn, s_file_ctrl_handle);
+    /* First peer takes the bridge by default (single-connection behaviour
+     * unchanged); if that peer is actually VESC Tool, the phone's first
+     * write to a bridge characteristic re-binds (see bridge_bind). */
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) bridge_bind(conn);
 }
-void notif_bridge_on_disconnect(void) {
+void notif_bridge_on_disconnect(uint16_t conn) {
+    if (conn != s_conn_handle) return;       /* an idle peer left */
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     ble_ota_on_disconnect();
     ble_files_on_disconnect();

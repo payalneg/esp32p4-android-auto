@@ -31,10 +31,12 @@ const struct ble_gatt_svc_def *ble_nus_get_svcs(void);
  * ble_hs_cfg.gatts_register_cb in ble_host. */
 void ble_nus_gatts_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 
-/* Tracking of the active connection — call from ble_host's GAP event hook
- * on connect / disconnect so notifications target the right peer. */
+/* Tracking of connected peers — call from ble_host's GAP event hook on
+ * connect / disconnect. Up to two peers can be connected at once (phone app
+ * + VESC Tool); NUS itself is single-owner and follows whoever last wrote
+ * to RX or subscribed to TX. */
 void ble_nus_on_connect(uint16_t conn_handle);
-void ble_nus_on_disconnect(void);
+void ble_nus_on_disconnect(uint16_t conn_handle);
 
 /* Subscription tracking — call from ble_host's GAP event hook on every
  * BLE_GAP_EVENT_SUBSCRIBE. forward_response stays a no-op until a peer
@@ -43,8 +45,11 @@ void ble_nus_on_disconnect(void);
  * touches NUS) would still receive a flood of VESC RT-poll responses pushed
  * at it — every one failing with notify_tx ENOMEM and back-pressuring the
  * CAN dispatch task. attr_handle is matched against the NUS TX value handle;
- * other handles (NotifBridge chars) are ignored. */
-void ble_nus_on_subscribe(uint16_t attr_handle, bool cur_notify);
+ * other handles (NotifBridge chars) are ignored. A peer enabling TX
+ * notifications also takes NUS ownership (that's how VESC Tool announces
+ * itself next to an already-connected phone). */
+void ble_nus_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
+                          bool cur_notify);
 
 /* Push a reassembled VESC payload back to the phone over the NUS TX
  * characteristic (frames it with packet_build_frame and chunks by MTU-3).

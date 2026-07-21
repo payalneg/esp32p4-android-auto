@@ -28,9 +28,16 @@ static const char *TAG = "ble_host";
 
 #define DEVICE_NAME "SuperVESCDisplay"
 
+/* Peripheral (adv-initiated) links only — the cadence-sensor central link
+ * has its own GAP callback in ble_cadence_client and never lands here. Two
+ * peers can be up at once (phone app + VESC Tool); the third NimBLE conn
+ * slot (CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3) stays reserved for the sensor. */
+#define MAX_PERIPH_LINKS 2
+
 static uint8_t       s_own_addr_type;
 static bool          s_started;
 static volatile bool s_connected;
+static uint8_t       s_periph_links;
 
 bool ble_host_is_connected(void)
 {
@@ -58,11 +65,17 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
 #endif
         if (event->connect.status == 0) {
-            ESP_LOGI(TAG, "GAP connect, conn=%u",
-                     (unsigned)event->connect.conn_handle);
+            s_periph_links++;
+            ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u)",
+                     (unsigned)event->connect.conn_handle,
+                     (unsigned)s_periph_links);
             s_connected = true;
             ble_nus_on_connect(event->connect.conn_handle);
             notif_bridge_on_connect(event->connect.conn_handle);
+            /* NimBLE stops advertising on connect; keep advertising while a
+             * second peripheral slot is free so VESC Tool can connect
+             * alongside the phone (and vice versa). */
+            if (s_periph_links < MAX_PERIPH_LINKS) start_advertising();
         } else {
             ESP_LOGW(TAG, "GAP connect failed, status=%d",
                      event->connect.status);
@@ -71,10 +84,13 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "GAP disconnect, reason=%d", event->disconnect.reason);
-        s_connected = false;
-        ble_nus_on_disconnect();
-        notif_bridge_on_disconnect();
+        if (s_periph_links) s_periph_links--;
+        ESP_LOGI(TAG, "GAP disconnect, conn=%u reason=%d (links=%u)",
+                 (unsigned)event->disconnect.conn.conn_handle,
+                 event->disconnect.reason, (unsigned)s_periph_links);
+        s_connected = s_periph_links > 0;
+        ble_nus_on_disconnect(event->disconnect.conn.conn_handle);
+        notif_bridge_on_disconnect(event->disconnect.conn.conn_handle);
         start_advertising();
         return 0;
 
@@ -97,7 +113,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         /* Gate NUS forwarding on a real subscription so a notifications-only
          * peer doesn't get spammed with VESC RT-poll responses. Ignored for
          * non-NUS handles (NotifBridge). */
-        ble_nus_on_subscribe(event->subscribe.attr_handle,
+        ble_nus_on_subscribe(event->subscribe.conn_handle,
+                             event->subscribe.attr_handle,
                              event->subscribe.cur_notify);
         return 0;
 
@@ -137,6 +154,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
 static void start_advertising(void)
 {
+    if (ble_gap_adv_active()) return;
     /* Adv data carries flags + the NUS service UUID-128 — VESC Tool and
      * similar apps filter scans by this UUID and won't show the device
      * if it's not advertised. UUID-128 (18 B) + flags (3 B) leaves no

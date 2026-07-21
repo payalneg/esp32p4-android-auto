@@ -31,7 +31,7 @@ const struct ble_gatt_svc_def *notif_bridge_get_svcs(void);
 void notif_bridge_gatts_register_cb(struct ble_gatt_register_ctxt *ctxt,
                                     void *arg);
 void notif_bridge_on_connect(uint16_t conn_handle);
-void notif_bridge_on_disconnect(void);
+void notif_bridge_on_disconnect(uint16_t conn_handle);
 
 /* Send a CMD frame (op + optional u32 arg) over OUT char. Used by LVGL
  * screens when the user taps play/pause/next/prev or dismiss. */
