@@ -2267,6 +2267,11 @@ static void settings_files_button_event_cb(lv_event_t *e)
 }
 
 // Initialize settings UI - called from custom_init or when settings screen loads
+static void pas_open_btn_event_cb(lv_event_t *e) {
+    (void)e;
+    show_pas_settings();   /* opens the on-device PAS screen (custom/pas_screen.c) */
+}
+
 void settings_ui_init(lv_ui *ui) {
     if (!ui || !ui->settings) {
         return;
@@ -2919,6 +2924,23 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_text_color(settings_temp_unit_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_temp_unit_hint, &lv_font_montserrat_14, 0);
 
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Pedal Assist (PAS) ==========
+    // Opens the dedicated on-device PAS screen (sensor pairing, live cadence,
+    // assist tuning). The head unit owns the whole feature — no phone.
+    settings_heading_create(ui->settings, y_pos, "Pedal assist (PAS)");
+    {
+        lv_obj_t *pas_btn = lv_btn_create(ui->settings);
+        lv_obj_set_pos(pas_btn, 600, y_pos + 8);
+        lv_obj_set_size(pas_btn, 190, 44);
+        lv_obj_set_style_bg_color(pas_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(pas_btn, 8, 0);
+        lv_obj_t *pas_lbl = lv_label_create(pas_btn);
+        lv_label_set_text(pas_lbl, "Open");
+        lv_obj_center(pas_lbl);
+        lv_obj_add_event_cb(pas_btn, pas_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
     y_pos += SETTINGS_ROW_H;
     /*
     // ========== Wheel Diameter Spinbox ==========

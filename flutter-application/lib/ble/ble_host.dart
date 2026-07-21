@@ -28,6 +28,7 @@ import 'ble_service.dart';
 import 'file_manager.dart';
 import 'file_ops.dart';
 import 'ipc.dart';
+import 'vesc/vesc_link.dart';
 
 /// Entry point executed in the foreground-service isolate. Must be a top-level
 /// (or static) function annotated for the AOT tree-shaker.
@@ -39,6 +40,8 @@ void startBleTask() {
 class BleTaskHandler extends TaskHandler {
   final _ble = BleService.instance;
   StreamSubscription<BleConnState>? _stateSub;
+  Timer? _statsTimer;
+  bool _statsInFlight = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -65,6 +68,7 @@ class BleTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp) async {
+    _statsTimer?.cancel();
     await _stateSub?.cancel();
   }
 
@@ -76,10 +80,16 @@ class BleTaskHandler extends TaskHandler {
         'supportsFm': _ble.supportsFileManager,
         'supportsOta': _ble.supportsOta,
         'supportsBleOta': _ble.supportsBleOta,
+        'supportsLisp': _ble.supportsLisp,
         'mtu': _ble.negotiatedMtu,
       };
 
   void _pushState(BleConnState s) {
+    // Stop stats polling if the link drops — VescLink would just time out.
+    if (s != BleConnState.connected) {
+      _statsTimer?.cancel();
+      _statsTimer = null;
+    }
     FlutterForegroundTask.sendDataToMain({'t': IpcEvt.state, ..._statusMap()});
   }
 
@@ -117,6 +127,11 @@ class BleTaskHandler extends TaskHandler {
 
         case IpcCmd.forget:
           await _ble.forget();
+          _reply(id, {});
+          break;
+
+        case IpcCmd.bleRestart:
+          await _ble.restart();
           _reply(id, {});
           break;
 
@@ -199,13 +214,70 @@ class BleTaskHandler extends TaskHandler {
               .rename(m['src'] as String, m['dst'] as String);
           _reply(id, {});
           break;
+
+        case IpcCmd.lispRead:
+          final code = await VescLink.instance
+              .readCode(onProgress: (f) => _progress(id, f));
+          _reply(id, {'code': code});
+          break;
+
+        case IpcCmd.lispUpload:
+          await VescLink.instance.uploadCode(m['code'] as String,
+              run: m['run'] as bool? ?? false,
+              onProgress: (f) => _progress(id, f));
+          _reply(id, {});
+          break;
+
+        case IpcCmd.lispRun:
+          await VescLink.instance.setRunning(true);
+          _reply(id, {});
+          break;
+
+        case IpcCmd.lispStop:
+          await VescLink.instance.setRunning(false);
+          _reply(id, {});
+          break;
+
+        case IpcCmd.lispStatsStart:
+          _startStatsPolling();
+          _reply(id, {});
+          break;
+
+        case IpcCmd.lispStatsStop:
+          _statsTimer?.cancel();
+          _statsTimer = null;
+          _reply(id, {});
+          break;
       }
+    } on VescLispException catch (e) {
+      _replyError(id, kind: IpcErrKind.lispOp, key: e.key);
     } on FileOpException catch (e) {
       _replyError(id,
           kind: IpcErrKind.fileOp, key: e.key, notReady: e.notReady);
     } catch (e) {
       _replyError(id, kind: IpcErrKind.generic, msg: '$e');
     }
+  }
+
+  /// Poll LISP runtime stats (~2.5 Hz) and stream each snapshot to the UI while
+  /// the Variables tab is open. Ticks that overlap a slow reply are skipped;
+  /// errors (e.g. transient link loss) are swallowed so the timer keeps going.
+  void _startStatsPolling() {
+    _statsTimer?.cancel();
+    _statsTimer =
+        Timer.periodic(const Duration(milliseconds: 400), (_) async {
+      if (_statsInFlight) return;
+      _statsInFlight = true;
+      try {
+        final s = await VescLink.instance.getStats(all: true);
+        FlutterForegroundTask
+            .sendDataToMain({'t': IpcEvt.lispStats, 'stats': s.toMap()});
+      } catch (_) {
+        // ignore — next tick retries
+      } finally {
+        _statsInFlight = false;
+      }
+    });
   }
 
   Future<void> _doBleOta(int? id, String? model) async {

@@ -40,3 +40,19 @@ class NotifBridgeUuids {
   /// the UPLOAD/READY handshake on [charFileCtrl].
   static const charFileData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000a';
 }
+
+/// Nordic UART Service — the head unit's VESC-Tool-compatible transparent
+/// bridge (main/ble_nus.c). Raw VESC packets written to [rx] are forwarded to
+/// the VESC over CAN; replies come back as notifications on [tx]. Used for the
+/// LISP editor (see lib/ble/vesc/). Advertised separately from NotifBridge;
+/// absent on firmware without the bridge, so the LISP feature is probed by
+/// characteristic presence.
+class NusUuids {
+  static const service = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+
+  /// WRITE | WRITE_NO_RSP. Phone → head unit: framed VESC packet bytes.
+  static const rx = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+  /// NOTIFY. Head unit → phone: framed VESC reply bytes.
+  static const tx = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+}

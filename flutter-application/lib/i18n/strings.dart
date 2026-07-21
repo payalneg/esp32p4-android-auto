@@ -24,6 +24,8 @@ const _en = <String, String>{
   'home.state.disconnected':
       'Link lost — waiting for device to come back on air…',
   'home.forget': 'Forget device',
+  'home.restart': 'Restart BLE',
+  'home.restart.toast': 'Restarting the Bluetooth link…',
   'home.forget.confirm.title': 'Forget device?',
   'home.forget.confirm.body':
       'Auto-reconnect will stop. To use it again you\'ll have to pair from scratch.',
@@ -46,6 +48,7 @@ const _en = <String, String>{
       'iOS sandbox blocks reading third-party notifications. Only pairing '
       'and the app\'s own media metadata work.',
   'home.lang.title': 'Language',
+  'home.test.title': 'Test panel',
 
   'pairing.title': 'Find head unit',
   'pairing.empty':
@@ -195,6 +198,33 @@ const _en = <String, String>{
   'splash.done': 'Boot splash updated — reboot the head unit to see it.',
   'splash.reboot_hint': 'Reboot the head unit to see the new splash.',
   'splash.err.decode': 'Could not read that GIF.',
+
+  'home.lisp.title': 'Edit LISP script',
+  'lisp.editor.title': 'LISP script',
+  'lisp.editor.hint': 'LISP (LispBM) code for the VESC…',
+  'lisp.tab.code': 'Code',
+  'lisp.tab.vars': 'Variables',
+  'lisp.open': 'Open file',
+  'lisp.save': 'Save file',
+  'lisp.read': 'Read',
+  'lisp.upload': 'Upload',
+  'lisp.uploadRun': 'Upload & Run',
+  'lisp.run': 'Run',
+  'lisp.stop': 'Stop',
+  'lisp.loaded': 'Script read from VESC',
+  'lisp.uploaded': 'Uploaded to VESC',
+  'lisp.uploadedRun': 'Uploaded and running',
+  'lisp.opened': 'File loaded',
+  'lisp.saved': 'File saved',
+  'lisp.gaugesPaused': 'Reading/uploading briefly pauses the dashboard gauges.',
+  'lisp.vars.waiting': 'Waiting for variables…',
+  'lisp.vars.none': 'No variables',
+  'lisp.err.noconn': 'Not connected to the head unit',
+  'lisp.err.timeout': 'The VESC did not respond',
+  'lisp.err.read': 'Could not read the script',
+  'lisp.err.write': 'Upload failed',
+  'lisp.err.erase': 'Could not erase old code',
+  'lisp.err.unknown': 'LISP operation failed',
 };
 
 const _ru = <String, String>{
@@ -209,6 +239,8 @@ const _ru = <String, String>{
   'home.state.disconnected':
       'Соединение потеряно, жду пока устройство появится в эфире…',
   'home.forget': 'Забыть устройство',
+  'home.restart': 'Перезапустить BLE',
+  'home.restart.toast': 'Перезапуск Bluetooth-соединения…',
   'home.forget.confirm.title': 'Забыть устройство?',
   'home.forget.confirm.body':
       'Авто-подключение отключится. Чтобы снова подключиться, придётся пройти '
@@ -232,6 +264,7 @@ const _ru = <String, String>{
       'На iOS уведомления приложений не пересылаются (sandbox). '
       'Доступно только pairing и media-метаданные собственного приложения.',
   'home.lang.title': 'Язык',
+  'home.test.title': 'Тестовая панель',
 
   'pairing.title': 'Поиск head unit',
   'pairing.empty':
@@ -379,6 +412,34 @@ const _ru = <String, String>{
   'splash.done': 'Заставка обновлена — перезагрузите магнитолу, чтобы увидеть.',
   'splash.reboot_hint': 'Перезагрузите магнитолу, чтобы увидеть новую заставку.',
   'splash.err.decode': 'Не удалось прочитать этот GIF.',
+
+  'home.lisp.title': 'Редактор LISP-скрипта',
+  'lisp.editor.title': 'LISP-скрипт',
+  'lisp.editor.hint': 'LISP-код (LispBM) для VESC…',
+  'lisp.tab.code': 'Код',
+  'lisp.tab.vars': 'Переменные',
+  'lisp.open': 'Открыть файл',
+  'lisp.save': 'Сохранить файл',
+  'lisp.read': 'Прочитать',
+  'lisp.upload': 'Залить',
+  'lisp.uploadRun': 'Залить и запустить',
+  'lisp.run': 'Запустить',
+  'lisp.stop': 'Остановить',
+  'lisp.loaded': 'Скрипт прочитан с VESC',
+  'lisp.uploaded': 'Залито на VESC',
+  'lisp.uploadedRun': 'Залито и запущено',
+  'lisp.opened': 'Файл загружен',
+  'lisp.saved': 'Файл сохранён',
+  'lisp.gaugesPaused':
+      'Чтение/заливка ненадолго приостанавливают приборы на дашборде.',
+  'lisp.vars.waiting': 'Ожидание переменных…',
+  'lisp.vars.none': 'Нет переменных',
+  'lisp.err.noconn': 'Нет подключения к головному устройству',
+  'lisp.err.timeout': 'VESC не ответил',
+  'lisp.err.read': 'Не удалось прочитать скрипт',
+  'lisp.err.write': 'Ошибка заливки',
+  'lisp.err.erase': 'Не удалось стереть старый код',
+  'lisp.err.unknown': 'Ошибка операции LISP',
 };
 
 const _tables = <String, Map<String, String>>{

@@ -10,9 +10,10 @@ import 'about_screen.dart';
 import 'app_filter_screen.dart';
 import 'device_files_screen.dart';
 import 'firmware_update_screen.dart';
+import 'lisp_editor_screen.dart';
 import 'pairing_screen.dart';
 import 'splash_setup_screen.dart';
-import 'test_panel.dart';
+import 'test_panel_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -70,6 +71,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _restartBle() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(t(context, 'home.restart.toast'))),
+    );
+    await BleProxy.instance.restartBle();
+  }
+
   void _showLanguagePicker() {
     final notifier = LocaleScope.of(context);
     showModalBottomSheet<void>(
@@ -112,12 +120,28 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: t(context, 'home.lang.title'),
             onPressed: _showLanguagePicker,
           ),
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'test') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const TestPanelScreen()),
+                );
+              }
+            },
+            itemBuilder: (ctx) => [
+              PopupMenuItem(
+                value: 'test',
+                child: Text(t(context, 'home.test.title')),
+              ),
+            ],
+          ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _StatusCard(onForget: _forget),
+          _StatusCard(onForget: _forget, onRestart: _restartBle),
           const SizedBox(height: 16),
           if (Platform.isAndroid) ...[
             Card(
@@ -240,6 +264,30 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
+          // LISP editor — only when connected to a head unit whose firmware
+          // exposes the NUS bridge (VESC-Tool-compatible transport).
+          StreamBuilder<BleConnState>(
+            stream: BleProxy.instance.state,
+            initialData: BleProxy.instance.currentState,
+            builder: (ctx, snap) {
+              final connected = snap.data == BleConnState.connected;
+              if (!connected || !BleProxy.instance.supportsLisp) {
+                return const SizedBox.shrink();
+              }
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.code),
+                  title: Text(t(context, 'home.lisp.title')),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const LispEditorScreen()),
+                  ),
+                ),
+              );
+            },
+          ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.info_outline),
@@ -251,8 +299,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          const TestPanel(),
         ],
       ),
     );
@@ -261,7 +307,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _StatusCard extends StatelessWidget {
   final VoidCallback onForget;
-  const _StatusCard({required this.onForget});
+  final VoidCallback onRestart;
+  const _StatusCard({required this.onForget, required this.onRestart});
 
   @override
   Widget build(BuildContext context) {
@@ -297,6 +344,11 @@ class _StatusCard extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      TextButton.icon(
+                        onPressed: onRestart,
+                        icon: const Icon(Icons.restart_alt, size: 18),
+                        label: Text(t(context, 'home.restart')),
+                      ),
                       TextButton.icon(
                         onPressed: onForget,
                         icon: const Icon(Icons.link_off, size: 18),

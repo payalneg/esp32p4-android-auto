@@ -15,6 +15,10 @@
 
 #include "vesc_can/comm_can.h"
 #include "vesc_can/packet_parser.h"
+#include "vesc_can/vesc_datatypes.h"
+#include "vesc_can/vesc_io_data.h"
+#include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_rt_data.h"
 
 static const char *TAG = "ble_nus";
 
@@ -69,9 +73,62 @@ static uint16_t        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static volatile bool   s_tx_subscribed;
 static packet_parser_t s_rx_parser;
 
+/* A LISP code transfer from the app (read/write/erase through this bridge)
+ * is a long chain of round-trips whose READ replies are multi-frame CAN
+ * transfers. The RT/LISP pollers produce their own multi-frame replies from
+ * the same VESC id, and the comm_can reassembler holds only one in-flight
+ * transfer per sender — the streams collide, frames drop on CRC, the app
+ * retries into timeouts (reads took tens of seconds and often failed).
+ * Same reasoning as pause_pollers() in vesc_lisp_code.c, but for the app's
+ * path: pause on the first code-transfer packet, resume 3 s after the last
+ * one (each packet re-arms the timer; erase gaps stay under 3 s because the
+ * blocking erase reply itself precedes the next write). */
+static esp_timer_handle_t s_poll_resume_timer;
+static volatile bool      s_pollers_paused;
+
+static void poll_resume_cb(void *arg)
+{
+    (void)arg;
+    if (!s_pollers_paused) return;
+    s_pollers_paused = false;
+    vesc_rt_data_start();
+    vesc_lisp_poll_start();
+    /* io_data is re-enabled by the realtime screen itself; leave off. */
+    ESP_LOGI(TAG, "LISP transfer idle — pollers resumed");
+}
+
+static void lisp_transfer_touch(void)
+{
+    if (!s_poll_resume_timer) {
+        const esp_timer_create_args_t args = {
+            .callback = poll_resume_cb,
+            .name     = "nus_poll_resume",
+        };
+        if (esp_timer_create(&args, &s_poll_resume_timer) != ESP_OK) return;
+    }
+    if (!s_pollers_paused) {
+        s_pollers_paused = true;
+        vesc_rt_data_stop();
+        vesc_lisp_poll_stop();
+        vesc_io_data_set_active(false);
+        ESP_LOGI(TAG, "LISP transfer active — pollers paused");
+    }
+    esp_timer_stop(s_poll_resume_timer);
+    esp_timer_start_once(s_poll_resume_timer, 3 * 1000 * 1000);
+}
+
 static void rx_packet_complete(const uint8_t *payload, uint16_t len)
 {
     if (len == 0) return;
+    switch (payload[0]) {
+    case COMM_LISP_READ_CODE:
+    case COMM_LISP_WRITE_CODE:
+    case COMM_LISP_ERASE_CODE:
+        lisp_transfer_touch();
+        break;
+    default:
+        break;
+    }
     /* Per-command line — useful for first-bringup debugging, but VESC Tool
      * issues bursts of these on every screen open. Demoted to DEBUG so the
      * default INFO log stays readable. */
@@ -186,6 +243,10 @@ void ble_nus_on_disconnect(void)
     s_conn_handle  = BLE_HS_CONN_HANDLE_NONE;
     s_tx_subscribed = false;
     tx_rb_drain();
+    /* Peer vanished mid-transfer — don't leave the dashboard pollers off
+     * for the rest of the timer window. */
+    if (s_poll_resume_timer) esp_timer_stop(s_poll_resume_timer);
+    poll_resume_cb(NULL);
 }
 
 void ble_nus_on_subscribe(uint16_t attr_handle, bool cur_notify)

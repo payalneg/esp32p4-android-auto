@@ -43,6 +43,17 @@ static vlp_dash_t         s_dash;
 static uint32_t           s_dash_last_ms;
 #define VLP_DASH_INTERVAL_MS  200
 
+/* PAS setpoint forwarding. s_pas_amps/s_pas_seen_ms are written from the PAS
+ * task (set_pas) and read on the CAN poll task (pas_loop); a portMUX keeps the
+ * value+timestamp pair coherent across cores. */
+#define VLP_PAS_WATCHDOG_MS   400   /* no fresh setpoint => coast (send 0 once) */
+#define VLP_PAS_SEND_MS        50   /* re-send cadence to feed VESC cmd timeout */
+static portMUX_TYPE       s_pas_mux = portMUX_INITIALIZER_UNLOCKED;
+static float              s_pas_amps;        /* last requested PAS current (A) */
+static uint32_t           s_pas_seen_ms;     /* millis_now() of last set_pas; 0 = never */
+static uint32_t           s_pas_last_send_ms;
+static bool               s_pas_sent_zero;   /* latched after the watchdog coast send */
+
 typedef struct { uint8_t id; float value; } vlp_action_t;
 
 static inline uint32_t millis_now(void)
@@ -60,6 +71,12 @@ void vesc_lisp_panel_init(uint8_t target_vesc_id)
         s_action_q = xQueueCreate(VLP_ACTION_QUEUE_LEN, sizeof(vlp_action_t));
     }
     s_enabled = false;
+    portENTER_CRITICAL(&s_pas_mux);
+    s_pas_amps        = 0.0f;
+    s_pas_seen_ms     = 0;
+    s_pas_last_send_ms = 0;
+    s_pas_sent_zero   = false;
+    portEXIT_CRITICAL(&s_pas_mux);
     if (s_lock && xSemaphoreTake(s_lock, portMAX_DELAY) == pdTRUE) {
         memset(&s_model, 0, sizeof(s_model));
         s_have_ui = false;
@@ -115,6 +132,69 @@ void vesc_lisp_panel_send_action(uint8_t ctrl_id, float value)
     if (!s_action_q) return;
     vlp_action_t a = { .id = ctrl_id, .value = value };
     xQueueSend(s_action_q, &a, 0);
+}
+
+/* ---- PAS setpoint forwarding ---- */
+
+static void send_pas(float amps)
+{
+    /* Fire-and-forget: send=3 (no reply expected) so the CAN task never blocks
+     * waiting for a reassembled reply. The LISP event-data-rx handler just
+     * stores the value; it does not reply. */
+    uint8_t buf[12];
+    int32_t ind = 0;
+    buf[ind++] = COMM_CUSTOM_APP_DATA;
+    buf[ind++] = VLP_MAGIC0;
+    buf[ind++] = VLP_MAGIC1;
+    buf[ind++] = VLP_MSG_PAS_SET;
+    buf[ind++] = comm_can_get_local_id();   /* reply_can_id (unused by PAS) */
+    buffer_append_float32(buf, amps, VLP_SCALE, &ind);
+    comm_can_send_buffer(s_target_vesc_id, buf, (unsigned int)ind, 3);
+}
+
+void vesc_lisp_panel_set_pas(float amps)
+{
+    uint32_t now = millis_now();
+    portENTER_CRITICAL(&s_pas_mux);
+    s_pas_amps      = amps;
+    s_pas_seen_ms   = now ? now : 1;   /* never store 0 (= "never seen") */
+    s_pas_sent_zero = false;           /* fresh data re-arms the watchdog */
+    portEXIT_CRITICAL(&s_pas_mux);
+}
+
+void vesc_lisp_panel_pas_loop(void)
+{
+    uint32_t now = millis_now();
+    float    amps;
+    uint32_t seen;
+    bool     sent_zero;
+    portENTER_CRITICAL(&s_pas_mux);
+    amps      = s_pas_amps;
+    seen      = s_pas_seen_ms;
+    sent_zero = s_pas_sent_zero;
+    portEXIT_CRITICAL(&s_pas_mux);
+
+    if (seen == 0) return;                       /* no setpoint ever received */
+
+    if (now - seen > VLP_PAS_WATCHDOG_MS) {
+        /* Stale (sensor dropped / PAS task wedged): send 0 once, then go quiet.
+         * The VESC's motor-command timeout then ramps to coast on its own. Do
+         * NOT keep re-sending the last nonzero value — that would defeat the
+         * coast. */
+        if (!sent_zero) {
+            send_pas(0.0f);
+            portENTER_CRITICAL(&s_pas_mux);
+            s_pas_sent_zero = true;
+            portEXIT_CRITICAL(&s_pas_mux);
+        }
+        return;
+    }
+
+    /* Fresh: re-send at ~20 Hz so the VESC keeps the command alive even if the
+     * PAS task's tick jitters or a CAN frame is dropped. */
+    if (now - s_pas_last_send_ms < VLP_PAS_SEND_MS) return;
+    s_pas_last_send_ms = now;
+    send_pas(amps);
 }
 
 void vesc_lisp_panel_set_enabled(bool enabled)

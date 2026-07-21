@@ -3,25 +3,34 @@
 
     LISP code transfer over CAN — see vesc_lisp_code.h.
 
-    Wire format (READ confirmed by hardware hexdump; WRITE/ERASE still being
-    validated — the diagnostic dump in process_response stays until then):
+    Wire format (matches VESC Tool's CodeLoader — the same layout the Flutter
+    app's vesc_code_loader.dart uses over the NUS bridge):
 
-      The VESC stores the LISP code RAW (no packed header — READ at offset 0
-      returns the code text directly).
+      On flash the VESC stores  [u32 size][u16 crc16][packed]  where
+      packed = [u16 flags=0][code bytes][NUL][i16 num_imports=0] and the
+      size field counts packed MINUS the 2 flag bytes. WRITE offsets are
+      absolute into that layout (header included), but READ is served from
+      flash_helper_code_data() which points PAST the 8 header bytes — so a
+      read at offset 0 returns the raw code text directly. The asymmetry is
+      the firmware's, not ours.
 
       Upload:
-        code_buf = raw code bytes + trailing NUL
+        blob = [u32 packed_size-2][u16 crc16(packed)][packed]
         1) COMM_LISP_SET_RUNNING [u8 0]                      -> ack
-        2) COMM_LISP_ERASE_CODE  [i32 code_buf_size]         -> ack
+        2) COMM_LISP_ERASE_CODE  [i32 blob_size + slack]     -> ack
         3) COMM_LISP_WRITE_CODE  [u32 offset][chunk...]      -> ack (echoed off)
-           repeated until the whole buffer is written
+           repeated until the whole blob is written
         4) COMM_LISP_SET_RUNNING [u8 1]   (if run_after)     -> ack
+      The u32/u16 header MUST be present: on start the VESC checks the
+      stored crc against the size field and refuses to load the script on
+      mismatch — a raw (headerless) upload flashes fine but never runs.
 
       Read:
         request: COMM_LISP_READ_CODE [i32 len][i32 offset]
         reply:   [u8 cmd][i32 total_len][i32 offset][raw code bytes]
-        total_len (first field) is the full stored size — read until we have
-        that many bytes; the code is the raw bytes from offset 0.
+        total_len is the stored size field (code + NUL + 2 import-count
+        bytes) — read until we have that many bytes, then cut the string
+        at the first NUL to drop the import-count tail.
 */
 
 #include "vesc_can/vesc_lisp_code.h"
@@ -33,20 +42,28 @@
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_io_data.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+
+#include "vesc_can/crc.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "vesc_lisp_code";
 
-#define LISP_CHUNK      256          /* payload bytes per WRITE/READ packet  */
-#define LISP_MAX        (16 * 1024)  /* max code size we handle              */
-#define STEP_TIMEOUT_MS 1500
-#define STEP_RETRIES    3
+#define LISP_CHUNK      256           /* payload bytes per WRITE/READ packet */
+#define LISP_MAX        (120 * 1024)  /* VESC's LISP flash area (STM32F405)  */
+#define BLOB_HDR        6             /* u32 size + u16 crc before packed    */
+#define STEP_TIMEOUT_MS  1500
+/* Erasing the LISP flash sector(s) blocks the VESC comm thread for up to a
+ * few seconds; the ack only comes when it's done. A short timeout would
+ * re-send ERASE on top of the still-running erase. Same 8 s VESC Tool uses. */
+#define ERASE_TIMEOUT_MS 8000
+#define STEP_RETRIES     3
 
 enum { OP_NONE = 0, OP_UPLOAD, OP_READ };
 
@@ -59,6 +76,7 @@ static SemaphoreHandle_t s_ack_sem   = NULL;
 
 /* ack hand-off (written by process_response, read by worker after sem take) */
 static volatile uint8_t  s_ack_cmd;
+static volatile bool     s_ack_ok;
 static volatile uint32_t s_ack_off;
 static volatile uint32_t s_ack_len;
 static volatile uint32_t s_read_total;   /* total stored code length (READ) */
@@ -103,8 +121,10 @@ static bool step_erase(uint32_t size)
         buffer_append_int32(b, (int32_t)size, &ind);
         drain_ack();
         comm_can_send_buffer(s_target, b, ind, 0);
-        if (wait_ack(COMM_LISP_ERASE_CODE, STEP_TIMEOUT_MS)) return true;
-        ESP_LOGW(TAG, "erase ack timeout (retry %d)", retry + 1);
+        if (wait_ack(COMM_LISP_ERASE_CODE, ERASE_TIMEOUT_MS) && s_ack_ok) {
+            return true;
+        }
+        ESP_LOGW(TAG, "erase ack timeout/nak (retry %d)", retry + 1);
     }
     return false;
 }
@@ -120,11 +140,13 @@ static bool step_write(uint32_t offset, const uint8_t *data, uint32_t n)
         ind += (int32_t)n;
         drain_ack();
         comm_can_send_buffer(s_target, b, ind, 0);
-        if (wait_ack(COMM_LISP_WRITE_CODE, STEP_TIMEOUT_MS) && s_ack_off == offset) {
+        if (wait_ack(COMM_LISP_WRITE_CODE, STEP_TIMEOUT_MS) && s_ack_ok &&
+            s_ack_off == offset) {
             return true;
         }
-        ESP_LOGW(TAG, "write ack mismatch off=%u got=%u (retry %d)",
-                 (unsigned)offset, (unsigned)s_ack_off, retry + 1);
+        ESP_LOGW(TAG, "write ack mismatch off=%u got=%u ok=%d (retry %d)",
+                 (unsigned)offset, (unsigned)s_ack_off, (int)s_ack_ok,
+                 retry + 1);
     }
     return false;
 }
@@ -181,7 +203,8 @@ static void do_upload(void)
     drain_ack();
     wait_ack(COMM_LISP_SET_RUNNING, 500);  /* best-effort stop */
 
-    if (!step_erase(s_total)) { res = VLC_ERR_TIMEOUT; goto done; }
+    /* +100 slack like VESC Tool — erase rounds up to whole flash sectors. */
+    if (!step_erase(s_total + 100)) { res = VLC_ERR_TIMEOUT; goto done; }
 
     for (uint32_t off = 0; off < s_total; ) {
         uint32_t n = s_total - off;
@@ -230,9 +253,11 @@ static void do_read(void)
         if (s_progress) s_progress(s_user, have, total);
     }
 
+    /* The stored total counts code + NUL + 2 import-count bytes; cut the
+     * string at the first NUL so callers get just the code text. */
     s_buf[have] = '\0';
     code = (const char *)s_buf;
-    code_str_len = have;
+    code_str_len = (uint32_t)strnlen(code, have);
 
 done:
     resume_pollers();
@@ -281,19 +306,31 @@ bool vesc_lisp_code_upload(const char *code, uint32_t len, bool run_after,
     if (!code || !s_start_sem) return false;
     if (s_busy) return false;
 
-    /* VESC stores LISP code raw (confirmed via READ: offset 0 is the code
-     * text, no packed header). Upload the raw code plus a trailing NUL. */
-    uint32_t packed = len + 1;
-    if (packed > LISP_MAX) return false;
+    /* Build the full upload blob VESC Tool would send:
+     *   [u32 packed-2][u16 crc16(packed)][u16 flags=0][code][NUL][i16 0] */
+    uint32_t packed_len = 2 + len + 1 + 2;   /* flags + code + NUL + imports */
+    uint32_t blob_len   = BLOB_HDR + packed_len;
+    if (blob_len > LISP_MAX) return false;
 
-    uint8_t *buf = malloc(packed);
+    uint8_t *buf = heap_caps_malloc(blob_len,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return false;
-    memcpy(buf, code, len);
-    buf[len] = '\0';
+
+    uint8_t *packed = buf + BLOB_HDR;
+    packed[0] = 0;                            /* u16 flags = 0 */
+    packed[1] = 0;
+    memcpy(packed + 2, code, len);
+    packed[2 + len] = '\0';
+    packed[3 + len] = 0;                      /* i16 num_imports = 0 */
+    packed[4 + len] = 0;
+
+    int32_t ind = 0;
+    buffer_append_uint32(buf, packed_len - 2, &ind);
+    buffer_append_uint16(buf, crc16(packed, packed_len), &ind);
 
     s_buf         = buf;
-    s_buf_cap     = packed;
-    s_total       = packed;
+    s_buf_cap     = blob_len;
+    s_total       = blob_len;
     s_run_after   = run_after;
     s_progress    = progress;
     s_upload_done = done;
@@ -311,7 +348,8 @@ bool vesc_lisp_code_read(vlc_progress_cb_t progress, vlc_read_done_cb_t done,
     if (!s_start_sem) return false;
     if (s_busy) return false;
 
-    uint8_t *buf = calloc(1, LISP_MAX);
+    uint8_t *buf = heap_caps_calloc(1, LISP_MAX,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return false;
 
     s_buf         = buf;
@@ -344,6 +382,8 @@ void vesc_lisp_code_process_response(const uint8_t *data, unsigned int len)
     switch (cmd) {
     case COMM_LISP_ERASE_CODE:
     case COMM_LISP_SET_RUNNING:
+        /* reply: [cmd][u8 ok] */
+        s_ack_ok  = (ind < (int)len) ? (data[ind] != 0) : true;
         s_ack_cmd = cmd;
         s_ack_off = 0;
         s_ack_len = 0;
@@ -351,6 +391,10 @@ void vesc_lisp_code_process_response(const uint8_t *data, unsigned int len)
         break;
 
     case COMM_LISP_WRITE_CODE:
+        /* reply: [cmd][u8 ok][u32 offset] — the ok byte comes FIRST (same
+         * as the app's parseLispWrite); skipping it shifts the offset read
+         * by 8 bits (a successful off=0 ack parses as 0x01000000). */
+        s_ack_ok = (ind < (int)len) ? (data[ind++] != 0) : false;
         if (ind + 4 <= (int)len) s_ack_off = buffer_get_uint32(data, &ind);
         s_ack_cmd = cmd;
         s_ack_len = 0;

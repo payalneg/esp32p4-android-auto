@@ -54,6 +54,7 @@ extern "C" {
 #define VLP_MSG_ACTION    0x02u
 #define VLP_MSG_REQ_STATE 0x03u
 #define VLP_MSG_REQ_DASH  0x04u   /* request dashboard stats (cruise + profile) */
+#define VLP_MSG_PAS_SET   0x05u   /* P4 -> LISP: [i32 pas_amps*1000] PAS target current (fire-and-forget) */
 /* LISP -> P4 */
 #define VLP_MSG_UI_DESC   0x81u
 #define VLP_MSG_STATE     0x82u
@@ -133,6 +134,18 @@ bool vesc_lisp_panel_get_dash(vlp_dash_t *out);
 /* Button/toggle/slider action. Safe to call from the LVGL task (a tap handler):
  * it just queues the action; poll_loop sends it from the CAN poll task. */
 void vesc_lisp_panel_send_action(uint8_t ctrl_id, float value);
+
+/* Pedal-assist (PAS) setpoint forwarding to the master LISP script.
+ *
+ * vesc_lisp_panel_set_pas() stores the requested PAS current (amps); it is
+ * thread-safe and may be called from any task (e.g. the PAS task). The actual
+ * CAN send is deferred to vesc_lisp_panel_pas_loop(), which MUST run on the
+ * single CAN poll task (rt_task) alongside the other polls. pas_loop re-sends
+ * the setpoint at ~20 Hz (so the VESC motor-command timeout stays fed) and acts
+ * as a watchdog: if no fresh setpoint arrives for ~400 ms it sends 0 once and
+ * goes quiet, letting the VESC coast. */
+void vesc_lisp_panel_set_pas(float amps);
+void vesc_lisp_panel_pas_loop(void);
 
 /* Fan-out hook — call from vesc_packet_dispatch. Gates on COMM_CUSTOM_APP_DATA
  * + the 'VP' magic and ignores everything else. Runs on the CAN task. */

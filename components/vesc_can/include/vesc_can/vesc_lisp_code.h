@@ -11,11 +11,10 @@
     callbacks INVOKED FROM THE WORKER TASK — a UI caller must marshal those
     onto its own (e.g. LVGL) thread.
 
-    NOTE: the exact COMM_LISP_{WRITE,ERASE,READ}_CODE wire format and the
-    on-flash "packed" header ([int32 code_len][int16 num_imports][code\0])
-    follow the documented VESC firmware / VESC Tool CodeLoader layout. It
-    must be validated against the target firmware (e.g. by sniffing a VESC
-    Tool upload through the BLE NUS bridge). See vesc_lisp_code.c.
+    The COMM_LISP_{WRITE,ERASE,READ}_CODE wire format follows VESC Tool's
+    CodeLoader: uploads carry a [u32 size][u16 crc16] header + packed code
+    (the VESC refuses to start a script whose stored crc doesn't match),
+    reads return the raw code text from offset 0. See vesc_lisp_code.c.
 */
 
 #pragma once
