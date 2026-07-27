@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "dev_settings.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -184,9 +185,13 @@ static void rx_packet_complete(const uint8_t *payload, uint16_t len)
     ESP_LOGD(TAG, "BLE→CAN cmd 0x%02X len=%u", payload[0], (unsigned)len);
     /* send=0 — VESC controller replies via CAN; comm_can's RX task wraps
      * the response into PROCESS_RX_BUFFER and the handler in main.c
-     * fans it back to ble_nus_forward_response. */
-    comm_can_send_buffer((uint8_t)CONFIG_VESC_CAN_TARGET_ID,
-                         payload, len, 0);
+     * fans it back to ble_nus_forward_response.
+     *
+     * Target = the runtime-configured primary VESC (Settings → Target VESC
+     * ID, NVS-backed), NOT the compile-time Kconfig default — otherwise the
+     * bridge keeps talking to a node that may not exist on the user's bus
+     * while the dashboard (which reads the same setting) works fine. */
+    comm_can_send_buffer(settings_get_target_vesc_id(), payload, len, 0);
 }
 
 static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,
