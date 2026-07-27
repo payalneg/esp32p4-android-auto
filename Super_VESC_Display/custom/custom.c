@@ -84,6 +84,7 @@ typedef struct num_field {
 
 static num_field_t s_target_id_field;
 static num_field_t s_second_head_id_field;
+static num_field_t s_controller_id_field;
 static num_field_t s_battery_capacity_field;
 static num_field_t s_power_max_field;
 static num_field_t s_clock_hour_field;
@@ -213,8 +214,9 @@ static lv_obj_t *settings_display_flip_switch = NULL;
 static lv_obj_t *settings_display_flip_label = NULL;
 static lv_obj_t *settings_brightness_slider = NULL;
 static lv_obj_t *settings_brightness_label = NULL;
-static lv_obj_t *settings_controller_id_slider = NULL;
 static lv_obj_t *settings_controller_id_label = NULL;
+static lv_obj_t *settings_controller_id_plus_btn = NULL;
+static lv_obj_t *settings_controller_id_minus_btn = NULL;
 static lv_obj_t *settings_battery_capacity_label = NULL;
 static lv_obj_t *settings_battery_capacity_plus_btn = NULL;
 static lv_obj_t *settings_battery_capacity_minus_btn = NULL;
@@ -1384,21 +1386,21 @@ static void brightness_slider_event_cb(lv_event_t *e) {
                               settings_wrapper_persist_brightness);
 }
 
-// Event handler for Controller ID slider
-static void controller_id_slider_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-    lv_obj_t *slider = lv_event_get_target(e);
-    int32_t value = lv_slider_get_value(slider);
-
-    char buf[32];
-    sprintf(buf, "Controller ID: %d", (int)value);
-    lv_label_set_text(settings_controller_id_label, buf);
-
-    settings_wrapper_set_controller_id_volatile((uint8_t)value);
+// Display CAN ID (this head unit's own node id) — value-change callback.
+// The volatile setter fires on_controller_id_changed (main.c), which re-arms
+// TWAI under the new ID right away; only the NVS commit is debounced.
+static void controller_id_on_change(num_field_t *f) {
+    settings_wrapper_set_controller_id_volatile((uint8_t)f->value);
     debounced_commit_schedule(&s_controller_id_commit,
                               settings_wrapper_persist_controller_id);
+}
 
-    lv_label_set_text(settings_info_label, "Controller ID requires restart!");
+static void controller_id_plus_btn_event_cb(lv_event_t *e) {
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_controller_id_field);
+}
+
+static void controller_id_minus_btn_event_cb(lv_event_t *e) {
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_controller_id_field);
 }
 
 // Battery Capacity — stored as int with 0.1 Ah step (e.g., 150 → 15.0 Ah)
@@ -2222,9 +2224,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_brightness_slider) {
             lv_slider_set_value(settings_brightness_slider, 80, LV_ANIM_ON);
         }
-        if (settings_controller_id_slider) {
-            lv_slider_set_value(settings_controller_id_slider, 2, LV_ANIM_ON);
-        }
+        if (s_controller_id_field.label)    num_field_set(&s_controller_id_field, 2);
         if (s_battery_capacity_field.label) num_field_set(&s_battery_capacity_field, 150); // 15.0 Ah
         if (settings_battery_calc_mode_dropdown) {
             lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, 0);
@@ -2353,7 +2353,20 @@ void settings_ui_init(lv_ui *ui) {
     settings_second_head_id_plus_btn = settings_step_btn_create(ui->settings,
         SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, second_head_id_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
-    
+
+    // ========== Display CAN ID (this head unit's node on the bus) ==========
+    settings_controller_id_label = settings_heading_create(ui->settings, y_pos, "Display CAN ID:");
+    s_controller_id_field = (num_field_t){
+        .value = controller_id, .min = 1, .max = 254, .step = 1, .decimals = 0,
+        .on_change = controller_id_on_change,
+    };
+    settings_controller_id_minus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, controller_id_minus_btn_event_cb);
+    settings_value_label_init(ui->settings, &s_controller_id_field, y_pos + 5, 0x00a9ff);
+    settings_controller_id_plus_btn = settings_step_btn_create(ui->settings,
+        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, controller_id_plus_btn_event_cb);
+    y_pos += SETTINGS_ROW_H;
+
     // ========== CAN Speed Dropdown ==========
     settings_can_speed_label = settings_heading_create(ui->settings, y_pos, "CAN Speed (kbps)");
 
@@ -2761,28 +2774,6 @@ void settings_ui_init(lv_ui *ui) {
     
     y_pos += spacing;
     */
-    /*
-    // ========== Controller ID Slider ==========
-    settings_controller_id_label = lv_label_create(ui->settings);
-    sprintf(buf, "Controller ID: %d", controller_id);
-    lv_label_set_text(settings_controller_id_label, buf);
-    lv_obj_set_pos(settings_controller_id_label, 20, y_pos);
-    lv_obj_set_style_text_color(settings_controller_id_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_controller_id_label, &lv_font_montserratMedium_16, 0);
-    
-    settings_controller_id_slider = lv_slider_create(ui->settings);
-    lv_slider_set_range(settings_controller_id_slider, 1, 254);
-    lv_slider_set_value(settings_controller_id_slider, controller_id, LV_ANIM_OFF);
-    lv_obj_set_pos(settings_controller_id_slider, 20, y_pos + 30);
-    lv_obj_set_size(settings_controller_id_slider, 770, 15);
-    lv_obj_set_style_bg_color(settings_controller_id_slider, lv_color_hex(0x2a3440), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(settings_controller_id_slider, lv_color_hex(0x00ff00), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(settings_controller_id_slider, lv_color_hex(0xffffff), LV_PART_KNOB);
-    lv_obj_add_event_cb(settings_controller_id_slider, controller_id_slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    y_pos += spacing;
-    */
-    
     /*
     // ========== Show FPS Switch ==========
     bool show_fps = settings_wrapper_get_show_fps();
