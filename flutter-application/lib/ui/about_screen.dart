@@ -59,7 +59,7 @@ class _AboutScreenState extends State<AboutScreen> {
           ),
           const SizedBox(height: 12),
           Center(
-            child: Text('AA Bridge',
+            child: Text(t(context, 'app.title'),
                 style: Theme.of(context).textTheme.headlineSmall),
           ),
           const SizedBox(height: 24),

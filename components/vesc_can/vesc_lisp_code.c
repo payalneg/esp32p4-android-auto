@@ -40,6 +40,7 @@
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_io_data.h"
 
 #include "esp_heap_caps.h"
@@ -185,12 +186,15 @@ static void pause_pollers(void)
     vesc_rt_data_stop();
     vesc_lisp_poll_stop();
     vesc_io_data_set_active(false);
+    /* Includes the dashboard poll, which runs regardless of the drawer. */
+    vesc_lisp_panel_polls_pause(true);
 }
 
 static void resume_pollers(void)
 {
     vesc_rt_data_start();
     vesc_lisp_poll_start();
+    vesc_lisp_panel_polls_pause(false);
     /* io_data is driven by the realtime screen's own active flag; leave off. */
 }
 

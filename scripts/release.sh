@@ -84,11 +84,51 @@ echo "==> staging firmwares into the Flutter app"
 scripts/stage_firmware_asset.sh
 
 echo "==> flutter build apk"
+# Deliberately a plain build: NO --dart-define for the LLM key. Release APKs
+# land in release/, which IS tracked by git, so a key baked in here would be
+# committed and live in the history for ever. Personal builds with an embedded
+# key come from scripts/build_app.sh and stay in build/ (git-ignored).
 ( cd flutter-application && flutter pub get && flutter build apk --release )
 
 APK="flutter-application/build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$APK" ]] || APK="$(find flutter-application/build -name 'app-release.apk' -print -quit 2>/dev/null || true)"
 [[ -n "$APK" && -f "$APK" ]] || { echo "release: built APK not found" >&2; exit 1; }
+
+# Belt and braces: if .env holds a key, make sure neither it nor its masked
+# form is inside the APK we are about to stage into a TRACKED directory. This
+# catches a stale build/ left over from scripts/build_app.sh.
+#
+# The APK is a zip, so grepping it directly finds nothing even when the key IS
+# there — the check has to run over the decompressed lib/*/libapp.so.
+if [[ -f .env ]]; then
+    LEAK_KEY="$(grep -E '^LLM_API_KEY=' .env | head -n1 | cut -d= -f2- | tr -d '"'"'"'[:space:]')"
+    if [[ -n "$LEAK_KEY" ]]; then
+        if ! APK="$APK" KEY="$LEAK_KEY" MASK='aa-bridge/vesc-display/2026' python3 - <<'PY'
+import base64, os, sys, zipfile
+key = os.environ["KEY"].encode()
+mask = os.environ["MASK"].encode()
+obf = base64.b64encode(
+    bytes(b ^ mask[i % len(mask)] for i, b in enumerate(key)))
+with zipfile.ZipFile(os.environ["APK"]) as z:
+    for name in z.namelist():
+        if not name.endswith(".so") and not name.endswith(".dex"):
+            continue
+        blob = z.read(name)
+        if key in blob or obf in blob:
+            print(f"release: found the LLM API key in {name}", file=sys.stderr)
+            sys.exit(1)
+sys.exit(0)
+PY
+        then
+            echo "release: ABORT — the built APK carries your LLM API key." >&2
+            echo "release: it came from a scripts/build_app.sh build; run" >&2
+            echo "release:   (cd flutter-application && flutter clean)" >&2
+            echo "release: and re-run this script. release/*.apk is committed." >&2
+            exit 1
+        fi
+        echo "==> APK checked: no embedded API key"
+    fi
+fi
 
 # --- stage versioned artifacts (keep only the latest of each kind) ------------
 echo "==> staging release artifacts"

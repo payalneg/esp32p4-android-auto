@@ -49,3 +49,8 @@ logs/
 
 # Compiled host tool (source is scripts/mid2melody.c)
 scripts/mid2melody
+
+# Local secrets (LLM_API_KEY for the in-app assistant, etc.)
+.env
+.env.*
+!.env.example

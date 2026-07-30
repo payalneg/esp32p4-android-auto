@@ -197,6 +197,16 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_GATT_CLIENT=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+# 512 B ATT MTU (NimBLE's own default is 256). VESC Tool already asks for 512
+# and the companion app now does too, so a ~415 B framed LISP READ reply rides
+# in ONE notification instead of two — one fewer connection event per chunk on
+# a path that is pure round-trip latency. Notifications are chained out of the
+# msys pool, so the block count goes up with the MTU: at 256 B/block a 512 B
+# PDU takes 2-3 blocks, and the stock 12 empty out mid-burst → BLE_HS_ENOMEM,
+# which ble_nus.c can only answer with a 5 ms backoff. Both pools live in
+# PSRAM here (MEM_ALLOC_MODE_EXTERNAL), so the extra 3 KiB is free.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
 
 # ===== H.264 SW decoder =====
 # IRAM-resident hot path (~22 KiB) leaves too little internal SRAM heap

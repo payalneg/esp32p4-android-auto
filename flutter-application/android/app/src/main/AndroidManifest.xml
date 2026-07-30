@@ -21,7 +21,7 @@
         xmlns:tools="http://schemas.android.com/tools"/>
 
     <application
-        android:label="AA Bridge"
+        android:label="VESC Display Tool"
         android:name=".AaBridgeApplication"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
@@ -48,7 +48,7 @@
         <service
             android:name=".NotifListener"
             android:exported="true"
-            android:label="AA Bridge notifications"
+            android:label="VESC Display Tool notifications"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService"/>

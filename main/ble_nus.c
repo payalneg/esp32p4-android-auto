@@ -18,6 +18,7 @@
 #include "vesc_can/packet_parser.h"
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/vesc_io_data.h"
+#include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_rt_data.h"
 
@@ -143,6 +144,7 @@ static void poll_resume_cb(void *arg)
     s_pollers_paused = false;
     vesc_rt_data_start();
     vesc_lisp_poll_start();
+    vesc_lisp_panel_polls_pause(false);
     /* io_data is re-enabled by the realtime screen itself; leave off. */
     ESP_LOGI(TAG, "LISP transfer idle — pollers resumed");
 }
@@ -161,6 +163,10 @@ static void lisp_transfer_touch(void)
         vesc_rt_data_stop();
         vesc_lisp_poll_stop();
         vesc_io_data_set_active(false);
+        /* The panel's dashboard poll is "always on" and fires every 200 ms —
+         * with code chunks ~50 ms apart it landed inside a transfer regularly,
+         * and its multi-frame reply shares the one per-sender reassembly slot. */
+        vesc_lisp_panel_polls_pause(true);
         ESP_LOGI(TAG, "LISP transfer active — pollers paused");
     }
     esp_timer_stop(s_poll_resume_timer);

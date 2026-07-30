@@ -116,8 +116,15 @@ class BleService {
   /// Tool) plus the device name in the scan response. The NotifBridge
   /// service isn't advertised because two 128-bit UUIDs don't fit in
   /// 31 bytes — so we scan unfiltered and let the user pick by name.
-  Future<List<ScanResult>> scan({Duration timeout = const Duration(seconds: 6)}) async {
-    _setState(BleConnState.scanning);
+  ///
+  /// [mutateState] drives the scanning/idle state pushes. The pairing screen
+  /// wants them; the LISP editor's adapter picker does not — it scans while a
+  /// head unit may be connected, and clobbering the state would make the UI
+  /// paint "not connected" and hide the head-unit tiles.
+  Future<List<ScanResult>> scan(
+      {Duration timeout = const Duration(seconds: 6),
+      bool mutateState = true}) async {
+    if (mutateState) _setState(BleConnState.scanning);
     final results = <String, ScanResult>{};
     final sub = FlutterBluePlus.scanResults.listen((batch) {
       for (final r in batch) {
@@ -131,7 +138,7 @@ class BleService {
     await FlutterBluePlus.startScan(timeout: timeout);
     await FlutterBluePlus.isScanning.where((s) => !s).first;
     await sub.cancel();
-    _setState(BleConnState.idle);
+    if (mutateState) _setState(BleConnState.idle);
     return results.values.toList();
   }
 
@@ -202,7 +209,11 @@ class BleService {
 
   Future<void> _completeHandshake(BluetoothDevice device) async {
     try {
-      await device.requestMtu(247);
+      // 512 matches the head unit's preferred MTU: a whole LISP read chunk
+      // (~415 B framed) then arrives in one notification instead of two.
+      // Android caps at 517 and negotiates down for peers that ask for less,
+      // so this is safe against older firmware still preferring 256.
+      await device.requestMtu(512);
     } catch (_) {}
     final services = await device.discoverServices();
     final svc = services.firstWhere(

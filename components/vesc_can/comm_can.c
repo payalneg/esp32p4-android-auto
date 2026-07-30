@@ -64,6 +64,11 @@ static volatile uint8_t s_rx_buffer_response_type = 1;
 static twai_message_t   s_rx_buf[RXBUF_LEN];
 static volatile int     s_rx_write = 0;
 static volatile int     s_rx_read  = 0;
+/* rx_task pokes this so process_task starts decoding the moment a frame lands
+ * instead of on the next tick. With FREERTOS_HZ=100 the old fixed
+ * vTaskDelay(10 ms) added 0-10 ms to EVERY reassembled reply — a flat ~15%
+ * tax on the request/reply round-trips that BLE↔CAN bridging is made of. */
+static TaskHandle_t     s_process_task;
 
 typedef struct {
     uint8_t controller_id;
@@ -127,7 +132,8 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
         /* 4096: the dispatch chain fans out to every *_process_response handler
          * (RT data, LISP stats, IO, config, LISP code, quick-action panel); a
          * couple of them parse multi-hundred-byte frames. 3072 was marginal. */
-        xTaskCreatePinnedToCore(process_task, "can_proc", 4096, NULL, 8, NULL, 0);
+        xTaskCreatePinnedToCore(process_task, "can_proc", 4096, NULL, 8,
+                                &s_process_task, 0);
         s_sem_init_done = true;
     }
 
@@ -648,6 +654,9 @@ static void rx_task(void *arg)
                 s_rx_buf[s_rx_write] = msg;
                 s_rx_write = next_write;
             }
+            /* Same priority as us, so this doesn't preempt mid-burst: the
+             * decoder runs as soon as we block on twai_receive again. */
+            if (s_process_task) xTaskNotifyGive(s_process_task);
         }
     }
     s_rx_running = false;
@@ -658,7 +667,11 @@ static void process_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        /* Woken by rx_task per frame; the 10 ms cap is only a safety net for
+         * a frame that raced the notification (and keeps the old cadence if
+         * the handle was ever missed). Clear-on-exit: a burst of notifies
+         * collapses into one wake, then the drain loop below empties it all. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
         while (s_rx_read != s_rx_write) {
             twai_message_t *msg = &s_rx_buf[s_rx_read];
             int next_read = s_rx_read + 1;

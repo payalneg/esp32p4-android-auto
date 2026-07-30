@@ -121,6 +121,19 @@ void vesc_lisp_panel_set_enabled(bool enabled);
  * the drawer is closed. Also flushes any queued button/slider actions. */
 void vesc_lisp_panel_poll_loop(void);
 
+/* Silence BOTH of this module's reply-expecting polls (UI_DESC/STATE and the
+ * dashboard stats) for the duration of a LISP code transfer.
+ *
+ * The comm_can reassembler holds one multi-frame transfer per sender id, so a
+ * 200 ms dash poll landing in the middle of a code chunk corrupts both — CRC
+ * mismatch, dropped packet, and a 1.5 s timeout on the reader. The other polls
+ * were already paused (vesc_rt_data_stop / vesc_lisp_poll_stop); dash_loop is
+ * "always on" and was not, which left a collision window every 200 ms.
+ *
+ * PAS forwarding is deliberately NOT gated: it is fire-and-forget (send=3, no
+ * reply) so it cannot collide, and pausing it would drop the motor setpoint. */
+void vesc_lisp_panel_polls_pause(bool paused);
+
 /* UI_DESC / STATE requests — issued from the CAN poll task via poll_loop. */
 void vesc_lisp_panel_request_ui(void);
 void vesc_lisp_panel_request_state(void);

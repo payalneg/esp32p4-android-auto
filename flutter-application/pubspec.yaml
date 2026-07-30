@@ -1,7 +1,7 @@
 name: aa_bridge
 description: "Notification + media BLE bridge to ESP32-P4 head unit."
 publish_to: 'none'
-version: 0.2.44+57
+version: 0.3.1+59
 
 environment:
   sdk: ^3.7.2
@@ -22,6 +22,9 @@ dependencies:
   file_picker: ^8.1.2
   path_provider: ^2.1.4
   image: ^4.2.0
+  # The DeepSeek API key belongs in the Android Keystore / iOS Keychain, not in
+  # SharedPreferences (which lands in adb/cloud backups).
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:
@@ -39,6 +42,11 @@ flutter:
     - assets/firmware/esp32p4_android_auto-waveshare.bin
     - assets/firmware/esp32p4_android_auto-jc4880.bin
     - assets/firmware/version.txt
+    # VESC BLE Helper (ESP32-C3) firmware, so it can be flashed with no network.
+    # Fetched from that project's GitHub releases by
+    # scripts/stage_firmware_asset.sh — never committed here.
+    - assets/firmware/esp32c3_ble_helper.bin
+    - assets/firmware/esp32c3_ble_helper_version.txt
 
 # Run: dart run flutter_launcher_icons
 flutter_launcher_icons:

@@ -22,7 +22,7 @@ class ForegroundBridge {
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'aabridge.link',
-        channelName: 'AA Bridge link',
+        channelName: 'VESC Display Tool link',
         channelDescription: 'Keeps the head-unit link alive',
         // LOW: a silent status pill, not a heads-up alert.
         channelImportance: NotificationChannelImportance.LOW,
@@ -51,7 +51,7 @@ class ForegroundBridge {
     // connection + pump (see ble_host.dart).
     await FlutterForegroundTask.startService(
       serviceId: 7242,
-      notificationTitle: 'AA Bridge — disconnected',
+      notificationTitle: 'VESC Display Tool — disconnected',
       notificationText: 'Waiting for head unit…',
       callback: startBleTask,
     );
@@ -72,7 +72,9 @@ class ForegroundBridge {
     if (!await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.updateService(
       notificationTitle:
-          connected ? 'AA Bridge — connected' : 'AA Bridge — disconnected',
+          connected
+              ? 'VESC Display Tool — connected'
+              : 'VESC Display Tool — disconnected',
       notificationText: subtitle.isNotEmpty
           ? subtitle
           : (connected ? 'Linked to head unit' : 'Waiting for head unit…'),

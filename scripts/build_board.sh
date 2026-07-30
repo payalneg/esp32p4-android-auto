@@ -33,15 +33,38 @@ command -v idf.py >/dev/null 2>&1 || {
     echo "build_board: idf.py not found — run '. \$IDF_PATH/export.sh' first" >&2; exit 1; }
 
 # run_board <board> <idf.py args...>
-run_board() {
+#
+# Runs in a subshell because of the Python-environment dance below: each build
+# directory remembers the interpreter it was CONFIGURED with, and idf.py flatly
+# refuses to build under a different one ("configured with … Run 'idf.py
+# fullclean'"). On this machine the two boards were configured with different
+# venvs, so building them both from one shell used to fail on the second one —
+# which meant scripts/release.sh never got past board #1. Point PATH at the
+# interpreter each build dir expects, per board, and both just work.
+run_board() (
     local board="$1"; shift
     local overlay="sdkconfig.defaults.${board}"
     [[ -f "$overlay" ]] || { echo "build_board: $overlay not found" >&2; exit 1; }
+
+    local cache="build_${board}/CMakeCache.txt"
+    if [[ -f "$cache" ]]; then
+        local py
+        py="$(sed -n 's/^PYTHON:[A-Za-z]*=//p' "$cache" | head -n1)"
+        if [[ -n "$py" && -x "$py" ]]; then
+            local bin_dir; bin_dir="$(dirname "$py")"
+            if [[ "$(command -v python || true)" != "$py" ]]; then
+                echo "build_board: ${board} was configured with $py — using it"
+            fi
+            export PATH="${bin_dir}:${PATH}"
+            export IDF_PYTHON_ENV_PATH="$(dirname "$bin_dir")"
+        fi
+    fi
+
     idf.py -B "build_${board}" \
            -D SDKCONFIG="build_${board}/sdkconfig" \
            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;${overlay}" \
            "$@"
-}
+)
 
 board="${1:-all}"
 

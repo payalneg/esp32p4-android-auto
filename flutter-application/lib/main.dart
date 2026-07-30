@@ -9,6 +9,7 @@ import 'app.dart';
 import 'ble/ble_proxy.dart';
 import 'bridge/foreground_bridge.dart';
 import 'i18n/strings.dart';
+import 'settings/agent_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +39,9 @@ Future<void> main() async {
   // Wire up the UI side of the port and prime the saved-device id so the home
   // screen shows it at first paint.
   await BleProxy.instance.init();
+  // Reads the API key from the system keystore; the editor hides the Assistant
+  // tab until this says a key is configured.
+  await AgentSettings.instance.load();
   final locale = LocaleNotifier();
   await locale.load();
   // Start the foreground service — this launches the background isolate
