@@ -1,0 +1,131 @@
+# Changelog
+
+Two version trains ship together and are bumped in lockstep by
+`scripts/release.sh`: the **ESP32-P4 firmware** (`1.x.y`, `version.txt`) and the
+**Flutter companion app** (`0.x.y`, `pubspec.yaml`). The external BT-agent
+firmware is versioned separately and is only bumped when `tools/bt_agent/`
+changes.
+
+Entries below name the firmware version; the app version of the same release is
+the one recorded in the release commit.
+
+## v1.3.1 / app 0.3.1 — 2026-07-31
+
+30 commits, 130 files, +27 929 / −8 284 since v1.2.35.
+
+### New: AI assistant for LISP
+
+- An "Assistant" tab in the LISP editor. It reads the script off the VESC,
+  edits it with anchored search/replace patches, runs the linter, flashes only
+  on an explicit tap, and then **verifies on hardware** — doneCtx, heap trend,
+  sentinel globals, print output. The protocol acks only prove the bytes
+  reached flash; they succeed even when the script is dead, so they are not
+  trusted.
+- Every flash and every script start needs a tap; stopping a script never does.
+  Provider is OpenRouter (or DeepSeek directly), the key is yours and lives in
+  the system keystore.
+- A VESC LispBM reference ships in the prompt — motor commands, config, CAN,
+  buffers, events — taken from the upstream bldc docs, plus this project's own
+  rules and worked examples.
+
+### New: ESP32-C3 BLE helper configurator
+
+- Status, parameters, pairing and firmware screens: cadence gauge, assist
+  current and levels, binding of buttons and the cadence sensor (the helper
+  itself does the scanning), per-button CAN commands, PAS tuning.
+- Runs as a second GATT link from the background isolate, so the head-unit
+  connection stays up while you configure the helper.
+- The helper's firmware is pulled from its GitHub releases at build time and
+  bundled into the APK, so it can be flashed with no network.
+
+### VESC console and LISP linter
+
+- Script `(print ...)` output is finally visible on the phone. The bytes always
+  arrived — the head unit's bridge forwards every packet — but the link layer
+  dropped anything that matched no pending request.
+- The linter encodes the rules that fail SILENTLY on hardware: one `@const`
+  block, mutable `def`s and `bufcreate` above it, and no forward references
+  from top-level statements (not "spawns last" — `main.lisp` legitimately
+  spawns from the middle of its const block).
+- Syntax highlighting in the editor and in the assistant's code blocks.
+
+### LISP and motor control
+
+- LISP editor in the app over any NUS link: the head unit's bridge, a
+  stand-alone VESC BLE adapter, or the helper.
+- Upload format now matches VESC Tool's CodeLoader. WRITE offsets include the
+  8-byte flash header the VESC validates at startup, so raw uploads flashed
+  fine and then never loaded. Limit raised 16K → 120K, pollers pause during a
+  transfer, faster BLE reads.
+- The motor is owned by a single current-based arbiter in LISP (100 Hz):
+  smooth ramps, brake slew, no step to zero. The stock ADC app stays configured
+  but its output is suppressed by a rolling `app-disable-output` — if the
+  script ever dies the motor stops on the command timeout and the stock
+  throttle comes back in ~1.5 s.
+- Tuning moved out of the quick panel: ramp times are read live from VESC Tool,
+  cruise PI gains live in the script.
+
+### Pedal assist (PAS)
+
+- Entirely on the head unit: a BLE central link to the cadence sensor, the PAS
+  loop, and a current setpoint handed to the arbiter on the VESC. The phone is
+  not involved.
+- Quiet on CAN unless actually assisting. PAS_SET frames used to stream at
+  ~20 Hz forever, even with no sensor connected.
+
+### Display and settings
+
+- 180° screen rotation for upside-down mounting, done at render level:
+  panel-level mirroring on the ST7701 produces stripes because the DPI scan
+  order is fixed — the data has to be flipped, not the panel.
+- Hold-to-repeat on the +/− step buttons in settings.
+- "Display CAN ID" row — the head unit's own CAN node id. The backend existed;
+  its UI had been left commented out.
+- throttle-curve range corrected to −100..100%. An audit of 985 parameters
+  across three firmware versions found this to be the only display-range
+  divergence.
+
+### BLE and stability
+
+- Advertising continues while a peer is connected, so VESC Tool can find the
+  head unit alongside the phone app. The third NimBLE slot stays reserved for
+  the cadence sensor.
+- The NUS→CAN bridge targets the VESC id from settings instead of a
+  compile-time default. Anyone whose VESC sits on a different CAN id had a
+  working dashboard but VESC Tool over BLE timing out against a node that does
+  not exist.
+- No more screen stalls while riding: the battery tracker's NVS commits moved
+  off the LVGL thread and the trip log is trickled out over time.
+- The app's whole BLE stack moved into the foreground-service isolate;
+  reconnect hardened.
+
+### Tooling
+
+- `scripts/build_app.sh` builds the APK with **no embedded API key** by
+  default; `--with-key` masks the key from `.env` into the build.
+- `scripts/release.sh` aborts if a key ends up in the APK anyway. The check
+  reads the decompressed zip entries — grepping the `.apk` itself always
+  reports "clean" even when the key is sitting in `libapp.so`.
+- `scripts/build_board.sh` uses each build directory's own Python venv, so both
+  boards build in one run. Releases used to stop at the first board.
+
+## Earlier releases
+
+Shipped between v1.2.35 and v1.3.1; cut as release commits but not tagged.
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.2.44 / 0.2.44 | 2026-07-27 | BLE bridge targets the configured VESC id |
+| 1.2.43 / 0.2.43 | 2026-07-27 | Display CAN ID in settings |
+| 1.2.42 / 0.2.42 | 2026-07-21 | PAS merged to main; CAN-quiet PAS; VESC Tool alongside the app |
+| 1.2.41 / 0.2.41 | 2026-07-04 | Deferred battery NVS, trickled trip log — no flash stalls while riding |
+| 1.2.40 / 0.2.40 | 2026-07-06 | Hold-to-repeat on the +/− step buttons |
+| 1.2.39 / 0.2.39 | 2026-07-05 | 180° flip fixed at render level (reboot to apply) |
+| 1.2.38 / 0.2.38 | 2026-07-05 | 180° screen flip option; on-device pedal assist (2026-06-30) |
+| 1.2.37 / 0.2.37 | 2026-06-29 | Companion BLE moved into the foreground-service isolate; reconnect hardening |
+| 1.2.36 / 0.2.36 | 2026-06-23 | VESC config throttle-curve range −100..100% |
+
+## v1.2.35 / app 0.2.35 — 2026-06-22
+
+LISP quick-action panel with cruise control and profiles, LVGL partial-render
+performance work, battery charge/swap detection by voltage.
