@@ -406,6 +406,35 @@ Two ways to manage files on the head unit:
 - **From the phone**: *Home → Device files* (shown when connected to firmware
   that supports it) — list folders, download to the phone, upload from the
   phone, rename, delete, mkdir.
+- **From a browser**: `http://android-auto.local/files` (or the SoftAP gateway
+  IP) — the same browse / preview / upload / rename / move / delete over both
+  drives.
+
+### Web LISP editor
+
+`http://android-auto.local/lisp` — a full LispBM editor for the script running
+on the VESC, from any browser on the same network (the phone joins the head
+unit's SoftAP anyway):
+
+- syntax highlighting, line numbers, rainbow + matching parens, find/replace,
+  block indent, auto-close;
+- a linter for the mistakes that cost the most time here: paren balance,
+  unterminated strings, `@const-start` / `@const-end` pairing, defuns left
+  outside the const block, and threads started before the function they run
+  is defined;
+- the on-device script library (`/vescfs/lisp` and microSD) with open, save,
+  rename / move, delete, mkdir and upload;
+- **Read VESC** / **Upload** / **Upload + Run** / **Start** / **Stop** over CAN
+  with a progress bar (the transfer runs asynchronously, so the rest of the
+  server stays responsive);
+- a live console of the script's `(print ...)` output, plus a REPL line for
+  evaluating an expression without reflashing the script;
+- LISP stats (CPU / heap / memory / stack and exported variables), polled only
+  while that tab is open.
+
+Turn it off with `CONFIG_LISP_HTTP_ENABLED=n` (costs ~15 KiB of flash).
+`scripts/lisp_web_mock.py` serves the same page against a fake device, for
+working on the editor without a board.
 
 **Set a startup GIF**: upload an animated GIF to `/vescfs` via *Device files*
 and name it **`splash.gif`** (upload it already named that, or rename it after

@@ -41,6 +41,15 @@ void vesc_lisp_poll_stop(void);
  * pollers so we don't double the FreeRTOS overhead for a single CAN bus. */
 void vesc_lisp_poll_loop(void);
 
+/* Ask for ONE COMM_LISP_GET_STATS without turning the periodic poll on.
+ * Callable from any task: it only raises a flag, the request itself goes
+ * out from vesc_lisp_poll_once_loop() on the CAN task (that serialisation
+ * is what keeps the big multi-frame reply from colliding with the RT poll).
+ * Used by the web LISP editor while its Stats tab is open — the bus stays
+ * quiet the rest of the time. */
+void vesc_lisp_poll_request_once(void);
+void vesc_lisp_poll_once_loop(void);
+
 void vesc_lisp_poll_process_response(const uint8_t *data, unsigned int len);
 
 const lisp_stats_t *vesc_lisp_poll_get_stats(void);

@@ -3,6 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_mac.h"
 #include "esp_lv_adapter_input.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -61,6 +62,7 @@ void port_start_app_hook(void)
 #include "mdns_advertise.h"
 #include "ota_http.h"
 #include "files_http.h"
+#include "lisp_http.h"
 #include "ota_screen.h"
 #include "tcp_server.h"
 #include "touch_input.h"
@@ -70,6 +72,7 @@ void port_start_app_hook(void)
 #include "vesc_can/comm_can.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
+#include "vesc_can/vesc_lisp_console.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_io_data.h"
 #include "vesc_can/vesc_lisp_code.h"
@@ -168,9 +171,13 @@ static void install_lvgl_touch_indev(void)
 static void vesc_packet_dispatch(const uint8_t *data, unsigned int len)
 {
     vesc_rt_data_process_response(data, len);
-#if CONFIG_VESC_CAN_LISP_POLL_ENABLE
+    /* COMM_LISP_GET_STATS replies. Unconditional: the periodic poll is off by
+     * default, but the web editor asks for stats one request at a time and
+     * still needs the answer parsed. Gates on data[0] like everything here. */
     vesc_lisp_poll_process_response(data, len);
-#endif
+    /* Script output — COMM_LISP_PRINT / COMM_PRINT — into the console ring
+     * the web editor polls. Unsolicited, arrives whenever a script prints. */
+    vesc_lisp_console_process_response(data, len);
     /* ADC/PPM decoded inputs for the realtime viewer (gated active). */
     vesc_io_data_process_response(data, len);
     /* LISP code upload/read acks (gated on an in-flight operation). */
@@ -236,9 +243,7 @@ static void on_controller_id_changed(uint8_t new_id)
 static void on_target_id_changed(uint8_t new_id)
 {
     vesc_rt_data_init(new_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
-#if CONFIG_VESC_CAN_LISP_POLL_ENABLE
     vesc_lisp_poll_init(new_id, CONFIG_VESC_CAN_LISP_INTERVAL_MS);
-#endif
     vesc_io_data_init(new_id, 150);
     vesc_lisp_code_set_target(new_id);
     vesc_lisp_panel_set_target(new_id);
@@ -397,10 +402,25 @@ void app_main(void)
         vesc_ui_updater_start();
     } else if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
                               ctrl_id, can_kbps) == ESP_OK) {
+        /* Identity for VESC Tool's CAN scan: it pings the bus, then asks each
+         * node that answered for its firmware version, and lists whoever stays
+         * quiet as "Unknown". UUID = our WiFi MAC so two units on one bus are
+         * still distinguishable. */
+        {
+            uint8_t mac[6] = {0};
+            esp_read_mac(mac, ESP_MAC_WIFI_STA);
+            const esp_app_desc_t *desc = esp_app_get_description();
+            unsigned maj = 0, min = 0;
+            if (desc) sscanf(desc->version, "%u.%u", &maj, &min);
+            comm_can_set_fw_info("Super VESC Display", (uint8_t)maj, (uint8_t)min,
+                                 mac, sizeof(mac));
+        }
         vesc_rt_data_init(tgt_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
-#if CONFIG_VESC_CAN_LISP_POLL_ENABLE
+        /* Unconditional: init only stores the target id and leaves the poll
+         * inactive. The periodic poll still needs its Kconfig (below), but the
+         * web editor's one-shot stats request needs the right target either way. */
         vesc_lisp_poll_init(tgt_id, CONFIG_VESC_CAN_LISP_INTERVAL_MS);
-#endif
+        vesc_lisp_console_init();
         /* ADC/PPM poller: inactive until the realtime viewer opens it. */
         vesc_io_data_init(tgt_id, 150);
         /* LISP code upload/read worker (used by the LISP editor screen). */
@@ -499,6 +519,9 @@ void app_main(void)
      * /vescfs + microSD from any browser on the SoftAP. No-op if the server
      * didn't start. */
     files_http_register(ota_http_get_server());
+    /* Web LISP editor (/lisp) on the same server — edit + upload the VESC's
+     * LispBM script from a browser instead of the 800x480 touch keyboard. */
+    lisp_http_register(ota_http_get_server());
 
     /* Display sink first — it captures the panel handle from BSP and waits
      * idle until first frame. Then the H.264 pipe; push() is a no-op until

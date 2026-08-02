@@ -376,6 +376,22 @@ void vesc_lisp_code_set_running(bool run)
     send_set_running(run);
 }
 
+bool vesc_lisp_code_repl(const char *expr, uint32_t len)
+{
+    if (!expr || !len || s_busy) return false;
+    if (len > VESC_LISP_REPL_MAX) return false;
+
+    /* [cmd][expr][NUL] — same payload VESC Tool's lispSendReplCmd() sends.
+     * The reply is whatever the evaluation prints (COMM_LISP_PRINT), not an
+     * ack, so there is nothing to wait for here. */
+    uint8_t b[1 + VESC_LISP_REPL_MAX + 1];
+    b[0] = COMM_LISP_REPL_CMD;
+    memcpy(b + 1, expr, len);
+    b[1 + len] = '\0';
+    comm_can_send_buffer(s_target, b, len + 2, 0);
+    return true;
+}
+
 void vesc_lisp_code_process_response(const uint8_t *data, unsigned int len)
 {
     if (!s_busy || len < 1 || !s_ack_sem) return;

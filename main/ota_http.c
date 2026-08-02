@@ -92,7 +92,9 @@ static esp_err_t index_get_handler(httpd_req_t *req)
         "<div class=bar id=ba><div class=fill id=bf></div></div>"
         "<div class=status id=st></div>"
         "<div class=foot>"
-        "<a href=/info>&#9432; device info</a>"
+        "<a href=/info>&#9432; device info</a> &nbsp; "
+        "<a href=/files>&#128193; files</a> &nbsp; "
+        "<a href=/lisp>&#955; LISP editor</a>"
         "<details><summary>shell upload</summary>"
         "<pre>curl --data-binary @build/esp32p4_android_auto.bin \\\n"
         "  -H 'Content-Type: application/octet-stream' \\\n"
@@ -355,8 +357,9 @@ esp_err_t ota_http_start(void)
     cfg.lru_purge_enable  = true;
     cfg.stack_size        = 8192;
     /* OTA registers 4 handlers; the web file manager (files_http_register)
-     * adds 7 more → bump past the default 8. */
-    cfg.max_uri_handlers  = 16;
+     * adds 7 and the web LISP editor (lisp_http_register) 10 more → bump
+     * well past the default 8. */
+    cfg.max_uri_handlers  = 24;
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {

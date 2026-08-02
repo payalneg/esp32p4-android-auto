@@ -10,6 +10,7 @@ idf_component_register(
         "c6_ota.c"
         "ota_http.c"
         "files_http.c"
+        "lisp_http.c"
         "aa_frame.c"
         "aa_tls.c"
         "aa_handshake.c"
@@ -81,6 +82,31 @@ idf_component_register(
         joltwallet__littlefs
         json
 )
+
+# Web LISP editor page (main/web/lisp_editor.html) — gzipped at build time and
+# embedded in .rodata, served with Content-Encoding: gzip by lisp_http.c. Kept
+# as a real .html file instead of a C string literal (the way ota_http.c and
+# files_http.c hold their much smaller pages) so it stays editable; gzip takes
+# ~50 KiB of markup down to ~15 KiB of flash.
+#
+# target_add_binary_data rather than EMBED_FILES in the registration above:
+# EMBED_FILES needs the file to exist at configure time, and this one is
+# generated. add_dependencies makes the gzip run before the object is built.
+set(_lisp_web_src "${CMAKE_CURRENT_LIST_DIR}/web/lisp_editor.html")
+set(_lisp_web_gz  "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html.gz")
+# (copy + `gzip -f` rather than a `> redirect`: add_custom_command runs the
+#  command directly, without a shell to interpret the redirection.)
+add_custom_command(
+    OUTPUT "${_lisp_web_gz}"
+    COMMAND "${CMAKE_COMMAND}" -E copy
+            "${_lisp_web_src}" "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
+    COMMAND gzip -f -9 -n "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
+    DEPENDS "${_lisp_web_src}"
+    COMMENT "Compressing web LISP editor -> lisp_editor.html.gz"
+    VERBATIM)
+add_custom_target(lisp_web_gz DEPENDS "${_lisp_web_gz}")
+add_dependencies(${COMPONENT_LIB} lisp_web_gz)
+target_add_binary_data(${COMPONENT_LIB} "${_lisp_web_gz}" BINARY)
 
 # Reroute mbedTLS's UTCTime parser to our offset-tolerant wrapper. Required
 # to load the original aasdk head-unit certificate (whose validity uses

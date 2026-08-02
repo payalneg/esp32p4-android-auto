@@ -65,6 +65,15 @@ bool vesc_lisp_code_read(vlc_progress_cb_t progress, vlc_read_done_cb_t done,
 /* Start (run=true) or stop (run=false) the stored script. Fire-and-forget. */
 void vesc_lisp_code_set_running(bool run);
 
+/* Evaluate `expr` in the running script's environment (COMM_LISP_REPL_CMD).
+ * Fire-and-forget: the result comes back asynchronously as COMM_LISP_PRINT,
+ * i.e. through vesc_lisp_console. Returns false when an upload/read is in
+ * flight or the expression doesn't fit a single CAN buffer transfer
+ * (VESC_LISP_REPL_MAX — comm_can_send_buffer stops reassembling past 255
+ * payload bytes). */
+#define VESC_LISP_REPL_MAX 240
+bool vesc_lisp_code_repl(const char *expr, uint32_t len);
+
 /* Hook from the comm_can packet handler. Filters by command byte. */
 void vesc_lisp_code_process_response(const uint8_t *data, unsigned int len);
 

@@ -1,0 +1,1395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VESC LISP editor</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#14181d; --panel2:#10141a; --line:#20262d;
+  --fg:#e6e8eb; --dim:#8a939c; --accent:#4ea1ff; --ok:#3dd68c;
+  --warn:#ffb454; --err:#ff5e5e;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --lh:1.45; --fs:13px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  font-size:14px}
+button,input,select,textarea{font-family:inherit;font-size:13px;color:var(--fg)}
+button{background:#2a3138;border:0;border-radius:6px;padding:.5em .8em;
+  cursor:pointer;transition:background .12s;white-space:nowrap}
+button:hover:not(:disabled){background:#39424c}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--accent);color:#08111c;font-weight:600}
+button.primary:hover:not(:disabled){background:#6cb3ff}
+button.danger{background:#3a2226;color:#ff9a9a}
+button.danger:hover:not(:disabled){background:#4d2a2f}
+button.ghost{background:transparent;color:var(--dim);padding:.35em .5em}
+button.ghost:hover{background:#1c2229;color:var(--fg)}
+input[type=text],input[type=search],select{background:var(--panel2);border:1px solid var(--line);
+  border-radius:6px;padding:.45em .6em;outline:none}
+input[type=text]:focus,input[type=search]:focus{border-color:var(--accent)}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ---------- layout ---------- */
+#app{display:flex;flex-direction:column;height:100vh}
+.top{display:flex;align-items:center;gap:.5em;padding:.5em .7em;background:var(--panel);
+  border-bottom:1px solid var(--line);overflow-x:auto;flex:0 0 auto}
+.brand{font-weight:700;letter-spacing:.06em;color:var(--accent);flex:0 0 auto}
+.fname{color:var(--dim);font-family:var(--mono);font-size:12px;flex:0 0 auto;
+  max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fname.dirty::after{content:' *';color:var(--warn)}
+.grow{flex:1 1 auto;min-width:.5em}
+.links{display:flex;gap:.6em;flex:0 0 auto;font-size:12px;color:var(--dim)}
+
+.bar{height:3px;background:#0e1216;flex:0 0 auto}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+.bar>i.ok{background:var(--ok)} .bar>i.err{background:var(--err)}
+
+.status{padding:.35em .8em;font-size:12px;color:var(--dim);background:var(--panel);
+  border-bottom:1px solid var(--line);flex:0 0 auto;min-height:1.9em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status.ok{color:var(--ok)} .status.err{color:var(--err)} .status.warn{color:var(--warn)}
+
+.body{flex:1 1 auto;display:flex;min-height:0}
+.editor{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0}
+.side{flex:0 0 340px;display:flex;flex-direction:column;background:var(--panel);
+  border-left:1px solid var(--line);min-height:0}
+
+/* ---------- editor ---------- */
+.edwrap{flex:1 1 auto;display:flex;min-height:0;background:#0e1216;position:relative}
+.gut{flex:0 0 auto;padding:8px 6px 8px 10px;text-align:right;color:#4b555f;
+  font-family:var(--mono);font-size:var(--fs);line-height:var(--lh);
+  background:#0c1014;border-right:1px solid var(--line);overflow:hidden;
+  user-select:none;min-width:3em}
+.gut b{display:block;font-weight:400}
+.gut b.err{color:var(--err);font-weight:700}
+.gut b.warn{color:var(--warn)}
+.code{position:relative;flex:1 1 auto;min-width:0}
+#hl,#ta{position:absolute;top:0;left:0;right:0;bottom:0;margin:0;border:0;
+  padding:8px 10px;font-family:var(--mono);font-size:var(--fs);line-height:var(--lh);
+  white-space:pre;tab-size:2;-moz-tab-size:2;word-wrap:normal}
+#hl{overflow:hidden;pointer-events:none;color:var(--fg)}
+#ta{overflow:auto;background:transparent;color:transparent;caret-color:var(--fg);
+  resize:none;outline:none}
+#ta::selection{background:#2b4a72}
+body.wrap #hl,body.wrap #ta{white-space:pre-wrap;word-break:break-word}
+body.wrap .gut{display:none}
+
+.tk-c{color:#5f6d78;font-style:italic}      /* comment       */
+.tk-s{color:#7ec699}                        /* string        */
+.tk-n{color:#e5a663}                        /* number        */
+.tk-k{color:#9bb4ff;font-weight:600}        /* keyword       */
+.tk-q{color:#c792ea}                        /* quote         */
+.tk-const{color:#ff8a80;font-weight:700}    /* @const-start  */
+.p0{color:#b0bec5}.p1{color:#80cbc4}.p2{color:#ce93d8}.p3{color:#ffcc80}
+.mp{background:#2d4a2f;border-radius:2px}
+.perr{background:#5a2020;border-radius:2px}
+
+.edfoot{flex:0 0 auto;display:flex;align-items:center;gap:.8em;padding:.3em .7em;
+  background:var(--panel);border-top:1px solid var(--line);font-size:11.5px;
+  color:var(--dim);font-family:var(--mono);overflow-x:auto}
+.edfoot label{display:flex;align-items:center;gap:.3em;white-space:nowrap;cursor:pointer}
+
+/* ---------- find bar ---------- */
+.find{display:none;gap:.4em;align-items:center;padding:.4em .7em;background:var(--panel);
+  border-bottom:1px solid var(--line);flex:0 0 auto;flex-wrap:wrap}
+.find.on{display:flex}
+.find input{flex:1 1 8em;min-width:6em}
+.find .cnt{color:var(--dim);font-size:12px;min-width:5em;text-align:right}
+
+/* ---------- side tabs ---------- */
+.tabs{display:flex;flex:0 0 auto;border-bottom:1px solid var(--line);background:var(--panel2)}
+.tabs button{flex:1;border-radius:0;background:transparent;color:var(--dim);
+  padding:.6em .2em;font-size:12px;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);background:var(--panel)}
+.tabs button .badge{display:inline-block;min-width:1.4em;padding:0 .25em;margin-left:.3em;
+  border-radius:8px;background:#2a3138;font-size:10px;color:var(--fg)}
+.tabs button .badge.err{background:#5a2020;color:#ffbcbc}
+.pane{display:none;flex:1 1 auto;min-height:0;flex-direction:column}
+.pane.on{display:flex}
+
+/* files */
+.fbar{display:flex;gap:.3em;align-items:center;padding:.45em .5em;border-bottom:1px solid var(--line);
+  flex:0 0 auto;flex-wrap:wrap}
+.fpath{font-family:var(--mono);font-size:11.5px;color:var(--dim);padding:.3em .5em;
+  flex:1 1 100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flist{flex:1 1 auto;overflow:auto;min-height:0}
+.frow{display:flex;align-items:center;gap:.5em;padding:.45em .6em;border-bottom:1px solid #191f25;
+  cursor:pointer}
+.frow:hover{background:#1a2027}
+.frow .ic{width:1.2em;text-align:center;color:var(--dim);flex:0 0 auto}
+.frow .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:12px}
+.frow.dir .nm{color:var(--accent)}
+.frow .sz{color:var(--dim);font-size:11px;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.frow .act{display:flex;gap:.1em;flex:0 0 auto}
+
+/* console */
+.clog{flex:1 1 auto;overflow:auto;min-height:0;padding:.4em .6em;font-family:var(--mono);
+  font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.clog div{padding:1px 0;border-bottom:1px solid #151a20}
+.clog .k-lisp{color:#cfe3ff}
+.clog .k-fw{color:#9fb3c0}
+.clog .k-note{color:var(--warn)}
+.crow{display:flex;gap:.3em;padding:.45em .5em;border-top:1px solid var(--line);flex:0 0 auto}
+.crow input{flex:1 1 auto;font-family:var(--mono)}
+
+/* problems */
+.plist{flex:1 1 auto;overflow:auto;min-height:0}
+.prow{padding:.5em .6em;border-bottom:1px solid #191f25;cursor:pointer;font-size:12px}
+.prow:hover{background:#1a2027}
+.prow .ln{font-family:var(--mono);color:var(--dim);margin-right:.5em}
+.prow.err .sev{color:var(--err)} .prow.warn .sev{color:var(--warn)}
+.prow .sev{font-weight:700;margin-right:.4em}
+
+/* stats */
+.stats{flex:1 1 auto;overflow:auto;min-height:0;padding:.6em}
+.stat{display:flex;justify-content:space-between;gap:1em;padding:.35em 0;
+  border-bottom:1px solid #191f25;font-size:12px}
+.stat b{font-weight:600;font-family:var(--mono)}
+.meter{height:5px;background:#0e1216;border-radius:3px;overflow:hidden;margin-top:.2em}
+.meter>i{display:block;height:100%;background:var(--accent)}
+.hint{color:var(--dim);font-size:11.5px;padding:.6em;line-height:1.5}
+
+/* modal */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+  align-items:center;justify-content:center;padding:1em;z-index:50}
+.modal.on{display:flex}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:1.2em;max-width:32em;width:100%;max-height:80vh;overflow:auto}
+.modal h3{margin:0 0 .6em;font-size:1.05em}
+.modal .txt{color:var(--dim);font-size:13px;line-height:1.5;margin-bottom:.8em;
+  word-break:break-word}
+.modal input{width:100%;margin-bottom:.8em;font-family:var(--mono)}
+.modal .btns{display:flex;gap:.5em;justify-content:flex-end;flex-wrap:wrap}
+
+@media (max-width:880px){
+  .body{flex-direction:column}
+  .side{flex:0 0 46vh;border-left:0;border-top:1px solid var(--line)}
+  .fname{max-width:26vw}
+  .links{display:none}
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="top">
+    <span class="brand">LISP</span>
+    <span class="fname" id="fname">untitled.lisp</span>
+    <div class="grow"></div>
+    <button id="bOpen" class="ghost" title="Focus the file browser">Files</button>
+    <button id="bSave" title="Ctrl+S">Save</button>
+    <button id="bRead" title="Alt+R">Read VESC</button>
+    <button id="bUpload">Upload</button>
+    <button id="bUploadRun" class="primary" title="Alt+U">Upload + Run</button>
+    <button id="bStart">Start</button>
+    <button id="bStop" class="danger">Stop</button>
+    <span class="links"><a href="/files">file manager</a><a href="/ota">OTA</a></span>
+  </div>
+
+  <div class="bar"><i id="prog"></i></div>
+  <div class="status" id="status">ready</div>
+
+  <div class="find" id="find">
+    <input type="search" id="fq" placeholder="find" autocomplete="off">
+    <input type="text" id="fr" placeholder="replace with" autocomplete="off">
+    <span class="cnt" id="fcnt">0 / 0</span>
+    <button id="fprev" class="ghost">&#8593;</button>
+    <button id="fnext" class="ghost">&#8595;</button>
+    <button id="frep" class="ghost">replace</button>
+    <button id="frepall" class="ghost">all</button>
+    <button id="fclose" class="ghost">&#10005;</button>
+  </div>
+
+  <div class="body">
+    <div class="editor">
+      <div class="edwrap">
+        <div class="gut" id="gut"></div>
+        <div class="code">
+          <pre id="hl"></pre>
+          <textarea id="ta" spellcheck="false" autocomplete="off"
+                    autocapitalize="off" autocorrect="off" wrap="off"></textarea>
+        </div>
+      </div>
+      <div class="edfoot">
+        <span id="pos">1:1</span>
+        <span id="size">0 B</span>
+        <span id="parens">()</span>
+        <div class="grow"></div>
+        <label><input type="checkbox" id="optWrap"> wrap</label>
+        <label><input type="checkbox" id="optAuto" checked> auto-close</label>
+        <button class="ghost" id="bFontMinus">A-</button>
+        <button class="ghost" id="bFontPlus">A+</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="tabs">
+        <button data-tab="files" class="on">Files</button>
+        <button data-tab="console">Console<span class="badge" id="cbadge">0</span></button>
+        <button data-tab="problems">Problems<span class="badge" id="pbadge">0</span></button>
+        <button data-tab="stats">Stats</button>
+      </div>
+
+      <div class="pane on" id="pane-files">
+        <div class="fbar">
+          <button class="ghost" id="fUp" title="Parent directory">&#8593;</button>
+          <button class="ghost" id="fRefresh">refresh</button>
+          <button class="ghost" id="fNewDir">new folder</button>
+          <button class="ghost" id="fNewFile">new file</button>
+          <button class="ghost" id="fPut">upload...</button>
+          <input type="file" id="fPick" style="display:none" multiple>
+          <div class="fpath" id="fPath">/</div>
+        </div>
+        <div class="flist" id="fList"></div>
+      </div>
+
+      <div class="pane" id="pane-console">
+        <div class="fbar">
+          <button class="ghost" id="cClear">clear</button>
+          <label style="display:flex;align-items:center;gap:.3em;color:var(--dim);font-size:12px">
+            <input type="checkbox" id="cAuto" checked> follow</label>
+          <input type="search" id="cFilter" placeholder="filter" style="flex:1 1 6em">
+        </div>
+        <div class="clog" id="clog"></div>
+        <div class="crow">
+          <input type="text" id="repl" placeholder="(+ 1 2)   -- REPL, Enter to send">
+          <button id="bRepl">send</button>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-problems">
+        <div class="plist" id="plist"></div>
+        <div class="hint">
+          Checks: paren balance, unterminated strings, <b>@const-start / @const-end</b>
+          pairing, defuns left outside the const block (they eat the cons heap and
+          the script dies at runtime), and buffers created inside it.
+        </div>
+      </div>
+
+      <div class="pane" id="pane-stats">
+        <div class="stats" id="stats">
+          <div class="hint">Polling COMM_LISP_GET_STATS while this tab is open.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal"><div class="box">
+  <h3 id="mTitle"></h3>
+  <div class="txt" id="mText"></div>
+  <input type="text" id="mInput" style="display:none">
+  <div class="btns" id="mBtns"></div>
+</div></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const ta = $('ta'), hl = $('hl'), gut = $('gut');
+
+/* ============================ helpers ============================ */
+
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const fmtSize = n => n < 1024 ? n + ' B'
+  : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB'
+  : (n / 1048576).toFixed(2) + ' MiB';
+const byteLen = s => new TextEncoder().encode(s).length;
+
+function setStatus(msg, cls) {
+  const el = $('status');
+  el.textContent = msg;
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+function setProgress(frac, cls) {
+  const p = $('prog');
+  p.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
+  p.className = cls || '';
+}
+
+/* modal(title, text, buttons[, {input, placeholder}]) -> Promise */
+function modal(title, text, buttons, opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    $('mTitle').textContent = title;
+    $('mText').innerHTML = text || '';
+    const inp = $('mInput');
+    inp.style.display = opts.input === undefined ? 'none' : '';
+    inp.value = opts.input || '';
+    inp.placeholder = opts.placeholder || '';
+    const btns = $('mBtns');
+    btns.innerHTML = '';
+    const close = v => { $('modal').classList.remove('on'); resolve(v); };
+    buttons.forEach(b => {
+      const el = document.createElement('button');
+      el.textContent = b.label;
+      if (b.cls) el.className = b.cls;
+      el.onclick = () => close(b.value === undefined ? inp.value : b.value);
+      btns.appendChild(el);
+    });
+    $('modal').classList.add('on');
+    if (opts.input !== undefined) { inp.focus(); inp.select(); }
+    inp.onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); close(inp.value); }
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+    };
+  });
+}
+const ask = (title, text, value, placeholder) => modal(title, text,
+  [{label:'OK'}, {label:'Cancel', value:null, cls:'ghost'}],
+  {input: value === undefined ? '' : value, placeholder: placeholder});
+const confirmBox = (title, text, okLabel, cls) => modal(title, text,
+  [{label: okLabel || 'OK', value:true, cls: cls || 'primary'},
+   {label:'Cancel', value:false, cls:'ghost'}]);
+const alertBox = (title, text) => modal(title, text, [{label:'Close', value:true}]);
+
+async function jfetch(url, opts) {
+  const r = await fetch(url, opts);
+  const txt = await r.text();
+  if (!r.ok) {
+    let m = r.status + '';
+    try { m = JSON.parse(txt).error || m; } catch (e) { if (txt) m = txt; }
+    throw new Error(m);
+  }
+  return txt ? JSON.parse(txt) : {};
+}
+
+/* ============================ syntax highlighting ============================ */
+
+/* Structural forms only. Colouring every builtin turns the screen into
+   confetti and hides the structure, which is the thing worth seeing. */
+const KEYWORDS = new Set([
+  'def','defun','defunret','define','setq','setvar','let','lambda',
+  'if','cond','match','progn','atomic','and','or','not',
+  'loopwhile','loopfor','loopwhile-thd','looprange','recv','recv-to',
+  'spawn','spawn-trap','event-register-handler','event-enable','yield',
+  'import','read-eval','closure','var','undefine'
+]);
+
+const isDelim = c => c === undefined || c === '(' || c === ')' ||
+  c === ' ' || c === '\t' || c === '\n' || c === '"' || c === ';' || c === "'";
+
+/* Returns highlighted HTML. `mark` is an optional [a,b] pair of character
+   indexes to flag as the matching parens, `bad` an index to flag red. */
+function highlight(src, mark, bad) {
+  const out = [];
+  let depth = 0, i = 0;
+  const ma = mark ? mark[0] : -1, mb = mark ? mark[1] : -1;
+
+  while (i < src.length) {
+    const c = src[i];
+
+    if (c === ';') {                                    // line comment
+      let j = i;
+      while (j < src.length && src[j] !== '\n') j++;
+      out.push('<span class="tk-c">', esc(src.slice(i, j)), '</span>');
+      i = j; continue;
+    }
+    if (c === '"') {                                    // string
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === '"') { j++; break; }
+        j++;
+      }
+      out.push('<span class="tk-s">', esc(src.slice(i, j)), '</span>');
+      i = j; continue;
+    }
+    if (c === '(' || c === ')') {
+      const cls = c === '(' ? 'p' + (depth % 4) : 'p' + ((depth - 1 + 4) % 4);
+      let extra = '';
+      if (i === ma || i === mb) extra = ' mp';
+      if (i === bad) extra = ' perr';
+      if (c === '(') depth++; else depth = Math.max(0, depth - 1);
+      out.push('<span class="', cls, extra, '">', c, '</span>');
+      i++; continue;
+    }
+    if (c === "'" || c === '`' || c === ',') {
+      out.push('<span class="tk-q">', c, '</span>');
+      i++; continue;
+    }
+    if (c === '@') {                                    // @const-start / @const-end
+      let j = i;
+      while (j < src.length && !isDelim(src[j])) j++;
+      const w = src.slice(i, j);
+      out.push('<span class="tk-const">', esc(w), '</span>');
+      i = j; continue;
+    }
+    if (/[\s]/.test(c)) { out.push(c === '\n' ? '\n' : esc(c)); i++; continue; }
+
+    /* bare token: number or symbol */
+    let j = i;
+    while (j < src.length && !isDelim(src[j])) j++;
+    const w = src.slice(i, j);
+    if (/^[-+]?(\d+\.?\d*([eE][-+]?\d+)?|0[xXbB][0-9a-fA-F]+)[uifb0-9]*$/.test(w)) {
+      out.push('<span class="tk-n">', esc(w), '</span>');
+    } else if (KEYWORDS.has(w)) {
+      out.push('<span class="tk-k">', esc(w), '</span>');
+    } else {
+      out.push(esc(w));
+    }
+    i = j;
+  }
+  /* Trailing newline: <pre> swallows the last one, so the highlight layer
+     would sit one line short of the textarea while scrolling. */
+  out.push('\n');
+  return out.join('');
+}
+
+/* ============================ linter ============================ */
+
+/* Ported from the app's lisp_lint.dart, trimmed to the rules that actually
+   bite on this project: paren balance, unterminated strings, @const pairing,
+   and what belongs inside the const block. */
+function lint(src) {
+  const problems = [];
+  const stack = [];              // {line, col, idx}
+  let line = 1, col = 1;
+  let constDepth = 0, constStarts = [], constEnds = 0, defunCount = 0;
+  let i = 0;
+  const push = (sev, l, msg) => problems.push({sev: sev, line: l, msg: msg});
+
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '\n') { line++; col = 1; i++; continue; }
+    if (c === ';') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '"') {
+      const startLine = line;
+      let j = i + 1, closed = false;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === '"') { closed = true; j++; break; }
+        if (src[j] === '\n') line++;
+        j++;
+      }
+      if (!closed) push('err', startLine, 'unterminated string');
+      col += j - i; i = j; continue;
+    }
+    if (c === '(') { stack.push({line: line, col: col, idx: i}); col++; i++; continue; }
+    if (c === ')') {
+      if (!stack.length) push('err', line, 'unmatched ")"');
+      else stack.pop();
+      col++; i++; continue;
+    }
+    /* whitespace and quote marks carry no meaning for these checks — but they
+       ARE delimiters, so the token scan below would not advance past them. */
+    if (c === ' ' || c === '\t' || c === '\r' || c === "'" || c === '`' || c === ',') {
+      col++; i++; continue;
+    }
+    if (c === '@') {
+      let j = i;
+      while (j < src.length && !isDelim(src[j])) j++;
+      const w = src.slice(i, j);
+      if (w === '@const-start') {
+        if (constDepth > 0) {
+          push('err', line, 'nested @const-start (one non-nested block only)');
+        }
+        constDepth++; constStarts.push(line);
+      } else if (w === '@const-end') {
+        if (constDepth === 0) push('err', line, '@const-end without @const-start');
+        else constDepth--;
+        constEnds++;
+      }
+      col += j - i; i = j; continue;
+    }
+    /* bare token — the only ones we care about are heads of a form */
+    let j = i;
+    while (j < src.length && !isDelim(src[j])) j++;
+    const w = src.slice(i, j);
+    const head = i > 0 && src[i - 1] === '(';
+    const topLevel = head && stack.length === 1;   // (form ...) at file level
+    if (topLevel && (w === 'defun' || w === 'defunret') && constDepth === 0) {
+      push('warn', line,
+        'defun outside @const-start/@const-end: it stays on the cons heap ' +
+        'and can OOM the script at runtime');
+    }
+    if (head && (w === 'bufcreate' || w === 'array-create') && constDepth > 0) {
+      push('warn', line, 'buffer created inside the @const block — keep buffers outside');
+    }
+    if (topLevel && (w === 'defun' || w === 'defunret')) defunCount++;
+    col += j - i; i = j;
+  }
+
+  stack.forEach(s => push('err', s.line, 'unclosed "(" opened here'));
+  if (constDepth > 0) {
+    constStarts.slice(-constDepth).forEach(l =>
+      push('err', l, '@const-start without a matching @const-end'));
+  }
+  if (!constStarts.length && defunCount > 5) {
+    push('warn', 1, defunCount + ' defuns and no @const-start/@const-end: ' +
+      'flashing them frees the cons heap, without it a big script OOMs at runtime');
+  }
+  lintOrder(src).forEach(p => problems.push(p));
+  problems.sort((a, b) => a.line - b.line);
+  return problems;
+}
+
+/* Load-order check, the failure that costs the most time here: a thread or
+   event handler started at the top level before the function it runs is
+   defined. The handler thread hits variable_not_bound, dies, and the feature
+   is simply gone with no error anywhere.
+
+   Line-based on purpose — top-level forms in these scripts start at column 0,
+   and matching that is far more predictable than tracking every symbol
+   reference through the reader. */
+function lintOrder(src) {
+  const lines = src.split('\n');
+  const defs = new Map();          // name -> line where it is defined
+  const starts = [];               // {name, line}
+  lines.forEach((text, idx) => {
+    const ln = idx + 1;
+    const code = text.replace(/;.*$/, '');
+    let m = /^\((?:defun|defunret|def|define|defvar)\s+([^\s()]+)/.exec(code);
+    if (m && !defs.has(m[1])) defs.set(m[1], ln);
+    if (/^\((?:spawn|spawn-trap|event-register-handler)\b/.test(code)) {
+      const re = /[(\s]([a-zA-Z][\w!?*<>=+-]*)/g;
+      let t;
+      while ((t = re.exec(code)) !== null) {
+        const w = t[1];
+        if (['spawn','spawn-trap','event-register-handler','lambda'].includes(w)) continue;
+        starts.push({name: w, line: ln});
+      }
+    }
+  });
+  const out = [];
+  starts.forEach(s => {
+    const at = defs.get(s.name);
+    if (at !== undefined && at > s.line) {
+      out.push({sev: 'err', line: s.line,
+        msg: '"' + s.name + '" is started here but only defined on line ' + at +
+             ' — the thread dies with variable_not_bound'});
+    }
+  });
+  return out;
+}
+
+/* ============================ paren matching ============================ */
+
+/* Index of the paren matching the one at/next to `pos`, or null. */
+function matchParen(src, pos) {
+  const at = i => {
+    if (i < 0 || i >= src.length) return null;
+    const c = src[i];
+    return (c === '(' || c === ')') && !inStringOrComment(src, i) ? i : null;
+  };
+  const idx = at(pos) !== null ? pos : at(pos - 1);
+  if (idx === null) return null;
+  const open = src[idx] === '(';
+  let depth = 0;
+  if (open) {
+    for (let i = idx; i < src.length; i++) {
+      if (inStringOrComment(src, i)) continue;
+      if (src[i] === '(') depth++;
+      else if (src[i] === ')' && --depth === 0) return [idx, i];
+    }
+  } else {
+    for (let i = idx; i >= 0; i--) {
+      if (inStringOrComment(src, i)) continue;
+      if (src[i] === ')') depth++;
+      else if (src[i] === '(' && --depth === 0) return [i, idx];
+    }
+  }
+  return null;
+}
+
+/* Cheap-but-correct enough: scan the current line only. Strings don't span
+   lines in practice here, and this runs on every caret move. */
+function inStringOrComment(src, pos) {
+  let start = src.lastIndexOf('\n', pos - 1) + 1;
+  let inStr = false;
+  for (let i = start; i < pos; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') inStr = false;
+    } else {
+      if (c === ';') return true;
+      if (c === '"') inStr = true;
+    }
+  }
+  return inStr;
+}
+
+/* ============================ editor state ============================ */
+
+const state = {
+  path: null,             // full path of the open file, null = untitled
+  dirty: false,
+  problems: [],
+  fontSize: 13,
+  busy: false,
+  consoleSeq: 0,
+  consoleLines: [],
+  replHist: [],
+  replIdx: -1,
+  cwd: '/vescfs/lisp',
+};
+
+let renderPending = false;
+function scheduleRender() {
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => { renderPending = false; render(); });
+}
+
+function render() {
+  const src = ta.value;
+  const pos = ta.selectionStart;
+  const m = ta.selectionStart === ta.selectionEnd ? matchParen(src, pos) : null;
+  hl.innerHTML = highlight(src, m, null);
+  syncScroll();
+  renderGutter();
+  $('size').textContent = fmtSize(byteLen(src));
+  const lineNo = src.slice(0, pos).split('\n').length;
+  const colNo = pos - (src.lastIndexOf('\n', pos - 1) + 1) + 1;
+  $('pos').textContent = lineNo + ':' + colNo;
+  $('parens').textContent = m ? 'matched' : (balance(src) === 0 ? '()' : 'unbalanced');
+}
+
+function balance(src) {
+  let d = 0;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === ';') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '"') { i++; while (i < src.length && src[i] !== '"') { if (src[i] === '\\') i++; i++; } continue; }
+    if (c === '(') d++;
+    else if (c === ')') d--;
+  }
+  return d;
+}
+
+let gutterLines = 0;
+function renderGutter() {
+  const n = ta.value.split('\n').length;
+  const sev = {};
+  state.problems.forEach(p => {
+    if (sev[p.line] !== 'err') sev[p.line] = p.sev;
+  });
+  const parts = [];
+  for (let i = 1; i <= n; i++) {
+    const s = sev[i];
+    parts.push('<b class="' + (s || '') + '">' + i + '</b>');
+  }
+  gut.innerHTML = parts.join('');
+  gutterLines = n;
+  syncScroll();
+}
+
+function syncScroll() {
+  hl.scrollTop = ta.scrollTop;
+  hl.scrollLeft = ta.scrollLeft;
+  gut.scrollTop = ta.scrollTop;
+}
+
+/* Linting is the expensive one on a 24 KiB file — debounce it separately. */
+let lintTimer = null;
+function scheduleLint() {
+  clearTimeout(lintTimer);
+  lintTimer = setTimeout(() => {
+    state.problems = lint(ta.value);
+    renderProblems();
+    renderGutter();
+  }, 250);
+}
+
+function markDirty(d) {
+  state.dirty = d;
+  $('fname').className = 'fname' + (d ? ' dirty' : '');
+}
+
+function setText(txt, path) {
+  ta.value = txt;
+  if (path !== undefined) {
+    state.path = path;
+    $('fname').textContent = path || 'untitled.lisp';
+  }
+  markDirty(false);
+  scheduleRender();
+  scheduleLint();
+  saveDraft();
+}
+
+/* ---- typing helpers: go through execCommand so native undo keeps working ---- */
+
+function insertText(s) {
+  ta.focus();
+  if (!document.execCommand('insertText', false, s)) {
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    ta.value = ta.value.slice(0, a) + s + ta.value.slice(b);
+    ta.selectionStart = ta.selectionEnd = a + s.length;
+  }
+  onInput();
+}
+
+function replaceRange(a, b, s, selA, selB) {
+  ta.focus();
+  ta.selectionStart = a; ta.selectionEnd = b;
+  if (!document.execCommand('insertText', false, s)) {
+    ta.value = ta.value.slice(0, a) + s + ta.value.slice(b);
+  }
+  if (selA !== undefined) {
+    ta.selectionStart = selA;
+    ta.selectionEnd = selB === undefined ? selA : selB;
+  }
+  onInput();
+}
+
+function onInput() {
+  markDirty(true);
+  scheduleRender();
+  scheduleLint();
+  saveDraftDebounced();
+}
+
+/* ---- draft persistence (survives a page reload / phone lock) ---- */
+let draftTimer = null;
+const saveDraftDebounced = () => {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraft, 800);
+};
+function saveDraft() {
+  try {
+    localStorage.setItem('lisp.draft', JSON.stringify({
+      text: ta.value, path: state.path, dirty: state.dirty
+    }));
+  } catch (e) { /* private mode / quota — the editor still works */ }
+}
+
+/* ============================ editor key handling ============================ */
+
+ta.addEventListener('input', onInput);
+ta.addEventListener('scroll', syncScroll);
+ta.addEventListener('click', scheduleRender);
+ta.addEventListener('keyup', e => {
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End',
+       'PageUp','PageDown'].includes(e.key)) scheduleRender();
+});
+
+ta.addEventListener('keydown', e => {
+  const src = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const lineStart = src.lastIndexOf('\n', a - 1) + 1;
+    if (a !== b || e.shiftKey) {
+      /* block indent / outdent */
+      const endLine = src.indexOf('\n', b);
+      const end = endLine === -1 ? src.length : endLine;
+      const block = src.slice(lineStart, end);
+      const out = e.shiftKey
+        ? block.split('\n').map(l => l.replace(/^ {1,2}/, '')).join('\n')
+        : block.split('\n').map(l => '  ' + l).join('\n');
+      replaceRange(lineStart, end, out, lineStart, lineStart + out.length);
+    } else {
+      insertText('  ');
+    }
+    return;
+  }
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const lineStart = src.lastIndexOf('\n', a - 1) + 1;
+    const cur = src.slice(lineStart, a);
+    let indent = (cur.match(/^[ \t]*/) || [''])[0];
+    /* one extra level for every paren left open on this line */
+    let d = 0;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i] === ';') break;
+      if (cur[i] === '(') d++;
+      else if (cur[i] === ')') d = Math.max(0, d - 1);
+    }
+    indent += '  '.repeat(d);
+    insertText('\n' + indent);
+    return;
+  }
+
+  if ($('optAuto').checked && a === b) {
+    if (e.key === '(') {
+      e.preventDefault(); replaceRange(a, b, '()', a + 1); return;
+    }
+    if (e.key === '"' && src[a] !== '"') {
+      e.preventDefault(); replaceRange(a, b, '""', a + 1); return;
+    }
+    if ((e.key === ')' && src[a] === ')') || (e.key === '"' && src[a] === '"')) {
+      e.preventDefault();
+      ta.selectionStart = ta.selectionEnd = a + 1;
+      scheduleRender();
+      return;
+    }
+    if (e.key === 'Backspace' && a > 0 &&
+        ((src[a - 1] === '(' && src[a] === ')') ||
+         (src[a - 1] === '"' && src[a] === '"'))) {
+      e.preventDefault(); replaceRange(a - 1, a + 1, '', a - 1); return;
+    }
+  }
+});
+
+/* ============================ find / replace ============================ */
+
+let matches = [], matchIdx = -1;
+
+function findAll() {
+  const q = $('fq').value;
+  matches = [];
+  if (q) {
+    const src = ta.value.toLowerCase(), needle = q.toLowerCase();
+    let i = src.indexOf(needle);
+    while (i !== -1) { matches.push(i); i = src.indexOf(needle, i + needle.length); }
+  }
+  matchIdx = matches.length ? 0 : -1;
+  updateFindCount();
+}
+function updateFindCount() {
+  $('fcnt').textContent = (matchIdx + 1) + ' / ' + matches.length;
+}
+function gotoMatch(step) {
+  if (!matches.length) return;
+  matchIdx = (matchIdx + step + matches.length) % matches.length;
+  const i = matches[matchIdx], len = $('fq').value.length;
+  ta.focus();
+  ta.setSelectionRange(i, i + len);
+  scrollToIndex(i);
+  updateFindCount();
+  scheduleRender();
+}
+function scrollToIndex(i) {
+  const line = ta.value.slice(0, i).split('\n').length - 1;
+  const lh = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+  syncScroll();
+}
+function gotoLine(line) {
+  const idx = ta.value.split('\n').slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0);
+  ta.focus();
+  ta.setSelectionRange(idx, idx);
+  scrollToIndex(idx);
+  scheduleRender();
+}
+
+$('fq').addEventListener('input', () => { findAll(); if (matches.length) gotoMatch(0); });
+$('fnext').onclick = () => gotoMatch(1);
+$('fprev').onclick = () => gotoMatch(-1);
+$('fclose').onclick = () => { $('find').classList.remove('on'); ta.focus(); };
+$('frep').onclick = () => {
+  if (matchIdx < 0) return;
+  const i = matches[matchIdx], q = $('fq').value;
+  replaceRange(i, i + q.length, $('fr').value, i + $('fr').value.length);
+  findAll();
+};
+$('frepall').onclick = async () => {
+  const q = $('fq').value;
+  if (!q || !matches.length) return;
+  if (!await confirmBox('Replace all', 'Replace ' + matches.length +
+      ' occurrence(s)?', 'Replace all')) return;
+  const parts = ta.value.split(q);   /* case-sensitive for the bulk op */
+  replaceRange(0, ta.value.length, parts.join($('fr').value), 0, 0);
+  findAll();
+};
+
+/* ============================ global shortcuts ============================ */
+
+document.addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(); return; }
+  if (mod && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    $('find').classList.add('on');
+    $('fq').focus(); $('fq').select();
+    findAll();
+    return;
+  }
+  if (mod && e.key === 'Enter') { e.preventDefault(); sendRepl(currentExpr()); return; }
+  if (e.altKey && e.key.toLowerCase() === 'u') { e.preventDefault(); doUpload(true); return; }
+  if (e.altKey && e.key.toLowerCase() === 'r') { e.preventDefault(); doRead(); return; }
+  if (e.key === 'Escape') {
+    $('find').classList.remove('on');
+    if ($('modal').classList.contains('on')) $('modal').classList.remove('on');
+  }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (state.dirty) { e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ============================ side tabs ============================ */
+
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    $('pane-' + b.dataset.tab).classList.add('on');
+    if (b.dataset.tab === 'console') $('cbadge').textContent = '0';
+  };
+});
+const activeTab = () => document.querySelector('.tabs button.on').dataset.tab;
+
+/* ============================ file browser (/files API) ============================ */
+
+const enc = encodeURIComponent;
+const joinPath = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
+
+async function fsList(path) {
+  const j = await jfetch('/files/api/list?path=' + enc(path));
+  state.cwd = j.path;
+  $('fPath').textContent = j.path;
+  const list = $('fList');
+  list.innerHTML = '';
+  const entries = j.entries.slice().sort((a, b) =>
+    (b.dir - a.dir) || a.name.localeCompare(b.name));
+  if (!entries.length) {
+    list.innerHTML = '<div class="hint">(empty)</div>';
+  }
+  entries.forEach(e => {
+    const full = joinPath(j.path, e.name);
+    const row = document.createElement('div');
+    row.className = 'frow' + (e.dir ? ' dir' : '');
+    row.innerHTML =
+      '<span class="ic">' + (e.dir ? '&#128193;' : '&#128196;') + '</span>' +
+      '<span class="nm"></span>' +
+      '<span class="sz">' + (e.dir ? '' : fmtSize(e.size)) + '</span>' +
+      '<span class="act"></span>';
+    row.querySelector('.nm').textContent = e.name;
+    const act = row.querySelector('.act');
+    const mk = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.className = 'ghost'; b.innerHTML = label; b.title = title;
+      b.onclick = ev => { ev.stopPropagation(); fn(); };
+      act.appendChild(b);
+    };
+    if (!e.dir) mk('&#8595;', 'download',
+      () => window.open('/files/api/download?path=' + enc(full), '_blank'));
+    mk('&#9998;', 'rename / move', () => renameEntry(full, e.name));
+    mk('&#128465;', 'delete', () => deleteEntry(full, e.dir));
+    row.onclick = () => e.dir ? fsList(full) : openFile(full, e.size);
+    list.appendChild(row);
+  });
+}
+
+async function openFile(path, size) {
+  if (state.dirty && !await confirmBox('Discard changes?',
+      'The current buffer has unsaved changes.', 'Discard')) return;
+  if (size > 512 * 1024) {
+    return alertBox('Too large', 'This file is ' + fmtSize(size) +
+      ' - open it from the <a href="/files">file manager</a> instead.');
+  }
+  try {
+    const r = await fetch('/files/api/download?path=' + enc(path));
+    if (!r.ok) throw new Error(r.status);
+    const txt = await r.text();
+    setText(txt, path);
+    setStatus('opened ' + path, 'ok');
+  } catch (err) { setStatus('open failed: ' + err.message, 'err'); }
+}
+
+async function saveFile() {
+  let path = state.path;
+  if (!path) {
+    const name = await ask('Save as', 'File name (stored under ' +
+      esc(state.cwd) + ')', 'main.lisp');
+    if (!name) return;
+    path = name.startsWith('/') ? name : joinPath(state.cwd, name);
+  }
+  await writeFile(path, ta.value);
+}
+
+async function writeFile(path, text) {
+  const put = () => fetch('/files/api/upload?path=' + enc(path),
+    {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: text});
+  try {
+    let r = await put();
+    if (!r.ok) {
+      /* The device only creates /vescfs/lisp when its on-screen editor saves
+         something, so the first save from here lands in a directory that
+         isn't there yet: make it and retry once. */
+      const dir = path.slice(0, path.lastIndexOf('/'));
+      if (dir && dir !== '/') {
+        try {
+          await jfetch('/files/api/mkdir', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: dir})});
+          r = await put();
+        } catch (e) { /* fall through to the original error below */ }
+      }
+    }
+    if (!r.ok) {
+      let m = r.status;
+      try { m = JSON.parse(await r.text()).error || m; } catch (e) {}
+      throw new Error(m);
+    }
+    state.path = path;
+    $('fname').textContent = path;
+    markDirty(false);
+    saveDraft();
+    setStatus('saved ' + path, 'ok');
+    fsList(state.cwd).catch(() => {});
+  } catch (err) { setStatus('save failed: ' + err.message, 'err'); }
+}
+
+async function renameEntry(full, name) {
+  const dst = await ask('Rename / move',
+    'New name, or a full path starting with "/" to move it elsewhere.', full);
+  if (!dst || dst === full) return;
+  const target = dst.startsWith('/') ? dst : joinPath(state.cwd, dst);
+  try {
+    await jfetch('/files/api/rename', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({src: full, dst: target})});
+    if (state.path === full) { state.path = target; $('fname').textContent = target; }
+    setStatus('moved to ' + target, 'ok');
+    fsList(state.cwd);
+  } catch (err) { setStatus('rename failed: ' + err.message, 'err'); }
+}
+
+async function deleteEntry(full, isDir) {
+  if (!await confirmBox(isDir ? 'Delete folder?' : 'Delete file?',
+      esc(full), 'Delete', 'danger')) return;
+  try {
+    await jfetch('/files/api/delete', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: full})});
+    setStatus('deleted ' + full, 'ok');
+    fsList(state.cwd);
+  } catch (err) { setStatus('delete failed: ' + err.message, 'err'); }
+}
+
+$('fUp').onclick = () => {
+  const p = state.cwd;
+  if (p === '/' ) return;
+  const up = p.slice(0, p.lastIndexOf('/')) || '/';
+  fsList(up);
+};
+$('fRefresh').onclick = () => fsList(state.cwd);
+$('fNewDir').onclick = async () => {
+  const n = await ask('New folder', 'Folder name', '');
+  if (!n) return;
+  try {
+    await jfetch('/files/api/mkdir', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: joinPath(state.cwd, n)})});
+    fsList(state.cwd);
+  } catch (err) { setStatus('mkdir failed: ' + err.message, 'err'); }
+};
+$('fNewFile').onclick = async () => {
+  if (state.dirty && !await confirmBox('Discard changes?',
+      'The current buffer has unsaved changes.', 'Discard')) return;
+  setText('', null);
+  setStatus('new buffer', '');
+};
+$('fPut').onclick = () => $('fPick').click();
+$('fPick').onchange = async () => {
+  const files = Array.from($('fPick').files);
+  $('fPick').value = '';
+  for (const f of files) {
+    try {
+      const r = await fetch('/files/api/upload?path=' + enc(joinPath(state.cwd, f.name)),
+        {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: f});
+      if (!r.ok) throw new Error(r.status);
+      setStatus('uploaded ' + f.name, 'ok');
+    } catch (err) { setStatus('upload ' + f.name + ' failed: ' + err.message, 'err'); }
+  }
+  fsList(state.cwd);
+};
+$('bOpen').onclick = () => {
+  document.querySelector('.tabs button[data-tab=files]').click();
+  fsList(state.cwd);
+};
+$('bSave').onclick = saveFile;
+
+/* ============================ problems panel ============================ */
+
+function renderProblems() {
+  const list = $('plist');
+  list.innerHTML = '';
+  const errs = state.problems.filter(p => p.sev === 'err').length;
+  const badge = $('pbadge');
+  badge.textContent = state.problems.length;
+  badge.className = 'badge' + (errs ? ' err' : '');
+  state.problems.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'prow ' + p.sev;
+    row.innerHTML = '<span class="ln">' + p.line + '</span>' +
+      '<span class="sev">' + (p.sev === 'err' ? 'error' : 'warn') + '</span>';
+    const t = document.createElement('span');
+    t.textContent = p.msg;
+    row.appendChild(t);
+    row.onclick = () => gotoLine(p.line);
+    list.appendChild(row);
+  });
+  if (!state.problems.length) {
+    list.innerHTML = '<div class="hint">No problems found.</div>';
+  }
+}
+
+/* ============================ VESC transfers ============================ */
+
+async function doRead() {
+  if (state.dirty && !await confirmBox('Discard changes?',
+      'Reading from the VESC replaces the buffer.', 'Read anyway')) return;
+  try {
+    await jfetch('/lisp/api/read', {method: 'POST'});
+    setStatus('reading from VESC...', '');
+    setProgress(0);
+    pollFast();
+  } catch (err) { setStatus('read failed: ' + err.message, 'err'); }
+}
+
+async function doUpload(run) {
+  const errs = state.problems.filter(p => p.sev === 'err');
+  if (errs.length) {
+    const go = await confirmBox('Upload with errors?',
+      errs.length + ' error(s) found, first one on line ' + errs[0].line +
+      ': ' + esc(errs[0].msg), 'Upload anyway', 'danger');
+    if (!go) return;
+  }
+  try {
+    const r = await fetch('/lisp/api/upload?run=' + (run ? 1 : 0),
+      {method: 'POST', headers: {'Content-Type': 'text/plain'}, body: ta.value});
+    if (!r.ok) {
+      let m = r.status;
+      try { m = JSON.parse(await r.text()).error || m; } catch (e) {}
+      throw new Error(m);
+    }
+    setStatus(run ? 'uploading and starting...' : 'uploading...', '');
+    setProgress(0);
+    pollFast();
+  } catch (err) { setStatus('upload failed: ' + err.message, 'err'); }
+}
+
+async function setRunning(run) {
+  try {
+    await jfetch('/lisp/api/run?run=' + (run ? 1 : 0), {method: 'POST'});
+    setStatus(run ? 'start sent' : 'stop sent', 'ok');
+  } catch (err) { setStatus('failed: ' + err.message, 'err'); }
+}
+
+$('bRead').onclick = doRead;
+$('bUpload').onclick = () => doUpload(false);
+$('bUploadRun').onclick = () => doUpload(true);
+$('bStart').onclick = () => setRunning(true);
+$('bStop').onclick = () => setRunning(false);
+
+let lastFinished = false, lastKind = 0;
+
+async function pollState() {
+  let s;
+  try { s = await jfetch('/lisp/api/state'); }
+  catch (err) { setStatus('device unreachable: ' + err.message, 'err'); return; }
+
+  const wasBusy = state.busy;
+  state.busy = s.busy;
+  [$('bRead'), $('bUpload'), $('bUploadRun'), $('bStart'), $('bStop')]
+    .forEach(b => b.disabled = s.busy);
+
+  if (s.mine && s.total) {
+    setProgress(s.done / s.total);
+    setStatus((s.kind === 1 ? 'uploading ' : 'reading ') +
+      Math.round(s.done * 100 / s.total) + '%   (' + s.done + ' / ' + s.total + ' bytes)');
+  }
+
+  if (s.finished && (!lastFinished || lastKind !== s.kind)) {
+    setProgress(1, s.result === 0 ? 'ok' : 'err');
+    setStatus(s.msg, s.result === 0 ? 'ok' : 'err');
+    if (s.kind === 2 && s.result === 0) {
+      try {
+        const txt = await (await fetch('/lisp/api/code')).text();
+        setText(txt, state.path);
+        markDirty(false);
+        setStatus('read ' + fmtSize(byteLen(txt)) + ' from the VESC', 'ok');
+      } catch (err) { setStatus('code fetch failed: ' + err.message, 'err'); }
+    }
+  }
+  lastFinished = s.finished; lastKind = s.kind;
+
+  if (s.stats) renderStats(s.stats);
+  if (wasBusy && !s.busy) setTimeout(() => setProgress(0, ''), 1500);
+}
+
+/* Poll faster while a transfer is running so the bar actually moves. */
+let fastUntil = 0;
+const pollFast = () => { fastUntil = Date.now() + 3000; };
+async function pollLoop() {
+  await pollState();
+  if (state.busy) pollFast();
+  setTimeout(pollLoop, Date.now() < fastUntil || state.busy ? 300 : 1000);
+}
+
+/* ============================ console + REPL ============================ */
+
+async function pollConsole() {
+  try {
+    const j = await jfetch('/lisp/api/console?since=' + state.consoleSeq);
+    if (j.lines && j.lines.length) {
+      state.consoleSeq = j.seq;
+      j.lines.forEach(l => state.consoleLines.push(l));
+      if (state.consoleLines.length > 600) {
+        state.consoleLines = state.consoleLines.slice(-600);
+      }
+      renderConsole();
+      if (activeTab() !== 'console') {
+        const b = $('cbadge');
+        b.textContent = Math.min(999, (parseInt(b.textContent, 10) || 0) + j.lines.length);
+      }
+    }
+    if (j.dropped) $('cbadge').title = j.dropped + ' line(s) dropped';
+  } catch (err) { /* transient — the next tick retries */ }
+  setTimeout(pollConsole, activeTab() === 'console' ? 400 : 1200);
+}
+
+function renderConsole() {
+  const box = $('clog');
+  const filter = $('cFilter').value.toLowerCase();
+  const stick = $('cAuto').checked;
+  const frag = document.createDocumentFragment();
+  state.consoleLines.forEach(l => {
+    if (filter && l.t.toLowerCase().indexOf(filter) === -1) return;
+    const d = document.createElement('div');
+    d.className = 'k-' + l.k;
+    d.textContent = l.t;
+    frag.appendChild(d);
+  });
+  box.innerHTML = '';
+  box.appendChild(frag);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+$('cFilter').oninput = renderConsole;
+$('cClear').onclick = async () => {
+  try { await jfetch('/lisp/api/console/clear', {method: 'POST'}); } catch (e) {}
+  state.consoleLines = [];
+  renderConsole();
+};
+
+/* The expression around the caret: the selection if there is one, otherwise
+   the top-level form the caret sits in, otherwise the current line. */
+function currentExpr() {
+  const src = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+  if (a !== b) return src.slice(a, b).trim();
+  const m = matchParen(src, a);
+  if (m) return src.slice(m[0], m[1] + 1).trim();
+  /* walk back to the nearest enclosing '(' */
+  let depth = 0;
+  for (let i = a - 1; i >= 0; i--) {
+    if (inStringOrComment(src, i)) continue;
+    if (src[i] === ')') depth++;
+    else if (src[i] === '(') {
+      if (depth === 0) {
+        const mm = matchParen(src, i);
+        if (mm) return src.slice(mm[0], mm[1] + 1).trim();
+        break;
+      }
+      depth--;
+    }
+  }
+  const ls = src.lastIndexOf('\n', a - 1) + 1;
+  let le = src.indexOf('\n', a);
+  if (le === -1) le = src.length;
+  return src.slice(ls, le).trim();
+}
+
+async function sendRepl(expr) {
+  expr = (expr || '').trim();
+  if (!expr) return;
+  document.querySelector('.tabs button[data-tab=console]').click();
+  try {
+    await fetch('/lisp/api/repl', {method: 'POST',
+      headers: {'Content-Type': 'text/plain'}, body: expr}).then(r => {
+        if (!r.ok) return r.text().then(t => {
+          let m = r.status; try { m = JSON.parse(t).error || m; } catch (e) {}
+          throw new Error(m);
+        });
+      });
+    state.replHist.push(expr);
+    state.replIdx = state.replHist.length;
+    setStatus('repl sent (' + expr.length + ' bytes)', 'ok');
+  } catch (err) { setStatus('repl failed: ' + err.message, 'err'); }
+}
+
+$('bRepl').onclick = () => { sendRepl($('repl').value); $('repl').value = ''; };
+$('repl').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('bRepl').onclick(); return; }
+  if (e.key === 'ArrowUp' && state.replIdx > 0) {
+    e.preventDefault();
+    $('repl').value = state.replHist[--state.replIdx] || '';
+  }
+  if (e.key === 'ArrowDown' && state.replIdx < state.replHist.length - 1) {
+    e.preventDefault();
+    $('repl').value = state.replHist[++state.replIdx] || '';
+  }
+});
+
+/* ============================ stats ============================ */
+
+function renderStats(st) {
+  const box = $('stats');
+  const meter = (label, v) =>
+    '<div class="stat"><span>' + label + '</span><b>' + v.toFixed(1) + ' %</b></div>' +
+    '<div class="meter"><i style="width:' + Math.min(100, v) + '%"></i></div>';
+  let h = meter('CPU', st.cpu) + meter('Heap', st.heap) +
+          meter('Memory', st.mem) + meter('Stack', st.stack);
+  if (st.vars && st.vars.length) {
+    h += '<div class="hint">exported variables</div>';
+    st.vars.forEach(v => {
+      h += '<div class="stat"><span>' + esc(v.n) + '</span><b>' +
+           (Math.round(v.v * 1000) / 1000) + '</b></div>';
+    });
+  }
+  box.innerHTML = h;
+}
+
+async function statsTick() {
+  if (activeTab() === 'stats' && !state.busy) {
+    try { await jfetch('/lisp/api/stats', {method: 'POST'}); } catch (e) {}
+  }
+  setTimeout(statsTick, 1500);
+}
+
+/* ============================ misc UI ============================ */
+
+$('optWrap').onchange = () => {
+  document.body.classList.toggle('wrap', $('optWrap').checked);
+  ta.wrap = $('optWrap').checked ? 'soft' : 'off';
+  scheduleRender();
+};
+function setFont(px) {
+  state.fontSize = Math.max(9, Math.min(22, px));
+  document.documentElement.style.setProperty('--fs', state.fontSize + 'px');
+  try { localStorage.setItem('lisp.font', state.fontSize); } catch (e) {}
+  scheduleRender();
+}
+$('bFontPlus').onclick = () => setFont(state.fontSize + 1);
+$('bFontMinus').onclick = () => setFont(state.fontSize - 1);
+
+/* ============================ boot ============================ */
+
+(function init() {
+  try {
+    const f = parseInt(localStorage.getItem('lisp.font'), 10);
+    if (f) setFont(f);
+    const d = JSON.parse(localStorage.getItem('lisp.draft') || 'null');
+    if (d && d.text) {
+      setText(d.text, d.path);
+      if (d.dirty) {
+        markDirty(true);
+        setStatus('restored unsaved draft' + (d.path ? ' of ' + d.path : ''), 'warn');
+      }
+    }
+  } catch (e) { /* ignore a corrupt draft */ }
+
+  if (!ta.value) {
+    setText(';; VESC LispBM\n;; Read VESC pulls the script off the controller.\n\n' +
+            '(print "hello")\n', null);
+  }
+  fsList(state.cwd).catch(() => fsList('/vescfs').catch(() => fsList('/')));
+  pollLoop();
+  pollConsole();
+  statsTick();
+  ta.focus();
+})();
+</script>
+</body>
+</html>

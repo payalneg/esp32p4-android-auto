@@ -8,6 +8,7 @@
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_can/vesc_datatypes.h"
+#include "vesc_can/vesc_lisp_code.h"   /* busy-gate for the one-shot request */
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -16,7 +17,8 @@
 
 static const char *TAG = "vesc_lisp";
 
-static bool         s_active             = false;
+static bool          s_active            = false;
+static volatile bool s_once_pending      = false;
 static uint32_t     s_last_poll_ms       = 0;
 static uint8_t      s_target_vesc_id     = 10;
 static uint32_t     s_poll_interval_ms   = 100;
@@ -42,21 +44,39 @@ void vesc_lisp_poll_init(uint8_t target_vesc_id, uint32_t poll_interval_ms)
 void vesc_lisp_poll_start(void) { s_active = true; s_last_poll_ms = 0; }
 void vesc_lisp_poll_stop(void)  { s_active = false; }
 
+/* Synced: the stats reply is the big multi-frame one (hundreds of bytes);
+ * letting it overlap the RT-data poll's reply is exactly what corrupted the
+ * reassembly buffer and dropped cruise/mode values. Call from the CAN task. */
+static void send_stats_request(void)
+{
+    uint8_t send_buffer[3];
+    int32_t ind = 0;
+    send_buffer[ind++] = COMM_LISP_GET_STATS;
+    send_buffer[ind++] = 1; /* poll_all */
+    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
+}
+
 void vesc_lisp_poll_loop(void)
 {
     if (!s_active) return;
     uint32_t now = millis_now();
     if (now - s_last_poll_ms < s_poll_interval_ms) return;
     s_last_poll_ms = now;
+    send_stats_request();
+}
 
-    uint8_t send_buffer[3];
-    int32_t ind = 0;
-    send_buffer[ind++] = COMM_LISP_GET_STATS;
-    send_buffer[ind++] = 1; /* poll_all */
-    /* Synced: the stats reply is the big multi-frame one (hundreds of bytes);
-     * letting it overlap the RT-data poll's reply is exactly what corrupted the
-     * reassembly buffer and dropped cruise/mode values. */
-    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
+void vesc_lisp_poll_request_once(void) { s_once_pending = true; }
+
+void vesc_lisp_poll_once_loop(void)
+{
+    if (!s_once_pending) return;
+    if (s_active) { s_once_pending = false; return; }  /* periodic poll covers it */
+    /* Hold the request back while a LISP upload/read owns the bus — that
+     * operation pauses the pollers precisely because its multi-frame replies
+     * must not collide with anything else. */
+    if (vesc_lisp_code_busy()) return;
+    s_once_pending = false;
+    send_stats_request();
 }
 
 void vesc_lisp_poll_process_response(const uint8_t *data, unsigned int len)

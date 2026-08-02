@@ -8,17 +8,19 @@ the ESP32-P4). It does three things that the dashboard relies on:
    - press throttle or brake → release cruise
    - the dashboard reads `cruise-active` over the LISP poll channel and
      lights the cruise indicator
-2. **Speed profiles** via the PPM `TX` pin button — three presets
-   (25 / 40 / 60 km/h, configurable in `apply-profile`). Different beep
-   tones confirm each profile change.
+2. **Speed profiles** — three presets (25 / 40 / 60 km/h, configurable in
+   `apply-profile`), switchable two ways:
+   - the PPM `TX` pin button cycles through them (`switch-profile`)
+   - the on-screen panel picks one directly (`panel-set-profile`)
+   Different beep tones confirm each profile change.
 3. **Quick-action panel** — the swipe-out drawer on the P4 dashboard
    (left-edge swipe). This script is the *server* for it: the P4 asks
    "describe your controls" and we answer with a list the firmware renders
    (toggles / buttons / numbers / read-only values); interactions come back
    here. The starter set: **Throttle on/off**, a **Beep** button, a **Beep Vol**
-   number, **Play Melody** (the motor plays a tune) and its **Melody Vol** — both
-   volumes persisted on shutdown. A **Traction Control** toggle + sensitivity is
-   included but commented out (single motor → native VESC TC is a no-op).
+   number (persisted) and the three **profile buttons** — a radio group, exactly
+   one lit. A **Traction Control** toggle + sensitivity is included but commented
+   out (single motor → native VESC TC is a no-op).
 
 Without this script the dashboard still shows live telemetry (battery,
 speed, voltage, temps over standard VESC CAN), but the cruise indicator,
@@ -174,9 +176,11 @@ These write into the scratch buffer `pbuf` at the running index `pi`:
 | `(pi32 v)`    | `v` as big-endian int32 (you pre-multiply ×1000)|
 | `(pstr s)`    | the string `s` **including** its NUL terminator |
 
-`pbuf` is `(bufcreate 96)` — zero-filled and over-sized on purpose: the P4 reads
+`pbuf` is `(bufcreate 128)` — zero-filled and over-sized on purpose: the P4 reads
 exactly `count` controls and ignores trailing zeros, so you only need to grow
-the `96` if a *single* reply gets bigger than that.
+the `128` if a *single* reply gets bigger than that. The current `UI_DESC` is
+102 B, so there is room for roughly one more short control before you must bump
+it (the whole buffer goes on the wire every reply, so don't over-grow it).
 
 ### Message catalogue
 
@@ -214,10 +218,15 @@ button → `1.0` (a press), number → the new value in real units (e.g. `55.0`)
 
 > Step-by-step with copy-paste templates is in **"Add a control — the simple
 > version"** above. The current `main.lisp` panel is a live worked example:
-> Throttle (toggle, id 1), Beep (button, id 4), Beep Vol (number, id 5),
-> Play Melody (toggle, id 6), Melody Vol (number, id 7) — both volumes persisted
-> on shutdown. Traction Control (ids 2/3) is there but commented out — a ready
-> template to copy.
+> Throttle (toggle, id 1), Beep (button, id 4), Beep Vol (number, id 5, persisted)
+> and the profile radio group — Slow / Medium / Fast (toggles, ids 10/11/12).
+> Traction Control (ids 2/3) is there but commented out — a ready template to
+> copy.
+>
+> **Radio group pattern** (the profiles): N toggles whose `state` is
+> `(if (= sel K) 1 0)`, and each action sets `sel` to *its own* index while
+> ignoring the incoming value. Tapping the lit row therefore sends `0` and does
+> nothing — the `STATE` echo lights it straight back up.
 
 ## How to flash
 
@@ -228,13 +237,12 @@ survives reboot.
 ## Customising
 
 - Speed presets — edit `apply-profile` (the three `conf-set 'max-speed`
-  lines near the top of the file).
-- Beep frequencies / profile count — `num-profiles` plus the `beep-freq`
-  table.
+  lines near the top of the file). Adding/removing one means: `num-profiles`,
+  the `beep-freq` table, and the panel rows (ids 10..12 in `panel-send-ui` /
+  `panel-send-state` / `panel-action`) — keep the labels in step with the
+  speeds, the P4 only draws what this script says.
 - Throttle/brake deadzones — `monitor-throttle-brake`.
 - Quick-action panel controls — the `panel-*` functions at the bottom (see
   "Add a control — the simple version" above).
-- Melody — replace the `(def melody '(...))` list (each entry `(freq-hz dur-s)`,
-  `0` = rest); volume follows the Beep Vol control.
 - Traction-control template — uncomment the TC controls + `monitor-traction`
   spawn; tune the `limit` formula. (Multi-motor only; no-op on a single motor.)

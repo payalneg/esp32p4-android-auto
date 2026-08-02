@@ -32,11 +32,6 @@
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
                 (if (and v (>= v 0) (<= v 50)) v 30)))
 (def beep-vol-dirty 0)
-(def melody-vol-addr 1)
-(def melody-vol (let ((v (eeprom-read-i melody-vol-addr)))
-                  (if (and v (>= v 0) (<= v 50)) v 40)))
-(def melody-vol-dirty 0)
-(def playing-idx -1)
 ; Pedal-assist setpoint from the head unit (over COMM_CUSTOM_APP_DATA, msg 0x05).
 ; pas-amps is the requested motor current (A); pas-seen is the (systime) of the
 ; last frame, for a staleness check. setq'd at runtime → MUST stay above @const.
@@ -180,6 +175,16 @@
     })
     (apply-profile current-profile)
 })
+; Direct profile selection — what the on-screen panel buttons call (the TX pin
+; button still cycles through them with switch-profile). Selecting the profile
+; that is already active is a no-op: the panel's toggles are a radio group, so
+; tapping the lit one just gets re-lit by the STATE echo instead of toggling off.
+(defun panel-set-profile (idx) {
+    (if (and (>= idx 0) (< idx num-profiles) (not (= idx current-profile))) {
+        (setq current-profile idx)
+        (apply-profile current-profile)
+    })
+})
 (defun decrease-cruise-speed () {
     (if (= cruise-active 1) {
         (if (> rpm-per-ms 0.0) {
@@ -230,23 +235,26 @@
 (defun pstr (s) { (bufcpy pbuf pi s 0 (buflen s)) (setq pi (+ pi (buflen s))) })
 (defun panel-send-ui (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 5)
+    (pu8 0x56) (pu8 0x50) (pu8 0x81) (pu8 1) (pu8 6)
     (pu8 1) (pu8 1) (pstr "Throttle") (pu8 (if (= throttle-on 1) 1 0))
     (pu8 4) (pu8 2) (pstr "Beep")
     (pu8 5) (pu8 3) (pstr "Beep Vol")
     (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* beep-vol 1000)) (pstr "")
-    (pu8 6) (pu8 1) (pstr "Polish Cow") (pu8 (if (= playing-idx 0) 1 0))
-    (pu8 7) (pu8 3) (pstr "Melody Vol")
-    (pi32 0) (pi32 50000) (pi32 5000) (pi32 (* melody-vol 1000)) (pstr "")
+    ; Profile radio group (ids 10..12) — exactly one is lit, tapping a row
+    ; selects that profile. Keep the labels in step with apply-profile.
+    (pu8 10) (pu8 1) (pstr "Slow 25 km/h")   (pu8 (if (= current-profile 0) 1 0))
+    (pu8 11) (pu8 1) (pstr "Medium 40 km/h") (pu8 (if (= current-profile 1) 1 0))
+    (pu8 12) (pu8 1) (pstr "Fast 60 km/h")   (pu8 (if (= current-profile 2) 1 0))
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-state (reply-id) {
     (setq pi 0)
-    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 4)
+    (pu8 0x56) (pu8 0x50) (pu8 0x82) (pu8 5)
     (pu8 1) (pi32 (* (if (= throttle-on 1) 1 0) 1000))
     (pu8 5) (pi32 (* beep-vol 1000))
-    (pu8 6) (pi32 (* (if (= playing-idx 0) 1 0) 1000))
-    (pu8 7) (pi32 (* melody-vol 1000))
+    (pu8 10) (pi32 (* (if (= current-profile 0) 1 0) 1000))
+    (pu8 11) (pi32 (* (if (= current-profile 1) 1 0) 1000))
+    (pu8 12) (pi32 (* (if (= current-profile 2) 1 0) 1000))
     (send-data pbuf 2 reply-id)
 })
 (defun panel-send-dash (reply-id) {
@@ -287,38 +295,6 @@
 })
 ; Run the sequence in its own thread so the sleeps don't block panel-event-loop.
 (defun panel-beep () (spawn 150 two-beeps))
-(defun play-list (idx lst) {
-    (setq playing-idx idx)
-    (let ((n (length lst))) {
-        (loopwhile (= playing-idx idx) {
-            (let ((i 0)) {
-                (loopwhile (and (< i n) (= playing-idx idx)) {
-                    (let ((note (ix lst i))) {
-                        (let ((f (ix note 0)) (d (ix note 1))) {
-                            ; Carve a short silence out of the END of each tone so
-                            ; consecutive notes are articulated instead of slurring
-                            ; together. Gap is taken from d, so the tempo is unchanged.
-                            (if (> f 0) {
-                                (foc-play-tone 0 f melody-vol)
-                                (let ((gap (if (< d 0.09) (/ d 3.0) 0.03))) {
-                                    (sleep (- d gap))
-                                    (foc-play-stop)
-                                    (sleep gap)
-                                })
-                            } {
-                                (foc-play-stop)
-                                (sleep d)
-                            })
-                        })
-                    })
-                    (setq i (+ i 1))
-                })
-            })
-            (if (= playing-idx idx) (sleep 0.3))
-        })
-    })
-    (if (= playing-idx -1) (foc-play-stop))
-})
 (defun panel-action (cid val) {
     (cond
         ((= cid 1) (panel-set-throttle (if (> val 0.5) 1 0)))
@@ -327,14 +303,11 @@
             (setq beep-vol (to-i32 val))
             (setq beep-vol-dirty 1)
         })
-        ((= cid 6)
-            (if (> val 0.5)
-                (if (not (= playing-idx 0)) { (setq playing-idx 0) (spawn 200 play-list 0 melody) })
-                (if (= playing-idx 0) (setq playing-idx -1))))
-        ((= cid 7) {
-            (setq melody-vol (to-i32 val))
-            (setq melody-vol-dirty 1)
-        }))
+        ; Profile radio group: the row identifies the profile, so val is ignored
+        ; (tapping the already-lit row sends 0 and panel-set-profile no-ops).
+        ((= cid 10) (panel-set-profile 0))
+        ((= cid 11) (panel-set-profile 1))
+        ((= cid 12) (panel-set-profile 2)))
 })
 (defun panel-handle (data) {
     (if (and (>= (buflen data) 4)
@@ -473,27 +446,23 @@
     })
 })
 (defun panel-on-shutdown () {
-    (if (or (= beep-vol-dirty 1) (= melody-vol-dirty 1)) {
+    (if (= beep-vol-dirty 1) {
         (shutdown-hold t)
-        (if (= beep-vol-dirty 1) {
-            (eeprom-store-i beep-vol-addr beep-vol) (setq beep-vol-dirty 0) })
-        (if (= melody-vol-dirty 1) {
-            (eeprom-store-i melody-vol-addr melody-vol) (setq melody-vol-dirty 0) })
+        (eeprom-store-i beep-vol-addr beep-vol)
+        (setq beep-vol-dirty 0)
         (shutdown-hold nil)
     })
 })
-; Volumes change via the panel slider (many intermediate values per drag) and
-; must survive a reboot. Persisting only in panel-on-shutdown was unreliable:
+; Beep volume changes via the panel slider (many intermediate values per drag)
+; and must survive a reboot. Persisting only in panel-on-shutdown was unreliable:
 ; event-shutdown fires only on a real power-off, not on a bench / USB / re-flash
-; reboot, so eeprom-store-i never ran. Flush the dirty volumes on a slow timer
+; reboot, so eeprom-store-i never ran. Flush the dirty volume on a slow timer
 ; instead — coalesces a drag into ~one flash write and does not depend on a
 ; clean shutdown. panel-on-shutdown stays as a final flush.
 (defun persist-volumes-loop () {
     (loopwhile t {
         (if (= beep-vol-dirty 1) {
             (eeprom-store-i beep-vol-addr beep-vol) (setq beep-vol-dirty 0) })
-        (if (= melody-vol-dirty 1) {
-            (eeprom-store-i melody-vol-addr melody-vol) (setq melody-vol-dirty 0) })
         (sleep 2)
     })
 })
@@ -504,43 +473,11 @@
               (_ nil))
     })
 })
-(def melody '(
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (262 0.124) (0 0.620) (330 0.124) (0 0.372) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.372) (330 0.124) (0 0.620) (294 0.124) (0 0.372)
-  (294 0.124) (0 0.124) (294 0.124) (0 0.372) (294 0.124) (0 0.372)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (262 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (440 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (262 0.124) (0 0.620) (330 0.124) (0 0.372)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.372) (330 0.124) (0 0.620)
-  (294 0.124) (0 0.372) (294 0.124) (0 0.124) (294 0.124) (0 0.372)
-  (294 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (440 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (262 0.124) (0 0.372) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (440 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (262 0.124) (0 0.620)
-  (330 0.124) (0 0.372) (330 0.124) (0 0.124) (330 0.124) (0 0.372)
-  (330 0.124) (0 0.620) (294 0.124) (0 0.372) (294 0.124) (0 0.124)
-  (294 0.124) (0 0.372) (294 0.124) (0 0.372) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (440 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (262 0.124) (0 0.372)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (262 0.124) (0 0.620) (330 0.124) (0 0.372) (330 0.124) (0 0.124)
-  (330 0.124) (0 0.372) (330 0.124) (0 0.620) (294 0.124) (0 0.372)
-  (294 0.124) (0 0.124) (294 0.124) (0 0.372) (294 0.124) (0 0.372)
-  (330 0.124) (0 0.124) (330 0.124) (0 0.124) (440 0.124) (0 0.124)
-  (440 0.124) (0 0.124) (330 0.124) (0 0.124) (330 0.124) (0 0.124)
-  (262 0.124) (0 0.372) (330 0.124)
-))
 
-; Spawn threads and enable events LAST — after melody (defined just above)
-; is bound. panel-event-loop calls panel-action, which references melody (cid 6);
-; spawned earlier, an incoming panel command during load would hit melody while
-; still unbound → the handler thread dies → panel/melodies dead.
+; Spawn threads and enable events LAST — after every function they reach is
+; bound. panel-event-loop → panel-handle → panel-action → panel-set-profile;
+; spawned earlier, an incoming panel command during load would hit a still
+; unbound binding → the handler thread dies → panel dead.
 ; These are plain expressions (not definitions), so @const-start does not flash
 ; them — they just execute here, which is exactly what we want.
 (event-register-handler (spawn panel-event-loop))

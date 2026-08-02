@@ -54,8 +54,11 @@ void main() {
       expect(_codes(report, LintLevel.info), contains('I_BINDING_CAP'));
     });
 
-    test('flags the melody literal as a load-time heap cost', () {
-      expect(_codes(report, LintLevel.warn), contains('W_LARGE_QUOTED'));
+    test('has no large quoted literal left to warn about', () {
+      // The script used to carry a ~2 kB melody list; the tune controls are
+      // gone, so the golden is expected clean here. W_LARGE_QUOTED itself is
+      // covered by the synthetic literal in 'small scripts' below.
+      expect(_codes(report, LintLevel.warn), isNot(contains('W_LARGE_QUOTED')));
     });
 
     test('packed size is well under the flash limit', () {
@@ -120,6 +123,14 @@ void main() {
           '(spawn tick)\n'
           '@const-end\n');
       expect(r.hasErrors, isFalse, reason: r.errors.join('\n'));
+    });
+
+    test('a large quoted literal is flagged as a load-time heap cost', () {
+      // >512 B of quoted list: the reader builds the whole thing on the cons
+      // heap before @const can flash it, so it can OOM at load time.
+      final notes = List.filled(60, '(330 0.124)').join(' ');
+      final r = lintLisp("(def tune '($notes))\n");
+      expect(_codes(r, LintLevel.warn), contains('W_LARGE_QUOTED'));
     });
 
     test('brace-progn is not mistaken for an unbalanced paren', () {

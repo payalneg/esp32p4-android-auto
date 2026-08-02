@@ -77,6 +77,19 @@ can_status_msg_6 *comm_can_get_status_msg_6_id(int id);
 typedef void (*can_packet_handler_t)(const uint8_t *data, unsigned int len);
 void comm_can_set_packet_handler(can_packet_handler_t handler);
 
+/* Identity answered to a COMM_FW_VERSION request arriving over CAN.
+ *
+ * VESC Tool's CAN scan pings the bus, then asks every node that answered for
+ * its firmware version; a node that stays silent is listed as "Unknown". We
+ * answer that one request (nothing else is served — this is not a VESC) so the
+ * head unit shows up by name next to the motor controllers.
+ *
+ * `hw_name` is copied (truncated to 31 chars). `uuid` may be NULL, in which
+ * case the 12 UUID bytes are zeroed; pass something stable and unique per
+ * device (the WiFi MAC works) so VESC Tool can tell two units apart. */
+void comm_can_set_fw_info(const char *hw_name, uint8_t major, uint8_t minor,
+                          const uint8_t *uuid, unsigned int uuid_len);
+
 #ifdef __cplusplus
 }
 #endif

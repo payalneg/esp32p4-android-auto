@@ -9,6 +9,60 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.2 / app 0.3.2 — 2026-08-02
+
+### New: LISP editor in the browser
+
+- `http://android-auto.local/lisp` — a full LispBM editor on the head unit's
+  own HTTP server, next to `/ota` and `/files`. Syntax highlighting, line
+  numbers, matching and rainbow parens, find/replace, block indent, hotkeys.
+- The linter encodes the failures that cost the most time here: paren balance,
+  unterminated strings, `@const-start` / `@const-end` pairing, defuns left
+  outside the const block, buffers created inside it, and a thread started
+  before the function it runs is defined (the handler dies with
+  `variable_not_bound` and the feature is simply gone).
+- Read VESC / Upload / Upload + Run / Start / Stop over CAN with a progress
+  bar. The transfer is asynchronous — an upload takes tens of seconds and the
+  server serves everything from one task, so blocking it would freeze `/files`
+  and `/ota` too.
+- Live console of the script's `(print ...)` output. The firmware never parsed
+  `COMM_LISP_PRINT` / `COMM_PRINT` before; the packets were arriving all along.
+- A REPL line evaluates an expression without reflashing the script (capped at
+  240 bytes — one CAN buffer transfer).
+- The script library on the device (`/vescfs/lisp` and microSD) is browsable
+  from the same page: open, save, rename, **move**, delete, mkdir, upload.
+- `scripts/lisp_web_mock.py` serves the page against a fake device, so the
+  editor can be worked on without a board.
+
+### CAN identity
+
+- The head unit answers `COMM_FW_VERSION` on the bus, so VESC Tool's CAN scan
+  lists it as **Super VESC Display** instead of "Unknown". It replies to that
+  one request only — it is not pretending to be a motor controller (the scan
+  icon comes from `HW_TYPE_CUSTOM_MODULE`).
+
+### Traction control in the LISP arbiter
+
+- The native VESC traction-control algorithm, ported into the arbiter as a
+  0..1 current scale. It cannot be left to the ADC app: that app's control
+  block sits behind `app_is_output_disabled()`, which the arbiter keeps
+  asserted, so the app's own TC never runs.
+- On/off and the threshold are the real appconf fields `adc-tc` /
+  `adc-tc-max-diff` — the panel toggle, the on-device VESC Tool menu and VESC
+  Tool itself are one setting. `tc-peer` (the other motor's CAN id) must be set
+  by hand; 255 disables the limiter, which is the safe default.
+- Profiles are now also selectable directly from the on-screen panel
+  (`panel-set-profile`), a radio group of three. The tune/melody controls are
+  gone, and with them the ~2 kB quoted literal that cost cons heap at load.
+
+### Reference and docs
+
+- `conf-get`'s second argument is a "read the firmware defaults" **flag**, not a
+  fallback value, and `conf-store` writes both mcconf and appconf from live RAM
+  — in a script that scales limits at runtime that bakes temporary values over
+  the rider's master config. Both are now documented in the assistant's LISP
+  reference and in `lisp/README.md`.
+
 ## v1.3.1 / app 0.3.1 — 2026-07-31
 
 30 commits, 130 files, +27 929 / −8 284 since v1.2.35.

@@ -147,6 +147,18 @@ menu "Android Auto Head Unit"
             default 80
             range 1 65535
 
+        config LISP_HTTP_ENABLED
+            bool "Web LISP editor (/lisp)"
+            depends on OTA_HTTP_ENABLED
+            default y
+            help
+                Attaches a full LispBM editor to the same HTTP server:
+                syntax highlighting, linting, the on-device script library
+                under /vescfs/lisp, read/upload/run against the VESC over
+                CAN, live (print ...) console and a REPL line.
+
+                Costs roughly 20 KiB of flash for the gzipped page.
+
     endmenu
 
     config DEBUG_UART_BRIDGE

@@ -268,6 +268,9 @@ static void rt_task(void *arg)
          * skipped here so it doesn't burn a serialised CAN slot for nothing. */
         (void)0;
 #endif
+        /* One-shot stats requests (web LISP editor's Stats tab). No-op unless
+         * someone asked, so the bus stays quiet with the page closed. */
+        vesc_lisp_poll_once_loop();
         vesc_io_data_loop();
         /* Dashboard cruise/profile stats over the panel's COMM_CUSTOM_APP_DATA
          * channel — replaces COMM_LISP_GET_STATS (capped at 18 vars). Always on. */

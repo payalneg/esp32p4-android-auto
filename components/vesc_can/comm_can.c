@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include <stdbool.h>
 #include <string.h>
 
 static const char *TAG = "vesc_can";
@@ -55,6 +56,14 @@ static SemaphoreHandle_t s_send_mutex;
  * a "reply arrived" signal, not a mutex. (See comm_can_send_buffer_sync.) */
 static SemaphoreHandle_t s_rx_done_sem;
 static volatile HW_TYPE  s_ping_hw_last = HW_TYPE_VESC;
+
+/* Identity served to a COMM_FW_VERSION request from the bus (VESC Tool's CAN
+ * scan). Defaults keep the answer sane even if the app never calls
+ * comm_can_set_fw_info(). */
+static char    s_fw_hw_name[32] = "Super VESC Display";
+static uint8_t s_fw_major       = 0;
+static uint8_t s_fw_minor       = 0;
+static uint8_t s_fw_uuid[12];
 
 static uint8_t          s_rx_buffer[RX_BUFFER_NUM][RX_BUFFER_SIZE];
 static int              s_rx_buffer_device_id[RX_BUFFER_NUM];
@@ -325,6 +334,67 @@ uint8_t comm_can_get_local_id(void)
     return s_can_config.controller_id;
 }
 
+void comm_can_set_fw_info(const char *hw_name, uint8_t major, uint8_t minor,
+                          const uint8_t *uuid, unsigned int uuid_len)
+{
+    if (hw_name) {
+        strncpy(s_fw_hw_name, hw_name, sizeof(s_fw_hw_name) - 1);
+        s_fw_hw_name[sizeof(s_fw_hw_name) - 1] = '\0';
+    }
+    s_fw_major = major;
+    s_fw_minor = minor;
+    memset(s_fw_uuid, 0, sizeof(s_fw_uuid));
+    if (uuid && uuid_len) {
+        if (uuid_len > sizeof(s_fw_uuid)) uuid_len = sizeof(s_fw_uuid);
+        memcpy(s_fw_uuid, uuid, uuid_len);
+    }
+}
+
+/* A request addressed to US, not a reply to something we asked for.
+ *
+ * The only one we serve is COMM_FW_VERSION (a bare one-byte payload), which is
+ * what VESC Tool sends to every node that answered its CAN-scan ping — nodes
+ * that stay quiet are listed as "Unknown". The reply layout matches the VESC
+ * firmware's commands.c so VESC Tool's parser is happy:
+ *
+ *   [COMM_FW_VERSION][major][minor][hw name + NUL][uuid 12]
+ *   [pairing_done][test_version][hw_type][custom_config][phase_filters]
+ *
+ * Sent back with send=1, which tells the node that forwarded the request to
+ * pass our answer up its own interface (USB / BLE) to VESC Tool.
+ *
+ * Returns true when it handled the payload, i.e. the caller must NOT also
+ * feed it to the packet handler (which parses COMM_FW_VERSION as a REPLY and
+ * would read our own request as a garbage version). */
+static bool serve_request(const uint8_t *data, unsigned int len, uint8_t sender_id)
+{
+    if (len != 1 || data[0] != COMM_FW_VERSION) return false;
+
+    uint8_t buf[64];
+    int32_t ind = 0;
+    buf[ind++] = COMM_FW_VERSION;
+    buf[ind++] = s_fw_major;
+    buf[ind++] = s_fw_minor;
+
+    size_t n = strlen(s_fw_hw_name);
+    memcpy(buf + ind, s_fw_hw_name, n + 1);   /* including the NUL */
+    ind += (int32_t)n + 1;
+
+    memcpy(buf + ind, s_fw_uuid, sizeof(s_fw_uuid));
+    ind += (int32_t)sizeof(s_fw_uuid);
+
+    buf[ind++] = 0;                      /* pairing_done   */
+    buf[ind++] = 0;                      /* test fw number */
+    buf[ind++] = HW_TYPE_CUSTOM_MODULE;  /* not a motor controller */
+    buf[ind++] = 0;                      /* custom config count */
+    buf[ind++] = 0;                      /* no phase filters */
+
+    comm_can_send_buffer(sender_id, buf, (unsigned int)ind, 1);
+    ESP_LOGI(TAG, "answered FW_VERSION to id %u as \"%s\" %u.%02u",
+             sender_id, s_fw_hw_name, s_fw_major, s_fw_minor);
+    return true;
+}
+
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type)
 {
     if (!s_init_done) return false;
@@ -506,7 +576,8 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
 
             if (crc16(s_rx_buffer[buf_ind], rxbuf_len) ==
                 ((unsigned short)crc_high << 8 | (unsigned short)crc_low)) {
-                if (s_packet_handler) {
+                if (!serve_request(s_rx_buffer[buf_ind], rxbuf_len, last_id) &&
+                    s_packet_handler) {
                     s_packet_handler(s_rx_buffer[buf_ind], rxbuf_len);
                 }
             } else {
@@ -527,7 +598,8 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
             }
             s_rx_buffer_response_type = (commands_send == 3) ? 0 : 1;
 
-            if (s_packet_handler) {
+            if (!serve_request(data8 + ind, len - ind, last_id) &&
+                s_packet_handler) {
                 s_packet_handler(data8 + ind, len - ind);
             }
             if (s_rx_done_sem) xSemaphoreGive(s_rx_done_sem);

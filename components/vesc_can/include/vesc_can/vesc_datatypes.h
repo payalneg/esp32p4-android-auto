@@ -82,6 +82,9 @@ typedef enum {
     COMM_GET_APPCONF_DEFAULT        = 18,
     COMM_REBOOT                     = 29,
     COMM_ALIVE                      = 30,
+    /* commands_printf() — plain firmware console output. Some LispBM builds
+     * route (print ...) through this instead of COMM_LISP_PRINT. */
+    COMM_PRINT                      = 21,
     COMM_FORWARD_CAN                = 34,
     COMM_CUSTOM_APP_DATA            = 36,
     COMM_GET_VALUES_SETUP           = 47,
@@ -92,6 +95,10 @@ typedef enum {
     COMM_LISP_ERASE_CODE            = 132,
     COMM_LISP_SET_RUNNING           = 133,
     COMM_LISP_GET_STATS             = 134,
+    /* commands_printf_lisp() — the script's own (print ...) output. Pushed
+     * asynchronously, never as a reply to a request. */
+    COMM_LISP_PRINT                 = 135,
+    COMM_LISP_REPL_CMD              = 136,
 } COMM_PACKET_ID;
 
 typedef struct {
