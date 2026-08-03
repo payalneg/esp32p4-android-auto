@@ -32,11 +32,14 @@
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
                 (if (and v (>= v 0) (<= v 50)) v 30)))
 (def beep-vol-dirty 0)
-; Pedal-assist setpoint from the head unit (over COMM_CUSTOM_APP_DATA, msg 0x05).
-; pas-amps is the requested motor current (A); pas-seen is the (systime) of the
-; last frame, for a staleness check. setq'd at runtime → MUST stay above @const.
+; Pedal-assist setpoint from the head unit / BLE helper (over
+; COMM_CUSTOM_APP_DATA, msg 0x05). pas-amps is the requested motor current
+; (A); pas-seen is the (systime) of the last accepted frame, for a staleness
+; check; pas-src is the CAN id of the sender we are locked onto (-1 = none) —
+; see the 0x05 handler. setq'd at runtime → MUST stay above @const.
 (def pas-amps 0.0)
 (def pas-seen 0)
+(def pas-src -1)
 ; @const-start flashes every definition below, freeing the cons heap. Without it
 ; all the defun bodies live in RAM and exhaust the heap — panel-event-loop then
 ; OOMs at runtime and the display goes blank while motor control keeps running.
@@ -322,8 +325,32 @@
                 ((= msg 0x05) {
                     ; Pedal-assist setpoint (fire-and-forget, no reply). i32 mA at
                     ; byte 4 (after magic[0,1], msg[2], reply-id[3]).
-                    (setq pas-amps (/ (bufget-i32 data 4) 1000.0))
-                    (setq pas-seen (systime))
+                    ;
+                    ; SOURCE LOCK: more than one node may stream setpoints (the
+                    ; P4 display's on-device PAS idles at 0 A, 20 Hz, forever on
+                    ; firmware older than 1.3.1). Interleaved with a real assist
+                    ; current those zeros chop pas-amps into 3→0→3… and the
+                    ; motor jerks. So: lock onto whoever sent the last NON-ZERO
+                    ; setpoint (reply-id = the sender's CAN id) and ignore other
+                    ; senders until that source goes silent/zero; a zero from the
+                    ; locked source releases the lock, staleness (0.4 s) too.
+                    (let ((amps (/ (bufget-i32 data 4) 1000.0)))
+                        (if (or (= pas-src reply-id)
+                                (= pas-src -1)
+                                (> (secs-since pas-seen) 0.4))
+                            {
+                                (setq pas-amps amps)
+                                (setq pas-seen (systime))
+                                (setq pas-src (if (> amps 0.0) reply-id -1))
+                            }
+                            nil))
+                })
+                ((= msg 0x06) {
+                    ; Atomic throttle toggle from the BLE helper (its GUI /
+                    ; throttle_ctl): flip our own state — the sender never
+                    ; needs to know it — and answer with fresh STATE.
+                    (panel-set-throttle (if (= throttle-on 1) 0 1))
+                    (panel-send-state reply-id)
                 })
                 ((= msg 0x02)
                     (let ((cid (bufget-u8 data 4))
@@ -466,9 +493,37 @@
         (sleep 2)
     })
 })
+; Custom button frames from the BLE helper: plain standard-id CAN frames,
+; id/data configured per button in the helper GUI. Command = the data bytes
+; read as a big-endian u16 (single-byte frames work too):
+;   CAN ID 0x123, data 00 01  (button A) -> toggle the throttle master switch
+;   CAN ID 0x123, data 00 02  (button B) -> switch speed profile (mode);
+;                                           apply-profile beeps per profile
+;   anything else             -> just printed; add your commands below
+(def helper-btn-id 0x123)
+(defun proc-helper-btn (data) {
+    (let ((cmd (if (>= (buflen data) 2)
+                   (bufget-u16 data 0)
+                   (bufget-u8 data 0)))) {
+        (cond
+            ((= cmd 1) {
+                (panel-set-throttle (if (= throttle-on 1) 0 1))
+                (print (str-merge "helper: throttle "
+                                  (if (= throttle-on 1) "ON" "off")))
+            })
+            ((= cmd 2) {
+                (switch-profile)
+                (print (str-merge "helper: profile "
+                                  (to-str current-profile)))
+            })
+            (t (print (str-merge "helper cmd " (to-str cmd)))))
+    })
+})
 (defun panel-event-loop () {
     (loopwhile t {
         (recv ((event-data-rx . (? data)) (panel-handle data))
+              ((event-can-sid (? id) . (? data))
+                  (if (= id helper-btn-id) (proc-helper-btn data)))
               (event-shutdown               (panel-on-shutdown))
               (_ nil))
     })
