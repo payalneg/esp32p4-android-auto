@@ -18,6 +18,12 @@ set(SVD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../Super_VESC_Display")
 # factory partition without bloat.
 file(GLOB SVD_GENERATED  "${SVD_ROOT}/generated/*.c")
 list(FILTER SVD_GENERATED EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
+# The "reference" screen is GUI Guider's own widget palette, kept in the project
+# as a design reference — nothing creates it (no setup_scr_reference call
+# anywhere). It also does not compile against our LVGL 8.4: GUI Guider emitted
+# the LVGL 9 forms (lv_animimg_set_src with 4 args, ui->g_kb_top_layer). Drop it
+# rather than hand-patch a generated file that the next export would overwrite.
+list(FILTER SVD_GENERATED EXCLUDE REGEX ".*setup_scr_reference\\.c$")
 file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
