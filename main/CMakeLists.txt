@@ -98,9 +98,7 @@ set(_lisp_web_gz  "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html.gz")
 #  command directly, without a shell to interpret the redirection.)
 add_custom_command(
     OUTPUT "${_lisp_web_gz}"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-            "${_lisp_web_src}" "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
-    COMMAND gzip -f -9 -n "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
+    COMMAND python "${CMAKE_SOURCE_DIR}/scripts/compress_gz.py" "${_lisp_web_src}" "${_lisp_web_gz}"
     DEPENDS "${_lisp_web_src}"
     COMMENT "Compressing web LISP editor -> lisp_editor.html.gz"
     VERBATIM)

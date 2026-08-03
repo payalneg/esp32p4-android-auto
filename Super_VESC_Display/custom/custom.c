@@ -1725,10 +1725,7 @@ static void apply_brightness_gesture_visibility(bool enabled) {
         if (enabled) lv_obj_clear_flag(guider_ui.dashboard_Classic_brightness_slider, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(guider_ui.dashboard_Classic_brightness_slider, LV_OBJ_FLAG_HIDDEN);
     }
-    if (guider_ui.dashboard_Amber_brightness_slider) {
-        if (enabled) lv_obj_clear_flag(guider_ui.dashboard_Amber_brightness_slider, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(guider_ui.dashboard_Amber_brightness_slider, LV_OBJ_FLAG_HIDDEN);
-    }
+    /* The amber theme has been removed, so no need to handle its slider here. */
 }
 
 static void brightness_gesture_switch_event_cb(lv_event_t *e) {

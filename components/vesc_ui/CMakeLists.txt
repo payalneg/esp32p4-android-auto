@@ -168,3 +168,6 @@ endif()
 # original setup_scr_dashboard.c sets it as bg_img with opa=0. Provide a
 # tiny stub so the linker is happy — the image is never drawn.
 target_sources(${COMPONENT_LIB} PRIVATE "grid_480_stub.c")
+
+# Suppress unused variable and function warnings (GUI Guider custom code can be messy)
+target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-unused-variable" "-Wno-unused-function")

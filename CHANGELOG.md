@@ -9,8 +9,18 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## v1.3.4 / app 0.3.4 — 2026-08-03
+## v1.3.5 / app 0.3.5 — 2026-08-04
 
+### Stability improvements and features
+
+- **BLE IPC Timeout:** Added a 5-minute timeout in the Flutter background isolate to prevent hanging requests when the VESC doesn't respond.
+- **UTF-8 Encoding:** Replaced custom bit-shifting UTF-8 encoder with native Dart `dart:convert` utilities for reliability and performance.
+- **Network Security:** Added Android `network_security_config.xml` to allow cleartext HTTP traffic for local OTA updates on Android 9+.
+- **Build Scripts:** Fixed CMake python3 references for Windows compatibility, and added `build_all.bat` for automated builds.
+- **Brightness Gesture:** Added a dedicated `brightness_gesture_enabled` setting in NVS (`dev_settings.c`) to toggle touch brightness controls.
+- **Amber Theme:** Restored the `theme_dashboard_amber.c` concept.
+
+## v1.3.4 / app 0.3.4 — 2026-08-03
 No firmware or app code changed in this repository — this release exists to ship
 the enclosure models and to cut a numbered build of the current tree.
 
