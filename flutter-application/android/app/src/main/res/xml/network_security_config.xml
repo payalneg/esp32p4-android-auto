@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext (HTTP) policy for AA Bridge.
+
+  The ONLY HTTP call in the app is the WiFi OTA POST to the head unit's
+  SoftAP (firmware_updater.dart → http://<host>/ota). The host is either
+  the mDNS name "android-auto.local" or a user-entered IP (typically
+  192.168.4.1). We allow cleartext for these specific targets only;
+  everything else (third-party libs, analytics, etc.) must use HTTPS.
+
+  Note: Android NSC <domain> matches literal IP strings too, so
+  "192.168.4.1" correctly allows http://192.168.4.1/ota.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">android-auto.local</domain>
+        <domain includeSubdomains="false">192.168.4.1</domain>
+    </domain-config>
+</network-security-config>

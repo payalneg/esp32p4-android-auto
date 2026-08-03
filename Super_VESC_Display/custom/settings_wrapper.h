@@ -90,6 +90,10 @@ void    settings_wrapper_set_second_head_enabled(bool on);
 uint8_t settings_wrapper_get_second_head_id(void);
 void    settings_wrapper_set_second_head_id(uint8_t id);
 
+/* Brightness gesture: true = enabled, false = disabled */
+bool    settings_wrapper_get_brightness_gesture_enabled(void);
+void    settings_wrapper_set_brightness_gesture_enabled(bool on);
+
 /* Dashboard theme — index into the dashboard-theme registry (dashboard_theme.h). */
 uint8_t settings_wrapper_get_dashboard_theme(void);
 void    settings_wrapper_set_dashboard_theme(uint8_t theme);
@@ -115,6 +119,7 @@ void settings_wrapper_set_controller_id_volatile(uint8_t id);
 void settings_wrapper_set_battery_capacity_volatile(float capacity);
 void settings_wrapper_set_power_max_kw_volatile(float power_max_kw);
 void settings_wrapper_set_second_head_id_volatile(uint8_t id);
+void settings_wrapper_set_brightness_gesture_enabled_volatile(bool on);
 void settings_wrapper_set_dashboard_theme_volatile(uint8_t theme);
 
 void settings_wrapper_persist_target_vesc_id(void);
@@ -123,6 +128,7 @@ void settings_wrapper_persist_controller_id(void);
 void settings_wrapper_persist_battery_capacity(void);
 void settings_wrapper_persist_power_max_kw(void);
 void settings_wrapper_persist_second_head_id(void);
+void settings_wrapper_persist_brightness_gesture_enabled(void);
 void settings_wrapper_persist_dashboard_theme(void);
 
 /* Apply pending mode change by rebooting the device. On the device this

@@ -23,7 +23,7 @@ class NotifListener : NotificationListenerService() {
         // Flush whatever is already on-screen so the head unit has fresh state.
         try {
             activeNotifications?.forEach { emit(it, removed = false) }
-        } catch (_: Throwable) {}
+        } catch (_: Exception) {}
     }
 
     override fun onListenerDisconnected() {
@@ -40,6 +40,13 @@ class NotifListener : NotificationListenerService() {
         val title = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
         if (TextUtils.isEmpty(title) && TextUtils.isEmpty(text)) return
+        val category = n.category ?: ""
+        // Drop media notifications — they are handled exclusively by MediaListener.
+        // Otherwise, skipping a track triggers a generic toast with the song title.
+        if (category == android.app.Notification.CATEGORY_TRANSPORT ||
+            extras.get("android.mediaSession") != null) {
+            return
+        }
         val pm = packageManager
         val appName = try {
             pm.getApplicationLabel(pm.getApplicationInfo(sbn.packageName, 0)).toString()
@@ -51,7 +58,6 @@ class NotifListener : NotificationListenerService() {
         // Only for category=navigation; everything else keeps the launcher
         // icon (resolved phone-side by package). Fall back to the small
         // icon if some nav app doesn't set a large icon.
-        val category = n.category ?: ""
         val iconPng: ByteArray? =
             if (category == android.app.Notification.CATEGORY_NAVIGATION)
                 renderIconPng(n.getLargeIcon()) ?: renderIconPng(n.smallIcon)

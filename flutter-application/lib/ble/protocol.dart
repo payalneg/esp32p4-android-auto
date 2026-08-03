@@ -12,6 +12,7 @@
 ///   u32 total_len  — only meaningful in the START chunk
 library;
 
+import 'dart:convert' show utf8;
 import 'dart:typed_data';
 
 enum PduType {
@@ -109,14 +110,14 @@ class ChunkedDecoder {
     }
     _buf.add(chunk.sublist(kChunkHeaderLen));
     if (!isEnd) return null;
+    final expected = _expected;
     final body = _buf.takeBytes();
-    final out = (type: _type!, body: body);
     _reset();
-    if (out.body.length != _expected && _expected != 0) {
+    if (body.length != expected && expected != 0) {
       // Length mismatch — drop silently; firmware retries.
       return null;
     }
-    return out;
+    return (type: type, body: body);
   }
 
   void _reset() {
@@ -164,8 +165,7 @@ class Tlv {
     if (v is Uint8List) return v;
     if (v is List<int>) return Uint8List.fromList(v);
     if (v is String) {
-      return Uint8List.fromList(
-          v.codeUnits.isEmpty ? const <int>[] : _utf8(v));
+      return Uint8List.fromList(utf8.encode(v));
     }
     if (v is int) {
       // Default int → u32 LE.
@@ -174,19 +174,6 @@ class Tlv {
     }
     if (v is bool) return Uint8List.fromList([v ? 1 : 0]);
     throw ArgumentError('TLV: unsupported value type ${v.runtimeType}');
-  }
-
-  static List<int> _utf8(String s) {
-    // Avoid importing dart:convert at top level to keep this file standalone.
-    return s.codeUnits.expand((cu) {
-      if (cu < 0x80) return [cu];
-      if (cu < 0x800) return [0xc0 | (cu >> 6), 0x80 | (cu & 0x3f)];
-      return [
-        0xe0 | (cu >> 12),
-        0x80 | ((cu >> 6) & 0x3f),
-        0x80 | (cu & 0x3f),
-      ];
-    }).toList(growable: false);
   }
 }
 
@@ -198,7 +185,7 @@ class TlvReader {
   String? str(int tag) {
     final b = fields[tag];
     if (b == null) return null;
-    return String.fromCharCodes(b);
+    return utf8.decode(b, allowMalformed: true);
   }
 
   int? u32(int tag) {

@@ -223,6 +223,8 @@ static lv_obj_t *settings_battery_calc_mode_dropdown = NULL;
 static lv_obj_t *settings_battery_calc_mode_label = NULL;
 static lv_obj_t *settings_show_fps_switch = NULL;
 static lv_obj_t *settings_show_fps_label = NULL;
+static lv_obj_t *settings_brightness_gesture_switch = NULL;
+static lv_obj_t *settings_brightness_gesture_label = NULL;
 static lv_obj_t *settings_demo_mode_switch = NULL;
 static lv_obj_t *settings_demo_mode_label = NULL;
 static lv_obj_t *settings_vesc_emulator_switch = NULL;
@@ -460,6 +462,10 @@ static void fmt_overlay_timer_cb(lv_timer_t *t)
  * set the static unit captions + bump the units epoch at (re)build time. */
 static void cockpit_units_changed(void);
 
+/* Defined further down (settings section); cockpit_screen_init() calls it to
+ * apply the saved brightness-gesture visibility at (re)build time. */
+static void apply_brightness_gesture_visibility(bool enabled);
+
 /* Per-screen chrome — applied every time the cockpit screen is (re)built (boot,
  * and again when the user switches back to the cockpit theme). The one-time
  * bits (settings_wrapper_init, the format-notice timer, theme registration)
@@ -562,6 +568,12 @@ static void cockpit_screen_init(lv_ui *ui)
     if (ui->dashboard_Classic_music_info) {
         lv_obj_add_flag(ui->dashboard_Classic_music_info, LV_OBJ_FLAG_HIDDEN);
     }
+
+    /* Apply the saved brightness-gesture setting so the slider is hidden
+     * when the user disabled the gesture before the last reboot. Without
+     * this, the slider stays in whatever state the generated code creates
+     * it in (visible for Classic, hidden for Amber). */
+    apply_brightness_gesture_visibility(settings_wrapper_get_brightness_gesture_enabled());
 }
 
 /* 4 Hz tick (~250 ms). sinf() drives smooth value sweeps; every change goes
@@ -1708,6 +1720,27 @@ static void show_fps_switch_event_cb(lv_event_t *e) {
 }
 */
 
+static void apply_brightness_gesture_visibility(bool enabled) {
+    if (guider_ui.dashboard_Classic_brightness_slider) {
+        if (enabled) lv_obj_clear_flag(guider_ui.dashboard_Classic_brightness_slider, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(guider_ui.dashboard_Classic_brightness_slider, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (guider_ui.dashboard_Amber_brightness_slider) {
+        if (enabled) lv_obj_clear_flag(guider_ui.dashboard_Amber_brightness_slider, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(guider_ui.dashboard_Amber_brightness_slider, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void brightness_gesture_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+        settings_wrapper_set_brightness_gesture_enabled_volatile(checked);
+        debounced_commit_schedule(&s_brightness_commit, settings_wrapper_persist_brightness_gesture_enabled);
+        apply_brightness_gesture_visibility(checked);
+    }
+}
+
 // Event handler for Demo mode switch
 static void demo_mode_switch_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -2801,6 +2834,21 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     */
 
+    // ========== Brightness Gesture Switch ==========
+    settings_brightness_gesture_label = settings_heading_create(ui->settings, y_pos, "Brightness gesture");
+
+    settings_brightness_gesture_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_brightness_gesture_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_brightness_gesture_switch, 60, 30);
+    if (settings_wrapper_get_brightness_gesture_enabled()) {
+        lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_brightness_gesture_switch, brightness_gesture_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
+
     // ========== Demo Mode Switch ==========
     settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
 
@@ -3297,5 +3345,6 @@ void custom_init(lv_ui *ui)
     custom_init_once();
     cockpit_screen_init(ui);
     dashboard_theme_adopt(0);
+    apply_brightness_gesture_visibility(settings_wrapper_get_brightness_gesture_enabled());
 }
 

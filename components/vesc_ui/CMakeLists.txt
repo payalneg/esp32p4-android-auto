@@ -110,7 +110,7 @@ set_source_files_properties(${COCKPIT_FONT_SRCS} PROPERTIES GENERATED TRUE)
 add_custom_command(
     OUTPUT ${COCKPIT_FONT_SRCS}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${COCKPIT_FONT_DIR}"
-    COMMAND python3 "${_regen_tool}"
+    COMMAND python "${_regen_tool}"
             --out-dir "${COCKPIT_FONT_DIR}"
             --fallback-from "${SVD_ROOT}/generated/guider_fonts"
     DEPENDS "${_antonio_ttf}" "${_regen_tool}"
@@ -122,7 +122,7 @@ add_custom_command(
 set_source_files_properties(${SVD_GENTHEME_SRC} PROPERTIES GENERATED TRUE)
 add_custom_command(
     OUTPUT ${SVD_GENTHEME_SRC}
-    COMMAND python3 "${SVD_GENTHEME_TOOL}"
+    COMMAND python "${SVD_GENTHEME_TOOL}"
             --header "${SVD_ROOT}/generated/gui_guider.h"
             --out "${SVD_GENTHEME_SRC}"
     DEPENDS "${SVD_ROOT}/generated/gui_guider.h" "${SVD_GENTHEME_TOOL}"

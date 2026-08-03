@@ -16,14 +16,12 @@
     <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL"
         tools:ignore="ProtectedPermissions"
         xmlns:tools="http://schemas.android.com/tools"/>
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission"
-        xmlns:tools="http://schemas.android.com/tools"/>
+
 
     <application
         android:label="VESC Display Tool"
         android:name=".AaBridgeApplication"
-        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher">
 
         <activity

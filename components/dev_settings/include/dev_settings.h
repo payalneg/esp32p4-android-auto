@@ -40,6 +40,7 @@ bool                 settings_get_aa_autoconnect(void);
 bool                 settings_get_use_imperial(void);
 bool                 settings_get_use_fahrenheit(void);
 bool                 settings_get_second_head_enabled(void);
+bool                 settings_get_brightness_gesture_enabled(void);
 uint8_t              settings_get_second_head_id(void);
 /* Index into the dashboard-theme registry (see dashboard_theme.h). Default 0
  * = cockpit. Callers must clamp against dashboard_theme_count() since the
@@ -79,6 +80,7 @@ void settings_set_aa_autoconnect(bool on);
 void settings_set_use_imperial(bool on);
 void settings_set_use_fahrenheit(bool on);
 void settings_set_second_head_enabled(bool on);
+void settings_set_brightness_gesture_enabled(bool on);
 void settings_set_second_head_id(uint8_t id);
 void settings_set_dashboard_theme(uint8_t theme);
 void settings_set_splash_loops(uint8_t loops);
@@ -96,6 +98,7 @@ void settings_set_controller_id_volatile(uint8_t id);
 void settings_set_battery_capacity_volatile(float capacity);
 void settings_set_power_max_kw_volatile(float power_max_kw);
 void settings_set_second_head_id_volatile(uint8_t id);
+void settings_set_brightness_gesture_enabled_volatile(bool on);
 void settings_set_dashboard_theme_volatile(uint8_t theme);
 
 void settings_persist_target_vesc_id(void);
@@ -104,6 +107,7 @@ void settings_persist_controller_id(void);
 void settings_persist_battery_capacity(void);
 void settings_persist_power_max_kw(void);
 void settings_persist_second_head_id(void);
+void settings_persist_brightness_gesture_enabled(void);
 void settings_persist_dashboard_theme(void);
 
 /* Hot-apply hooks: registered by main once the corresponding subsystem is

@@ -39,6 +39,7 @@ static struct {
     bool use_imperial;
     bool use_fahrenheit;
     bool second_head_enabled;
+    bool brightness_gesture_enabled;
     uint8_t second_head_id;
     uint8_t dashboard_theme;
     uint8_t splash_loops;
@@ -59,6 +60,7 @@ static struct {
     .use_imperial = false,
     .use_fahrenheit = false,
     .second_head_enabled = false,
+    .brightness_gesture_enabled = true,
     .second_head_id = 11,
     .dashboard_theme = 0,
     .splash_loops = 1,
@@ -361,6 +363,22 @@ void settings_wrapper_set_second_head_enabled(bool on) {
 #endif
 }
 
+bool settings_wrapper_get_brightness_gesture_enabled(void) {
+#if SIMULATOR_MODE
+    return sim_settings.brightness_gesture_enabled;
+#else
+    return settings_get_brightness_gesture_enabled();
+#endif
+}
+
+void settings_wrapper_set_brightness_gesture_enabled(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.brightness_gesture_enabled = on;
+#else
+    settings_set_brightness_gesture_enabled(on);
+#endif
+}
+
 uint8_t settings_wrapper_get_second_head_id(void) {
 #if SIMULATOR_MODE
     return sim_settings.second_head_id;
@@ -385,9 +403,23 @@ void settings_wrapper_set_second_head_id_volatile(uint8_t id) {
 #endif
 }
 
+void settings_wrapper_set_brightness_gesture_enabled_volatile(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.brightness_gesture_enabled = on;
+#else
+    settings_set_brightness_gesture_enabled_volatile(on);
+#endif
+}
+
 void settings_wrapper_persist_second_head_id(void) {
 #if !SIMULATOR_MODE
     settings_persist_second_head_id();
+#endif
+}
+
+void settings_wrapper_persist_brightness_gesture_enabled(void) {
+#if !SIMULATOR_MODE
+    settings_persist_brightness_gesture_enabled();
 #endif
 }
 

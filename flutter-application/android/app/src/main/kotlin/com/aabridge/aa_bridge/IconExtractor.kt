@@ -34,6 +34,7 @@ object IconExtractor {
         val bmp = drawable.toBitmap(size, size, Bitmap.Config.ARGB_8888)
         val bytes = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.PNG, 100, bytes)
+        bmp.recycle()
         val data = bytes.toByteArray()
         Log.i(TAG, "$pkg via=$source cls=${drawable.javaClass.simpleName} " +
                 "intrinsic=${drawable.intrinsicWidth}x${drawable.intrinsicHeight} " +

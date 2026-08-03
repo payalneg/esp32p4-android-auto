@@ -64,8 +64,12 @@ object MediaListener {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         } ?: controllers.firstOrNull()
 
+    private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
+    private var msm: MediaSessionManager? = null
+
     private fun attach(ctx: Context) {
         val msm = ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+        this.msm = msm
         val cn = ComponentName(ctx, NotifListener::class.java)
         try {
             controllers = msm.getActiveSessions(cn)
@@ -73,17 +77,25 @@ object MediaListener {
         } catch (_: SecurityException) {
             controllers = emptyList()
         }
-        msm.addOnActiveSessionsChangedListener({ list ->
+        val listener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
             controllers.forEach { it.unregisterCallback(callback) }
             controllers = list ?: emptyList()
             controllers.forEach { it.registerCallback(callback) }
             pushSnapshot()
-        }, cn)
+        }
+        sessionsListener = listener
+        msm.addOnActiveSessionsChangedListener(listener, cn)
         startTicker()
         pushSnapshot()
     }
 
     private fun detach() {
+        sessionsListener?.let { listener ->
+            try {
+                msm?.removeOnActiveSessionsChangedListener(listener)
+            } catch (_: Exception) {}
+        }
+        sessionsListener = null
         controllers.forEach { it.unregisterCallback(callback) }
         controllers = emptyList()
     }
@@ -186,6 +198,7 @@ object MediaListener {
         canvas.drawBitmap(b, m, Paint(Paint.FILTER_BITMAP_FLAG))
         val bytes = ByteArrayOutputStream()
         out.compress(Bitmap.CompressFormat.JPEG, 85, bytes)
+        out.recycle()
         return bytes.toByteArray()
     }
 

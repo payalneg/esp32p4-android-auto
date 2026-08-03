@@ -285,7 +285,10 @@ class BleProxy {
     final c = Completer<Map<String, dynamic>>();
     _pending[id] = c;
     FlutterForegroundTask.sendDataToTask({'cmd': cmd, 'id': id, ...?args});
-    return c.future;
+    return c.future.timeout(const Duration(minutes: 5), onTimeout: () {
+      _pending.remove(id);
+      throw TimeoutException('IPC request $cmd timed out');
+    });
   }
 
   void _fireAndForget(String cmd, [Map<String, dynamic>? args]) {
