@@ -20,6 +20,9 @@ void events_init(lv_ui *ui);
 
 void events_init_dashboard_Classic(lv_ui *ui);
 void events_init_settings(lv_ui *ui);
+void events_init_dashboard_Classic_Max(lv_ui *ui);
+void events_init_dashboard_Lamborghini(lv_ui *ui);
+void events_init_dashboard_Supermoto(lv_ui *ui);
 
 #ifdef __cplusplus
 }

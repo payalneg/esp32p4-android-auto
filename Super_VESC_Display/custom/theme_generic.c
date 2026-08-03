@@ -64,6 +64,18 @@ static void paint_v_bar(lv_obj_t *const *segs, int count, int filled, lv_color_t
     }
 }
 
+/* lv_bar, clamped to the range the screen was authored with. Skips the write
+ * when nothing changed — lv_bar_set_value invalidates unconditionally. */
+static void bar_set(lv_obj_t *bar, int32_t v)
+{
+    if (!bar) return;
+    int32_t lo = lv_bar_get_min_value(bar);
+    int32_t hi = lv_bar_get_max_value(bar);
+    if (v < lo) v = lo; else if (v > hi) v = hi;
+    if (lv_bar_get_value(bar) == v) return;
+    lv_bar_set_value(bar, v, LV_ANIM_OFF);
+}
+
 /* Horizontal bar: seg_00 lights first (speed). */
 static void paint_h_bar(lv_obj_t *const *segs, int count, int filled, lv_color_t on)
 {
@@ -78,6 +90,16 @@ static void paint_h_bar(lv_obj_t *const *segs, int count, int filled, lv_color_t
 static void render_power(void)
 {
     if (!s_w) return;
+    /* The configured power ceiling (a setting, not telemetry). Refreshed from
+     * here rather than on a dedicated hook: dash_label_set short-circuits when
+     * the text is unchanged, so this costs nothing on the hot path, and a
+     * Classic-derived screen would otherwise show its "-.- KW" placeholder
+     * forever. */
+    if (s_w->power_max_val) {
+        char text[16];
+        snprintf(text, sizeof(text), "%.1f KW", settings_wrapper_get_power_max_kw());
+        dash_label_set(s_w->power_max_val, text);
+    }
     float power_kw = s_last_current_a * s_last_voltage_v / 1000.0f;
     lv_color_t color = (power_kw < 0.0f) ? GEN_REGEN : GEN_ACCENT;
     if (s_w->power_value) {
@@ -86,13 +108,22 @@ static void render_power(void)
         dash_label_set(s_w->power_value, text);
         dash_set_text_color(s_w->power_value, color, LV_PART_MAIN);
     }
+    float pmax = settings_wrapper_get_power_max_kw();
+    if (pmax <= 0.0f) pmax = 4.5f;
+    float ratio = fabsf(power_kw) / pmax;
+    if (ratio > 1.0f) ratio = 1.0f;
     if (s_w->power_seg_n > 0) {
-        float pmax = settings_wrapper_get_power_max_kw();
-        if (pmax <= 0.0f) pmax = 4.5f;
-        float ratio = fabsf(power_kw) / pmax;
-        if (ratio > 1.0f) ratio = 1.0f;
         paint_v_bar(s_w->power_seg, s_w->power_seg_n,
                     (int)(ratio * s_w->power_seg_n + 0.5f), color);
+    }
+    if (s_w->power_bar) {
+        /* Signed fraction of the bar's own span. On a symmetrical bar authored
+         * with a negative minimum this reads as regen (left) / drive (right);
+         * on a plain 0..N bar the clamp in bar_set() pins regen at zero. */
+        int32_t hi = lv_bar_get_max_value(s_w->power_bar);
+        float signed_ratio = (power_kw < 0.0f) ? -ratio : ratio;
+        bar_set(s_w->power_bar, (int32_t)(signed_ratio * hi + (signed_ratio < 0 ? -0.5f : 0.5f)));
+        dash_set_bg_color(s_w->power_bar, color, LV_PART_INDICATOR);
     }
 }
 
@@ -112,6 +143,16 @@ static void g_speed(float speed)
         int smax = 60;
         int filled = ((int)speed * s_w->speed_seg_n + smax / 2) / smax;
         paint_h_bar(s_w->speed_seg, s_w->speed_seg_n, filled, GEN_ACCENT);
+    }
+    /* Sweep the gauge with the DISPLAYED speed, so the arc and the digits agree
+     * after a km/h <-> mph switch. The scale's authored range is the full-scale
+     * value; lv_meter clamps nothing, hence the explicit clamp. */
+    if (s_w->speed_arc && s_w->speed_meter && s_w->speed_scale) {
+        int32_t lo = s_w->speed_scale->min;
+        int32_t hi = s_w->speed_scale->max;
+        int32_t v = disp;
+        if (v < lo) v = lo; else if (v > hi) v = hi;
+        lv_meter_set_indicator_end_value(s_w->speed_meter, s_w->speed_arc, v);
     }
 }
 
@@ -153,22 +194,35 @@ static void g_battery_proc(float pct)
         int filled = (v * s_w->batt_seg_n + 50) / 100;
         paint_v_bar(s_w->batt_seg, s_w->batt_seg_n, filled, batt_color(v));
     }
+    if (s_w->batt_bar) {
+        bar_set(s_w->batt_bar, v);
+        dash_set_bg_color(s_w->batt_bar, batt_color(v), LV_PART_INDICATOR);
+    }
+}
+
+/* Both temperatures render the same way: digits plus an optional bar whose
+ * range the screen author picked (e.g. 0..100 degrees). */
+static void render_temp(lv_obj_t *label, lv_obj_t *bar, float celsius)
+{
+    int disp = (int)settings_wrapper_temp_to_display(celsius);
+    if (label) {
+        char text[8];
+        snprintf(text, sizeof(text), "%d", disp);
+        dash_label_set(label, text);
+    }
+    bar_set(bar, disp);
 }
 
 static void g_temp_fet(float c)
 {
-    if (!s_w || !s_w->temp_fet_text) return;
-    char text[8];
-    snprintf(text, sizeof(text), "%d", (int)settings_wrapper_temp_to_display(c));
-    dash_label_set(s_w->temp_fet_text, text);
+    if (!s_w) return;
+    render_temp(s_w->temp_fet_text, s_w->temp_esc_bar, c);
 }
 
 static void g_temp_motor(float c)
 {
-    if (!s_w || !s_w->temp_motor_text) return;
-    char text[8];
-    snprintf(text, sizeof(text), "%d", (int)settings_wrapper_temp_to_display(c));
-    dash_label_set(s_w->temp_motor_text, text);
+    if (!s_w) return;
+    render_temp(s_w->temp_motor_text, s_w->temp_mot_bar, c);
 }
 
 static void g_trip(float km)
@@ -254,6 +308,27 @@ static void g_hide_cur_time(void)
         lv_obj_add_flag(s_w->time_label, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* Session peaks, tracked centrally in dashboard_theme.c so they are the same
+ * numbers on every theme. The unit suffix is baked in: these labels sit in a
+ * cramped strip and a separate unit widget per value would not fit. */
+static void g_max_values(float max_speed_kmh, float max_power_kw)
+{
+    if (!s_w) return;
+    if (s_w->max_power_text) {
+        char text[16];
+        snprintf(text, sizeof(text), "%.1f KW", max_power_kw);
+        dash_label_set(s_w->max_power_text, text);
+    }
+    if (s_w->max_speed_text) {
+        int disp = (int)settings_wrapper_speed_to_display(max_speed_kmh);
+        if (disp < 0) disp = 0; else if (disp > 999) disp = 999;
+        char text[16];
+        snprintf(text, sizeof(text), "%d %s", disp,
+                 settings_wrapper_speed_unit());
+        dash_label_set(s_w->max_speed_text, text);
+    }
+}
+
 static void g_ble_status(bool connected)
 {
     if (!s_w || !s_w->status_bt) return;
@@ -279,6 +354,7 @@ const dashboard_theme_ops_t dashboard_generic_ops = {
     .cur_time_hm     = g_cur_time_hm,
     .hide_cur_time   = g_hide_cur_time,
     .ble_status      = g_ble_status,
+    .max_values      = g_max_values,
     /* battery_temp / fps / units_changed / cruise_* / navigation_* / music_*:
      * theme-specific or need extra widgets — left NULL (skipped). */
 };

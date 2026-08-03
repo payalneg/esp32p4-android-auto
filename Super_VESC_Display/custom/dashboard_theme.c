@@ -49,6 +49,10 @@ static const dashboard_theme_ops_t *active_ops(void)
     return (s_active >= 0 && s_active < s_count) ? s_reg[s_active]->ops : NULL;
 }
 
+/* Defined with the dispatchers below; called here so a freshly built screen
+ * shows the running maxima instead of its placeholder text. */
+static void fire_max(void);
+
 static void fire_switch_cb(int idx)
 {
     if (!s_switch_cb) return;
@@ -67,6 +71,7 @@ void dashboard_theme_adopt(int idx)
      * setup_scr_dashboard. */
     guider_ui.dashboard_Classic_del = false;
     fire_switch_cb(idx);
+    fire_max();
 }
 
 void dashboard_theme_build(int idx)
@@ -109,6 +114,7 @@ void dashboard_theme_set(int idx)
      * old tile, then re-attaches onto the new theme's tile (or tears down when
      * the new theme has none). */
     fire_switch_cb(idx);
+    fire_max();
 
     /* Tear down the previous theme. The new screen is already the active slot
      * (and loaded, if it was on screen), so deleting the old screen here can
@@ -130,10 +136,68 @@ void dashboard_theme_set(int idx)
 #define DISPATCH3(fn, member, t0, t1, t2) \
     void fn(t0 a0, t1 a1, t2 a2) { const dashboard_theme_ops_t *o = active_ops(); if (o && o->member) o->member(a0, a1, a2); }
 
-DISPATCH1(update_current,               current,               float)
-DISPATCH1(update_speed,                 speed,                 float)
+/* ---- session maxima ---------------------------------------------------- *
+ * Recorded here rather than inside a theme so they survive theme switches and
+ * are the same numbers whichever screen shows them. Power is derived the same
+ * way the themes derive the live value: |current| x voltage. */
+static float s_max_speed_kmh;
+static float s_max_power_kw;
+static float s_last_current_a;
+static float s_last_voltage_v;
+
+float dashboard_max_speed_kmh(void) { return s_max_speed_kmh; }
+float dashboard_max_power_kw(void)  { return s_max_power_kw; }
+
+static void fire_max(void)
+{
+    const dashboard_theme_ops_t *o = active_ops();
+    if (o && o->max_values) o->max_values(s_max_speed_kmh, s_max_power_kw);
+}
+
+void dashboard_max_reset(void)
+{
+    s_max_speed_kmh = 0.0f;
+    s_max_power_kw = 0.0f;
+    fire_max();
+}
+
+/* Discharge only — regen (negative current) is not a "max power" record. */
+static void note_power(void)
+{
+    float kw = s_last_current_a * s_last_voltage_v / 1000.0f;
+    if (kw > s_max_power_kw) {
+        s_max_power_kw = kw;
+        fire_max();
+    }
+}
+
+void update_speed(float kmh)
+{
+    if (kmh > s_max_speed_kmh) {
+        s_max_speed_kmh = kmh;
+        fire_max();
+    }
+    const dashboard_theme_ops_t *o = active_ops();
+    if (o && o->speed) o->speed(kmh);
+}
+
+void update_current(float a)
+{
+    s_last_current_a = a;
+    note_power();
+    const dashboard_theme_ops_t *o = active_ops();
+    if (o && o->current) o->current(a);
+}
+
+void update_battery_voltage(float v)
+{
+    s_last_voltage_v = v;
+    note_power();
+    const dashboard_theme_ops_t *o = active_ops();
+    if (o && o->battery_voltage) o->battery_voltage(v);
+}
+
 DISPATCH1(update_battery_proc,          battery_proc,          float)
-DISPATCH1(update_battery_voltage,       battery_voltage,       float)
 DISPATCH1(update_battery_temp,          battery_temp,          float)
 DISPATCH1(update_temp_fet,              temp_fet,              float)
 DISPATCH1(update_temp_motor,            temp_motor,            float)

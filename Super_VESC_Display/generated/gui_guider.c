@@ -77,7 +77,10 @@ void init_scr_del_flag(lv_ui *ui)
 
     ui->dashboard_Classic_del = true;
     ui->settings_del = true;
-    ui->dashboard_Amber_del = true;
+    ui->reference_del = true;
+    ui->dashboard_Classic_Max_del = true;
+    ui->dashboard_Lamborghini_del = true;
+    ui->dashboard_Supermoto_del = true;
 }
 
 void setup_ui(lv_ui *ui)

@@ -38,15 +38,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TTF = os.path.join(ROOT, "import", "font", "Antonio-Regular.ttf")
-# DSEG7 Classic — real 7-segment font used by the amber dashboard theme. Only
-# the digits/dot/colon/space are kept; the full GUI Guider export is enormous
-# (DSEG7_200 alone = 9.7 MB) and overflows the OTA slot.
-DSEG_TTF = os.path.join(ROOT, "import", "font", "DSEG7Classic-Regular.ttf")
-# DSEG14 Classic — 14-segment alphanumeric ("starburst"). The amber dashboard
-# uses it for the WHOLE screen (labels + numbers), so unlike DSEG7 it needs
-# letters. Small label sizes get the full charset; the big numeric-only sizes
-# (50/64/200) keep the cheap digit subset.
-DSEG14_TTF = os.path.join(ROOT, "import", "font", "DSEG14Classic-Regular.ttf")
+# The DSEG7 / DSEG14 segment subsets lived here for the amber dashboard theme.
+# That screen was deleted, no screen references DSEG any more, and the subsets
+# were ~3 MB of source (DSEG14@200 alone 664 KB) linked into every image, so
+# they are gone. The .ttf files stay in import/font/ and are still registered in
+# the .guiguider ImportFonts — re-add jobs here (and to COCKPIT_FONT_NAMES in
+# components/vesc_ui/CMakeLists.txt) if a screen picks them up again.
 OUT_DIR = os.path.join(ROOT, "generated", "guider_fonts")
 
 # (file_basename_without_.c, size_px, lv_font_conv_range_spec, ttf)
@@ -56,15 +53,6 @@ OUT_DIR = os.path.join(ROOT, "generated", "guider_fonts")
 # Keep this list in sync with the sizes referenced by setup_scr_dashboard.c /
 # gui_guider.h / aa_overlay.c — a size missing here ships the full-ASCII
 # GUI Guider export instead (e.g. Antonio_200 = 1.4 MB).
-# DSEG7 only ever renders digits, decimal dot, colon (clock) and space; minus
-# kept as one cheap glyph. Same spec at every size the amber theme uses.
-_DSEG_RANGE = "0x20,0x2D,0x2E,0x30-0x3A"
-# DSEG14 (amber, whole screen). Letter sizes need A-Z + the few lowercase the
-# units use (h,k,m for Ah/kW/...), digits, minus, dot, slash, colon, %, degree.
-# NOTE: DSEG14 has no middle-dot (U+00B7); the converter rewrites "·" -> "-".
-_DSEG14_FULL = "0x20,0x25,0x2D-0x3A,0x41-0x5A,0x68,0x6B,0x6D,0xB0"
-# Numeric-only big readouts (speed/battery%/power/cruise) — digits, minus, dot.
-_DSEG14_DIG  = "0x20,0x2D,0x2E,0x30-0x3A"
 
 # Fonts at or above this size ship RLE-compressed (lv_font_conv default), the
 # rest stay raw (--no-compress). Compression is lossless (bpp kept at 4) and only
@@ -81,6 +69,8 @@ JOBS = [
     # dashboard_Speed_text — snprintf "%02d", clamped 0..999. Digits only;
     # keep minus too since it is one cheap glyph.
     ("lv_font_Antonio_Regular_200", 200, "0x2D,0x30-0x39", TTF),
+    # dashboard_Lambo / dashboard_Moto hero speed readouts — digits only.
+    ("lv_font_Antonio_Regular_100", 100, "0x2D,0x30-0x39", TTF),
     # dashboard_Speed_cc_text (cruise target) — "%d" (may be negative) + "--".
     ("lv_font_Antonio_Regular_50",   50, "0x2D,0x30-0x39", TTF),
     # TRIP "%0.1f" / odo "%05d" / temp "%d" (negative) / voltage "%.1f"
@@ -95,32 +85,6 @@ JOBS = [
     # bottom-strip values — digits, minus, ., /, A-Z, °, ·, space.
     ("lv_font_Antonio_Regular_32",   32, "0x20,0x2D-0x39,0x41-0x5A,0xB0,0xB7", TTF),
 
-    # ── DSEG7 Classic 7-segment subset for the amber dashboard theme ──
-    # Sizes used by setup_scr_dashboard_amber / theme_dashboard_amber.c.
-    ("lv_font_DSEG7Classic_Regular_200", 200, _DSEG_RANGE, DSEG_TTF),
-    ("lv_font_DSEG7Classic_Regular_64",   64, _DSEG_RANGE, DSEG_TTF),
-    ("lv_font_DSEG7Classic_Regular_40",   40, _DSEG_RANGE, DSEG_TTF),
-    ("lv_font_DSEG7Classic_Regular_32",   32, _DSEG_RANGE, DSEG_TTF),
-    ("lv_font_DSEG7Classic_Regular_24",   24, _DSEG_RANGE, DSEG_TTF),
-
-    # ── DSEG14 Classic 14-segment, the amber dashboard's ONE font ──
-    # Letter sizes (labels + units) — full charset.
-    ("lv_font_DSEG14Classic_Regular_11",  11, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_12",  12, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_16",  16, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_18",  18, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_20",  20, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_22",  22, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_24",  24, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_25",  25, _DSEG14_FULL, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_26",  26, _DSEG14_FULL, DSEG14_TTF),
-    # Numeric-only readouts (speed / cruise / battery% / power) — digit subset.
-    ("lv_font_DSEG14Classic_Regular_30",  30, _DSEG14_DIG, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_50",  50, _DSEG14_DIG, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_64",  64, _DSEG14_DIG, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_160", 160, _DSEG14_DIG, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_180", 180, _DSEG14_DIG, DSEG14_TTF),
-    ("lv_font_DSEG14Classic_Regular_200", 200, _DSEG14_DIG, DSEG14_TTF),
 ]
 
 def find_npx() -> str | None:

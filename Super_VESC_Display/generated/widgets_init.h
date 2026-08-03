@@ -23,6 +23,15 @@ void clock_count(int *hour, int *min, int *sec);
 #endif
 
 
+extern const lv_img_dsc_t * reference_animimg_1_imgs[1];
+extern const lv_img_dsc_t * reference_image3D_1_imgs[1];
+extern lv_calendar_date_t reference_calendar_1_today;
+extern lv_calendar_date_t reference_calendar_1_highlihted_days[1];
+void reference_calendar_1_event_handler(lv_event_t * e);
+void reference_calendar_1_draw_part_begin_event_cb(lv_event_t * e);extern lv_obj_t * reference_spinbox_1;
+void lv_reference_spinbox_1_increment_event_cb(lv_event_t * event);
+void lv_reference_spinbox_1_decrement_event_cb(lv_event_t * event);
+
 
 #ifdef __cplusplus
 }

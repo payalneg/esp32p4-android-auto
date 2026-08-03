@@ -45,7 +45,17 @@ SCALARS = [
     ("mode_text",       "mode_text"),
     ("time_label",      "cur_time_label"),
     ("power_value",     "power_value"),
+    ("max_power_text",  "max_power_text"),
+    ("max_speed_text",  "max_speed_text"),
+    ("power_max_val",   "power_max_val"),
     ("status_bt",       "status_bt"),
+    # Analogue gauges (plain lv_obj_t *; the meter's scale/arc need their own
+    # types and are emitted by emit_speed_gauge()).
+    ("speed_meter",     "speed_meter"),
+    ("batt_bar",        "batt_bar"),
+    ("temp_mot_bar",    "temp_mot_bar"),
+    ("temp_esc_bar",    "temp_esc_bar"),
+    ("power_bar",       "power_bar"),
 ]
 # (member array, field-suffix stem, max count). Counts contiguous _00.._NN.
 SEGMENTS = [
@@ -55,10 +65,31 @@ SEGMENTS = [
 ]
 
 
+def emit_speed_gauge(out, screen, fields):
+    """Wire the lv_meter speed gauge. GUI Guider names a meter's parts
+    `<meter>_scale_0`, `<meter>_scale_0_arc_0`, `_arc_1`, ... — different C
+    types (lv_meter_scale_t * / lv_meter_indicator_t *), so they can't ride
+    along in SCALARS. By convention the LAST arc is the one that tracks speed;
+    that is also the one a screen must author last so it draws over the track
+    and redline arcs."""
+    scale = f"{screen}_speed_meter_scale_0"
+    if scale not in fields:
+        return
+    arcs = sorted(int(m.group(1)) for f in fields
+                  if (m := re.fullmatch(re.escape(scale) + r"_arc_(\d+)", f)))
+    if not arcs:
+        return
+    out.append(f"    w->speed_scale = guider_ui.{scale};")
+    out.append(f"    w->speed_arc = guider_ui.{scale}_arc_{arcs[-1]};")
+
+
 def parse(header_text):
     """Return (screens, fields): screen base names and the set of all field ids."""
     screens = re.findall(r"void\s+setup_scr_(dashboard_[A-Za-z0-9_]+)\s*\(", header_text)
-    fields = set(re.findall(r"lv_obj_t\s*\*\s*([A-Za-z0-9_]+)\s*;", header_text))
+    # Any lv_*_t pointer, not just lv_obj_t: a meter contributes
+    # lv_meter_scale_t * / lv_meter_indicator_t * members that emit_speed_gauge
+    # needs to see. Lookups are by exact name, so extra entries are harmless.
+    fields = set(re.findall(r"lv_[A-Za-z0-9_]+_t\s*\*\s*([A-Za-z0-9_]+)\s*;", header_text))
     # De-dup, keep discovery order stable.
     seen, ordered = set(), []
     for s in screens:
@@ -89,6 +120,7 @@ def emit_screen(out, screen, fields):
             out.append(f"    w->{member}[{i}] = guider_ui.{screen}_{stem}_{i:02d};")
         if n:
             out.append(f"    w->{member}_n = {n};")
+    emit_speed_gauge(out, screen, fields)
     out.append("    dashboard_generic_set_active(w);")
     out.append(f"    return guider_ui.{screen};")
     out.append("}")

@@ -26,10 +26,25 @@
         <scr>_mode_text          label   "MODE N"
         <scr>_cur_time_label     label   "HH:MM[:SS]"
         <scr>_power_value        label   "%.1f" kW (current*voltage)
+        <scr>_max_power_text     label   session peak power, "%.1f KW"
+        <scr>_max_speed_text     label   session peak speed, "%d <unit>"
+        <scr>_power_max_val      label   configured power ceiling, "%.1f KW"
         <scr>_status_bt          label   BLE link indicator (colour/opacity)
         <scr>_batt_seg_00..13    objects vertical battery bar (bottom→top fill)
         <scr>_power_seg_00..13   objects vertical power bar  (bottom→top fill)
         <scr>_speed_seg_00..11   objects horizontal speed bar (seg_00 first)
+
+    Analogue gauges — the range always comes from the widget as authored in GUI
+    Guider, so the design owns the scale and no value is hard-coded here:
+        <scr>_speed_meter        lv_meter; its LAST arc indicator on scale_0
+                                 tracks speed (put the value arc last — it also
+                                 has to be drawn on top of track/redline)
+        <scr>_batt_bar           lv_bar, charge %
+        <scr>_temp_mot_bar       lv_bar, motor temp in display units
+        <scr>_temp_esc_bar       lv_bar, ESC temp in display units
+        <scr>_power_bar          lv_bar, power as a fraction of the configured
+                                 ceiling; author it LV_BAR_MODE_SYMMETRICAL with
+                                 a negative minimum to get a regen/drive flow bar
 
     Any field a screen omits is simply left NULL and skipped at render time.
 */
@@ -60,6 +75,9 @@ typedef struct {
     lv_obj_t *mode_text;
     lv_obj_t *time_label;
     lv_obj_t *power_value;
+    lv_obj_t *max_power_text;
+    lv_obj_t *max_speed_text;
+    lv_obj_t *power_max_val;
     lv_obj_t *status_bt;
     lv_obj_t *batt_seg[14];
     int       batt_seg_n;
@@ -67,6 +85,15 @@ typedef struct {
     int       power_seg_n;
     lv_obj_t *speed_seg[12];
     int       speed_seg_n;
+    /* Analogue gauges. speed_scale is kept only to read its authored min/max —
+     * lv_meter_scale_t is a plain public struct, there is no getter. */
+    lv_obj_t             *speed_meter;
+    lv_meter_scale_t     *speed_scale;
+    lv_meter_indicator_t *speed_arc;
+    lv_obj_t *batt_bar;
+    lv_obj_t *temp_mot_bar;
+    lv_obj_t *temp_esc_bar;
+    lv_obj_t *power_bar;
 } dashboard_widgets_t;
 
 /* Shared ops table every auto-discovered theme points at. */

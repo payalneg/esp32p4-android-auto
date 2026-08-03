@@ -62,6 +62,18 @@ CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 $(EXTRA_CFLAGS)
 -include $(PRJ_DIR)/custom/custom.mk
 
 CSRCS += main.c
+
+# Auto-registered dashboard themes. scripts/gen_dashboard_themes.py turns every
+# convention-named dashboard_* screen in generated/gui_guider.h into a generic
+# theme (custom/theme_generic.c) so it shows up in the Settings theme dropdown.
+# The ESP-IDF build does the same in components/vesc_ui/CMakeLists.txt; without
+# this the simulator would only ever offer the hand-written cockpit theme.
+# A real file target (not a .PHONY step) so -j cannot race the compile. The rule
+# itself lives further down, below `all:` — the first target in a makefile is the
+# default goal, and a rule here would hijack it.
+THEMES_AUTO := $(makefile_path)/dashboard_themes_auto.c
+CSRCS += dashboard_themes_auto.c
+
 DEPPATH += --dep-path $(makefile_path)/
 VPATH += :$(makefile_path)/
 CFLAGS += "-I$(makefile_path)/"
@@ -106,6 +118,17 @@ endif
 regen_fonts:
 	@python3 $(PRJ_DIR)/tools/regen_cockpit_fonts.py
 	@python3 $(PRJ_DIR)/tools/patch_cockpit_dashboard.py
+
+GENTHEME_TOOL := $(PRJ_DIR)/../scripts/gen_dashboard_themes.py
+# Depends on the generator too, matching the firmware's add_custom_command —
+# editing the naming convention has to regenerate even when no screen changed.
+$(THEMES_AUTO): $(PRJ_DIR)/generated/gui_guider.h $(GENTHEME_TOOL)
+	@python3 $(GENTHEME_TOOL) --header $< --out $@
+
+# CSRCS names the file relatively, so the pattern rule builds a target make does
+# not identify with the absolute path above — without this the registrar would
+# be generated once and then never refreshed when a screen is added or removed.
+$(OBJ_DIR)dashboard_themes_auto.o: $(THEMES_AUTO)
 
 env:
 	$(call MKDIR_P,build/bin)

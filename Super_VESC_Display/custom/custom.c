@@ -21,7 +21,6 @@
 #include "settings_wrapper.h"
 #include "dashboard_theme.h"
 #include "theme_ref.h"
-#include "theme_dashboard_amber.h"
 #include "theme_generic.h"
 
 #ifdef LV_REALDEVICE
@@ -3275,16 +3274,17 @@ void custom_init_once(void)
     /* theme_ref ("Minimal (ref)") is a scaffold/reference theme — not exposed
      * in the Settings dropdown. Re-enable by calling theme_ref_register() here
      * (it would take the next free index). See theme_ref.c. */
-    /* Append new themes at the END so saved NVS theme indices stay stable. */
-    theme_dashboard_amber_register();   /* idx 1 — "Cockpit (Amber)", see theme_dashboard_amber.c */
+    /* Append new themes at the END so saved NVS theme indices stay stable.
+     * The amber theme (its GUI Guider screen and theme_dashboard_amber.c)
+     * was removed; every other dashboard screen is auto-registered below. */
 
-#ifdef LV_REALDEVICE
-    /* Auto-register every convention-named dashboard_* GUI Guider screen
-     * (firmware build only — the registrar is code-generated from
-     * gui_guider.h; see scripts/gen_dashboard_themes.py + theme_generic.h).
+    /* Auto-register every convention-named dashboard_* GUI Guider screen. The
+     * registrar is code-generated from gui_guider.h — by
+     * components/vesc_ui/CMakeLists.txt for the firmware and by
+     * lvgl-simulator/Makefile for the desktop build, so both see the same set
+     * of themes. See scripts/gen_dashboard_themes.py + theme_generic.h.
      * Appended last, so these take the indices after the hand-written themes. */
     dashboard_themes_auto_register_all();
-#endif
 }
 
 /* Simulator / desktop-port entry point. setup_ui() already built and loaded the

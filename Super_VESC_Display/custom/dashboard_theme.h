@@ -108,6 +108,9 @@ typedef struct {
                             uint16_t width, uint16_t height, lv_img_cf_t cf);
     void (*navigation_text)(const char *text);
     void (*music_text)(const char *text);
+    /* Session maxima, tracked centrally (see dashboard_max_reset). Fired when
+     * either value grows, on reset, and once per theme build/switch. */
+    void (*max_values)(float max_speed_kmh, float max_power_kw);
 } dashboard_theme_ops_t;
 
 typedef struct {
@@ -149,6 +152,19 @@ void dashboard_theme_adopt(int idx);
  * dashboard slot, frees the previous screen and fires the switch callback.
  * No-op if idx is already active or out of range. */
 void dashboard_theme_set(int idx);
+
+/* ---- session maxima ----------------------------------------------------- *
+ * Peak speed and peak (discharge) power since boot or since the last reset.
+ * Tracked in the update_speed / update_current / update_battery_voltage
+ * dispatchers, so they accumulate no matter which theme is active — switching
+ * to the Classic Max screen shows the whole session, not just the time that
+ * screen was on. A theme draws them through ops->max_values. */
+float dashboard_max_speed_kmh(void);
+float dashboard_max_power_kw(void);
+
+/* Clear both maxima and repaint the active theme. Wired to the RESET button on
+ * dashboard_Classic_Max (GUI Guider custom_code event). LVGL thread only. */
+void dashboard_max_reset(void);
 
 #ifdef __cplusplus
 }
