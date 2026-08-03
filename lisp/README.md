@@ -146,6 +146,14 @@ Rules of thumb:
   us ─ STATE ───────────► P4        echo the applied state back
 ```
 
+> **Three copies of these rules exist and must stay in step.** This file is the
+> human one. The in-app AI assistant is told the same protocol in
+> `flutter-application/lib/agent/lisp_reference.dart` (byte layout) and
+> `agent_prompt.dart` (the fail-silently rules), and
+> `flutter-application/lib/agent/lisp_lint.dart` enforces it before letting the
+> assistant flash. Change the wire format and you change all three, plus
+> `components/vesc_can/`.
+
 Transport is `COMM_CUSTOM_APP_DATA` (id 36): the firmware delivers inbound
 frames to the `event-data-rx` event, and we answer with
 `(send-data buf 2 reply-can-id)` — interface `2` is CAN, `reply-can-id` is the

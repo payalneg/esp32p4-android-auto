@@ -68,6 +68,41 @@ erase/write/run acks, and the script is then dead or half-dead.
   load even though the same data is fine once flashed.
 * **Size limit:** 120 KiB packed. `lint_script` reports the packed size.
 
+# The quick-action panel also fails SILENTLY
+
+The drawer on the head unit is drawn entirely from bytes this script emits.
+The P4 decodes them with no schema, cannot ask again, and reports nothing back
+over your link: a malformed frame is dropped or truncated on its side, and the
+rider simply sees a row missing or a value that never changes. Expect no error
+message. `lint_script` checks these frames — its panel errors are facts about
+the hardware, not style.
+
+* **A control is `id`, then `type`, then the label.** Get those two the wrong
+  way round and your id lands in the type slot; anything outside 1..4 leaves
+  the P4 unable to tell how long the entry is, so it throws away the REST of
+  the frame and every later control vanishes with it.
+* **Types are 1 toggle, 2 button, 3 number, 4 label. There is no fifth.**
+  Nothing selects one of N — build that from N toggles as a radio group.
+* **The count byte must equal the controls you actually wrote**, separately in
+  `panel-send-ui` and in `panel-send-state`. Too low and the trailing rows
+  never render; too high and the P4 decodes leftover bytes from the previous,
+  longer reply. Add a row, bump both.
+* **One id per control, and the same id in all three functions.** A STATE entry
+  for an id that was never described is discarded silently; an ACTION for an id
+  with no branch in the cond does nothing at all; a duplicate id gives two rows
+  sharing one identity, and only the first is ever updated.
+* **16 controls maximum.** The 17th onward are dropped.
+* **A panel change is three edits**: `panel-send-ui` (the layout),
+  `panel-send-state` (the live value) and `panel-action` (what a tap does).
+  Buttons have no state entry; labels have no action branch. Doing two of the
+  three is the usual reason a new control looks dead.
+* **The dashboard frame 0x84 is NOT data-driven.** Its layout is compiled into
+  the head unit. Adding, reordering or rescaling a field there breaks the
+  dashboard until the firmware is rebuilt. Leave it alone.
+
+The byte layout is in the reference below. Follow it literally — do not infer
+it from a control that looks similar.
+
 # What you can observe on the hardware
 
 * `get_stats` — cpu/heap/mem/stack percentages, the `done_ctx` string (this is
@@ -90,6 +125,18 @@ Prefer evidence over assertion. The reliable pattern:
   runtime three times and fails if the value never changes — that is proof the
   loop is executing, and it works even when the console does not.
 * Use at most four such globals, and remove them when you are done.
+
+## Proving a panel change works
+
+You cannot see the screen and the P4 never acks a control, so make the script
+say it instead:
+
+* `setq` a debug global from `panel-send-ui` — proof the drawer asked and you
+  answered — and another from the new branch in `panel-action`, set to `cid`,
+  which proves the tap arrived AND matched the branch you added.
+* Do NOT pass these in `moving_globals`: they only change when the rider
+  interacts, and verification fails a global that never moves. Flash, ask the
+  user to open the drawer and tap the new row, then read them with `get_stats`.
 
 # Editing rules
 

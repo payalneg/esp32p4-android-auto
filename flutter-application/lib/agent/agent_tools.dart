@@ -294,7 +294,8 @@ class ToolRegistry {
     description:
         'Check the working copy against the VESC LispBM rules that fail '
         'silently on hardware (@const placement, mutable defs, use before '
-        'bind, size). flash_script refuses to run while this reports errors.',
+        'bind, size, quick-action panel frames). flash_script refuses to run '
+        'while this reports errors.',
     parameters: _obj({}, []),
     run: (ctx, args, _) async => lintLisp(ctx.getWorking()).toJson(),
   );

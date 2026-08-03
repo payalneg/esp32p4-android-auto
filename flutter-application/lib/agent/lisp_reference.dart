@@ -171,15 +171,96 @@ reset or a re-flash. Anything that must survive needs a timer flush as well.
 
 ## This project's conventions
 
-* The head unit talks to the script over `COMM_CUSTOM_APP_DATA`: payload starts
-  with magic `0x56 0x50` ('V' 'P'), then a 1-byte message id, then a reply-id
-  (the sender's CAN id). Floats on the wire are `int32 = round(value * 1000)`,
-  big-endian. Strings are NUL-terminated and `buflen` counts the terminator.
-* Replies are built in `pbuf` at index `pi` with `(pu8 v)`, `(pi32 v)`,
-  `(pstr s)`, then sent with `(send-data pbuf 2 reply-id)`.
+* The head unit talks to the script over `COMM_CUSTOM_APP_DATA`: magic
+  `0x56 0x50` ('V' 'P'), a 1-byte message id, then a reply-id (the sender's CAN
+  id). Replies are built in `pbuf` at index `pi` with `(pu8 v)`, `(pi32 v)`,
+  `(pstr s)` and sent with `(send-data pbuf 2 reply-id)`. Full byte layout in
+  "Quick-action panel protocol" below.
 * ONE loop commands the motor (`motor-control-loop`), with a fixed priority:
   master-off > brake > throttle > cruise > pedal assist > coast. Add a new
   source as a branch there; never call `set-current` from a second thread.
+
+### The motor arbiter, and why it is shaped like that
+
+Each of these was paid for on hardware. Do not simplify one away.
+
+* 100 Hz tick (`ctl-dt 0.01`). At 20 Hz the ramp advanced in 12.5 %-of-max
+  steps, which FOC executes instantly — the rider felt jerks, not a ramp.
+* `(app-disable-output 1500)` is refreshed EVERY tick deliberately. The stock
+  ADC app stays configured (`get-adc-decoded` only works while it runs); only
+  its output is suppressed. If this script dies the motor stops on the command
+  timeout and the stock throttle returns ~1.5 s later, so the bike stays
+  rideable. Never make it a one-shot, never detach the ADC app.
+* Safe start: no output until the throttle has been seen released once
+  (`armed`) — a held throttle at script start must not launch the bike.
+* A branch stays selected while its slew tails off (`out-rel` / `brk-rel` above
+  zero), otherwise releasing below the 0.05 threshold steps current to 0.
+* Cruise is a PI controller with a CURRENT output, not `set-rpm` — the mode
+  switch is what jerked on engage; the integrator is seeded with
+  `(get-current)` for a bumpless transfer.
+* Ramp times come live from `(conf-get 'adc-ramp-time-pos)` / `-neg`, clamped
+  away from zero (a zero would divide-by-zero and kill the thread). Tuning
+  stays in VESC Tool — do not hardcode ramps.
+
+## Quick-action panel protocol
+
+The drawer is a menu this script describes at runtime, so it changes with LISP
+alone — no firmware rebuild. `panel-handle` runs on the `event-data-rx` thread:
+nothing it calls may sleep or block; spawn instead.
+
+Inbound — `data`, magic already checked:
+
+```
+[0]=0x56 [1]=0x50 [2]=msg [3]=reply-id
+  0x01 REQ_UI     -> reply UI_DESC
+  0x03 REQ_STATE  -> reply STATE    (~5 Hz while the drawer is open)
+  0x04 REQ_DASH   -> reply DASH     (~5 Hz always, drawer open or not)
+  0x02 ACTION     [4]=ctrl-id [5..8]=i32 value*1000 -> apply, then reply STATE
+  0x05 PAS_SET    [4..7]=i32 amps*1000 — fire-and-forget, send NO reply
+```
+
+Outbound — built in `pbuf`, always starting with `(setq pi 0)`. Skip that reset
+and the writes run off the end of the buffer; the evaluation error kills
+`panel-event-loop` and takes the shutdown handler with it.
+
+```
+UI_DESC  0x56 0x50 0x81 <ver=1:u8> <count:u8>  then <count> controls
+STATE    0x56 0x50 0x82 <count:u8>             then <count> x <id:u8> <val:i32>
+DASH     0x56 0x50 0x84 <cruise-active:i32> <cruise-rpm:i32>
+                        <current-profile:i32> <rpm-per-ms:i32>
+```
+
+Only UI_DESC carries a version byte. DASH carries neither version nor count —
+its four fields are a fixed struct on the head unit.
+
+A control inside UI_DESC is `<id:u8> <type:u8> <label:str>` — that order —
+followed by a tail chosen by the type:
+
+```
+1 toggle : <state:u8, 0 or 1>     <- a plain byte here, NOT scaled
+2 button : (nothing)
+3 number : <min:i32> <max:i32> <step:i32> <value:i32> <suffix:str>
+4 label  : <value:i32> <suffix:str>
+```
+
+Every i32 here is `round(value * 1000)`, big-endian — including a toggle's 0/1
+inside STATE, which travels as 0 or 1000. An ACTION value arrives already
+divided, in real units: toggle 0.0 or 1.0, button 1.0, number e.g. 55.0.
+
+Strings are NUL-terminated and `buflen` counts the terminator, so `(pstr "")`
+still writes one byte. A label may be at most 39 bytes and a unit suffix 11: a
+longer one leaves the P4 decoder stopped mid-string and everything after it in
+the frame is misread. Sizes, with L and S the label and suffix lengths:
+
+```
+toggle L+4    button L+3    number L+S+20    label L+S+8
+UI_DESC = 5 + those;  STATE = 4 + 5 per entry;  pbuf is (bufcreate 128)
+```
+
+`pbuf` is never cleared between replies — only `pi` is reset — which is why a
+count byte larger than what you wrote makes the P4 read leftovers from the
+last, longer reply. Grow the 128 only when one reply no longer fits, and keep
+the `bufcreate` above `@const-start`.
 
 # Worked examples
 
@@ -203,6 +284,54 @@ does not. Note where the `def` goes and where the `spawn` goes.
 
 Flash it with `moving_globals: ["dbg-tick"]` and verification fails if the
 value never moves.
+
+## Add a control to the quick-action panel
+
+Three edits keyed by one unused id, plus the count byte in both senders.
+Replace ID, the label and `myvar`:
+
+```lisp
+; TOGGLE  (myvar is 0 or 1)
+;  ui:     (pu8 ID) (pu8 1) (pstr "Label") (pu8 myvar)
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (if (> val 0.5) 1 0)))
+; BUTTON  (momentary — no state entry)
+;  ui:     (pu8 ID) (pu8 2) (pstr "Label")
+;  action: ((= cid ID) (do-something))
+; NUMBER  (-/value/+, here 0..100 step 5)
+;  ui:     (pu8 ID) (pu8 3) (pstr "Label")
+;          (pi32 0) (pi32 100000) (pi32 5000) (pi32 (* myvar 1000)) (pstr "")
+;          ;        ^min*1000     ^max*1000   ^step*1000 ^value*1000 ^unit
+;  state:  (pu8 ID) (pi32 (* myvar 1000))
+;  action: ((= cid ID) (setq myvar (to-i32 val)))
+; LABEL   (read-only — no action branch)
+;  ui:     (pu8 ID) (pu8 4) (pstr "Label") (pi32 (* (get-temp-mot) 1000)) (pstr "C")
+;  state:  (pu8 ID) (pi32 (* (get-temp-mot) 1000))
+```
+
+The dispatch parameter is named `cid` by convention and the linter keys on it.
+
+Choosing one of N — a profile, a mode — is N toggles over one variable: a radio
+group with exactly one lit. There is no list control and no type for it.
+
+```lisp
+; panel-send-ui   (the count byte covers all three rows)
+(pu8 10) (pu8 1) (pstr "Slow")   (pu8 (if (= current-profile 0) 1 0))
+(pu8 11) (pu8 1) (pstr "Medium") (pu8 (if (= current-profile 1) 1 0))
+(pu8 12) (pu8 1) (pstr "Fast")   (pu8 (if (= current-profile 2) 1 0))
+; panel-send-state
+(pu8 10) (pi32 (* (if (= current-profile 0) 1 0) 1000))
+(pu8 11) (pi32 (* (if (= current-profile 1) 1 0) 1000))
+(pu8 12) (pi32 (* (if (= current-profile 2) 1 0) 1000))
+; panel-action — the row identifies the choice, so val is ignored
+((= cid 10) (panel-set-profile 0))
+((= cid 11) (panel-set-profile 1))
+((= cid 12) (panel-set-profile 2))
+```
+
+Tapping the row that is already lit sends 0.0; the selector no-ops and the
+STATE echo lights it straight back up. That is intended — do not "fix" it by
+toggling the value off.
 
 ## React to a CAN button frame
 

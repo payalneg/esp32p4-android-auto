@@ -16,6 +16,12 @@
 ///     `main.lisp` legitimately spawns from the middle of its const block, so
 ///     a naive "spawns must come last" check would fire on the reference
 ///     script itself.
+///   * The quick-action panel frames must match what `vesc_lisp_panel.c`
+///     decodes byte for byte. An unknown control type, a count byte that
+///     disagrees with the rows listed, an id that only half the three panel
+///     functions know about, an over-long label or a frame wider than its
+///     buffer are all dropped or truncated ON THE P4, which reports nothing
+///     back over BLE — the row just isn't there.
 ///
 /// The tokenizer has to understand `;` comments, `"…"` strings and LispBM's
 /// `{ … }` brace-progn (used throughout `main.lisp`). Getting that wrong would
@@ -277,6 +283,13 @@ LintReport lintLisp(String src) {
     ));
   }
 
+  // ---- quick-action panel frames ----
+  // Skipped outright when the parens are already broken: the parent/sibling
+  // bookkeeping these checks rely on is meaningless on an unbalanced file.
+  if (!issues.any((i) => i.code == 'E_PARENS')) {
+    _panelChecks(toks, forms, issues);
+  }
+
   // ---- size ----
   final packed = packLispCode(src).length;
   if (packed + _kEraseSlack > kLispMaxBytes) {
@@ -519,6 +532,12 @@ class _Form {
   /// Size of the largest quoted list literal inside the form.
   final int quotedLiteralBytes;
 
+  /// Index of this form's opening token, and of its matching close. Rules that
+  /// need more than a flat `mentions` set walk `toks[tokStart .. tokEnd)` —
+  /// absolute indices, so `_matchingClose` works on them directly.
+  final int tokStart;
+  final int tokEnd;
+
   const _Form({
     required this.startLine,
     required this.endLine,
@@ -526,6 +545,8 @@ class _Form {
     required this.name,
     required this.mentions,
     required this.quotedLiteralBytes,
+    required this.tokStart,
+    required this.tokEnd,
   });
 }
 
@@ -591,6 +612,8 @@ List<_Form> _forms(List<_Tok> toks, List<LintIssue> issues) {
       name: name,
       mentions: mentions,
       quotedLiteralBytes: quotedBytes,
+      tokStart: i,
+      tokEnd: j,
     ));
     i = j + 1;
   }
@@ -607,6 +630,592 @@ int? _matchingClose(List<_Tok> toks, int openIdx) {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Quick-action panel frames
+// ---------------------------------------------------------------------------
+//
+// The drawer on the head unit is drawn from bytes this script emits; the P4
+// decodes them with no schema and no way to ask again (see
+// components/vesc_can/vesc_lisp_panel.c). Every deviation below is dropped or
+// truncated on its side WITHOUT any error reaching the phone, so the model
+// gets a clean flash, a clean verify, and a control that silently isn't there.
+// That is exactly the class of bug this linter exists to catch.
+
+/// Buffer-append helpers a panel reply is built from.
+const _emitOps = {'pu8', 'pi32', 'pstr'};
+
+/// Control types the P4 knows (vlp_ctrl_type_t). Anything else makes the tail
+/// size unknowable, so it stops decoding and drops the rest of the frame.
+const _ctrlToggle = 1, _ctrlButton = 2, _ctrlNumber = 3, _ctrlLabel = 4;
+
+/// VLP_LABEL_MAX / VLP_SUFFIX_MAX minus the NUL the P4 reserves.
+const _labelMaxBytes = 39, _suffixMaxBytes = 11;
+
+/// VLP_MAX_CTRLS.
+const _maxCtrls = 16;
+
+/// One `(pu8 …)` / `(pi32 …)` / `(pstr …)` call inside a form.
+class _Emit {
+  final String op;
+  final int openIdx;
+  final int closeIdx;
+
+  /// Token index of the enclosing open — the brace-progn in practice. Two
+  /// emits are siblings only if this matches; `_Tok.depth` is not enough,
+  /// because an `open` carries its OUTER depth and both arms of an `(if …)`
+  /// therefore sit at the same depth.
+  final int parent;
+
+  const _Emit(this.op, this.openIdx, this.closeIdx, this.parent);
+}
+
+/// A control as declared in UI_DESC. `id` and `label` are null when written as
+/// an expression rather than a literal.
+class _Ctrl {
+  final int? id;
+  final int type;
+  final String? label;
+  final int line;
+  const _Ctrl(this.id, this.type, this.label, this.line);
+}
+
+class _UiRun {
+  final List<_Ctrl> controls;
+  final bool malformed;
+  final int? declaredCount;
+  const _UiRun(this.controls, this.malformed, this.declaredCount);
+}
+
+class _StateRun {
+  final List<({int? id, int line})> ids;
+  final bool malformed;
+  final int? declaredCount;
+  const _StateRun(this.ids, this.malformed, this.declaredCount);
+}
+
+int? _intAtom(String s) {
+  if (s.startsWith('0x') || s.startsWith('0X')) {
+    return int.tryParse(s.substring(2), radix: 16);
+  }
+  return int.tryParse(s);
+}
+
+/// The emit's argument as a literal int, or null when it is an expression
+/// (`(pu8 (if (= throttle-on 1) 1 0))`). Null disables the rules that need the
+/// value; it never invents one.
+int? _emitInt(List<_Tok> toks, _Emit e) {
+  if (e.closeIdx != e.openIdx + 3) return null;
+  final a = toks[e.openIdx + 2];
+  return a.kind == _TokKind.atom ? _intAtom(a.text) : null;
+}
+
+/// The emit's argument as a literal string, quotes stripped.
+String? _emitStr(List<_Tok> toks, _Emit e) {
+  if (e.closeIdx != e.openIdx + 3) return null;
+  final a = toks[e.openIdx + 2];
+  if (a.kind != _TokKind.str || a.text.length < 2) return null;
+  return a.text.substring(1, a.text.length - 1);
+}
+
+/// Bytes the string occupies on the wire, NOT counting its NUL terminator.
+int _strBytes(String content) {
+  final sb = StringBuffer();
+  for (var i = 0; i < content.length; i++) {
+    if (content[i] == r'\' && i + 1 < content.length) i++;
+    sb.write(content[i]);
+  }
+  return utf8.encode(sb.toString()).length;
+}
+
+/// Emits of a form, in source order, plus every foreign direct child (used by
+/// the interleave gate). Returns null if the form's parens don't resolve.
+({List<_Emit> emits, List<({int parent, int openIdx})> others})? _scanEmits(
+    List<_Tok> toks, _Form f) {
+  final emits = <_Emit>[];
+  final others = <({int parent, int openIdx})>[];
+  final stack = <int>[];
+  var k = f.tokStart;
+  while (k < f.tokEnd) {
+    final t = toks[k];
+    if (t.kind == _TokKind.open) {
+      final isEmit = k + 1 < f.tokEnd &&
+          toks[k + 1].kind == _TokKind.atom &&
+          !toks[k + 1].quoted &&
+          _emitOps.contains(toks[k + 1].text);
+      if (isEmit) {
+        final close = _matchingClose(toks, k);
+        if (close == null || close >= f.tokEnd) return null;
+        emits.add(_Emit(toks[k + 1].text, k, close,
+            stack.isEmpty ? f.tokStart : stack.last));
+        // Skip the whole call: opens inside the ARGUMENT must not register as
+        // parents, or `(pu8 (if …))` would look like a nested emit context.
+        k = close + 1;
+        continue;
+      }
+      if (stack.isNotEmpty) others.add((parent: stack.last, openIdx: k));
+      stack.add(k);
+      k++;
+      continue;
+    }
+    if (t.kind == _TokKind.close) {
+      if (stack.isNotEmpty) stack.removeLast();
+      k++;
+      continue;
+    }
+    k++;
+  }
+  return (emits: emits, others: others);
+}
+
+/// Controls declared by one UI_DESC run. Reports `E_PANEL_CTRL_TYPE` itself,
+/// because an unknown type is also what forces the walk to stop.
+_UiRun _parseUiRun(List<_Tok> toks, List<_Emit> body, List<_Emit> suffixes,
+    List<LintIssue> issues) {
+  if (body.length < 2 || body[0].op != 'pu8' || body[1].op != 'pu8') {
+    return const _UiRun([], true, null);
+  }
+  final declaredCount = _emitInt(toks, body[1]);
+  final controls = <_Ctrl>[];
+  var malformed = false;
+  var i = 2;
+  while (i < body.length) {
+    if (i + 2 >= body.length ||
+        body[i].op != 'pu8' ||
+        body[i + 1].op != 'pu8' ||
+        body[i + 2].op != 'pstr') {
+      malformed = true;
+      break;
+    }
+    final id = _emitInt(toks, body[i]);
+    final type = _emitInt(toks, body[i + 1]);
+    final label = _emitStr(toks, body[i + 2]);
+    final line = toks[body[i].openIdx].line;
+    if (type == null) {
+      // An expression in the type slot: we cannot know the tail length, so
+      // stop rather than guess. No diagnostic — this shape is legal.
+      malformed = true;
+      break;
+    }
+    i += 3;
+    if (type == _ctrlToggle) {
+      if (i < body.length && body[i].op == 'pu8') {
+        i += 1;
+      } else {
+        malformed = true;
+      }
+    } else if (type == _ctrlButton) {
+      // No tail.
+    } else if (type == _ctrlNumber) {
+      if (i + 4 < body.length &&
+          body[i].op == 'pi32' &&
+          body[i + 1].op == 'pi32' &&
+          body[i + 2].op == 'pi32' &&
+          body[i + 3].op == 'pi32' &&
+          body[i + 4].op == 'pstr') {
+        suffixes.add(body[i + 4]);
+        i += 5;
+      } else {
+        malformed = true;
+      }
+    } else if (type == _ctrlLabel) {
+      if (i + 1 < body.length &&
+          body[i].op == 'pi32' &&
+          body[i + 1].op == 'pstr') {
+        suffixes.add(body[i + 1]);
+        i += 2;
+      } else {
+        malformed = true;
+      }
+    } else {
+      final swapped = id != null &&
+          id >= _ctrlToggle &&
+          id <= _ctrlLabel &&
+          (type < _ctrlToggle || type > _ctrlLabel);
+      issues.add(LintIssue(
+        level: LintLevel.error,
+        line: line,
+        code: 'E_PANEL_CTRL_TYPE',
+        message: 'Panel control declares type $type; the P4 only knows '
+            '1=toggle, 2=button, 3=number, 4=label.',
+        hint: '${swapped ? 'The order is (pu8 <id>) (pu8 <type>) '
+            '(pstr "label") — these two look swapped: $id is a valid type '
+            'and $type is not. ' : ''}An unknown type has no known tail '
+            'size, so the P4 stops decoding there and SILENTLY drops this '
+            'control and every control after it — no error, the rows just '
+            'never appear.',
+      ));
+      malformed = true;
+    }
+    if (type >= _ctrlToggle && type <= _ctrlLabel) {
+      controls.add(_Ctrl(id, type, label, line));
+    }
+    if (malformed) break;
+  }
+  return _UiRun(controls, malformed, declaredCount);
+}
+
+/// `(pu8 id) (pi32 value)` pairs of one STATE run.
+_StateRun _parseStateRun(List<_Tok> toks, List<_Emit> body) {
+  if (body.isEmpty || body[0].op != 'pu8') {
+    return const _StateRun([], true, null);
+  }
+  final declaredCount = _emitInt(toks, body[0]);
+  final ids = <({int? id, int line})>[];
+  var malformed = false;
+  var i = 1;
+  while (i < body.length) {
+    if (i + 1 >= body.length ||
+        body[i].op != 'pu8' ||
+        body[i + 1].op != 'pi32') {
+      malformed = true;
+      break;
+    }
+    ids.add((id: _emitInt(toks, body[i]), line: toks[body[i].openIdx].line));
+    i += 2;
+  }
+  return _StateRun(ids, malformed, declaredCount);
+}
+
+/// Formal parameter names of `(defun NAME (a b) …)`.
+Set<String> _formals(List<_Tok> toks, _Form f) {
+  final out = <String>{};
+  final ai = f.tokStart + 3;
+  if (ai >= f.tokEnd || toks[ai].kind != _TokKind.open) return out;
+  final close = _matchingClose(toks, ai);
+  if (close == null) return out;
+  for (var k = ai + 1; k < close; k++) {
+    if (toks[k].kind == _TokKind.atom) out.add(toks[k].text);
+  }
+  return out;
+}
+
+/// Literals compared against `param` with `=` inside the form: the control ids
+/// a `cond` dispatches on.
+List<({int id, int line})> _dispatchIds(
+    List<_Tok> toks, _Form f, String param) {
+  final out = <({int id, int line})>[];
+  for (var k = f.tokStart; k + 4 < f.tokEnd; k++) {
+    if (toks[k].kind != _TokKind.open) continue;
+    if (toks[k + 1].kind != _TokKind.atom || toks[k + 1].text != '=') continue;
+    if (toks[k + 4].kind != _TokKind.close) continue;
+    final a = toks[k + 2], b = toks[k + 3];
+    if (a.kind != _TokKind.atom || b.kind != _TokKind.atom) continue;
+    if (a.text == param) {
+      final v = _intAtom(b.text);
+      if (v != null) out.add((id: v, line: a.line));
+    } else if (b.text == param) {
+      final v = _intAtom(a.text);
+      if (v != null) out.add((id: v, line: b.line));
+    }
+  }
+  return out;
+}
+
+/// Name of the single buffer this form sends, or null if it sends none or
+/// several.
+String? _sendDataBuf(List<_Tok> toks, _Form f) {
+  final names = <String>{};
+  for (var k = f.tokStart; k + 2 < f.tokEnd; k++) {
+    if (toks[k].kind == _TokKind.open &&
+        toks[k + 1].kind == _TokKind.atom &&
+        toks[k + 1].text == 'send-data' &&
+        toks[k + 2].kind == _TokKind.atom) {
+      names.add(toks[k + 2].text);
+    }
+  }
+  return names.length == 1 ? names.first : null;
+}
+
+/// `(def NAME (bufcreate N))` → N.
+int? _bufCapacity(List<_Tok> toks, List<_Form> forms, String name) {
+  for (final f in forms) {
+    if (f.head != 'def' || f.name != name) continue;
+    for (var k = f.tokStart; k + 2 < f.tokEnd; k++) {
+      if (toks[k].kind == _TokKind.open &&
+          toks[k + 1].kind == _TokKind.atom &&
+          toks[k + 1].text == 'bufcreate' &&
+          toks[k + 2].kind == _TokKind.atom) {
+        return _intAtom(toks[k + 2].text);
+      }
+    }
+  }
+  return null;
+}
+
+/// Panel-protocol checks. Every one of them degrades to SILENCE when the shape
+/// is not recognised: this linter gates flashing, and a false positive here
+/// costs more than a missed catch — a gate that cries wolf gets switched off.
+void _panelChecks(
+    List<_Tok> toks, List<_Form> forms, List<LintIssue> issues) {
+  final declaredIds = <int>{};
+  final declared = <_Ctrl>[];
+  final stateIds = <int, int>{}; // control id -> line it is sent from
+  final actionIds = <({int id, int line})>[];
+  var sawUi = false;
+  var declaredComplete = true;
+  var stateUsable = true;
+
+  for (final f in forms) {
+    final scan = _scanEmits(toks, f);
+    if (scan == null) continue;
+    final emits = scan.emits;
+    if (emits.length < 3) continue;
+
+    // Split the form's emits into frames at each 'V' 'P' <msg> triple.
+    final starts = <int>[];
+    for (var e = 0; e + 2 < emits.length; e++) {
+      if (emits[e].op != 'pu8' ||
+          emits[e + 1].op != 'pu8' ||
+          emits[e + 2].op != 'pu8') {
+        continue;
+      }
+      if (_emitInt(toks, emits[e]) == 0x56 &&
+          _emitInt(toks, emits[e + 1]) == 0x50) {
+        starts.add(e);
+      }
+    }
+
+    for (var s = 0; s < starts.length; s++) {
+      final from = starts[s];
+      final to = s + 1 < starts.length ? starts[s + 1] : emits.length;
+      final run = emits.sublist(from, to);
+
+      // G1: one parent for the whole run. Kills rows emitted from inside an
+      // (if …) or a loop, where counting them statically is meaningless.
+      final parent = run.first.parent;
+      if (run.any((e) => e.parent != parent)) continue;
+
+      // G2: no foreign direct sibling between the first and last emit. This is
+      // what stops a helper call — (emit-row 2 "B") — from being miscounted.
+      final lo = run.first.openIdx, hi = run.last.openIdx;
+      final interleaved = scan.others.any(
+          (o) => o.parent == parent && o.openIdx > lo && o.openIdx < hi);
+      if (interleaved) continue;
+
+      final msg = _emitInt(toks, run[2]);
+      final body = run.sublist(3);
+      final suffixes = <_Emit>[];
+
+      if (msg == 0x81) {
+        sawUi = true;
+        final ui = _parseUiRun(toks, body, suffixes, issues);
+        if (ui.malformed || ui.controls.any((c) => c.id == null)) {
+          declaredComplete = false;
+        }
+        for (final c in ui.controls) {
+          if (c.id == null) continue;
+          if (!declaredIds.add(c.id!)) {
+            issues.add(LintIssue(
+              level: LintLevel.error,
+              line: c.line,
+              code: 'E_PANEL_DUP_ID',
+              message: 'Panel control id ${c.id} is declared twice.',
+              hint: 'The id is the P4\'s only handle on a row: both STATE '
+                  'updates and taps resolve to the FIRST match, so the second '
+                  'row never updates and the first one gets its taps.',
+            ));
+          }
+          declared.add(c);
+        }
+        if (!ui.malformed &&
+            ui.declaredCount != null &&
+            ui.declaredCount != ui.controls.length) {
+          issues.add(LintIssue(
+            level: LintLevel.error,
+            line: toks[run.first.openIdx].line,
+            code: 'E_PANEL_COUNT',
+            message: 'UI_DESC count byte says ${ui.declaredCount} controls '
+                'but ${ui.controls.length} are listed.',
+            hint: 'The byte after (pu8 0x81) (pu8 <ver>) must equal the number '
+                'of controls that follow. Too low and the extra rows never '
+                'appear; too high and the P4 decodes leftovers from the '
+                'previous, longer reply — the buffer is never cleared, only '
+                'pi is reset. Both fail silently.',
+          ));
+        }
+        final n = ui.declaredCount ?? ui.controls.length;
+        if (n > _maxCtrls) {
+          issues.add(LintIssue(
+            level: LintLevel.warn,
+            line: toks[run.first.openIdx].line,
+            code: 'W_PANEL_TOO_MANY',
+            message: 'UI_DESC declares $n controls; the P4 renders at most '
+                '$_maxCtrls.',
+            hint: 'Controls past the ${_maxCtrls}th are dropped without any '
+                'error.',
+          ));
+        }
+        for (final c in ui.controls) {
+          if (c.label == null) continue;
+          final b = _strBytes(c.label!);
+          if (b > _labelMaxBytes) {
+            issues.add(LintIssue(
+              level: LintLevel.error,
+              line: c.line,
+              code: 'E_PANEL_STR_LEN',
+              message: 'Panel label "${c.label}" is $b bytes; the P4 field '
+                  'holds $_labelMaxBytes plus the NUL.',
+              hint: 'An over-long string leaves the P4 decoder stopped mid-'
+                  'string instead of past the terminator, so every byte after '
+                  'it is misread and the rest of the panel is garbage.',
+            ));
+          }
+        }
+        for (final sfx in suffixes) {
+          final s = _emitStr(toks, sfx);
+          if (s == null) continue;
+          final b = _strBytes(s);
+          if (b > _suffixMaxBytes) {
+            issues.add(LintIssue(
+              level: LintLevel.error,
+              line: toks[sfx.openIdx].line,
+              code: 'E_PANEL_STR_LEN',
+              message: 'Panel unit suffix "$s" is $b bytes; the P4 field holds '
+                  '$_suffixMaxBytes plus the NUL.',
+              hint: 'An over-long string leaves the P4 decoder stopped mid-'
+                  'string instead of past the terminator, so every byte after '
+                  'it is misread and the rest of the panel is garbage.',
+            ));
+          }
+        }
+      } else if (msg == 0x82) {
+        final st = _parseStateRun(toks, body);
+        if (st.malformed || st.ids.any((v) => v.id == null)) {
+          stateUsable = false;
+        }
+        for (final e in st.ids) {
+          if (e.id != null) stateIds[e.id!] = e.line;
+        }
+        if (!st.malformed &&
+            st.declaredCount != null &&
+            st.declaredCount != st.ids.length) {
+          issues.add(LintIssue(
+            level: LintLevel.error,
+            line: toks[run.first.openIdx].line,
+            code: 'E_PANEL_COUNT',
+            message: 'STATE count byte says ${st.declaredCount} entries but '
+                '${st.ids.length} are listed.',
+            hint: 'The byte after (pu8 0x82) must equal the number of '
+                '(pu8 id) (pi32 value) pairs that follow.',
+          ));
+        }
+      }
+
+      // Frame size vs the buffer it is written into. Skipped unless every
+      // string in the run is a literal — otherwise the sum is a guess.
+      final bufName = _sendDataBuf(toks, f);
+      if (bufName == null) continue;
+      final cap = _bufCapacity(toks, forms, bufName);
+      if (cap == null) continue;
+      var bytes = 0;
+      var sizeKnown = true;
+      for (final e in run) {
+        if (e.op == 'pu8') {
+          bytes += 1;
+        } else if (e.op == 'pi32') {
+          bytes += 4;
+        } else {
+          final s = _emitStr(toks, e);
+          if (s == null) {
+            sizeKnown = false;
+            break;
+          }
+          bytes += _strBytes(s) + 1; // buflen counts the NUL
+        }
+      }
+      if (sizeKnown && bytes > cap) {
+        issues.add(LintIssue(
+          level: LintLevel.error,
+          line: toks[run.first.openIdx].line,
+          code: 'E_PANEL_BUF_OVERFLOW',
+          message: 'This frame writes $bytes B into \'$bufName\', which is '
+              '(bufcreate $cap).',
+          hint: 'The out-of-range bufset is an evaluation error that kills the '
+              'event thread, so the panel simply stops answering and the '
+              'drawer stays empty. Grow the (bufcreate $cap) — it lives above '
+              '@const-start — but only as far as needed: the whole buffer goes '
+              'on the wire on every reply.',
+        ));
+      }
+    }
+  }
+
+  // Action ids, name-anchored on the `cid` convention. Corroborated PER FORM:
+  // a dispatcher counts as the panel's only if at least one of its literals is
+  // a declared control id. `cid` also reads as "CAN id" in this project, and
+  // (defun on-frame (cid data) … (= cid 42) …) must not look like a panel bug
+  // just because some other function happens to be the real panel-action.
+  var actionsUsable = false;
+  for (final f in forms) {
+    if (f.head != 'defun' && f.head != 'defunret') continue;
+    final formals = _formals(toks, f);
+    final param = formals.contains('cid')
+        ? 'cid'
+        : formals.contains('ctrl-id')
+            ? 'ctrl-id'
+            : null;
+    if (param == null) continue;
+    final ids = _dispatchIds(toks, f, param);
+    if (!ids.any((a) => declaredIds.contains(a.id))) continue;
+    actionsUsable = true;
+    actionIds.addAll(ids);
+  }
+
+  if (!sawUi || !declaredComplete) return;
+
+  for (final entry in stateIds.entries) {
+    final id = entry.key;
+    if (declaredIds.contains(id)) continue;
+    issues.add(LintIssue(
+      level: LintLevel.error,
+      line: entry.value,
+      code: 'E_PANEL_STATE_ID',
+      message: 'STATE sends a value for control id $id, which no UI_DESC '
+          'declares.',
+      hint: 'The P4 looks the id up in the descriptor and drops the value when '
+          'it is missing, so that row silently never updates. Declare it in '
+          'panel-send-ui (id, type, label) and bump that count byte, or drop '
+          'the pair.',
+    ));
+  }
+
+  if (actionsUsable) {
+    for (final a in actionIds) {
+      if (declaredIds.contains(a.id)) continue;
+      issues.add(LintIssue(
+        level: LintLevel.error,
+        line: a.line,
+        code: 'E_PANEL_ACTION_ID',
+        message: 'Action branch (= cid ${a.id}) handles a control id that no '
+            'UI_DESC declares.',
+        hint: 'The P4 only ever sends ids it was told about, so this branch is '
+            'unreachable and whatever control it was meant for does nothing '
+            'when tapped. Add it to panel-send-ui and bump the count byte.',
+      ));
+    }
+  }
+
+  if (stateUsable && actionsUsable) {
+    final acted = {for (final a in actionIds) a.id};
+    for (final c in declared) {
+      if (c.type == _ctrlLabel) continue; // a static readout needs neither
+      if (c.id == null) continue;
+      if (stateIds.containsKey(c.id) || acted.contains(c.id)) continue;
+      issues.add(LintIssue(
+        level: LintLevel.info,
+        line: c.line,
+        code: 'I_PANEL_CTRL_INERT',
+        message: 'Panel control id ${c.id}'
+            '${c.label != null ? ' ("${c.label}")' : ''} has no STATE entry '
+            'and no (= cid ${c.id}) action branch.',
+        hint: 'It renders but never updates and does nothing when tapped. A '
+            'panel change is three edits: panel-send-ui, panel-send-state and '
+            'panel-action.',
+      ));
+    }
+  }
 }
 
 /// Numbers, keywords and syntax that can't name a top-level binding.
