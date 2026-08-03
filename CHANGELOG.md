@@ -9,6 +9,30 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.4 / app 0.3.4 — 2026-08-03
+
+No firmware or app code changed in this repository — this release exists to ship
+the enclosure models and to cut a numbered build of the current tree.
+
+### Enclosure models for the Guition board
+
+- `3d-model/esp32-p4-wifi6-guiton-800x480/` — main body, insert, u-holder and a
+  TPU cover, plus the STEP source. The Waveshare models move into
+  `3d-model/esp32-p4-wifi6-waveshare/`, so the directory now names its board
+  instead of implying there is only one.
+
+### Related: the PAS chain fix landed in the helper, not here
+
+- The pedal-assist regression traced to the **C3 BLE helper** (separate repo,
+  firmware `v1.0.7`): its single boot-time `REQ_STATE` missed while the VESC was
+  still loading `main.lisp`, and with periodic polling off by design the miss was
+  permanent — hence "no data from vesc" in the app, and a throttle toggle that
+  flipped `throttle-on` from a guess, which coasts the motor arbiter
+  (`lisp/main.lisp:451`) with a healthy cadence sensor.
+- Nothing on the P4 side was involved, so this app build carries the same P4
+  firmware as 1.3.3. The helper image is fetched from the helper repo's GitHub
+  releases at update time, not bundled here.
+
 ## v1.3.3 / app 0.3.3 — 2026-08-03
 
 ### New: three concept dashboard themes
