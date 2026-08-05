@@ -64,8 +64,16 @@ object MediaListener {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         } ?: controllers.firstOrNull()
 
+    // Kept so detach() can unregister. The listener outlives attach(), and the
+    // system holds it until removed — without this, every listener-service
+    // reconnect (attach → detach → attach) left the previous one registered and
+    // still pushing snapshots.
+    private var sessionManager: MediaSessionManager? = null
+    private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
+
     private fun attach(ctx: Context) {
         val msm = ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+        sessionManager = msm
         val cn = ComponentName(ctx, NotifListener::class.java)
         try {
             controllers = msm.getActiveSessions(cn)
@@ -73,17 +81,26 @@ object MediaListener {
         } catch (_: SecurityException) {
             controllers = emptyList()
         }
-        msm.addOnActiveSessionsChangedListener({ list ->
+        val listener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
             controllers.forEach { it.unregisterCallback(callback) }
             controllers = list ?: emptyList()
             controllers.forEach { it.registerCallback(callback) }
             pushSnapshot()
-        }, cn)
+        }
+        sessionsListener = listener
+        msm.addOnActiveSessionsChangedListener(listener, cn)
         startTicker()
         pushSnapshot()
     }
 
     private fun detach() {
+        sessionsListener?.let { listener ->
+            try {
+                sessionManager?.removeOnActiveSessionsChangedListener(listener)
+            } catch (_: Exception) {}
+        }
+        sessionsListener = null
+        sessionManager = null
         controllers.forEach { it.unregisterCallback(callback) }
         controllers = emptyList()
     }
@@ -186,6 +203,9 @@ object MediaListener {
         canvas.drawBitmap(b, m, Paint(Paint.FILTER_BITMAP_FLAG))
         val bytes = ByteArrayOutputStream()
         out.compress(Bitmap.CompressFormat.JPEG, 85, bytes)
+        // Scratch bitmap, one per album-art push — release it now rather than
+        // waiting on the GC. (Only `out`; `b` is the caller's.)
+        out.recycle()
         return bytes.toByteArray()
     }
 

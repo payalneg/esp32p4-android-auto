@@ -277,15 +277,27 @@ class BleProxy {
 
   // ---- outbound requests ----
 
+  /// Backstop for a reply that never arrives. `sendDataToTask` gives no
+  /// delivery guarantee, so a dropped IPC reply used to leave the Completer
+  /// unresolved forever: the caller's await never returned and its entry leaked
+  /// in [_pending]. Generous by design — a slow op behind it is a full LISP read
+  /// over BLE, which legitimately runs for minutes. Pass [timeout] to tighten it
+  /// for a short command.
+  static const _kRequestTimeout = Duration(minutes: 5);
+
   Future<Map<String, dynamic>> _request(
     String cmd, [
     Map<String, dynamic>? args,
+    Duration timeout = _kRequestTimeout,
   ]) {
     final id = _nextId++;
     final c = Completer<Map<String, dynamic>>();
     _pending[id] = c;
     FlutterForegroundTask.sendDataToTask({'cmd': cmd, 'id': id, ...?args});
-    return c.future;
+    return c.future.timeout(timeout, onTimeout: () {
+      _pending.remove(id);
+      throw TimeoutException('IPC request $cmd timed out', timeout);
+    });
   }
 
   void _fireAndForget(String cmd, [Map<String, dynamic>? args]) {

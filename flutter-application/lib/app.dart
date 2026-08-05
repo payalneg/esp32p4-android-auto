@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'ble/ble_proxy.dart';
 import 'i18n/strings.dart';
@@ -42,6 +43,14 @@ class _AaBridgeAppState extends State<AaBridgeApp> {
       debugShowCheckedModeBanner: false,
       locale: locale,
       supportedLocales: supportedLocales,
+      // App strings come from i18n/strings.dart; these cover the framework's
+      // own widgets (date/time pickers, text-selection menu, scrollbar a11y
+      // labels), which otherwise fall back to English regardless of locale.
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

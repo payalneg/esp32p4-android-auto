@@ -12,6 +12,7 @@
 ///   u32 total_len  — only meaningful in the START chunk
 library;
 
+import 'dart:convert' show utf8;
 import 'dart:typed_data';
 
 enum PduType {
@@ -109,14 +110,16 @@ class ChunkedDecoder {
     }
     _buf.add(chunk.sublist(kChunkHeaderLen));
     if (!isEnd) return null;
+    // Read _expected BEFORE _reset() zeroes it, or the mismatch check below
+    // compares against 0 and its `_expected != 0` guard makes it dead code.
+    final expected = _expected;
     final body = _buf.takeBytes();
-    final out = (type: _type!, body: body);
     _reset();
-    if (out.body.length != _expected && _expected != 0) {
+    if (expected != 0 && body.length != expected) {
       // Length mismatch — drop silently; firmware retries.
       return null;
     }
-    return out;
+    return (type: type, body: body);
   }
 
   void _reset() {
@@ -164,8 +167,10 @@ class Tlv {
     if (v is Uint8List) return v;
     if (v is List<int>) return Uint8List.fromList(v);
     if (v is String) {
-      return Uint8List.fromList(
-          v.codeUnits.isEmpty ? const <int>[] : _utf8(v));
+      // utf8.encode, not a hand-rolled UTF-16-code-unit encoder: the latter
+      // turned each half of a surrogate pair into its own 3-byte sequence
+      // (CESU-8), so any emoji — and any non-BMP char — went out malformed.
+      return Uint8List.fromList(utf8.encode(v));
     }
     if (v is int) {
       // Default int → u32 LE.
@@ -176,18 +181,6 @@ class Tlv {
     throw ArgumentError('TLV: unsupported value type ${v.runtimeType}');
   }
 
-  static List<int> _utf8(String s) {
-    // Avoid importing dart:convert at top level to keep this file standalone.
-    return s.codeUnits.expand((cu) {
-      if (cu < 0x80) return [cu];
-      if (cu < 0x800) return [0xc0 | (cu >> 6), 0x80 | (cu & 0x3f)];
-      return [
-        0xe0 | (cu >> 12),
-        0x80 | ((cu >> 6) & 0x3f),
-        0x80 | (cu & 0x3f),
-      ];
-    }).toList(growable: false);
-  }
 }
 
 /// Convenience reader.
@@ -198,7 +191,9 @@ class TlvReader {
   String? str(int tag) {
     final b = fields[tag];
     if (b == null) return null;
-    return String.fromCharCodes(b);
+    // The wire is UTF-8; fromCharCodes treated each byte as a code unit, which
+    // mangled everything non-ASCII (Cyrillic paths, LISP comments...).
+    return utf8.decode(b, allowMalformed: true);
   }
 
   int? u32(int tag) {
