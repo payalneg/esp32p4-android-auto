@@ -36,6 +36,19 @@ a:hover{text-decoration:underline}
 
 /* ---------- layout ---------- */
 #app{display:flex;flex-direction:column;height:100vh}
+
+/* Three-tab strip shared with /ota and /files. This page can't include the
+   C header those two use — mirror of WEB_NAV_CSS in main/web_nav.h, keep in
+   sync. Colours come from the vars above, which match that palette. */
+.nav{display:flex;align-items:stretch;background:var(--bg);
+  border-bottom:1px solid var(--line);flex:0 0 auto}
+.nav a{flex:1 1 0;min-width:0;text-align:center;padding:.6em;color:var(--dim);
+  text-decoration:none;font-size:13px;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;line-height:1.25;
+  border-bottom:2px solid transparent;transition:.12s}
+.nav a:hover{color:var(--fg);background:var(--panel);text-decoration:none}
+.nav a.on{color:var(--fg);background:var(--panel);border-bottom-color:var(--accent)}
+.nav a .ic{margin-right:.45em;opacity:.9;font-weight:400}
 .top{display:flex;align-items:center;gap:.5em;padding:.5em .7em;background:var(--panel);
   border-bottom:1px solid var(--line);overflow-x:auto;flex:0 0 auto}
 .brand{font-weight:700;letter-spacing:.06em;color:var(--accent);flex:0 0 auto}
@@ -43,7 +56,6 @@ a:hover{text-decoration:underline}
   max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fname.dirty::after{content:' *';color:var(--warn)}
 .grow{flex:1 1 auto;min-width:.5em}
-.links{display:flex;gap:.6em;flex:0 0 auto;font-size:12px;color:var(--dim)}
 
 .bar{height:3px;background:#0e1216;flex:0 0 auto}
 .bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
@@ -171,12 +183,17 @@ body.wrap .gut{display:none}
   .body{flex-direction:column}
   .side{flex:0 0 46vh;border-left:0;border-top:1px solid var(--line)}
   .fname{max-width:26vw}
-  .links{display:none}
 }
 </style>
 </head>
 <body>
 <div id="app">
+
+  <nav class="nav">
+    <a href="/ota"><span class="ic">&#8593;</span>Firmware</a>
+    <a href="/files"><span class="ic">&#128193;</span>Files</a>
+    <a class="on" href="/lisp"><span class="ic">&#955;</span>LISP</a>
+  </nav>
 
   <div class="top">
     <span class="brand">LISP</span>
@@ -189,7 +206,6 @@ body.wrap .gut{display:none}
     <button id="bUploadRun" class="primary" title="Alt+U">Upload + Run</button>
     <button id="bStart">Start</button>
     <button id="bStop" class="danger">Stop</button>
-    <span class="links"><a href="/files">file manager</a><a href="/ota">OTA</a></span>
   </div>
 
   <div class="bar"><i id="prog"></i></div>

@@ -22,6 +22,7 @@
 
 #include "ota_screen.h"
 #include "board.h"
+#include "web_nav.h"
 
 static const char *TAG = "ota_http";
 static httpd_handle_t s_server;
@@ -42,8 +43,10 @@ static esp_err_t index_get_handler(httpd_req_t *req)
         "<title>ESP32-P4 OTA</title><style>"
         "*{box-sizing:border-box}"
         "body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"
-        "'Segoe UI',system-ui,sans-serif;background:#0b0d10;color:#e6e8eb;"
-        "display:flex;align-items:center;justify-content:center;padding:1.5em}"
+        "'Segoe UI',system-ui,sans-serif;background:#0b0d10;color:#e6e8eb}"
+        WEB_NAV_CSS
+        ".main{display:flex;align-items:center;justify-content:center;"
+        "padding:1.5em;min-height:calc(100vh - 3.4em)}"
         ".card{width:100%;max-width:32em;background:#14181d;border-radius:14px;"
         "padding:2em;box-shadow:0 8px 32px rgba(0,0,0,.4);"
         "border:1px solid #20262d}"
@@ -81,8 +84,10 @@ static esp_err_t index_get_handler(httpd_req_t *req)
         ".foot summary{cursor:pointer;color:#8a939c}"
         ".foot pre{background:#10141a;padding:.7em;border-radius:6px;"
         "overflow-x:auto;font-size:.85em;color:#b8c0c8;margin:.5em 0 0}"
-        "</style></head><body><div class=card>"
-        "<h1>ESP32-P4 OTA</h1>"
+        "</style></head><body>"
+        WEB_NAV_FIRMWARE
+        "<div class=main><div class=card>"
+        "<h1>Firmware update</h1>"
         "<div class=sub>upload firmware image to the next partition</div>"
         "<input type=file id=f accept='.bin'>"
         "<button id=p class=btn-pick>Select firmware (.bin)</button>"
@@ -92,14 +97,12 @@ static esp_err_t index_get_handler(httpd_req_t *req)
         "<div class=bar id=ba><div class=fill id=bf></div></div>"
         "<div class=status id=st></div>"
         "<div class=foot>"
-        "<a href=/info>&#9432; device info</a> &nbsp; "
-        "<a href=/files>&#128193; files</a> &nbsp; "
-        "<a href=/lisp>&#955; LISP editor</a>"
+        "<a href=/info>&#9432; device info</a>"
         "<details><summary>shell upload</summary>"
         "<pre>curl --data-binary @build/esp32p4_android_auto.bin \\\n"
         "  -H 'Content-Type: application/octet-stream' \\\n"
         "  http://&lt;device&gt;/ota</pre></details>"
-        "</div></div>"
+        "</div></div></div>"
         "<script>"
         "const $=id=>document.getElementById(id),"
         "f=$('f'),p=$('p'),fi=$('fi'),fn=$('fn'),fs=$('fs'),"

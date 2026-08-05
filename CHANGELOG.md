@@ -9,6 +9,26 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.6 / app 0.3.6 — 2026-08-05
+
+### One navigation strip across the on-device web UI
+
+- The three built-in pages — `/ota` (firmware update), `/files` (file manager)
+  and `/lisp` (LISP editor) — now share an identical tab strip, so they read as
+  one interface instead of three unrelated pages. Markup and CSS live in
+  `main/web_nav.h`; the current tab is marked by appending `on` to its class.
+- No JavaScript: every tab is a plain link to a sibling page, which costs
+  nothing and survives a reload.
+- The LISP editor is a standalone gzipped `.html` and cannot include a C
+  header, so it carries its own copy of the strip — the header says so, and the
+  two have to be kept in step by hand.
+
+### Line-by-line Russian walkthrough of the LISP script
+
+- `lisp/main.ru.lisp`: the same code as `main.lisp` with an explanation above
+  every line. Documentation only — **`main.lisp` is what gets flashed**, and
+  this copy has to be updated by hand when the real script changes.
+
 ## v1.3.5 / app 0.3.5 — 2026-08-05
 
 ### The display no longer dies on the CAN bus (and neither does the helper)

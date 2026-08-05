@@ -20,6 +20,7 @@
 #include "esp_log.h"
 
 #include "app_fs.h"   /* app_fs_base() — the /vescfs LittleFS mount */
+#include "web_nav.h"
 
 static const char *TAG = "files_http";
 
@@ -448,9 +449,9 @@ static esp_err_t index_handler(httpd_req_t *req)
         "<title>ESP32-P4 Files</title><style>"
         "*{box-sizing:border-box}"
         "body{margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"
-        "'Segoe UI',system-ui,sans-serif;background:#0b0d10;color:#e6e8eb;"
-        "padding:1em}"
-        ".wrap{max-width:60em;margin:0 auto}"
+        "'Segoe UI',system-ui,sans-serif;background:#0b0d10;color:#e6e8eb}"
+        WEB_NAV_CSS
+        ".wrap{max-width:60em;margin:0 auto;padding:1em}"
         "h1{margin:.2em 0;font-weight:600;font-size:1.3em}"
         ".bar{display:flex;gap:.5em;flex-wrap:wrap;align-items:center;"
         "margin:.6em 0}"
@@ -504,11 +505,10 @@ static esp_err_t index_handler(httpd_req_t *req)
         ".tv{background:#10141a;padding:.7em;border-radius:6px;max-height:50vh;"
         "overflow:auto;font-family:ui-monospace,monospace;font-size:.82em;"
         "white-space:pre-wrap;word-break:break-all;color:#b8c0c8}"
-        "</style></head><body><div class=wrap>"
-        "<h1><a href=/ style=\"color:#8a939c;text-decoration:none;"
-        "margin-right:.3em\">\xe2\x86\x90</a>ESP32-P4 Files"
-        "<a href=/lisp style=\"float:right;font-size:.6em;color:#4ea1ff;"
-        "text-decoration:none;line-height:2.4\">LISP editor \xe2\x86\x92</a></h1>"
+        "</style></head><body>"
+        WEB_NAV_FILES
+        "<div class=wrap>"
+        "<h1>Files</h1>"
         "<div class=bar>"
           "<button id=up>\xe2\x86\x91 Up</button>"
           "<div class=path id=cp></div>"
