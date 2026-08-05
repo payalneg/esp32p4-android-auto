@@ -56,6 +56,9 @@ SCALARS = [
     ("temp_mot_bar",    "temp_mot_bar"),
     ("temp_esc_bar",    "temp_esc_bar"),
     ("power_bar",       "power_bar"),
+    # Not a render target: the invisible brightness drag slider, so the
+    # "brightness gesture" setting can hide it on this screen too.
+    ("brightness_slider", "brightness_slider"),
 ]
 # (member array, field-suffix stem, max count). Counts contiguous _00.._NN.
 SEGMENTS = [

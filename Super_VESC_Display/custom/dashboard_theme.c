@@ -12,6 +12,7 @@
 
 #include "gui_guider.h"   /* guider_ui — the active-theme screen slot */
 #include "custom.h"       /* the public update_*() prototypes we implement */
+#include "settings_wrapper.h" /* the saved brightness-gesture setting */
 
 #define DASHBOARD_THEME_MAX 8
 
@@ -53,6 +54,16 @@ static const dashboard_theme_ops_t *active_ops(void)
  * shows the running maxima instead of its placeholder text. */
 static void fire_max(void);
 
+/* Same idea for the brightness drag gesture: the slider belongs to the screen,
+ * so a rebuild resurrects it in whatever state GUI Guider authored it in. */
+void dashboard_brightness_gesture_refresh(void)
+{
+    const dashboard_theme_ops_t *ops = active_ops();
+    if (ops && ops->brightness_gesture) {
+        ops->brightness_gesture(settings_wrapper_get_brightness_gesture_enabled());
+    }
+}
+
 static void fire_switch_cb(int idx)
 {
     if (!s_switch_cb) return;
@@ -72,6 +83,7 @@ void dashboard_theme_adopt(int idx)
     guider_ui.dashboard_Classic_del = false;
     fire_switch_cb(idx);
     fire_max();
+    dashboard_brightness_gesture_refresh();
 }
 
 void dashboard_theme_build(int idx)
@@ -115,6 +127,7 @@ void dashboard_theme_set(int idx)
      * the new theme has none). */
     fire_switch_cb(idx);
     fire_max();
+    dashboard_brightness_gesture_refresh();
 
     /* Tear down the previous theme. The new screen is already the active slot
      * (and loaded, if it was on screen), so deleting the old screen here can

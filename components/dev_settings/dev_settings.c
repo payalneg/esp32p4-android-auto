@@ -34,6 +34,7 @@ static struct {
     bool                 use_imperial;
     bool                 use_fahrenheit;
     bool                 second_head_enabled;
+    bool                 brightness_gesture_enabled;
     uint8_t              second_head_id;
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
@@ -88,6 +89,7 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "use_imp",     &u8 ) == ESP_OK) s_cache.use_imperial      = (u8 != 0);
     if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
     if (nvs_get_u8 (h, "sh_en",       &u8 ) == ESP_OK) s_cache.second_head_enabled = (u8 != 0);
+    if (nvs_get_u8 (h, "br_gest_en",  &u8 ) == ESP_OK) s_cache.brightness_gesture_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "sh_id",       &u8 ) == ESP_OK) s_cache.second_head_id    = u8;
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
@@ -143,6 +145,7 @@ void settings_init(void) {
     s_cache.use_imperial      = false;
     s_cache.use_fahrenheit    = false;
     s_cache.second_head_enabled = false;
+    s_cache.brightness_gesture_enabled = true;
     s_cache.second_head_id    = 11;
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
@@ -172,6 +175,7 @@ bool                settings_get_aa_autoconnect(void)    { return s_cache.aa_aut
 bool                settings_get_use_imperial(void)      { return s_cache.use_imperial; }
 bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
 bool                settings_get_second_head_enabled(void) { return s_cache.second_head_enabled; }
+bool                settings_get_brightness_gesture_enabled(void) { return s_cache.brightness_gesture_enabled; }
 uint8_t             settings_get_second_head_id(void)    { return s_cache.second_head_id; }
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
@@ -279,6 +283,15 @@ void settings_set_second_head_enabled(bool on) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "sh_en", on ? 1 : 0);
+    commit(h);
+}
+
+void settings_set_brightness_gesture_enabled(bool on) {
+    if (s_cache.brightness_gesture_enabled == on) return;
+    s_cache.brightness_gesture_enabled = on;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "br_gest_en", on ? 1 : 0);
     commit(h);
 }
 
@@ -454,6 +467,18 @@ void settings_persist_second_head_id(void) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "sh_id", s_cache.second_head_id);
+    commit(h);
+}
+
+void settings_set_brightness_gesture_enabled_volatile(bool on) {
+    if (s_cache.brightness_gesture_enabled == on) return;
+    s_cache.brightness_gesture_enabled = on;
+}
+
+void settings_persist_brightness_gesture_enabled(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "br_gest_en", s_cache.brightness_gesture_enabled ? 1 : 0);
     commit(h);
 }
 

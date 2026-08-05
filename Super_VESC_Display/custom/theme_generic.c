@@ -336,6 +336,16 @@ static void g_ble_status(bool connected)
     lv_obj_set_style_text_opa(s_w->status_bt, connected ? LV_OPA_COVER : LV_OPA_50, LV_PART_MAIN);
 }
 
+/* HIDDEN also takes the slider out of LVGL's hit-testing, so hiding it is what
+ * actually disables the gesture — not just what makes it invisible (it already
+ * is: the screens author it with bg_opa 0). */
+static void g_brightness_gesture(bool enabled)
+{
+    if (!s_w || !s_w->brightness_slider) return;
+    if (enabled) lv_obj_clear_flag(s_w->brightness_slider, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(s_w->brightness_slider, LV_OBJ_FLAG_HIDDEN);
+}
+
 const dashboard_theme_ops_t dashboard_generic_ops = {
     .speed           = g_speed,
     .current         = g_current,
@@ -355,6 +365,7 @@ const dashboard_theme_ops_t dashboard_generic_ops = {
     .hide_cur_time   = g_hide_cur_time,
     .ble_status      = g_ble_status,
     .max_values      = g_max_values,
+    .brightness_gesture = g_brightness_gesture,
     /* battery_temp / fps / units_changed / cruise_* / navigation_* / music_*:
      * theme-specific or need extra widgets — left NULL (skipped). */
 };

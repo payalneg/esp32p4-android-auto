@@ -111,6 +111,12 @@ typedef struct {
     /* Session maxima, tracked centrally (see dashboard_max_reset). Fired when
      * either value grows, on reset, and once per theme build/switch. */
     void (*max_values)(float max_speed_kmh, float max_power_kw);
+    /* Show/hide the theme's invisible full-screen brightness drag slider.
+     * Fired once per theme build/switch (the slider is recreated with each
+     * screen, so the saved setting has to be re-applied every time) and from
+     * the Settings switch via dashboard_brightness_gesture_refresh(). NULL on
+     * themes without a brightness slider. */
+    void (*brightness_gesture)(bool enabled);
 } dashboard_theme_ops_t;
 
 typedef struct {
@@ -165,6 +171,12 @@ float dashboard_max_power_kw(void);
 /* Clear both maxima and repaint the active theme. Wired to the RESET button on
  * dashboard_Classic_Max (GUI Guider custom_code event). LVGL thread only. */
 void dashboard_max_reset(void);
+
+/* ---- brightness drag gesture -------------------------------------------- *
+ * Push the saved "brightness gesture" setting into the active theme. Called
+ * automatically on every theme build/switch; call it directly after flipping
+ * the setting so the change lands without a reboot. LVGL thread only. */
+void dashboard_brightness_gesture_refresh(void);
 
 #ifdef __cplusplus
 }

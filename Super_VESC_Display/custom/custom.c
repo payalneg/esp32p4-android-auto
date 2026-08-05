@@ -223,6 +223,8 @@ static lv_obj_t *settings_battery_calc_mode_dropdown = NULL;
 static lv_obj_t *settings_battery_calc_mode_label = NULL;
 static lv_obj_t *settings_show_fps_switch = NULL;
 static lv_obj_t *settings_show_fps_label = NULL;
+static lv_obj_t *settings_brightness_gesture_switch = NULL;
+static lv_obj_t *settings_brightness_gesture_label = NULL;
 static lv_obj_t *settings_demo_mode_switch = NULL;
 static lv_obj_t *settings_demo_mode_label = NULL;
 static lv_obj_t *settings_vesc_emulator_switch = NULL;
@@ -1212,6 +1214,17 @@ static void cockpit_music_text(const char *text)
     (void)text;
 }
 
+/* The dashboard's invisible full-screen brightness drag slider. HIDDEN also
+ * takes it out of LVGL's hit-testing, so hiding is what disables the gesture —
+ * the slider is already invisible (styled bg_opa 0 in cockpit_screen_init). */
+static void cockpit_brightness_gesture(bool enabled)
+{
+    lv_obj_t *sl = guider_ui.dashboard_Classic_brightness_slider;
+    if (!sl) return;
+    if (enabled) lv_obj_clear_flag(sl, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(sl, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ============================================================================
 // SETTINGS UI IMPLEMENTATION
 // ============================================================================
@@ -1252,6 +1265,11 @@ static void debounced_commit_schedule(debounced_commit_t *d,
 static debounced_commit_t s_target_id_commit;
 static debounced_commit_t s_second_head_id_commit;
 static debounced_commit_t s_brightness_commit;
+/* Separate from s_brightness_commit on purpose: debounced_commit_schedule()
+ * overwrites the pending persist fn, so sharing one slot between the
+ * brightness VALUE and the gesture FLAG would drop whichever write was armed
+ * first. */
+static debounced_commit_t s_brightness_gesture_commit;
 static debounced_commit_t s_controller_id_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
@@ -1707,6 +1725,20 @@ static void show_fps_switch_event_cb(lv_event_t *e) {
     }
 }
 */
+
+// Event handler for the Brightness gesture switch. Volatile setter + debounced
+// commit (an nvs_commit straight from the LVGL thread freezes the screen), and
+// the refresh pushes the new state into whichever theme is built right now.
+static void brightness_gesture_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+        settings_wrapper_set_brightness_gesture_enabled_volatile(checked);
+        debounced_commit_schedule(&s_brightness_gesture_commit,
+                                  settings_wrapper_persist_brightness_gesture_enabled);
+        dashboard_brightness_gesture_refresh();
+    }
+}
 
 // Event handler for Demo mode switch
 static void demo_mode_switch_event_cb(lv_event_t *e) {
@@ -2200,6 +2232,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_dashboard_theme(0); // Cockpit
         settings_wrapper_set_splash_loops(1);     // play boot splash once
         settings_wrapper_set_display_flip(false); // normal orientation
+        settings_wrapper_set_brightness_gesture_enabled(true);
 
         // Update UI elements
         if (s_target_id_field.label)        num_field_set(&s_target_id_field, 10);
@@ -2219,7 +2252,13 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_display_flip_switch) {
             lv_obj_clear_state(settings_display_flip_switch, LV_STATE_CHECKED);
         }
+        if (settings_brightness_gesture_switch) {
+            lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
+        }
         dashboard_theme_set(0);   // live-switch back to cockpit
+        /* dashboard_theme_set no-ops when cockpit is already active, so push the
+         * restored gesture state in explicitly. */
+        dashboard_brightness_gesture_refresh();
         if (settings_brightness_slider) {
             lv_slider_set_value(settings_brightness_slider, 80, LV_ANIM_ON);
         }
@@ -2801,6 +2840,22 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     */
 
+    // ========== Brightness Gesture Switch ==========
+    settings_brightness_gesture_label =
+        settings_heading_create(ui->settings, y_pos, "Brightness gesture");
+
+    settings_brightness_gesture_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_brightness_gesture_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_brightness_gesture_switch, 60, 30);
+    if (settings_wrapper_get_brightness_gesture_enabled()) {
+        lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_brightness_gesture_switch, brightness_gesture_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
+
     // ========== Demo Mode Switch ==========
     settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
 
@@ -3241,6 +3296,7 @@ static const dashboard_theme_ops_t cockpit_ops = {
     .navigation_icon       = cockpit_navigation_icon,
     .navigation_text       = cockpit_navigation_text,
     .music_text            = cockpit_music_text,
+    .brightness_gesture    = cockpit_brightness_gesture,
 };
 
 static const dashboard_theme_t cockpit_theme = {
