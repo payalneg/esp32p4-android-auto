@@ -53,4 +53,34 @@ menu "VESC CAN"
             Polls COMM_LISP_GET_STATS at the configured rate. Only
             enable if your VESC has a LISP application loaded.
 
+    config VESC_CAN_POLL_START_DELAY_MS
+        int "Hold off all CAN polling for this long after boot (ms)"
+        default 4000
+        range 0 30000
+        help
+            The display goes quiet on CAN for this long after start-up before
+            it begins polling (RT data, IO, the dashboard DASH packet and the
+            quick-action panel). Nothing is dropped — the pollers just start
+            later.
+
+            Why: a second node on the bus (the ESP32-C3 BLE helper) has to get
+            its own request/reply exchange with the VESC's LISP script through,
+            and it loses that race whenever the display is already streaming
+            requests. Observed on hardware: with the boot splash enabled — which
+            delays the display's CAN bring-up by several seconds — pedal assist
+            over the helper works; without the splash the helper reports
+            "no data from vesc" and PAS never commands current. This makes the
+            quiet window explicit instead of a side effect of how long the boot
+            animation happens to run.
+
+            The root cause of the dead pedal assist was a node dropping into
+            TWAI bus-off and never being recovered — fixed properly by
+            can_health_check() in comm_can.c. This hold-off is kept on top of
+            that as cheap insurance: it costs a few seconds of empty dashboard
+            at boot and keeps us off the bus while the other nodes and the
+            VESC's LISP script come up, which is when the error storms that
+            lead to bus-off are worst.
+
+            0 disables it.
+
 endmenu

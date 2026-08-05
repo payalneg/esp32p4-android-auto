@@ -259,6 +259,16 @@ void vesc_rt_data_loop(void)
 static void rt_task(void *arg)
 {
     (void)arg;
+    /* Stay off the bus for the first few seconds so the other node on it (the
+     * C3 BLE helper) can complete its own exchange with the LISP script. It
+     * only ever asks once per second and loses the race against our streaming
+     * requests; when it loses, it reports "no data from vesc" and pedal assist
+     * never commands current. This used to work only by accident — the boot
+     * splash delayed our CAN bring-up — so the quiet window is explicit now.
+     * See CONFIG_VESC_CAN_POLL_START_DELAY_MS. */
+#if CONFIG_VESC_CAN_POLL_START_DELAY_MS > 0
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_VESC_CAN_POLL_START_DELAY_MS));
+#endif
     for (;;) {
         vesc_rt_data_loop();
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE

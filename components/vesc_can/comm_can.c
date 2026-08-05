@@ -11,6 +11,7 @@
 #include "driver/twai.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -713,11 +714,51 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
     }
 }
 
+/* Bus-off recovery.
+ *
+ * Past 255 transmit errors the TWAI controller drops into BUS_OFF and STOPS,
+ * and it never returns on its own: recovery must be requested, and once the
+ * controller has counted 128 sequences of 11 recessive bits it sits in STOPPED
+ * waiting for an explicit start. Skip this and the node is gone from the bus
+ * until its power is cycled — every send returns silently, so RT polls, the
+ * panel and PAS all stop at once with nothing in the log to explain it.
+ *
+ * Real on this hardware: 1 Mbit/s, three nodes, tens of thousands of bus errors
+ * — the mill that grinds a node down to bus-off. Recovering does not remove the
+ * errors, it removes the permanent death that follows them. */
+static void can_health_check(void)
+{
+    static uint32_t s_last_ms;
+    static uint32_t s_recoveries;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now - s_last_ms < 500) return;
+    s_last_ms = now;
+
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) != ESP_OK) return;
+
+    if (st.state == TWAI_STATE_BUS_OFF) {
+        ESP_LOGE(TAG, "TWAI bus-off (tx_err=%lu bus_err=%lu) — recovering",
+                 (unsigned long)st.tx_error_counter,
+                 (unsigned long)st.bus_error_count);
+        twai_initiate_recovery();
+    } else if (st.state == TWAI_STATE_STOPPED) {
+        /* Only reachable after a completed recovery — comm_can_stop()
+         * uninstalls the driver rather than leaving it stopped. */
+        if (twai_start() == ESP_OK) {
+            s_recoveries++;
+            ESP_LOGW(TAG, "TWAI back on the bus (recovery #%lu)",
+                     (unsigned long)s_recoveries);
+        }
+    }
+}
+
 static void rx_task(void *arg)
 {
     (void)arg;
     s_rx_running = true;
     while (!s_stop_rx) {
+        can_health_check();
         twai_message_t msg;
         if (twai_receive(&msg, pdMS_TO_TICKS(10)) == ESP_OK) {
             int next_write = s_rx_write + 1;
