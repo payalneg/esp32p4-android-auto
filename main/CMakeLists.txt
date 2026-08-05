@@ -94,14 +94,17 @@ idf_component_register(
 # generated. add_dependencies makes the gzip run before the object is built.
 set(_lisp_web_src "${CMAKE_CURRENT_LIST_DIR}/web/lisp_editor.html")
 set(_lisp_web_gz  "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html.gz")
-# (copy + `gzip -f` rather than a `> redirect`: add_custom_command runs the
-#  command directly, without a shell to interpret the redirection.)
+# (scripts/compress_gz.py rather than `gzip -9 -n > out`: add_custom_command
+#  runs the command directly, without a shell to interpret the redirection —
+#  and Windows has no gzip at all. The script reproduces `-n` exactly. ${_py} is
+#  the IDF venv interpreter; a bare `python3`/`python` is missing on one host OS
+#  or the other.)
+idf_build_get_property(_py PYTHON)
 add_custom_command(
     OUTPUT "${_lisp_web_gz}"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-            "${_lisp_web_src}" "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
-    COMMAND gzip -f -9 -n "${CMAKE_CURRENT_BINARY_DIR}/lisp_editor.html"
-    DEPENDS "${_lisp_web_src}"
+    COMMAND "${_py}" "${CMAKE_CURRENT_LIST_DIR}/../scripts/compress_gz.py"
+            "${_lisp_web_src}" "${_lisp_web_gz}"
+    DEPENDS "${_lisp_web_src}" "${CMAKE_CURRENT_LIST_DIR}/../scripts/compress_gz.py"
     COMMENT "Compressing web LISP editor -> lisp_editor.html.gz"
     VERBATIM)
 add_custom_target(lisp_web_gz DEPENDS "${_lisp_web_gz}")

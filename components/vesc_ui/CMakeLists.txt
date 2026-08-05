@@ -106,11 +106,15 @@ idf_component_register(
 # must run only in the normal configure pass, after idf_component_register.
 set(_regen_tool  "${SVD_ROOT}/tools/regen_cockpit_fonts.py")
 set(_antonio_ttf "${SVD_ROOT}/import/font/Antonio-Regular.ttf")
+# The IDF venv interpreter, not a bare `python3`/`python`: the former is absent
+# on Windows, the latter on stock macOS. ${_py} is the one that exists wherever
+# export.sh/export.bat has run.
+idf_build_get_property(_py PYTHON)
 set_source_files_properties(${COCKPIT_FONT_SRCS} PROPERTIES GENERATED TRUE)
 add_custom_command(
     OUTPUT ${COCKPIT_FONT_SRCS}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${COCKPIT_FONT_DIR}"
-    COMMAND python3 "${_regen_tool}"
+    COMMAND "${_py}" "${_regen_tool}"
             --out-dir "${COCKPIT_FONT_DIR}"
             --fallback-from "${SVD_ROOT}/generated/guider_fonts"
     DEPENDS "${_antonio_ttf}" "${_regen_tool}"
@@ -122,7 +126,7 @@ add_custom_command(
 set_source_files_properties(${SVD_GENTHEME_SRC} PROPERTIES GENERATED TRUE)
 add_custom_command(
     OUTPUT ${SVD_GENTHEME_SRC}
-    COMMAND python3 "${SVD_GENTHEME_TOOL}"
+    COMMAND "${_py}" "${SVD_GENTHEME_TOOL}"
             --header "${SVD_ROOT}/generated/gui_guider.h"
             --out "${SVD_GENTHEME_SRC}"
     DEPENDS "${SVD_ROOT}/generated/gui_guider.h" "${SVD_GENTHEME_TOOL}"
