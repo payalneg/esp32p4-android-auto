@@ -37,6 +37,11 @@ static bool        s_zeros_pushed;
  * Ah), and the UI updater is the only consumer. */
 #define RANGE_UPDATE_DISTANCE_M  100.0f
 #define RANGE_UPDATE_AH          0.1f
+/* Ceiling for the displayed estimate. Any ride light enough to compute a
+ * four-digit range (coasting downhill, pedalling an e-bike, a trip total that
+ * momentarily disagrees with the Ah total) says "plenty left", not a number
+ * worth printing — and a wide value overflows the dashboard's range field. */
+#define RANGE_MAX_KM             999.9f
 
 static float s_range_last_dist_km;
 static float s_range_last_ah;
@@ -66,8 +71,10 @@ static float compute_range_km(void)
         /* Negative / near-zero consumption (regen, sensor noise) makes the
          * range divisor blow up; cap at a sentinel large value instead so
          * the UI shows something stable rather than INF. */
-        s_range_cached_km   = (ah_per_km < 0.01f) ? 999.9f
-                                                  : (remaining_ah / ah_per_km);
+        float est = (ah_per_km < 0.01f) ? RANGE_MAX_KM : (remaining_ah / ah_per_km);
+        if (est > RANGE_MAX_KM) est = RANGE_MAX_KM;
+        if (est < 0.0f)         est = 0.0f;
+        s_range_cached_km    = est;
         s_range_last_dist_km = distance_km;
         s_range_last_ah      = consumed_ah;
         s_range_initialized  = true;

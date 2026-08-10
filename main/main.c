@@ -270,6 +270,34 @@ void app_main(void)
 
     ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, aa_submode=%d", CONNECTION_MODE);
 
+    /* Why did we (re)start? A mid-ride restart is invisible on the dashboard
+     * but resets every in-RAM total, so the Logs screen has to be able to
+     * answer it after the fact: POWERON is the normal case, TASK_WDT / INT_WDT
+     * / PANIC point at a firmware hang, BROWNOUT at the supply. Logged at WARN
+     * for anything other than a clean power-on so it stands out in the ring. */
+    {
+        esp_reset_reason_t rr = esp_reset_reason();
+        const char *name;
+        switch (rr) {
+        case ESP_RST_POWERON:  name = "POWERON";  break;
+        case ESP_RST_SW:       name = "SW";       break;
+        case ESP_RST_PANIC:    name = "PANIC";    break;
+        case ESP_RST_INT_WDT:  name = "INT_WDT";  break;
+        case ESP_RST_TASK_WDT: name = "TASK_WDT"; break;
+        case ESP_RST_WDT:      name = "WDT";      break;
+        case ESP_RST_BROWNOUT: name = "BROWNOUT"; break;
+        case ESP_RST_EXT:      name = "EXT";      break;
+        case ESP_RST_DEEPSLEEP:name = "DEEPSLEEP";break;
+        default:               name = "OTHER";    break;
+        }
+        if (rr == ESP_RST_POWERON || rr == ESP_RST_SW) {
+            ESP_LOGI(TAG, "reset reason: %s (%d)", name, (int)rr);
+        } else {
+            ESP_LOGW(TAG, "reset reason: %s (%d) — previous run did not exit cleanly",
+                     name, (int)rr);
+        }
+    }
+
     /* Publish our own (P4) firmware version to dev_settings so the Settings
      * screen can render it. BT + C6 entries get filled in further below as
      * those subsystems come up. */
