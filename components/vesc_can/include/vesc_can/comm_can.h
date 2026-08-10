@@ -56,6 +56,12 @@ void comm_can_send_buffer_sync(uint8_t controller_id, const uint8_t *data,
 
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type);
 
+/* Live TWAI health snapshot for the Settings screen. bus_err is the driver's
+ * cumulative bus-error counter since comm_can_start, recoveries the number of
+ * completed bus-off recoveries (see can_health_check). Any pointer may be
+ * NULL; returns false (and zeroes the outputs) when the driver is not up. */
+bool comm_can_get_bus_health(uint32_t *bus_err, uint32_t *recoveries);
+
 /* Convenience setters (translated to fragments+forward-CAN if needed). */
 void comm_can_set_duty(uint8_t controller_id, float duty);
 void comm_can_set_current(uint8_t controller_id, float current);

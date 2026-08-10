@@ -13,7 +13,8 @@
  * logging). At boot only a minimal runway is guaranteed (RUNWAY_BOOT_MIN — the
  * old erase-64-sectors-up-front made every cold boot after a long ride jerky
  * for seconds); the rest is trickled in one sector at a time from the writer's
- * idle loop, and only while the bike is standing still (speed ~0 or no ESC),
+ * idle loop, and only after a SUSTAINED standstill (speed ~0 for
+ * IDLE_DWELL_TICKS, or the ESC silent for minutes — see bike_is_idle),
  * so the ~50 ms cache-stall of each erase never lands mid-ride. Before
  * crossing into a fresh sector the writer still checks it is clean and erases
  * just-in-time if not — that only happens if the runway was exhausted.
@@ -242,11 +243,31 @@ static uint32_t ring_dist(uint32_t from, uint32_t to)
     return (to + n - from) % n;
 }
 
-/* An erase is only allowed while the bike is standing still (or no ESC is
- * talking at all) so its cache-stall hitch never lands mid-ride. */
+/* An erase is only allowed while the bike is VERIFIABLY standing still, so its
+ * cache-stall hitch — and the full-screen blue DSI-underrun flash that comes
+ * with every flash erase on this board (AUTO_SUSPEND unsupported, see
+ * sdkconfig.defaults) — never lands mid-ride.
+ *
+ * "ESC not talking" must NOT count as idle right away: a mid-ride CAN dropout
+ * (bus errors / bus-off recovery) used to flip this true and blue-flash the
+ * screen every RUNWAY_TRICKLE_MS while the bike was still moving — exactly
+ * when the rider is staring at frozen numbers. No data means UNKNOWN speed;
+ * only a long silence (genuinely parked, or a bench without an ESC) may
+ * unlock the trickle. */
+#define ESC_SILENT_IDLE_US (2 * 60 * 1000000LL)
+
 static bool bike_is_idle(void)
 {
-    if (!vesc_rt_data_is_fresh()) return true;
+    static int64_t s_esc_gone_us;   /* 0 = ESC was fresh at last check */
+    if (!vesc_rt_data_is_fresh()) {
+        int64_t now = esp_timer_get_time();
+        if (s_esc_gone_us == 0) {
+            s_esc_gone_us = now;
+            return false;
+        }
+        return (now - s_esc_gone_us) >= ESC_SILENT_IDLE_US;
+    }
+    s_esc_gone_us = 0;
     float kmh = vesc_rt_data_get_speed_kmh();
     return kmh > -1.0f && kmh < 1.0f;
 }
@@ -275,6 +296,12 @@ static void writer_task(void *arg)
              (unsigned)head_fresh_sector());
 
     trip_rec_t rec;
+    /* Consecutive idle ticks before the trickle may start erasing. Each blue
+     * flash is user-visible, so a short stop (red light ≈ up to ~30 s) should
+     * produce none; only a sustained standstill unlocks the runway rebuild.
+     * ~3 idle ticks pass per 10 s record cadence → 10 ticks ≈ 30+ s parked. */
+    #define IDLE_DWELL_TICKS 10
+    uint32_t idle_dwell = 0;
     for (;;) {
         if (xQueueReceive(s_queue, &rec, pdMS_TO_TICKS(RUNWAY_TRICKLE_MS)) != pdTRUE) {
             /* Idle tick — extend the runway one sector at a time while parked. */
@@ -285,7 +312,9 @@ static void writer_task(void *arg)
                 s_runway_next = head_fresh_sector();
                 dist = 0;
             }
-            if (dist < RUNWAY_TARGET_SECTORS && bike_is_idle()) {
+            if (!bike_is_idle()) {
+                idle_dwell = 0;
+            } else if (dist < RUNWAY_TARGET_SECTORS && ++idle_dwell >= IDLE_DWELL_TICKS) {
                 if (!sector_is_clean(s_runway_next)) erase_sector(s_runway_next);
                 s_runway_next = (s_runway_next + 1) % sectors_total();
             }

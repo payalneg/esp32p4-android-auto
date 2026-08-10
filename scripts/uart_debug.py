@@ -247,6 +247,25 @@ def do_touch(ser, line: str):
             return
 
 
+def do_cmd(ser, line: str, timeout: float):
+    """Send an arbitrary console command and echo everything the device prints
+    until output goes quiet (no prompt detection — the REPL echoes lines back
+    interleaved with log output, so a quiet period is the only reliable end)."""
+    send_cmd(ser, line)
+    reader = LineReader(ser)
+    last = time.time()
+    deadline = last + timeout
+    while True:
+        resp = reader.readline(min(last + 1.5, deadline))
+        now = time.time()
+        if resp is not None:
+            print(resp)
+            last = now
+            continue
+        if now >= deadline or now - last >= 1.5:
+            return
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -285,6 +304,11 @@ def main():
     m.add_argument("x", type=int); m.add_argument("y", type=int)
     sub.add_parser("touchup", help="release the held press")
 
+    c = sub.add_parser("cmd", help="run an arbitrary console command "
+                                   "(e.g. 'tasks') and print the output")
+    c.add_argument("line", nargs="+", help="command and its arguments")
+    c.add_argument("--timeout", type=float, default=10.0)
+
     args = ap.parse_args()
     if not args.port:
         _die("no port given (use -p/--port or $AA_PORT)")
@@ -304,6 +328,8 @@ def main():
             do_touch(ser, f"touchmove {args.x} {args.y}")
         elif args.cmd == "touchup":
             do_touch(ser, "touchup")
+        elif args.cmd == "cmd":
+            do_cmd(ser, " ".join(args.line), args.timeout)
     finally:
         ser.close()
 

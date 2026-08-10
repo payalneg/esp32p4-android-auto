@@ -18,6 +18,19 @@
         <scr>_Battery_proc_text  label   "%d" (coloured by charge)
         <scr>_temp_esc_text      label   ESC temp (unit-converted)
         <scr>_temp_mot_text      label   motor temp (unit-converted)
+        <scr>_temp_esc_unit      label   "°C" next to the ESC temp; pushed aside
+                                 (or <scr>_col_ctmp_unit) when a dual-head
+                                 reading widens the value — optional
+        <scr>_temp_mot_unit      label   same for the motor temp
+                                 (or <scr>_col_mtmp_unit)
+        <scr>_esc_not_connected_text
+                                 label   "ESC NOT CONNECTED" banner, authored
+                                 HIDDEN; blinks while the VESC link is dead. A
+                                 screen without one gets a banner created at
+                                 runtime, so no theme hides a dead link.
+        <scr>_statistics_button  label   STATISTICS entry point; alternated with
+                                 the banner above (they share the same slot in
+                                 the Classic-derived layouts)
         <scr>_TRIP_text          label   trip distance (unit-converted)
         <scr>_Range_text         label   range (unit-converted)
         <scr>_odo_text           label   odometer (unit-converted)
@@ -61,12 +74,19 @@ extern "C" {
  * by the generated create() (scripts/gen_dashboard_themes.py); NULL fields are
  * skipped by the renderer. */
 typedef struct {
+    /* Theme root, only used as the parent of the runtime-created
+     * "ESC NOT CONNECTED" banner on screens that don't author one. */
+    lv_obj_t *screen;
     lv_obj_t *speed_text;
     lv_obj_t *current_text;
     lv_obj_t *voltage_text;
     lv_obj_t *batt_pct_text;
     lv_obj_t *temp_fet_text;
     lv_obj_t *temp_motor_text;
+    /* "°C" labels sitting next to the two temperature values. Needed only so a
+     * dual-head reading ("34/37") can push them aside — see theme_generic.c. */
+    lv_obj_t *temp_fet_unit;
+    lv_obj_t *temp_motor_unit;
     lv_obj_t *trip_text;
     lv_obj_t *range_text;
     lv_obj_t *odo_text;
@@ -79,6 +99,9 @@ typedef struct {
     lv_obj_t *max_speed_text;
     lv_obj_t *power_max_val;
     lv_obj_t *status_bt;
+    /* Dead-VESC banner + the STATISTICS label it overlaps (both optional). */
+    lv_obj_t *esc_warn_text;
+    lv_obj_t *statistics_button;
     lv_obj_t *batt_seg[14];
     int       batt_seg_n;
     lv_obj_t *power_seg[14];

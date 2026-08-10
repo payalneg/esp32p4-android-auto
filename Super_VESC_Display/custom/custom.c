@@ -48,6 +48,7 @@ static int s_units_epoch = 0;
 #include "vesc_battery_calc.h"
 #include "vesc_head2.h"
 #include "app_fs.h"
+#include "vesc_can/comm_can.h"
 #endif
 
 int cruise_active = 0;
@@ -844,12 +845,7 @@ static void cockpit_range(float range_distance)
  * default. vesc_head2_get_temps() is device-only — the simulator stays single. */
 static bool dashboard_head2_temps(float *fet, float *motor)
 {
-#ifdef LV_REALDEVICE
-    return vesc_head2_get_temps(fet, motor);
-#else
-    (void)fet; (void)motor;
-    return false;
-#endif
+    return settings_wrapper_head2_temps(fet, motor);
 }
 
 static void dashboard_temps_apply_layout(bool dual)
@@ -2310,6 +2306,52 @@ static void pas_open_btn_event_cb(lv_event_t *e) {
     show_pas_settings();   /* opens the on-device PAS screen (custom/pas_screen.c) */
 }
 
+#ifdef LV_REALDEVICE
+/* CAN bus health readout next to the firmware-version block. The label is
+ * (re)created by every settings_ui_init; the 1 Hz timer is global and gated
+ * on the settings screen being active — same DIRECT-render rule as
+ * vesc_ui_updater (never write widgets on an inactive screen; it also keeps
+ * the timer off the dangling label after the screen was deleted, since the
+ * pointer is refreshed on each rebuild before Settings can be shown again). */
+static lv_obj_t   *settings_can_health_label = NULL;
+static lv_timer_t *s_can_health_tmr = NULL;
+/* Dedup cache — set_text invalidates unconditionally, so skip no-op rewrites.
+ * Reset to the sentinel whenever the label is (re)created (settings_ui_init),
+ * otherwise a rebuilt screen would keep an empty label until the count moves. */
+static uint32_t s_can_health_last_err = UINT32_MAX;
+static uint32_t s_can_health_last_rec = UINT32_MAX;
+
+static void settings_can_health_refresh(void)
+{
+    if (!settings_can_health_label) return;
+
+    uint32_t err = 0, rec = 0;
+    char buf[64];
+    if (comm_can_get_bus_health(&err, &rec)) {
+        if (err == s_can_health_last_err && rec == s_can_health_last_rec) return;
+        s_can_health_last_err = err; s_can_health_last_rec = rec;
+        if (rec) {
+            snprintf(buf, sizeof(buf), "CAN errors: %lu\nBus-off recoveries: %lu",
+                     (unsigned long)err, (unsigned long)rec);
+        } else {
+            snprintf(buf, sizeof(buf), "CAN errors: %lu", (unsigned long)err);
+        }
+    } else {
+        if (s_can_health_last_err == 0 && s_can_health_last_rec == 0) return;
+        s_can_health_last_err = 0; s_can_health_last_rec = 0;
+        snprintf(buf, sizeof(buf), "CAN errors: (bus down)");
+    }
+    lv_label_set_text(settings_can_health_label, buf);
+}
+
+static void settings_can_health_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (lv_scr_act() != guider_ui.settings) return;
+    settings_can_health_refresh();
+}
+#endif /* LV_REALDEVICE */
+
 void settings_ui_init(lv_ui *ui) {
     if (!ui || !ui->settings) {
         return;
@@ -3227,6 +3269,20 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_text_color(fw_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(fw_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_line_space(fw_label, 4, 0);
+
+    /* CAN bus health, next to the version block. Refreshed live by
+     * settings_can_health_timer_cb while Settings is the active screen —
+     * the counter is exactly what you watch when hunting bus trouble. */
+    settings_can_health_label = lv_label_create(ui->settings);
+    lv_obj_set_pos(settings_can_health_label, 380, y_pos);
+    lv_obj_set_style_text_color(settings_can_health_label, lv_color_hex(0xB6FF2E), 0);
+    lv_obj_set_style_text_font(settings_can_health_label, &lv_font_montserrat_20, 0);
+    s_can_health_last_err = UINT32_MAX;   /* fresh label — force first paint */
+    s_can_health_last_rec = UINT32_MAX;
+    settings_can_health_refresh();
+    if (!s_can_health_tmr) {
+        s_can_health_tmr = lv_timer_create(settings_can_health_timer_cb, 1000, NULL);
+    }
 #endif
 }
 

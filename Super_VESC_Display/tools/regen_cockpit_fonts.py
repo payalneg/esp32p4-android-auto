@@ -74,8 +74,11 @@ JOBS = [
     # dashboard_Speed_cc_text (cruise target) — "%d" (may be negative) + "--".
     ("lv_font_Antonio_Regular_50",   50, "0x2D,0x30-0x39", TTF),
     # TRIP "%0.1f" / odo "%05d" / temp "%d" (negative) / voltage "%.1f"
-    # and the "--.-" / "----" placeholders — digits, dot, minus.
-    ("lv_font_Antonio_Regular_40",   40, "0x2D,0x2E,0x30-0x39", TTF),
+    # and the "--.-" / "----" placeholders — digits, dot, minus. The slash is
+    # needed too: a dual-motor board renders both circuits in one temperature
+    # label ("34/37"), and a missing glyph draws nothing — the two numbers would
+    # run together as "3437".
+    ("lv_font_Antonio_Regular_40",   40, "0x2D-0x39", TTF),
     # AA overlay unit label "KM/H" / "MPH" / "%" + dashboard "ESC NOT CONNECTED".
     # Be generous (A-Z and common symbols) — cheap at 22 px, future-proof.
     ("lv_font_Antonio_Regular_22",   22, "0x20,0x25,0x2D-0x3A,0x41-0x5A", TTF),

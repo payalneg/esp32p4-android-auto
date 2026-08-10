@@ -16,6 +16,7 @@
     #define SIMULATOR_MODE 0
     // On device - include real settings
     #include "dev_settings.h"
+    #include "vesc_head2.h"
     #include "esp_system.h"
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
@@ -376,6 +377,15 @@ void settings_wrapper_set_second_head_id(uint8_t id) {
     sim_settings.second_head_id = id;
 #else
     settings_set_second_head_id(id);
+#endif
+}
+
+bool settings_wrapper_head2_temps(float *fet, float *motor) {
+#if SIMULATOR_MODE
+    (void)fet; (void)motor;
+    return false;
+#else
+    return vesc_head2_get_temps(fet, motor);
 #endif
 }
 

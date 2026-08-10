@@ -49,6 +49,17 @@ SCALARS = [
     ("max_speed_text",  "max_speed_text"),
     ("power_max_val",   "power_max_val"),
     ("status_bt",       "status_bt"),
+    # "ESC NOT CONNECTED" banner + the STATISTICS label it overlaps. Screens
+    # cloned from Classic carry both; screens without a banner get one created at
+    # runtime instead (see theme_generic.c).
+    ("esc_warn_text",     "esc_not_connected_text"),
+    ("statistics_button", "statistics_button"),
+    # "°C" labels next to the temperatures — only so a dual-head reading
+    # ("34/37") can push them aside. Two naming variants in the wild.
+    ("temp_fet_unit",   "temp_esc_unit"),
+    ("temp_fet_unit",   "col_ctmp_unit"),
+    ("temp_motor_unit", "temp_mot_unit"),
+    ("temp_motor_unit", "col_mtmp_unit"),
     # Analogue gauges (plain lv_obj_t *; the meter's scale/arc need their own
     # types and are emitted by emit_speed_gauge()).
     ("speed_meter",     "speed_meter"),
@@ -112,6 +123,8 @@ def emit_screen(out, screen, fields):
     out.append(f"    setup_scr_{screen}(&guider_ui);")
     out.append(f"    dashboard_widgets_t *w = &s_w_{ident};")
     out.append("    *w = (dashboard_widgets_t){0};")
+    # Theme root — parent for the runtime-created "ESC NOT CONNECTED" banner.
+    out.append(f"    w->screen = guider_ui.{screen};")
     for member, sfx in SCALARS:
         if f"{screen}_{sfx}" in fields:
             out.append(f"    w->{member} = guider_ui.{screen}_{sfx};")

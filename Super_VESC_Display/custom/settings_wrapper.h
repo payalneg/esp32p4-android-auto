@@ -90,6 +90,12 @@ void    settings_wrapper_set_second_head_enabled(bool on);
 uint8_t settings_wrapper_get_second_head_id(void);
 void    settings_wrapper_set_second_head_id(uint8_t id);
 
+/* Second head's temperatures, for themes that show both circuits. True (and
+ * *fet / *motor filled) only when the second head is enabled AND its passive
+ * CAN STATUS is fresh — see components/dev_settings/vesc_head2.h. Always false
+ * in the simulator, so themes fall back to single-head rendering there. */
+bool    settings_wrapper_head2_temps(float *fet, float *motor);
+
 /* Brightness drag gesture on the dashboard (the invisible full-screen slider).
  * true = enabled. Applied per theme through dashboard_theme_ops_t.
  * brightness_gesture — see dashboard_brightness_gesture_refresh(). */

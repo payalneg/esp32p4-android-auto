@@ -276,6 +276,64 @@ static int cmd_touchup(int argc, char **argv)
     return 0;
 }
 
+/* Per-task CPU usage over a 1 s window (two uxTaskGetSystemState snapshots,
+ * delta of ulRunTimeCounter). Needs CONFIG_FREERTOS_USE_TRACE_FACILITY +
+ * CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS (diagnostic build). Percentages are
+ * of wall-clock time — two cores means the column can total ~200%. */
+static int cmd_tasks(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+#if !(configUSE_TRACE_FACILITY && configGENERATE_RUN_TIME_STATS)
+    printf("ERR: rebuild with FREERTOS_USE_TRACE_FACILITY + GENERATE_RUN_TIME_STATS\n");
+    return 1;
+#else
+    UBaseType_t cap = uxTaskGetNumberOfTasks() + 6;
+    TaskStatus_t *a = calloc(cap, sizeof(TaskStatus_t));
+    TaskStatus_t *b = calloc(cap, sizeof(TaskStatus_t));
+    if (!a || !b) { free(a); free(b); printf("ERR: alloc\n"); return 1; }
+
+    configRUN_TIME_COUNTER_TYPE rt_a = 0, rt_b = 0;
+    UBaseType_t na = uxTaskGetSystemState(a, cap, &rt_a);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    UBaseType_t nb = uxTaskGetSystemState(b, cap, &rt_b);
+    uint32_t win = (uint32_t)(rt_b - rt_a);   /* µs of wall clock (esp_timer) */
+    if (!win) win = 1;
+
+    printf("%-18s core prio state hwm(B)  cpu%%/1s\n", "task");
+    for (UBaseType_t i = 0; i < nb; i++) {
+        uint32_t prev = 0;
+        for (UBaseType_t j = 0; j < na; j++) {
+            if (a[j].xTaskNumber == b[i].xTaskNumber) {
+                prev = a[j].ulRunTimeCounter;
+                break;
+            }
+        }
+        uint32_t d = b[i].ulRunTimeCounter - prev;
+        unsigned pct10 = (unsigned)((uint64_t)d * 1000 / win);
+        char st = '?';
+        switch (b[i].eCurrentState) {
+        case eRunning:   st = 'X'; break;
+        case eReady:     st = 'R'; break;
+        case eBlocked:   st = 'B'; break;
+        case eSuspended: st = 'S'; break;
+        case eDeleted:   st = 'D'; break;
+        default: break;
+        }
+        int core = (int)xTaskGetCoreID(b[i].xHandle);
+        printf("%-18s %4d %4u   %c   %6u  %4u.%u\n",
+               b[i].pcTaskName,
+               core == tskNO_AFFINITY ? -1 : core,
+               (unsigned)b[i].uxCurrentPriority, st,
+               (unsigned)b[i].usStackHighWaterMark * (unsigned)sizeof(StackType_t),
+               pct10 / 10, pct10 % 10);
+    }
+    printf("OK tasks window=%uus\n", (unsigned)win);
+    free(a);
+    free(b);
+    return 0;
+#endif
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -293,6 +351,9 @@ static void register_cmds(void)
           .hint = NULL, .func = cmd_touchmove },
         { .command = "touchup",   .help = "Release the held press",
           .hint = NULL, .func = cmd_touchup },
+        { .command = "tasks",
+          .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
+          .hint = NULL, .func = cmd_tasks },
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

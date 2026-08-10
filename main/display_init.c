@@ -28,7 +28,12 @@ static bool s_flip_active;
  * DOUBLE_FULL/full_refresh path).
  *
  * Flip DISPLAY_PERF_LOG to 0 to silence once the cause is found. */
-#define DISPLAY_PERF_LOG 0
+#define DISPLAY_PERF_LOG 1
+
+/* Flush sequence — increments on every actual LVGL refresh. Always compiled:
+ * the render watchdog in scr_scrub_timer_cb keys off it. The perf aggregation
+ * below stays behind DISPLAY_PERF_LOG. */
+static volatile uint32_t s_flush_seq;
 
 #if DISPLAY_PERF_LOG
 /* monitor_cb only fires when LVGL actually renders (something invalidated), so
@@ -40,18 +45,25 @@ static volatile uint32_t s_perf_frames;
 static volatile uint32_t s_perf_time_sum_ms;
 static volatile uint32_t s_perf_time_max_ms;
 static volatile uint64_t s_perf_px_sum;
+#endif
 
-static void display_perf_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
+static void display_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
 {
     (void)drv;
+    s_flush_seq++;
+#if DISPLAY_PERF_LOG
     s_perf_frames++;
     s_perf_time_sum_ms += time_ms;
     if (time_ms > s_perf_time_max_ms) {
         s_perf_time_max_ms = time_ms;
     }
     s_perf_px_sum += px;
+#else
+    (void)time_ms; (void)px;
+#endif
 }
 
+#if DISPLAY_PERF_LOG
 static void display_perf_timer_cb(void *arg)
 {
     (void)arg;
@@ -93,13 +105,43 @@ static void display_perf_timer_cb(void *arg)
 #define SCR_SCRUB_PERIOD_MS   50
 #define SCR_SCRUB_DELAY_TICKS 6     /* ~300 ms — outlasts the 200 ms screen-load anim */
 
+/* Render watchdog — the "automatic tap". Field bug (v1.3.6): the dashboard
+ * occasionally stops refreshing until the user taps the screen; the tap heals
+ * it because the press invalidates a widget and the refresh pipeline runs
+ * again. Root cause not yet pinned down (this timer running at all proves the
+ * LVGL task itself is alive), so heal it the same way the tap does: if not a
+ * single refresh happened for RENDER_WDT_TICKS, force one full-screen
+ * invalidate. On a genuinely static screen that costs one extra full frame
+ * every ~4 s (the forced frame bumps s_flush_seq, so fires alternate) — and
+ * the full repaint goes through the PART_COPY path into BOTH framebuffers,
+ * which also scrubs any stale-FB ghosting as a side effect. */
+#define RENDER_WDT_TICKS 40   /* 40 × 50 ms = 2 s without a refresh */
+
 static void scr_scrub_timer_cb(lv_timer_t *t)
 {
     (void)t;
     static lv_obj_t *last_scr;
     static int       ticks = -1;    /* -1 = idle; else ticks since last screen change */
+    static uint32_t  wdt_ticks;
+    static uint32_t  wdt_last_seq;
 
     lv_obj_t *act = lv_scr_act();
+
+    /* ---- render watchdog (runs every tick, independent of the scrub) ---- */
+    if (++wdt_ticks >= RENDER_WDT_TICKS) {
+        wdt_ticks = 0;
+        uint32_t seq = s_flush_seq;
+        if (seq == wdt_last_seq && act) {
+            lv_obj_invalidate(act);
+            static uint32_t log_gate;
+            if ((log_gate++ % 30) == 0) {   /* ≳2 min between lines at worst */
+                ESP_LOGI(TAG, "render watchdog: no refresh in 2 s — forced repaint");
+            }
+        }
+        wdt_last_seq = seq;
+    }
+
+    /* ---- stale-region scrub after a screen transition ---- */
     if (act != last_scr) {
         last_scr = act;
         ticks = 0;
@@ -168,16 +210,22 @@ esp_err_t display_init(void)
         return ESP_FAIL;
     }
 
-#if DISPLAY_PERF_LOG
     /* Attach the render-time monitor. The adapter sets flush_cb / full_refresh
      * but never touches monitor_cb, and lv_refr.c re-reads driver->monitor_cb
      * every cycle, so setting it post-register is safe. lv_display_t == lv_disp_t
-     * in LVGL v8.4. */
+     * in LVGL v8.4. Always attached: the render watchdog needs the flush
+     * counter even when the perf log is compiled out. */
     {
         lv_disp_t *d = (lv_disp_t *)s_display;
         if (d && d->driver) {
-            d->driver->monitor_cb = display_perf_monitor_cb;
+            d->driver->monitor_cb = display_monitor_cb;
+        }
+    }
 
+#if DISPLAY_PERF_LOG
+    {
+        lv_disp_t *d = (lv_disp_t *)s_display;
+        if (d && d->driver) {
             /* 1 Hz logger, decoupled from rendering — always emits a line so an
              * idle screen ("0 fps") is distinguishable from a hang, and we get
              * steady-state numbers (the render-driven version only logged during

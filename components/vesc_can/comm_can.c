@@ -726,10 +726,11 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
  * Real on this hardware: 1 Mbit/s, three nodes, tens of thousands of bus errors
  * — the mill that grinds a node down to bus-off. Recovering does not remove the
  * errors, it removes the permanent death that follows them. */
+static uint32_t s_recoveries;   /* completed bus-off recoveries, see below */
+
 static void can_health_check(void)
 {
     static uint32_t s_last_ms;
-    static uint32_t s_recoveries;
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
     if (now - s_last_ms < 500) return;
     s_last_ms = now;
@@ -751,6 +752,19 @@ static void can_health_check(void)
                      (unsigned long)s_recoveries);
         }
     }
+}
+
+bool comm_can_get_bus_health(uint32_t *bus_err, uint32_t *recoveries)
+{
+    if (bus_err)    *bus_err = 0;
+    if (recoveries) *recoveries = 0;
+
+    twai_status_info_t st;
+    if (twai_get_status_info(&st) != ESP_OK) return false;  /* driver not up */
+
+    if (bus_err)    *bus_err = (uint32_t)st.bus_error_count;
+    if (recoveries) *recoveries = s_recoveries;
+    return true;
 }
 
 static void rx_task(void *arg)
