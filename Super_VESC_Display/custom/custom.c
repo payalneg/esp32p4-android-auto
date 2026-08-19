@@ -2306,6 +2306,11 @@ static void pas_open_btn_event_cb(lv_event_t *e) {
     show_pas_settings();   /* opens the on-device PAS screen (custom/pas_screen.c) */
 }
 
+static void speed_open_btn_event_cb(lv_event_t *e) {
+    (void)e;
+    show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
+}
+
 #ifdef LV_REALDEVICE
 /* CAN bus health readout next to the firmware-version block. The label is
  * (re)created by every settings_ui_init; the 1 Hz timer is global and gated
@@ -3027,6 +3032,26 @@ void settings_ui_init(lv_ui *ui) {
         lv_label_set_text(pas_lbl, "Open");
         lv_obj_center(pas_lbl);
         lv_obj_add_event_cb(pas_btn, pas_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Wheel-speed sensor ==========
+    // Opens the dedicated speed-sensor screen (source selector, CSC sensor
+    // pairing, wheel diameter, live speed/trip/odometer). The speed source,
+    // sensor binding and odometer live in the "spdsns" NVS namespace and
+    // deliberately survive the settings Reset button (PAS precedent; the
+    // odometer must never be resettable). wheel_mm is reset there already.
+    settings_heading_create(ui->settings, y_pos, "Speed sensor");
+    {
+        lv_obj_t *spd_btn = lv_btn_create(ui->settings);
+        lv_obj_set_pos(spd_btn, 600, y_pos + 8);
+        lv_obj_set_size(spd_btn, 190, 44);
+        lv_obj_set_style_bg_color(spd_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(spd_btn, 8, 0);
+        lv_obj_t *spd_lbl = lv_label_create(spd_btn);
+        lv_label_set_text(spd_lbl, "Open");
+        lv_obj_center(spd_lbl);
+        lv_obj_add_event_cb(spd_btn, speed_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
     }
     y_pos += SETTINGS_ROW_H;
     /*

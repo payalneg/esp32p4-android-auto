@@ -45,6 +45,7 @@ void port_start_app_hook(void)
 #include "notif_bridge.h"
 #include "notif_toast.h"
 #include "pas.h"
+#include "speed_sensor.h"
 #include "music_info_view.h"
 #include "gui_guider.h"
 #include "dashboard_theme.h"
@@ -520,6 +521,11 @@ void app_main(void)
      * control task. Safe to call regardless of CAN state — it only forwards a
      * current setpoint to the LISP arbiter when the CAN poll task is running. */
     pas_init();
+
+    /* Wheel-speed sensor: load source setting + bound CSC sensor + local
+     * trip/odometer from NVS, start the integrator and NVS-writer tasks, and
+     * hook into trip_log (speed provider) + trip_persist (trip reset). */
+    speed_sensor_init();
 
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");
 

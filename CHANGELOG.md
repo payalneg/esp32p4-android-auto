@@ -9,6 +9,40 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### BLE wheel-speed sensor (stock Coospo-class CSC sensors)
+
+- The head unit can now take its speed from an off-the-shelf BLE wheel-speed
+  sensor (Coospo, Magene, ... — anything speaking the standard Cycling Speed
+  and Cadence profile, service `0x1816` / CSC Measurement `0x2A5B`). New
+  files: `main/ble_speed_client.c` (central client + wrap/reset-safe CSC
+  parser), `main/speed_sensor.c` (source setting, rev→km/h conversion, local
+  trip/odometer integrators + their NVS persistence in namespace `spdsns`),
+  `custom/speed_screen.c` (settings screen).
+- **Settings → Speed sensor → Open**: pick the speed source (VESC vs BLE
+  sensor — an explicit switch, no auto-fallback), pair/forget the sensor
+  (same address-binding flow as the PAS cadence sensor), set the wheel
+  diameter (the shared `wheel_mm` setting, now with a debounced NVS commit so
+  +/- taps don't stall LVGL), and watch live speed / trip / odometer /
+  sensor battery.
+- With the BLE source selected, dashboard **speed, trip and odometer** come
+  from wheel revolutions × circumference — they keep updating even when the
+  VESC is silent (the "ESC NOT CONNECTED" banner still reflects the VESC).
+  The AA video HUD speed and the trip-log speed samples follow the same
+  source; the trip-log idle detector (which gates flash-erase trickling)
+  now requires BOTH sources to look idle before erasing. The local odometer
+  is stored in NVS (saved on ride stops + a 10 min fallback, on a dedicated
+  writer task) and is never resettable; "Reset trip" zeroes the BLE trip
+  alongside the VESC one.
+- Both BLE sensors (cadence + speed) can be bound at once: a new
+  `main/ble_central_arb.c` shares NimBLE's single connect-initiator between
+  them (one bound sensor behaves exactly as before; with two, connect
+  attempts rotate on 8 s windows). `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` is now
+  4 — delete the stale per-board `build_*/sdkconfig` before rebuilding.
+- NOT yet hardware-verified: CSC parsing against a real Coospo, dual-sensor
+  coexistence, and the BLE-source trip/odometer accuracy.
+
 ## v1.3.6 / app 0.3.6 — 2026-08-05
 
 ### One navigation strip across the on-device web UI

@@ -340,6 +340,18 @@ void settings_set_wheel_diameter_mm(uint16_t diameter_mm) {
     commit(h);
 }
 
+void settings_set_wheel_diameter_mm_volatile(uint16_t diameter_mm) {
+    if (s_cache.wheel_diameter_mm == diameter_mm) return;
+    s_cache.wheel_diameter_mm = diameter_mm;
+}
+
+void settings_persist_wheel_diameter_mm(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u16(h, "wheel_mm", s_cache.wheel_diameter_mm);
+    commit(h);
+}
+
 void settings_set_motor_poles(uint8_t poles) {
     if (s_cache.motor_poles == poles) return;
     s_cache.motor_poles = poles;

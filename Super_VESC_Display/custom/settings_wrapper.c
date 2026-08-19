@@ -239,6 +239,20 @@ void settings_wrapper_set_motor_poles(uint8_t poles) {
 #endif
 }
 
+void settings_wrapper_set_wheel_diameter_mm_volatile(uint16_t diameter_mm) {
+#if SIMULATOR_MODE
+    sim_settings.wheel_diameter_mm = diameter_mm;
+#else
+    settings_set_wheel_diameter_mm_volatile(diameter_mm);
+#endif
+}
+
+void settings_wrapper_persist_wheel_diameter_mm(void) {
+#if !SIMULATOR_MODE
+    settings_persist_wheel_diameter_mm();
+#endif
+}
+
 float settings_wrapper_get_power_max_kw(void) {
 #if SIMULATOR_MODE
     return sim_settings.power_max_kw;

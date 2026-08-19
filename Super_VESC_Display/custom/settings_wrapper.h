@@ -129,6 +129,7 @@ void settings_wrapper_set_power_max_kw_volatile(float power_max_kw);
 void settings_wrapper_set_second_head_id_volatile(uint8_t id);
 void settings_wrapper_set_brightness_gesture_enabled_volatile(bool on);
 void settings_wrapper_set_dashboard_theme_volatile(uint8_t theme);
+void settings_wrapper_set_wheel_diameter_mm_volatile(uint16_t diameter_mm);
 
 void settings_wrapper_persist_target_vesc_id(void);
 void settings_wrapper_persist_brightness(void);
@@ -138,6 +139,7 @@ void settings_wrapper_persist_power_max_kw(void);
 void settings_wrapper_persist_second_head_id(void);
 void settings_wrapper_persist_brightness_gesture_enabled(void);
 void settings_wrapper_persist_dashboard_theme(void);
+void settings_wrapper_persist_wheel_diameter_mm(void);
 
 /* Apply pending mode change by rebooting the device. On the device this
  * calls esp_restart() and does not return; in the simulator it just logs

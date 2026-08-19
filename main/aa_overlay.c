@@ -11,6 +11,7 @@
 #include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_datatypes.h"
+#include "speed_sensor.h"
 
 /* Panel-native (portrait) dimensions, mirrored from display_video.c. The
  * AA frame in `fb` was rotated 90° CW into this layout, so the user sees
@@ -283,14 +284,14 @@ void aa_overlay_draw(uint16_t *fb)
     unsigned speed = 0;
     unsigned batt  = 0;
     bool cc_active = false;
+    /* Speed follows the user-selected source: the BLE wheel sensor keeps
+     * feeding the HUD even when the VESC is silent (speed_sensor's getter is
+     * spinlock-backed and safe on this decoder task). */
+    bool ble_src = speed_source_is_ble();
+    float spd_kmh = ble_src ? speed_sensor_get_kmh() : 0.0f;
     if (vesc_rt_data_is_fresh()) {
         const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
-        float spd_kmh = vesc_rt_data_get_speed_kmh();
-        if (spd_kmh < 0) spd_kmh = -spd_kmh;
-        /* Honour the km/miles toggle (same setting as the dashboard). */
-        if (settings_get_use_imperial()) spd_kmh *= 0.621371f;
-        int s = (int)(spd_kmh + 0.5f);
-        speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
+        if (!ble_src) spd_kmh = vesc_rt_data_get_speed_kmh();
 
         /* Battery percent — same helper as the cockpit / trip log so every
          * readout agrees (Smart tracker vs Direct controller estimate). */
@@ -298,6 +299,11 @@ void aa_overlay_draw(uint16_t *fb)
         int b = (int)(pct + 0.5f);
         batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
     }
+    if (spd_kmh < 0) spd_kmh = -spd_kmh;
+    /* Honour the km/miles toggle (same setting as the dashboard). */
+    if (settings_get_use_imperial()) spd_kmh *= 0.621371f;
+    int s = (int)(spd_kmh + 0.5f);
+    speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
     /* Cruise indicator — from the Lisp DASH packet (its own pump), so it may
      * report CC active even if the RT poll just gapped a frame. */
     vlp_dash_t dash;

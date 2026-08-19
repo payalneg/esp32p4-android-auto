@@ -14,6 +14,7 @@
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_can/vesc_rt_data.h"
+#include "speed_sensor.h"
 #include "vesc_trip_persist.h"
 #include "vesc_head2.h"
 #include "trip_log.h"
@@ -107,6 +108,20 @@ static void push_rt_locked(void)
     bool fresh = vesc_rt_data_is_fresh() &&
                  (!settings_get_second_head_enabled() || vesc_head2_is_fresh());
     update_esc_connection_status(fresh);
+
+    /* BLE wheel sensor as the speed source: speed/trip/odometer come from
+     * the local integrator and must keep updating even when the VESC is
+     * silent (that's the point of the sensor) — so they run BEFORE the
+     * freshness gate; the VESC-fed equivalents below are skipped instead.
+     * The "ESC NOT CONNECTED" banner still reflects the VESC — motor data
+     * really is gone. */
+    bool ble_src = speed_source_is_ble();
+    if (ble_src) {
+        update_speed(speed_sensor_get_kmh());
+        update_trip(speed_sensor_get_trip_km());
+        update_odometer(speed_sensor_get_odometer_km());
+    }
+
     if (!fresh) return;
 
     const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
@@ -126,7 +141,7 @@ static void push_rt_locked(void)
     trip_persist_update(rt->tachometer_abs, rt->amp_hours, rt->uptime_ms);
     trip_log_tick(rt);   /* per-trip history → /vescfs/trips/<id>/ (throttled to 10 s) */
 
-    update_speed(vesc_rt_data_get_speed_kmh());
+    if (!ble_src) update_speed(vesc_rt_data_get_speed_kmh());
     update_current(rt->current_in);
     /* battery_level is 0..1 in VESC protocol → display wants percent.
      * battery_calc_display_percentage picks Smart vs Direct per the setting —
@@ -136,14 +151,14 @@ static void push_rt_locked(void)
      * — the raw counters get reset to 0 by the controller, which would make
      * the dashboard appear to jump backwards. trip_persist folds those
      * resets into a running offset. */
-    update_trip(trip_persist_get_trip_km());
+    if (!ble_src) update_trip(trip_persist_get_trip_km());
     update_range(compute_range_km());
     update_temp_fet(rt->temp_mos);
     update_temp_motor(rt->temp_motor);
     update_amp_hours(trip_persist_get_amp_hours());
     update_battery_temp(rt->temp_mos);
     update_battery_voltage(rt->v_in);
-    update_odometer(vesc_rt_data_get_odometer_km());
+    if (!ble_src) update_odometer(vesc_rt_data_get_odometer_km());
     update_uptime(trip_persist_get_uptime_ms());
 }
 

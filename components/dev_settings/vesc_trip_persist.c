@@ -30,6 +30,7 @@ static bool     s_first_update = true;
 static bool     s_have_saved_state;
 static bool     s_uptime_supported;   /* VESC reports uptime_ms (sticky once seen) */
 static void   (*s_reset_cb)(void);
+static void   (*s_reset_cb2)(void);   /* second listener (BLE trip reset) */
 
 /* A VESC uptime that went back by more than this is a controller reboot, not
  * jitter between two CAN replies. */
@@ -194,9 +195,15 @@ void trip_persist_reset(void)
     ESP_LOGI(TAG, "reset complete");
 
     if (s_reset_cb) s_reset_cb();   /* roll the trip logger over to a new trip */
+    if (s_reset_cb2) s_reset_cb2(); /* zero the BLE wheel-sensor trip */
 }
 
 void trip_persist_set_reset_cb(void (*cb)(void))
 {
     s_reset_cb = cb;
+}
+
+void trip_persist_add_reset_cb(void (*cb)(void))
+{
+    s_reset_cb2 = cb;
 }

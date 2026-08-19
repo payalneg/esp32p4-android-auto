@@ -25,6 +25,29 @@ void trip_log_init(void);
  * the time-series sampling to ~10 s and tracks max speed. */
 void trip_log_tick(const vesc_setup_values_t *rt);
 
+/* ---- Optional external speed source (BLE wheel-speed sensor) ----
+ *
+ * When the user selects the BLE sensor as the speed source, the recorded
+ * speed samples and the idle detector (which gates flash-erase trickling —
+ * every erase blue-flashes the display) must follow the wheel, not the VESC.
+ * The provider is polled on the writer/tick paths:
+ *   INACTIVE — source is VESC: behave exactly as without a provider;
+ *   STALE    — source is BLE but the sensor is silent: treat like a silent
+ *              ESC (erases unlock only after a long quiet dwell — a sensor
+ *              battery dying mid-ride must not unlock them);
+ *   FRESH    — *kmh was written with the current wheel speed. */
+typedef enum {
+    TRIP_SPEED_PROV_INACTIVE = 0,
+    TRIP_SPEED_PROV_STALE,
+    TRIP_SPEED_PROV_FRESH,
+} trip_speed_prov_res_t;
+
+typedef trip_speed_prov_res_t (*trip_speed_provider_t)(float *kmh);
+
+/* Register (or clear with NULL) the provider. Called once at init time by
+ * speed_sensor.c; safe to leave unset — default behavior is unchanged. */
+void trip_log_set_speed_provider(trip_speed_provider_t fn);
+
 /* Finalize the current trip and begin a new one. Wired to vesc_trip_persist's
  * reset callback (fires on the dashboard reset button and on battery-swap). */
 void trip_log_new_trip(void);

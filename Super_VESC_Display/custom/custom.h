@@ -70,6 +70,14 @@ void lisp_panel_open_async(void);
  * phone involvement. Defined in custom/pas_screen.c. */
 void show_pas_settings(void);
 
+/* Wheel-speed sensor settings screen. Opened from the Settings screen. Lets
+ * the rider pick the dashboard speed source (VESC vs BLE CSC sensor), pair a
+ * stock BLE wheel-speed sensor (Coospo etc.), set the wheel diameter and
+ * watch live speed / trip / odometer. Talks to the speed backend
+ * (main/speed_sensor.h) and BLE speed client (main/ble_speed_client.h)
+ * directly — no phone involvement. Defined in custom/speed_screen.c. */
+void show_speed_settings(void);
+
 void update_current(float current);
 void update_speed(float speed);
 void update_battery_proc(float battery_proc);

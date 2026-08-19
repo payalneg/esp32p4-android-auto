@@ -256,20 +256,60 @@ static uint32_t ring_dist(uint32_t from, uint32_t to)
  * unlock the trickle. */
 #define ESC_SILENT_IDLE_US (2 * 60 * 1000000LL)
 
+static trip_speed_provider_t s_speed_provider;
+
+void trip_log_set_speed_provider(trip_speed_provider_t fn)
+{
+    s_speed_provider = fn;
+}
+
 static bool bike_is_idle(void)
 {
+    /* VESC verdict, exactly as before the BLE speed source existed. */
     static int64_t s_esc_gone_us;   /* 0 = ESC was fresh at last check */
+    bool vesc_idle;
     if (!vesc_rt_data_is_fresh()) {
         int64_t now = esp_timer_get_time();
         if (s_esc_gone_us == 0) {
             s_esc_gone_us = now;
+            vesc_idle = false;
+        } else {
+            vesc_idle = (now - s_esc_gone_us) >= ESC_SILENT_IDLE_US;
+        }
+    } else {
+        s_esc_gone_us = 0;
+        float kmh = vesc_rt_data_get_speed_kmh();
+        vesc_idle = kmh > -1.0f && kmh < 1.0f;
+    }
+
+    /* With the BLE wheel sensor as the speed source, BOTH sources must agree
+     * before flash erases unlock: the wheel can turn while the ESC is silent
+     * (or reports zero), and an erase mid-ride blue-flashes the display. */
+    static int64_t s_ble_gone_us;   /* 0 = sensor was fresh at last check */
+    float ble_kmh = 0.0f;
+    trip_speed_prov_res_t res = s_speed_provider
+                                    ? s_speed_provider(&ble_kmh)
+                                    : TRIP_SPEED_PROV_INACTIVE;
+    switch (res) {
+    case TRIP_SPEED_PROV_FRESH:
+        s_ble_gone_us = 0;
+        return vesc_idle && ble_kmh > -1.0f && ble_kmh < 1.0f;
+    case TRIP_SPEED_PROV_STALE: {
+        /* Sensor silent: mirror the silent-ESC dwell — a dead sensor battery
+         * mid-ride must not unlock erases immediately. */
+        int64_t now = esp_timer_get_time();
+        if (s_ble_gone_us == 0) {
+            s_ble_gone_us = now;
             return false;
         }
-        return (now - s_esc_gone_us) >= ESC_SILENT_IDLE_US;
+        if ((now - s_ble_gone_us) < ESC_SILENT_IDLE_US) return false;
+        return vesc_idle;
     }
-    s_esc_gone_us = 0;
-    float kmh = vesc_rt_data_get_speed_kmh();
-    return kmh > -1.0f && kmh < 1.0f;
+    case TRIP_SPEED_PROV_INACTIVE:
+    default:
+        s_ble_gone_us = 0;
+        return vesc_idle;
+    }
 }
 
 static void writer_task(void *arg)
@@ -396,7 +436,19 @@ void trip_log_tick(const vesc_setup_values_t *rt)
     rec.ah            = trip_persist_get_amp_hours();
     rec.wh            = rt->watt_hours;
     rec.uptime_ms     = trip_persist_get_uptime_ms();
-    rec.speed_dkmh    = (int16_t)(rt->speed * 3.6f * 10.0f);
+    /* Speed sample follows the user-selected source: the BLE wheel sensor
+     * when it's active and fresh (so the stats chart matches the ride), the
+     * VESC otherwise. distance_m stays on trip_persist regardless — it
+     * doubles as the boot resume-seed for the VESC accumulator. */
+    float sample_kmh = rt->speed * 3.6f;
+    {
+        float ble_kmh = 0.0f;
+        if (s_speed_provider &&
+            s_speed_provider(&ble_kmh) == TRIP_SPEED_PROV_FRESH) {
+            sample_kmh = ble_kmh;
+        }
+    }
+    rec.speed_dkmh    = (int16_t)(sample_kmh * 10.0f);
     rec.current_da    = (int16_t)(rt->current_in * 10.0f);
     rec.voltage_dv    = (uint16_t)(rt->v_in * 10.0f);
     rec.temp_motor_dc = (int16_t)(rt->temp_motor * 10.0f);

@@ -104,6 +104,7 @@ void settings_set_power_max_kw_volatile(float power_max_kw);
 void settings_set_second_head_id_volatile(uint8_t id);
 void settings_set_brightness_gesture_enabled_volatile(bool on);
 void settings_set_dashboard_theme_volatile(uint8_t theme);
+void settings_set_wheel_diameter_mm_volatile(uint16_t diameter_mm);
 
 void settings_persist_target_vesc_id(void);
 void settings_persist_screen_brightness(void);
@@ -113,6 +114,7 @@ void settings_persist_power_max_kw(void);
 void settings_persist_second_head_id(void);
 void settings_persist_brightness_gesture_enabled(void);
 void settings_persist_dashboard_theme(void);
+void settings_persist_wheel_diameter_mm(void);
 
 /* Hot-apply hooks: registered by main once the corresponding subsystem is
  * up. settings_set_* fires the callback synchronously on the caller after

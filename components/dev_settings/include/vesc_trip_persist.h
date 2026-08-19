@@ -42,6 +42,10 @@ void  trip_persist_reset(void);
  * a new trip folder. */
 void  trip_persist_set_reset_cb(void (*cb)(void));
 
+/* Second listener on the same hook (fired after the primary one). Used by
+ * speed_sensor.c to zero the BLE wheel-sensor trip alongside the VESC one. */
+void  trip_persist_add_reset_cb(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif
