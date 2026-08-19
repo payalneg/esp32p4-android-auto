@@ -9,7 +9,7 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## v1.3.8 / app 0.3.8 — 2026-08-19
 
 ### BLE wheel-speed sensor (stock Coospo-class CSC sensors)
 
