@@ -523,41 +523,58 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     return send_err;
 }
 
-/* Per-second timing accumulators for the recv/decrypt path. Logged from
- * recv_decrypted itself so we don't have to thread state through callers. */
+/* One INFO line per AA_STATS_WINDOW_US while messages flow (release builds
+ * compile DEBUG out, and the video pipeline is tuned from field logs — see the
+ * 2026-09 "lags after the 4.5-minute frame-size jump" hunt). The recv/decrypt
+ * times come from recv_decrypted; the video counters and the push-wait from
+ * the media dispatch below.
+ *
+ *   rx 5.0s: 148 video fr 2300 KiB (max 187 KiB) | 12 other msg | tcp 1180 ms |
+ *            tls 402 ms | push-wait 2210 ms
+ *
+ * tcp       = time blocked in aa_frame_recv (waiting for the phone / lwIP);
+ * tls       = mbedTLS decrypt;
+ * push-wait = time the recv loop spent blocked in h264_pipe_push because the
+ *             decoder queue was full — how hard we back-pressure the phone.
+ *             Large push-wait + small tcp = decoder-bound. */
+#define AA_STATS_WINDOW_US (5LL * 1000 * 1000)
+
 static struct {
     uint32_t messages;
     uint32_t frames;       /* AA frames including MIDDLE/LAST fragments */
     uint64_t recv_us;      /* time spent in aa_frame_recv (TCP + lwIP) */
     uint64_t decrypt_us;   /* time spent in aa_tls_decrypt (mbedTLS) */
+    uint32_t video_frames; /* AV media messages on the video channel */
+    uint64_t video_bytes;
+    uint32_t video_max;    /* largest video message in the window */
+    uint64_t push_wait_us; /* blocked in h264_pipe_push (queue full) */
     int64_t  window_start_us;
 } s_recv_stats;
 
-static void recv_stats_log_once_per_second(void)
+static void recv_stats_log_periodic(void)
 {
     int64_t now = esp_timer_get_time();
     if (s_recv_stats.window_start_us == 0) {
         s_recv_stats.window_start_us = now;
         return;
     }
-    if (now - s_recv_stats.window_start_us < 1000000) return;
+    int64_t span = now - s_recv_stats.window_start_us;
+    if (span < AA_STATS_WINDOW_US) return;
     uint32_t m = s_recv_stats.messages;
-    uint32_t f = s_recv_stats.frames;
     if (m > 0) {
-        /* 1 Hz recv/decrypt timing — only matters when profiling. */
-        ESP_LOGD(TAG,
-                 "recv: %u msg / %u frames | recv %llu us total "
-                 "(%llu us/frame) | decrypt %llu us total (%llu us/frame)",
-                 (unsigned)m, (unsigned)f,
-                 (unsigned long long)s_recv_stats.recv_us,
-                 (unsigned long long)(f ? s_recv_stats.recv_us / f : 0),
-                 (unsigned long long)s_recv_stats.decrypt_us,
-                 (unsigned long long)(f ? s_recv_stats.decrypt_us / f : 0));
+        ESP_LOGI(TAG,
+                 "rx %lld.%llds: %u video fr %llu KiB (max %u KiB) | %u other msg | "
+                 "tcp %llu ms | tls %llu ms | push-wait %llu ms",
+                 (long long)(span / 1000000), (long long)((span / 100000) % 10),
+                 (unsigned)s_recv_stats.video_frames,
+                 (unsigned long long)(s_recv_stats.video_bytes / 1024),
+                 (unsigned)(s_recv_stats.video_max / 1024),
+                 (unsigned)(m - s_recv_stats.video_frames),
+                 (unsigned long long)(s_recv_stats.recv_us / 1000),
+                 (unsigned long long)(s_recv_stats.decrypt_us / 1000),
+                 (unsigned long long)(s_recv_stats.push_wait_us / 1000));
     }
-    s_recv_stats.messages   = 0;
-    s_recv_stats.frames     = 0;
-    s_recv_stats.recv_us    = 0;
-    s_recv_stats.decrypt_us = 0;
+    memset(&s_recv_stats, 0, sizeof(s_recv_stats));
     s_recv_stats.window_start_us = now;
 }
 
@@ -677,7 +694,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             *out_msg = plain_buf;
             *out_ch = ch;
             s_recv_stats.messages++;
-            recv_stats_log_once_per_second();
+            recv_stats_log_periodic();
             return ESP_OK;
         }
 
@@ -715,7 +732,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             *out_ch = ch;
             p->active = false;
             s_recv_stats.messages++;
-            recv_stats_log_once_per_second();
+            recv_stats_log_periodic();
             return ESP_OK;
         }
         /* MIDDLE — keep reading next frame (which may be on any channel). */
@@ -949,29 +966,13 @@ static esp_err_t av_ack_callback(void *ctx_v)
                              s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
 }
 
-/* Per-second video-rate counter — tracks AV media bytes/frames coming from
- * the phone so we can sanity-check that 30 fps is actually flowing without
- * leaving per-frame logs on. Called from the AV media path after the ack.
- * Channel-agnostic for now (we only have one video channel). */
+/* Video throughput accounting — folded into the periodic rx line (see
+ * s_recv_stats). Channel-agnostic for now (we only have one video channel). */
 static void video_stats_tick(size_t body_len)
 {
-    static int64_t  window_start_us;
-    static uint32_t frames;
-    static uint64_t bytes;
-    int64_t now = esp_timer_get_time();
-    if (window_start_us == 0) window_start_us = now;
-    frames += 1;
-    bytes  += body_len;
-    if (now - window_start_us >= 1000000) {
-        /* 1 Hz video throughput — profiling aid. */
-        ESP_LOGD(TAG, "video stats: %u frames, %llu KiB in last %llu ms",
-                 (unsigned)frames,
-                 (unsigned long long)(bytes / 1024),
-                 (unsigned long long)((now - window_start_us) / 1000));
-        window_start_us = now;
-        frames = 0;
-        bytes  = 0;
-    }
+    s_recv_stats.video_frames += 1;
+    s_recv_stats.video_bytes  += body_len;
+    if (body_len > s_recv_stats.video_max) s_recv_stats.video_max = (uint32_t)body_len;
 }
 
 /* SensorStartRequest{ type, refresh_interval } → SensorStartResponse{ status=OK }
@@ -1455,7 +1456,10 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
                     s_av_ack_ctx.sock = sock;
                     s_av_ack_ctx.tls  = tls;
                     s_av_ack_ctx.ch   = ch;
+                    int64_t t_push0 = esp_timer_get_time();
                     h264_pipe_push(nal, nal_len, av_ack_callback, &s_av_ack_ctx);
+                    s_recv_stats.push_wait_us +=
+                        (uint64_t)(esp_timer_get_time() - t_push0);
                 } else {
                     err = send_av_media_ack(sock, tls, ch, cipher, CIPHER_BUF_SIZE);
                 }

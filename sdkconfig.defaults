@@ -146,6 +146,12 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # debounced/deferred nvs_commit() off the LVGL thread instead.
 CONFIG_SPI_FLASH_AUTO_SUSPEND=n
 
+# Per-task run-time counters (esp_timer, µs). Costs one timer read per context
+# switch; buys the per-core idle % in the AA video-pipeline stats line
+# (h264_pipe) and the `tasks` REPL command of the UART debug bridge — the
+# video path is tuned from field logs, so this stays on in release builds.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
 # ===== Android Auto head unit =====
 # Default role AP: head unit runs SoftAP, phone joins it (production —
 # matches a real wireless head unit). Switch to CONFIG_AA_WIFI_ROLE_STA=y

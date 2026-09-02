@@ -23,6 +23,9 @@ static const char *TAG = "h264_pipe";
  * iterations rather than being starved by them. */
 #define H264_TASK_PRIORITY     8
 
+/* Decoder queue depth — see the note at xQueueCreate in h264_pipe_init. */
+#define H264_QUEUE_DEPTH       4
+
 /* In VESC mode (LVGL dashboard owns the panel) we still decode every frame —
  * H.264 is stateful and dropping P-frames here would leave the decoder unable
  * to recover until the next IDR (this phone only emits IDRs ~every 10 s and
@@ -46,19 +49,55 @@ static esp_h264_dec_param_handle_t s_dec_param;
 static QueueHandle_t               s_queue;
 static TaskHandle_t                s_task;
 
-/* Stats — reported once per second from the decoder task. */
+/* Stats — one INFO line per STATS_WINDOW_US from the decoder task while
+ * frames flow (DEBUG is compiled out of release builds and the pipeline is
+ * tuned from field logs):
+ *
+ *   dec 5.0s: 72 fr 14.4 fps | dec avg 31 ms max 142 ms (max fr 187 KiB) |
+ *             q hwm 4/4 | push blocked 60x 2210 ms | errors 0
+ *
+ * dec avg/max  = esp_h264_dec_process time per frame (the max is the I-frame,
+ *                "max fr" its size);
+ * q hwm        = deepest the queue got;
+ * push blocked = recv-loop waits > 50 ms on a full queue (back-pressure). */
+#define STATS_WINDOW_US (5LL * 1000 * 1000)
+
 static uint32_t s_decoded_frames;
 static uint32_t s_decode_errors;
 static uint64_t s_decode_total_us;
-/* Per-second high-water mark of queue depth, sampled both inside the
- * decoder pop loop (just after we dequeued — so this is the depth left
- * behind after take) and by push() before it enqueues. Lets us tell
- * "queue spikes to 32 once then drains" from "queue stays near 32". */
+static uint64_t s_decode_max_us;
+static uint32_t s_decode_max_bytes;   /* size of the slowest frame in the window */
+/* High-water mark of queue depth, sampled both inside the decoder pop loop
+ * (just after we dequeued — so this is the depth left behind after take) and
+ * by push() before it enqueues. Lets us tell "queue spikes once then drains"
+ * from "queue stays full". */
 static uint32_t s_queue_hwm;
 static uint32_t s_push_blocked;       /* number of push waits > 50 ms */
 static uint64_t s_push_blocked_us;    /* sum of those waits */
 
-static void log_stats_once_per_second(void)
+/* Per-core idle share over the window — tells whether the video pipeline is
+ * CPU-bound on core 1 while core 0 (LVGL paused in AA mode) sits idle, i.e.
+ * whether moving the display stage to core 0 has anything to gain. Needs
+ * CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS (on in sdkconfig.defaults; the
+ * counter is esp_timer µs, uint32 — wraps every ~71 min, deltas survive). */
+static void idle_pct(int64_t span_us, unsigned pct[2])
+{
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    static uint32_t last[2];
+    for (int c = 0; c < 2; c++) {
+        uint32_t cur = (uint32_t)ulTaskGetIdleRunTimeCounterForCore(c);
+        uint32_t d = cur - last[c];
+        last[c] = cur;
+        pct[c] = span_us > 0 ? (unsigned)((uint64_t)d * 100 / (uint64_t)span_us) : 0;
+        if (pct[c] > 100) pct[c] = 100;
+    }
+#else
+    (void)span_us;
+    pct[0] = pct[1] = 0;
+#endif
+}
+
+static void log_stats_periodic(void)
 {
     static int64_t window_start_us;
     int64_t now = esp_timer_get_time();
@@ -66,29 +105,37 @@ static void log_stats_once_per_second(void)
         window_start_us = now;
         return;
     }
-    if (now - window_start_us < 1000000) return;
+    int64_t span = now - window_start_us;
+    if (span < STATS_WINDOW_US) return;
 
+    unsigned idle[2];
+    idle_pct(span, idle);
     if (s_decoded_frames > 0 || s_decode_errors > 0 || s_queue_hwm > 0) {
-        /* 1 Hz decode-pipeline summary — handy when tuning the queue /
-         * ACK pacing, otherwise just clutter once AA is up. */
-        ESP_LOGD(TAG,
-                 "decoded %u fr (avg %llu us/fr) | q hwm %u/4 | "
-                 "push blocked %u times, %llu ms total | errors %u",
-                 (unsigned)s_decoded_frames,
+        uint32_t fps10 = (uint32_t)(((uint64_t)s_decoded_frames * 10000000ULL) / (uint64_t)span);
+        ESP_LOGI(TAG,
+                 "dec %lld.%llds: %u fr %u.%u fps | dec avg %llu ms max %llu ms "
+                 "(max fr %u KiB) | q hwm %u/%u | push blocked %ux %llu ms | errors %u "
+                 "| idle c0 %u%% c1 %u%%",
+                 (long long)(span / 1000000), (long long)((span / 100000) % 10),
+                 (unsigned)s_decoded_frames, (unsigned)(fps10 / 10), (unsigned)(fps10 % 10),
                  (unsigned long long)(s_decoded_frames
-                     ? (s_decode_total_us / s_decoded_frames) : 0),
-                 (unsigned)s_queue_hwm,
+                     ? (s_decode_total_us / s_decoded_frames / 1000) : 0),
+                 (unsigned long long)(s_decode_max_us / 1000),
+                 (unsigned)(s_decode_max_bytes / 1024),
+                 (unsigned)s_queue_hwm, (unsigned)H264_QUEUE_DEPTH,
                  (unsigned)s_push_blocked,
                  (unsigned long long)(s_push_blocked_us / 1000),
-                 (unsigned)s_decode_errors);
+                 (unsigned)s_decode_errors, idle[0], idle[1]);
     }
-    s_decoded_frames  = 0;
-    s_decode_errors   = 0;
-    s_decode_total_us = 0;
-    s_queue_hwm       = 0;
-    s_push_blocked    = 0;
-    s_push_blocked_us = 0;
-    window_start_us   = now;
+    s_decoded_frames   = 0;
+    s_decode_errors    = 0;
+    s_decode_total_us  = 0;
+    s_decode_max_us    = 0;
+    s_decode_max_bytes = 0;
+    s_queue_hwm        = 0;
+    s_push_blocked     = 0;
+    s_push_blocked_us  = 0;
+    window_start_us    = now;
 }
 
 static void decode_and_show(const uint8_t *data, size_t len)
@@ -117,6 +164,10 @@ static void decode_and_show(const uint8_t *data, size_t len)
         if (out.out_size > 0) {
             s_decoded_frames++;
             s_decode_total_us += (uint64_t)dt;
+            if ((uint64_t)dt > s_decode_max_us) {
+                s_decode_max_us    = (uint64_t)dt;
+                s_decode_max_bytes = (uint32_t)len;
+            }
             esp_h264_resolution_t res = {0};
             bool have_res = (s_dec_param &&
                 esp_h264_dec_get_resolution(s_dec_param, &res)
@@ -169,7 +220,7 @@ static void decoder_task(void *arg)
                 ESP_LOGW(TAG, "ack cb returned %s", esp_err_to_name(e));
             }
         }
-        log_stats_once_per_second();
+        log_stats_periodic();
     }
 }
 
@@ -206,7 +257,7 @@ esp_err_t h264_pipe_init(void)
      * frames are dropped (push still blocks on full, just for less time
      * and with much less accumulated lag), so H.264 decoder state stays
      * valid across IDR boundaries. */
-    s_queue = xQueueCreate(4, sizeof(pipe_item_t));
+    s_queue = xQueueCreate(H264_QUEUE_DEPTH, sizeof(pipe_item_t));
     if (!s_queue) {
         ESP_LOGE(TAG, "xQueueCreate failed");
         esp_h264_dec_close(s_dec);
@@ -227,7 +278,7 @@ esp_err_t h264_pipe_init(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "decoder ready (async, queue=32, ack-on-display)");
+    ESP_LOGI(TAG, "decoder ready (async, queue=%d, ack-on-display)", H264_QUEUE_DEPTH);
     return ESP_OK;
 }
 

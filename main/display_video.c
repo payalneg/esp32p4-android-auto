@@ -66,7 +66,7 @@ static uint16_t            s_landscape_h;
 static esp_imgfx_color_convert_handle_t s_imgfx;
 
 /* Per-stage timing accumulators for the AA video path. Reset every second
- * by aa_stats_log_once_per_second(). All times in microseconds. */
+ * by aa_stats_log_periodic(). All times in microseconds. */
 static struct {
     uint32_t frames;
     uint64_t imgfx_us;
@@ -77,27 +77,40 @@ static struct {
     int64_t  window_start_us;
 } s_aa_stats;
 
-static void aa_stats_log_once_per_second(void)
+/* One INFO line per 5 s while frames are shown (DEBUG is compiled out of
+ * release builds; the video path is tuned from field logs):
+ *
+ *   show 5.0s: 72 fr | shuffle 19.1 | ppa 15.2 | hud 6.0 | draw 0.2 | total 40.5 ms/fr
+ *
+ * On the active DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420 path "shuffle" is the CPU
+ * I420→MCU reorder, "ppa" the blocking HW convert+rotate, "hud" the overlay +
+ * cache syncs, "draw" the panel submit. */
+#define AA_SHOW_STATS_WINDOW_US (5LL * 1000 * 1000)
+
+static void aa_stats_log_periodic(void)
 {
     int64_t now = esp_timer_get_time();
     if (s_aa_stats.window_start_us == 0) {
         s_aa_stats.window_start_us = now;
         return;
     }
-    if (now - s_aa_stats.window_start_us < 1000000) return;
+    int64_t span = now - s_aa_stats.window_start_us;
+    if (span < AA_SHOW_STATS_WINDOW_US) return;
     uint32_t f = s_aa_stats.frames;
     if (f > 0) {
-        /* 1 Hz per-frame timing breakdown — only useful while profiling
-         * the imgfx/PPA/overlay path. */
-        ESP_LOGD(TAG,
-                 "AA show: %u fr | imgfx %llu | ppa %llu | hud %llu | "
-                 "draw %llu | total %llu us/fr (avg)",
+        /* per-frame averages in tenths of a millisecond */
+        unsigned long long sh = s_aa_stats.imgfx_us   / f / 100;
+        unsigned long long pp = s_aa_stats.ppa_us     / f / 100;
+        unsigned long long hd = s_aa_stats.overlay_us / f / 100;
+        unsigned long long dr = s_aa_stats.draw_us    / f / 100;
+        unsigned long long tt = s_aa_stats.total_us   / f / 100;
+        ESP_LOGI(TAG,
+                 "show %lld.%llds: %u fr | shuffle %llu.%llu | ppa %llu.%llu | "
+                 "hud %llu.%llu | draw %llu.%llu | total %llu.%llu ms/fr",
+                 (long long)(span / 1000000), (long long)((span / 100000) % 10),
                  (unsigned)f,
-                 (unsigned long long)(s_aa_stats.imgfx_us  / f),
-                 (unsigned long long)(s_aa_stats.ppa_us    / f),
-                 (unsigned long long)(s_aa_stats.overlay_us/ f),
-                 (unsigned long long)(s_aa_stats.draw_us   / f),
-                 (unsigned long long)(s_aa_stats.total_us  / f));
+                 sh / 10, sh % 10, pp / 10, pp % 10, hd / 10, hd % 10,
+                 dr / 10, dr % 10, tt / 10, tt % 10);
     }
     s_aa_stats.frames     = 0;
     s_aa_stats.imgfx_us   = 0;
@@ -543,7 +556,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_yuv_end);
         s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
         s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
-        aa_stats_log_once_per_second();
+        aa_stats_log_periodic();
         return err;
     }
 #elif DISPLAY_CPU_YUV_THEN_PPA_ROTATE
@@ -669,7 +682,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
         s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
         s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
-        aa_stats_log_once_per_second();
+        aa_stats_log_periodic();
         return err;
     }
 #elif DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420
@@ -760,7 +773,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
         s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
         s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
-        aa_stats_log_once_per_second();
+        aa_stats_log_periodic();
         return err;
     }
 #elif DISPLAY_CPU_YUV_BYPASS
@@ -988,7 +1001,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
         s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
         s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t_total_start);
-        aa_stats_log_once_per_second();
+        aa_stats_log_periodic();
         return err;
     }
 #else  /* DISPLAY_TEST_PATTERN */
