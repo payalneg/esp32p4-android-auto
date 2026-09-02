@@ -9,7 +9,7 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## v1.3.9 / app 0.3.9 — 2026-09-02
 
 ### Trip statistics are now opt-in (Settings → Trip statistics, default OFF)
 

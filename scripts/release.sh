@@ -43,9 +43,15 @@ command -v flutter >/dev/null 2>&1 || { echo "release: flutter not found in PATH
 
 # esptool (bundled with ESP-IDF) builds the single-file merged flash image used by
 # release/flash.py. 'merge_bin' (underscore) is accepted by both esptool v4 (IDF) and v5.
-if   command -v esptool    >/dev/null 2>&1; then ESPTOOL=(esptool)
-elif command -v esptool.py >/dev/null 2>&1; then ESPTOOL=(esptool.py)
-else ESPTOOL=(python -m esptool); fi
+# Prefer the IDF venv's module (export.sh put that python first in PATH) and only
+# accept a candidate that actually runs: a stale ~/.local/bin/esptool shim pointing
+# at a deleted interpreter ("bad interpreter") once killed a release at the very
+# last step, after both firmwares and the APK had been built.
+esptool_works() { "$@" version >/dev/null 2>&1; }
+if   esptool_works python -m esptool; then ESPTOOL=(python -m esptool)
+elif esptool_works esptool;           then ESPTOOL=(esptool)
+elif esptool_works esptool.py;        then ESPTOOL=(esptool.py)
+else echo "release: no working esptool found (need it for the merged flasher image)" >&2; exit 1; fi
 
 # --- resolve versions ---------------------------------------------------------
 bump_patch() {  # 1.2.3 -> 1.2.4
