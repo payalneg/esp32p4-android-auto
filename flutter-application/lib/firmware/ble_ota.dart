@@ -20,6 +20,8 @@ class BleOta {
   static const opAbort = 0x03;
 
   // CTRL status notifications (head unit → phone): [u8 status][u32 detail LE].
+  // READY's detail is the largest DATA write the firmware accepts (509 on
+  // current builds); 0 means an older firmware whose buffer fits 244 bytes.
   static const stReady = 0x10;
   static const stProgress = 0x11;
   static const stDone = 0x12;

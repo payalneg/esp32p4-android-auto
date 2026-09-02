@@ -25,11 +25,13 @@
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
 
+#include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/ble_hs_mbuf.h"
 #include "os/os_mbuf.h"
 
+#include "ble_central_arb.h"
 #include "ota_screen.h"
 
 static const char *TAG = "ble_ota";
@@ -113,6 +115,39 @@ static void stage_free(void)
     s_total = s_recv = s_next_progress = 0;
 }
 
+/* Link tuning for the transfer (see the speed note in ble_ota.h).
+ *
+ * on:  ask the central for an 11.25–15 ms connection interval — the phone
+ *      writes one DATA chunk per ATT round trip, so the interval is the
+ *      throughput; Android's default is ~45 ms and it refuses < 11.25 ms.
+ *      Also park the sensor-connect arbiter: with a bound sensor asleep it
+ *      keeps an initiator scan running (NimBLE's default connect params scan
+ *      at 100 % duty) that competes with this link for the radio.
+ * off: back to a balanced 30–50 ms interval and let the arbiter resume. The
+ *      update request is best-effort — the phone may ignore or override it
+ *      (the app asks for high priority on its side too). */
+static bool s_link_boosted;
+
+static void link_boost(bool on)
+{
+    if (on == s_link_boosted) return;
+    s_link_boosted = on;
+    if (on) ble_arb_scan_suspend();
+    else    ble_arb_scan_resume();
+
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+    struct ble_gap_upd_params p = {
+        .itvl_min            = on ? 9  : BLE_GAP_INITIAL_CONN_ITVL_MIN,   /* 11.25 ms : 30 ms */
+        .itvl_max            = on ? 12 : BLE_GAP_INITIAL_CONN_ITVL_MAX,   /* 15 ms    : 50 ms */
+        .latency             = 0,
+        .supervision_timeout = 400,    /* 4 s */
+        .min_ce_len          = 0,
+        .max_ce_len          = 0,
+    };
+    int rc = ble_gap_update_params(s_conn, &p);
+    if (rc != 0) ESP_LOGW(TAG, "conn param update (%s) rc=%d", on ? "fast" : "normal", rc);
+}
+
 /* ---- worker-task handlers (the only place notifies / flash happen) ---- */
 
 static void do_begin(const ota_evt_t *ev)
@@ -156,7 +191,10 @@ static void do_begin(const ota_evt_t *ev)
     s_state = ST_RECEIVING;
     ESP_LOGI(TAG, "BLE OTA begin: %u bytes -> %s @ 0x%08" PRIx32,
              (unsigned)s_total, next->label, next->address);
-    notify_status(OTA_ST_READY, 0);
+    link_boost(true);
+    /* READY carries the largest DATA write we accept; the app sizes its
+     * chunks from it (older app versions ignore the detail and send 244). */
+    notify_status(OTA_ST_READY, BLE_OTA_MAX_DATA);
 }
 
 static void do_finalize(void)
@@ -166,6 +204,10 @@ static void do_finalize(void)
         return;
     }
     s_state = ST_FINALIZING;
+
+    /* The bytes are in; the link no longer needs to be fast (and a failed
+     * finalize must not leave the phone stuck on the fast interval). */
+    link_boost(false);
 
     if (s_recv != s_total) {
         ESP_LOGE(TAG, "END with recv=%u want=%u", (unsigned)s_recv, (unsigned)s_total);
@@ -295,12 +337,14 @@ static void worker(void *arg)
                 notify_status(OTA_ST_ERROR, ev.detail);
                 stage_free();
                 s_state = ST_IDLE;
+                link_boost(false);
                 break;
             case EV_ABORT:
                 ESP_LOGW(TAG, "OTA aborted");
                 ota_screen_hide();
                 stage_free();
                 s_state = ST_IDLE;
+                link_boost(false);
                 break;
         }
     }

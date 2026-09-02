@@ -499,10 +499,11 @@ static int access_cb(uint16_t conn, uint16_t attr,
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
         (attr == s_ota_ctrl_handle || attr == s_ota_data_handle)) {
         /* BLE OTA control / firmware-data channel. Flatten the mbuf and hand
-         * it to ble_ota; the firmware bytes are staged in PSRAM there. The
-         * 260-byte buffer covers the MTU-247 link the app negotiates
-         * (payload ≤ 244). */
-        uint8_t  buf[260];
+         * it to ble_ota; the firmware bytes are staged in PSRAM there. Sized
+         * for a full MTU-512 write (payload ≤ BLE_OTA_MAX_DATA = 509): the
+         * app learns that cap from READY and sends the biggest chunk the
+         * negotiated MTU allows — half the ATT round trips of the old 244. */
+        uint8_t  buf[BLE_OTA_MAX_DATA + 3];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
         if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;

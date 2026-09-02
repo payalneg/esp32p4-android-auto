@@ -9,6 +9,45 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.11 / app 0.3.11 — 2026-09-02
+
+### Faster firmware updates over Bluetooth
+
+Why a BLE update took 10+ minutes: a 4.4 MB image went out as ~18 000
+writes of 244 bytes, the phone stack issues them one per ATT round trip, and
+four things kept each round trip slow:
+
+- **Connection interval.** Nothing asked for a fast link, so the transfer ran
+  at Android's default ~45 ms interval. The LISP editor already requests
+  high priority (7.5–15 ms) for its transfers; the OTA path did not. Now the
+  app requests it for the duration of the update, and the firmware asks from
+  its side too on BEGIN (`ble_gap_update_params`, 11.25–15 ms — Android
+  refuses anything shorter), reverting on failure.
+- **Sensor initiator scan.** With a PAS or wheel-speed sensor bound but asleep
+  (the usual state of a parked bike), the head unit keeps a connect attempt
+  pending — and NimBLE's default connect parameters scan for the peer at
+  100 % duty, sharing the radio with the phone link the whole time. The
+  arbiter now scans 30 ms in every 100 ms (a sensor advertising at ~1 Hz is
+  still caught within seconds of waking), and the OTA parks the arbiter
+  entirely while receiving.
+- **Chunk size.** The firmware's flatten buffer capped DATA writes at 244 B
+  although both sides negotiate MTU 512. The buffer now takes 509 B and READY
+  advertises that cap in its `detail` field; the app uses the largest chunk
+  the cap and the MTU allow — half the writes. Older firmware sends 0 and the
+  app keeps 244.
+- **Ack fallback.** On Android's BUSY (TX credits exhausted) the app retried
+  after 15 and 30 ms and then switched that chunk to an *acknowledged* write
+  — one chunk per connection event. Under load that path swallowed most of
+  the image. Retries now wait roughly a connection interval and stay
+  unacknowledged for six attempts before falling back.
+- Also: progress IPC to the UI isolate is throttled (was one message per
+  chunk).
+
+Note: the update *to* 1.3.11 still runs on the old firmware's side of the
+protocol (244-byte chunks, no peripheral-side interval request, scan still
+running) — only the app-side improvements apply to it. Updates *from* 1.3.11
+onward get the full effect. Not hardware-measured yet.
+
 ## v1.3.10 / app 0.3.10 — 2026-09-02
 
 ### Android Auto no longer drops on a big video frame

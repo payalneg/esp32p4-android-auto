@@ -521,11 +521,27 @@ class BleTaskHandler extends TaskHandler {
     try {
       final image = await FirmwareUpdater.imageFor(model);
       final digest = Uint8List.fromList(sha256.convert(image).bytes);
+      // Progress fires once per BLE chunk — ~9 000 times per image. Each
+      // IPC hop to the UI isolate is a platform-channel message and a
+      // rebuild; throttle to visible steps so the sender loop isn't spending
+      // its time between writes on progress plumbing.
+      var lastSent = -1.0;
+      var lastAt = DateTime.fromMillisecondsSinceEpoch(0);
       final res = await _ble.bleOta(
         image,
         digest,
-        onUpload: (f) => FlutterForegroundTask
-            .sendDataToMain({'t': IpcEvt.otaUpload, 'id': id, 'frac': f}),
+        onUpload: (f) {
+          final now = DateTime.now();
+          if (f < 1.0 &&
+              f - lastSent < 0.005 &&
+              now.difference(lastAt).inMilliseconds < 250) {
+            return;
+          }
+          lastSent = f;
+          lastAt = now;
+          FlutterForegroundTask
+              .sendDataToMain({'t': IpcEvt.otaUpload, 'id': id, 'frac': f});
+        },
         onVerify: () => FlutterForegroundTask
             .sendDataToMain({'t': IpcEvt.otaVerify, 'id': id}),
       );

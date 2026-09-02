@@ -332,6 +332,13 @@ class BleService {
     final events = StreamController<({int status, int detail})>.broadcast();
     StreamSubscription<List<int>>? sub;
     try {
+      // A 4.4 MB image is thousands of serialized ATT writes, one per
+      // connection event: at Android's default ~45 ms interval that is a
+      // 10-minute transfer, at high priority (7.5-15 ms) a couple of minutes.
+      // The firmware asks for the fast interval from its side too (a
+      // peripheral request the phone may ignore); asking here as well makes
+      // it stick on Androids that only honour the app's own priority.
+      await setLinkSpeed(fast: true);
       await ctrl.setNotifyValue(true);
       sub = ctrl.onValueReceived.listen((raw) {
         if (raw.isEmpty) return;
@@ -359,10 +366,15 @@ class BleService {
         return (ok: false, errorKey: BleOta.errKey(ready.detail));
       }
 
-      // Stream the image. Cap the chunk at 244 B to fit the firmware's
-      // 260-byte flatten buffer regardless of the negotiated MTU.
+      // Stream the image. READY's detail is the largest DATA write the
+      // firmware's flatten buffer takes (509 on current firmware; 0 from
+      // older builds whose buffer only fits 244) — use the biggest chunk both
+      // that and the negotiated MTU allow. Fewer, larger writes matter: every
+      // write is a platform round trip plus one ATT packet per connection
+      // event, so 509-byte chunks halve the transfer time versus 244.
+      final maxChunk = ready.detail > 0 ? ready.detail : 244;
       final mtu = _device?.mtuNow ?? 247;
-      final chunkSize = (mtu - 3).clamp(20, 244);
+      final chunkSize = (mtu - 3).clamp(20, maxChunk);
       final total = image.length;
       var off = 0;
       onUpload?.call(0);
@@ -400,24 +412,33 @@ class BleService {
     } finally {
       await sub?.cancel();
       await events.close();
+      // On success the head unit reboots and the link drops anyway; on
+      // failure hand the radio back to normal duty.
+      await setLinkSpeed(fast: false);
     }
   }
 
-  /// Write one OTA data chunk, mirroring [_send]'s busy backoff: fast
-  /// write-without-response first, then acknowledged writes the stack can
-  /// pace once Android's ATT layer reports BUSY (status 201).
+  /// Write one OTA data chunk. Android reports BUSY (status 201) on a
+  /// write-without-response when the controller's TX credits are exhausted;
+  /// they come back at the next connection event, so wait roughly one
+  /// interval and try again *without* response. Only after a run of misses
+  /// fall back to an acknowledged write — that path costs a full ATT round
+  /// trip per chunk (one chunk per connection event), and [_send]'s
+  /// "fall back after two 15 ms retries" made most of a firmware image go
+  /// that slow way whenever the stack was under pressure.
   Future<void> _writeOtaData(BluetoothCharacteristic ch, Uint8List chunk) async {
+    const fastAttempts = 6;
     var attempt = 0;
     while (true) {
       try {
-        await ch.write(chunk, withoutResponse: attempt < 2);
+        await ch.write(chunk, withoutResponse: attempt < fastAttempts);
         return;
       } on PlatformException catch (e) {
         final msg = (e.message ?? '').toLowerCase();
         final busy = msg.contains('busy') || msg.contains('201');
-        if (!busy || attempt >= 8) rethrow;
+        if (!busy || attempt >= 12) rethrow;
         attempt++;
-        await Future.delayed(Duration(milliseconds: 15 * attempt));
+        await Future.delayed(Duration(milliseconds: 10 * attempt));
       }
     }
   }

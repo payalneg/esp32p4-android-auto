@@ -95,7 +95,24 @@ static void arb_evaluate(void)
     s_next = (pick + 1) % s_nslots;
     portEXIT_CRITICAL(&s_mux);
 
-    int rc = ble_gap_connect(own, &peer, window, NULL,
+    /* Explicit connect params instead of NimBLE's defaults: those scan for
+     * the peer at 100 % duty (10 ms window in a 10 ms interval), and a bound
+     * sensor is asleep most of the time the bike is parked — i.e. exactly
+     * when the phone link is busy with a firmware update or the LISP editor.
+     * A 30 ms window every 100 ms still catches a sensor advertising at ~1 Hz
+     * within a few seconds of it waking, at a third of the radio time. The
+     * connection itself keeps the standard 30–50 ms interval. */
+    static const struct ble_gap_conn_params conn_params = {
+        .scan_itvl           = BLE_GAP_SCAN_ITVL_MS(100),
+        .scan_window         = BLE_GAP_SCAN_WIN_MS(30),
+        .itvl_min            = BLE_GAP_INITIAL_CONN_ITVL_MIN,
+        .itvl_max            = BLE_GAP_INITIAL_CONN_ITVL_MAX,
+        .latency             = BLE_GAP_INITIAL_CONN_LATENCY,
+        .supervision_timeout = BLE_GAP_INITIAL_SUPERVISION_TIMEOUT,
+        .min_ce_len          = BLE_GAP_INITIAL_CONN_MIN_CE_LEN,
+        .max_ce_len          = BLE_GAP_INITIAL_CONN_MAX_CE_LEN,
+    };
+    int rc = ble_gap_connect(own, &peer, window, &conn_params,
                              arb_trampoline, (void *)(intptr_t)pick);
     if (rc == 0) {
         ESP_LOGI(TAG, "slot %d connecting to "
