@@ -9,6 +9,34 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.10 / app 0.3.10 — 2026-09-02
+
+### Android Auto no longer drops on a big video frame
+
+- Field log (1.3.9, five minutes into a session): `aa_tls: decrypt: out_buf
+  full (1564)` → `recv_decrypted: ESP_ERR_NO_MEM` → `tcp: client closed` —
+  the panel fell back to the dashboard and the phone had to reconnect. A
+  fragmented AA message (a video I-frame) came in larger than the fixed
+  96 KiB reassembly buffer. The same cap had already been raised once, from
+  32 KiB, for the post-BT-handover key-frame burst.
+- `recv_decrypted` now reassembles into per-channel buffers that grow on
+  demand (doubling from 96 KiB, hard ceiling 2 MiB — an 800×480 I-frame is
+  ~100–300 KiB) and hands the message to the dispatcher by pointer instead
+  of copying it out, which also removes a ~100 KiB memcpy per video frame.
+  Growth steps are logged once (`ch 3 reassembly buffer 98304 -> 196608
+  bytes`) so real frame sizes show up in the log.
+
+### Trip statistics switch removed again
+
+- The opt-in switch introduced in 1.3.9 is gone; statistics are always on,
+  as before 1.3.9 (the NVS key it left behind is ignored). What stays from
+  1.3.9 is the actual fix: the trip log's sector runway is erased at boot,
+  before the display comes up, instead of at every stop longer than ~30 s.
+- On the log's own device the runway was already clean (`runway: 64 clean
+  sectors ahead`) — so the stop-time erases were NOT what that unit was
+  freezing on; the 10 s record writes remain the only flash activity during
+  a ride.
+
 ## v1.3.9 / app 0.3.9 — 2026-09-02
 
 ### Trip statistics are now opt-in (Settings → Trip statistics, default OFF)

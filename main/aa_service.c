@@ -47,17 +47,23 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_INPUT_BINDING_REQ    0x8002
 #define AA_MSG_INPUT_BINDING_RESP   0x8003
 
-/* Buffer sizes — generous since these live on the heap, not the stack.
- * AA fragments any logical message bigger than ~16 KiB (TLS record size)
- * across multiple AA frames with FIRST/MIDDLE/LAST flags; recv_decrypted
- * accumulates them until LAST. After the BT-mode handover the phone tends
- * to burst a full key-frame to re-sync video — observed 60+ KiB of video
- * data in a single second, so 32 KiB plain_buf overflowed ("out_buf full
- * (524)" → connection dropped). 96 KiB has room for a 80 KiB I-frame plus
- * normal back-and-forth control traffic. */
+/* Buffer sizes — generous since these live on the heap (PSRAM), not the
+ * stack. A single AA frame carries at most 64 KiB (16-bit length), so these
+ * two bound one frame with room to spare. Logical messages bigger than a
+ * frame are fragmented FIRST/MIDDLE/LAST and reassembled by recv_decrypted
+ * into per-channel partial buffers that GROW on demand (see PARTIAL_MAX):
+ * a fixed reassembly cap has bitten twice — 32 KiB overflowed on the post-
+ * BT-handover key-frame burst ("out_buf full (524)"), then 96 KiB on a
+ * 2026-09-02 field log ("out_buf full (1564)": a >96 KiB video I-frame five
+ * minutes into a session) — and each time the whole AA session dropped. */
 #define CIPHER_BUF_SIZE     (96 * 1024)
 #define PLAIN_BUF_SIZE      (96 * 1024)
 #define SCRATCH_SIZE        8192    /* protobuf scratch */
+/* Hard ceiling for one reassembled message. An 800×480 H.264 I-frame is
+ * ~100–300 KiB at gearhead's bitrates; anything approaching this is a
+ * protocol error, not a big picture. Partial buffers start at PLAIN_BUF_SIZE
+ * and double up to here. */
+#define PARTIAL_MAX         (2 * 1024 * 1024)
 
 /* ---------- Service Discovery response builder ---------- */
 
@@ -583,19 +589,54 @@ static void recv_partial_reset(void)
     }
 }
 
-/* Decrypt one logical AA message and return the assembled inner [msg_id][body].
+/* Make sure the channel's partial buffer can take `extra` more bytes (a
+ * fragment's plaintext is never longer than its ciphertext, so the caller
+ * passes the cipher length). Doubles the buffer up to PARTIAL_MAX; the memory
+ * comes from PSRAM (malloc > 16 KiB lands there on this config). */
+static esp_err_t partial_reserve(partial_msg_t *p, size_t extra, aa_channel_id_t ch)
+{
+    size_t need = p->len + extra;
+    if (need <= p->cap) return ESP_OK;
+    if (need > PARTIAL_MAX) {
+        ESP_LOGE(TAG, "ch %d message > %u bytes (%u so far) — dropping session",
+                 (int)ch, (unsigned)PARTIAL_MAX, (unsigned)p->len);
+        return ESP_ERR_NO_MEM;
+    }
+    size_t new_cap = p->cap ? p->cap : PLAIN_BUF_SIZE;
+    while (new_cap < need) new_cap *= 2;
+    if (new_cap > PARTIAL_MAX) new_cap = PARTIAL_MAX;
+    uint8_t *nb = realloc(p->buf, new_cap);
+    if (!nb) {
+        ESP_LOGE(TAG, "ch %d partial realloc %u failed", (int)ch, (unsigned)new_cap);
+        return ESP_ERR_NO_MEM;
+    }
+    /* Once per growth step — tells us how big real frames get. */
+    ESP_LOGI(TAG, "ch %d reassembly buffer %u -> %u bytes",
+             (int)ch, (unsigned)p->cap, (unsigned)new_cap);
+    p->buf = nb;
+    p->cap = new_cap;
+    return ESP_OK;
+}
+
+/* Decrypt one logical AA message and return the assembled inner [msg_id][body]
+ * through *out_msg / *out_len.
  *
- * BULK frames decrypt straight into the caller's plain_buf and return.
- * Fragmented messages (FIRST → 0..N MIDDLE → LAST) accumulate in the channel's
- * partial buffer; on LAST we copy out to plain_buf. Different channels can
- * have partials in flight simultaneously. */
+ * BULK frames decrypt straight into the caller's plain_buf (*out_msg points
+ * there). Fragmented messages (FIRST → 0..N MIDDLE → LAST) accumulate in the
+ * channel's partial buffer, which grows on demand; on LAST *out_msg points
+ * INTO that buffer — no copy, and no size cap other than PARTIAL_MAX. The
+ * pointer stays valid until the next call (the next FIRST on that channel
+ * restarts the buffer), which is fine: every handler consumes the message
+ * synchronously and the video path copies into the h264 pipe. Different
+ * channels can have partials in flight simultaneously. */
 static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
                                 aa_channel_id_t *out_ch,
                                 uint8_t *cipher_buf, size_t cipher_cap,
                                 uint8_t *plain_buf, size_t plain_cap,
-                                size_t *plain_len)
+                                const uint8_t **out_msg, size_t *out_len)
 {
-    *plain_len = 0;
+    *out_msg = plain_buf;
+    *out_len = 0;
 
     while (true) {
         aa_channel_id_t ch;
@@ -629,10 +670,11 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         if (is_bulk) {
             int64_t t_dec0 = esp_timer_get_time();
             err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
-                                 plain_buf, plain_cap, plain_len);
+                                 plain_buf, plain_cap, out_len);
             s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
             xSemaphoreGive(s_ssl_mutex);
             if (err != ESP_OK) return err;
+            *out_msg = plain_buf;
             *out_ch = ch;
             s_recv_stats.messages++;
             recv_stats_log_once_per_second();
@@ -641,22 +683,21 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
 
         partial_msg_t *p = &s_partial[(int)ch];
         if (is_first) {
-            if (!p->buf) {
-                p->cap = plain_cap;
-                p->buf = malloc(p->cap);
-                if (!p->buf) {
-                    xSemaphoreGive(s_ssl_mutex);
-                    ESP_LOGE(TAG, "ch %d partial malloc %u failed",
-                             (int)ch, (unsigned)plain_cap);
-                    return ESP_ERR_NO_MEM;
-                }
-            }
             p->len = 0;
             p->active = true;
         } else if (!p->active) {
             xSemaphoreGive(s_ssl_mutex);
             ESP_LOGE(TAG, "ch %d MIDDLE/LAST without prior FIRST", (int)ch);
             return ESP_ERR_INVALID_STATE;
+        }
+        /* Plaintext ≤ ciphertext, so reserving cipher_len can never come up
+         * short — aa_tls_decrypt's "out_buf full" is unreachable from here. */
+        err = partial_reserve(p, cipher_len, ch);
+        if (err != ESP_OK) {
+            xSemaphoreGive(s_ssl_mutex);
+            p->active = false;
+            p->len = 0;
+            return err;
         }
 
         size_t got = 0;
@@ -669,18 +710,10 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         p->len += got;
 
         if (is_last) {
-            if (p->len > plain_cap) {
-                ESP_LOGE(TAG, "ch %d msg %u > plain_cap %u",
-                         (int)ch, (unsigned)p->len, (unsigned)plain_cap);
-                p->active = false;
-                p->len = 0;
-                return ESP_ERR_NO_MEM;
-            }
-            memcpy(plain_buf, p->buf, p->len);
-            *plain_len = p->len;
+            *out_msg = p->buf;
+            *out_len = p->len;
             *out_ch = ch;
             p->active = false;
-            p->len = 0;
             s_recv_stats.messages++;
             recv_stats_log_once_per_second();
             return ESP_OK;
@@ -1318,9 +1351,10 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
 
     while (true) {
         aa_channel_id_t ch;
+        const uint8_t *msg;
         size_t plen;
         err = recv_decrypted(sock, tls, &ch, cipher, CIPHER_BUF_SIZE,
-                             plain, PLAIN_BUF_SIZE, &plen);
+                             plain, PLAIN_BUF_SIZE, &msg, &plen);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "recv_decrypted: %s", esp_err_to_name(err));
             break;
@@ -1329,8 +1363,8 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             ESP_LOGW(TAG, "short message %u on ch %d", (unsigned)plen, ch);
             continue;
         }
-        uint16_t msg_id = ((uint16_t)plain[0] << 8) | plain[1];
-        const uint8_t *body = plain + 2;
+        uint16_t msg_id = ((uint16_t)msg[0] << 8) | msg[1];
+        const uint8_t *body = msg + 2;
         size_t body_len = plen - 2;
         /* Skip the rx log for the high-rate AV media flow and ping pings —
          * see noisy gate in send_encrypted for the same reason. */

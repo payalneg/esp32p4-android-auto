@@ -495,8 +495,6 @@ static lv_obj_t *warn_label(void)
     return l;
 }
 
-static void stats_btn_show(bool show);
-
 static void warn_show(bool show)
 {
     lv_obj_t *l = warn_label();
@@ -509,29 +507,9 @@ static void warn_show(bool show)
      * layouts put both at the top centre), so the two alternate. The runtime
      * banner sits on its own, and leaves STATISTICS alone. */
     if (s_w->esc_warn_text && s_w->statistics_button) {
-        stats_btn_show(!show);
+        if (show) lv_obj_add_flag(s_w->statistics_button, LV_OBJ_FLAG_HIDDEN);
+        else      lv_obj_clear_flag(s_w->statistics_button, LV_OBJ_FLAG_HIDDEN);
     }
-}
-
-/* STATISTICS entry point: only ever visible while Settings → Trip statistics
- * is on (there is no log behind the screen otherwise). Shared by the banner
- * alternation above and the Settings switch below. */
-static void stats_btn_show(bool show)
-{
-    if (!s_w || !s_w->statistics_button) return;
-    if (show && settings_wrapper_get_trip_stats_enabled()) {
-        lv_obj_clear_flag(s_w->statistics_button, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_w->statistics_button, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static void g_trip_stats(bool enabled)
-{
-    /* On: show unless the authored banner currently owns the slot (the blink
-     * loop hands it back on reconnect). Off: hide outright. */
-    bool banner_up = s_w && s_w->esc_warn_text && s_warn_shown;
-    stats_btn_show(enabled && !banner_up);
 }
 
 /* Called from the 100 ms data pump (and only while the dashboard is on screen),
@@ -586,7 +564,6 @@ const dashboard_theme_ops_t dashboard_generic_ops = {
     .esc_connection_status = g_esc_connection_status,
     .max_values      = g_max_values,
     .brightness_gesture = g_brightness_gesture,
-    .trip_stats         = g_trip_stats,
     /* battery_temp / fps / units_changed / cruise_* / navigation_* / music_*:
      * theme-specific or need extra widgets — left NULL (skipped). */
 };

@@ -117,10 +117,6 @@ typedef struct {
      * the Settings switch via dashboard_brightness_gesture_refresh(). NULL on
      * themes without a brightness slider. */
     void (*brightness_gesture)(bool enabled);
-    /* Show/hide the theme's STATISTICS entry point (Settings → Trip statistics).
-     * Fired once per theme build/switch and from the Settings switch via
-     * dashboard_trip_stats_refresh(). NULL on themes without the button. */
-    void (*trip_stats)(bool enabled);
 } dashboard_theme_ops_t;
 
 typedef struct {
@@ -181,12 +177,6 @@ void dashboard_max_reset(void);
  * automatically on every theme build/switch; call it directly after flipping
  * the setting so the change lands without a reboot. LVGL thread only. */
 void dashboard_brightness_gesture_refresh(void);
-
-/* ---- trip statistics entry point ---------------------------------------- *
- * Push the saved "Trip statistics" setting into the active theme (hides the
- * STATISTICS button when off). Called automatically on every theme
- * build/switch; call it directly after flipping the setting. LVGL thread only. */
-void dashboard_trip_stats_refresh(void);
 
 #ifdef __cplusplus
 }

@@ -34,19 +34,11 @@
  *
  * All flash I/O runs on a dedicated low-priority writer task; trip_log_tick()
  * (called from the UI updater) only builds a record and queues it.
- *
- * Master switch: Settings → "Trip statistics" (settings_get_trip_stats_enabled,
- * default OFF). While off the log does nothing at all — no boot scan, no
- * seeding of the dashboard totals, no writer task, no flash I/O; the readers
- * report an empty log and the dashboard hides its STATISTICS entry point.
- * Every flash write/erase stalls the display on this board, and the log is
- * the prime suspect for the periodic dashboard freezes, so it is opt-in.
  */
 #include "trip_log.h"
 
 #include "vesc_trip_persist.h"
 #include "vesc_battery_calc.h"
-#include "dev_settings.h"
 #include "vesc_head2.h"
 #include "vesc_can/crc.h"
 #include "vesc_can/vesc_rt_data.h"
@@ -126,9 +118,6 @@ static volatile bool s_pending_new;
 
 static QueueHandle_t s_queue;
 
-static volatile bool s_enabled;   /* master switch (Settings → Trip statistics); LVGL thread writes, writer reads */
-static bool s_started;   /* ring scanned, writer task running */
-
 static uint32_t s_deleted[MAX_DELETED];   /* hidden trip ids */
 static int      s_deleted_count;
 
@@ -172,12 +161,8 @@ static bool rec_valid(const trip_rec_t *r)
     return crc32c((const uint8_t *)r, REC_SIZE - 4) == r->crc;
 }
 
-/* ---- boot scan: find head / seq / current trip / last totals ----
- * seed: also resume the dashboard running totals + smart-battery state from
- * the last record. True at boot; false when logging is switched on at runtime
- * (the totals have been counting since boot — an old record would yank them
- * back to a stale value). */
-static void boot_scan(bool seed)
+/* ---- boot scan: find head / seq / current trip / last totals ---- */
+static void boot_scan(void)
 {
     uint32_t sectors = s_part->size / SECTOR;
     s_total_recs = sectors * RECS_PER_SECTOR;
@@ -218,15 +203,13 @@ static void boot_scan(bool seed)
     s_trip_t_s = last.t_s;
     s_head    = (last_slot + 1) % s_total_recs;
 
-    if (seed) {
-        /* Resume the dashboard running totals from the last record. */
-        trip_persist_seed_totals(last.distance_m, last.ah, last.uptime_ms);
+    /* Resume the dashboard running totals from the last record. */
+    trip_persist_seed_totals(last.distance_m, last.ah, last.uptime_ms);
 
-        /* Resume the smart-battery tracker too (10 s freshness vs the rare NVS
-         * fallback). battery_calc validates the epoch and rejects stale seeds. */
-        if (last.ver >= 3) {
-            battery_calc_seed_remaining(last.batt_remaining_ah, last.batt_epoch);
-        }
+    /* Resume the smart-battery tracker too (10 s freshness vs the rare NVS
+     * fallback). battery_calc validates the epoch and rejects stale seeds. */
+    if (last.ver >= 3) {
+        battery_calc_seed_remaining(last.batt_remaining_ah, last.batt_epoch);
     }
 
     ESP_LOGI(TAG, "resumed: trip=%u seq=%u head=%u dist=%um ah=%.2f",
@@ -374,12 +357,11 @@ static void writer_task(void *arg)
 {
     (void)arg;
 
-    /* Fast-forward the runway pointer past whatever runway_build_boot() (or
-     * the previous boot) left clean — 2-byte reads, no erases — then guarantee
-     * a minimal runway before the first sample (a safety net for the case the
-     * boot build ran out of budget, or logging was enabled at runtime, where
-     * the boot build doesn't run). Everything beyond RUNWAY_BOOT_MIN is
-     * trickled from the idle loop below. */
+    /* Fast-forward the runway pointer past whatever runway_build_boot() left
+     * clean — 2-byte reads, no erases — then guarantee a minimal runway before
+     * the first sample (a safety net for the case the boot build ran out of
+     * budget). Everything beyond RUNWAY_BOOT_MIN is trickled from the idle
+     * loop below. */
     s_runway_next = head_fresh_sector();
     while (ring_dist(head_fresh_sector(), s_runway_next) < RUNWAY_TARGET_SECTORS &&
            sector_is_clean(s_runway_next)) {
@@ -412,10 +394,7 @@ static void writer_task(void *arg)
                 s_runway_next = head_fresh_sector();
                 dist = 0;
             }
-            /* Switched off at runtime: stay parked — no runway erases either
-             * (each one blue-flashes the display, which is the whole point of
-             * the switch). Nothing arrives on the queue while disabled. */
-            if (!s_enabled || !bike_is_idle()) {
+            if (!bike_is_idle()) {
                 idle_dwell = 0;
             } else if (dist < RUNWAY_TARGET_SECTORS && ++idle_dwell >= IDLE_DWELL_TICKS) {
                 if (!sector_is_clean(s_runway_next)) erase_sector(s_runway_next);
@@ -444,27 +423,6 @@ static void writer_task(void *arg)
 }
 
 /* ---- public ---- */
-
-/* Scan the ring and bring up the writer. Runs once — at boot when the switch
- * is on, or later from trip_log_set_enabled() the first time it is turned on. */
-static bool start_logging(bool seed)
-{
-    boot_scan(seed);
-    load_deleted();
-    /* Boot path only: the panel isn't up yet, so erase the runway now. On a
-     * runtime enable the screen is live — leave the runway to the trickle. */
-    if (seed) runway_build_boot();
-
-    s_queue = xQueueCreate(QUEUE_DEPTH, sizeof(trip_rec_t));
-    if (!s_queue || xTaskCreate(writer_task, "trip_wr", 4096, NULL, 2, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "writer task/queue init failed — trip logging disabled");
-        s_part = NULL;
-        return false;
-    }
-    s_started = true;
-    return true;
-}
-
 void trip_log_init(void)
 {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
@@ -473,33 +431,19 @@ void trip_log_init(void)
         ESP_LOGE(TAG, "triplog partition not found — trip logging disabled");
         return;
     }
-    /* Registered regardless of the switch: the flag it sets is only consumed
-     * by trip_log_tick, which is a no-op while disabled. */
+    boot_scan();
+    load_deleted();
+    /* The panel isn't up yet (main.c calls us before display_init) — erase
+     * the runway now, while nobody can see the stall. */
+    runway_build_boot();
     trip_persist_set_reset_cb(trip_log_new_trip);
 
-    s_enabled = settings_get_trip_stats_enabled();
-    if (!s_enabled) {
-        ESP_LOGI(TAG, "trip statistics off — log idle (no scan, no flash I/O)");
-        return;
+    s_queue = xQueueCreate(QUEUE_DEPTH, sizeof(trip_rec_t));
+    if (!s_queue || xTaskCreate(writer_task, "trip_wr", 4096, NULL, 2, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "writer task/queue init failed — trip logging disabled");
+        s_part = NULL;
     }
-    start_logging(true);
 }
-
-void trip_log_set_enabled(bool on)
-{
-    if (!s_part || on == s_enabled) return;
-    if (on) {
-        /* First enable since boot: find the head now, but do NOT re-seed the
-         * running totals (see boot_scan). Either way start a fresh trip so the
-         * new samples don't graft onto whatever trip the log last recorded. */
-        if (!s_started && !start_logging(false)) return;
-        s_pending_new = true;
-    }
-    s_enabled = on;
-    ESP_LOGI(TAG, "trip statistics %s", on ? "on" : "off");
-}
-
-bool trip_log_is_enabled(void) { return s_enabled; }
 
 void trip_log_new_trip(void)
 {
@@ -508,7 +452,7 @@ void trip_log_new_trip(void)
 
 void trip_log_tick(const vesc_setup_values_t *rt)
 {
-    if (!rt || !s_part || !s_queue || !s_enabled) return;
+    if (!rt || !s_part || !s_queue) return;
 
     if (s_pending_new) {
         s_pending_new = false;

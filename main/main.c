@@ -333,10 +333,10 @@ void app_main(void)
      * pattern as battery_calc, separate namespace. The dashboard reset icon
      * eventually flows here via battery_calc_reset_trip_and_ah(). */
     trip_persist_init();
-    /* Per-trip history on the raw "triplog" partition (only if Settings →
-     * Trip statistics is on). MUST stay before display_init(): when enabled it
-     * erases the dirty part of its sector runway synchronously here, while the
-     * panel is still dark — every flash erase freezes the screen otherwise. */
+    /* Per-trip history on the raw "triplog" partition. MUST stay before
+     * display_init(): it erases the dirty part of its sector runway
+     * synchronously here, while the panel is still dark — every flash erase
+     * freezes the screen otherwise. */
     trip_log_init();
 
     /* Bump CPU to 400 MHz before any peripheral / WiFi init so APB ratio

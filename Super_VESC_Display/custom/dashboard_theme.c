@@ -64,16 +64,6 @@ void dashboard_brightness_gesture_refresh(void)
     }
 }
 
-/* And for the STATISTICS entry point: the label is authored visible in GUI
- * Guider, so every rebuilt screen has to be told whether the feature is on. */
-void dashboard_trip_stats_refresh(void)
-{
-    const dashboard_theme_ops_t *ops = active_ops();
-    if (ops && ops->trip_stats) {
-        ops->trip_stats(settings_wrapper_get_trip_stats_enabled());
-    }
-}
-
 static void fire_switch_cb(int idx)
 {
     if (!s_switch_cb) return;
@@ -94,7 +84,6 @@ void dashboard_theme_adopt(int idx)
     fire_switch_cb(idx);
     fire_max();
     dashboard_brightness_gesture_refresh();
-    dashboard_trip_stats_refresh();
 }
 
 void dashboard_theme_build(int idx)
@@ -139,7 +128,6 @@ void dashboard_theme_set(int idx)
     fire_switch_cb(idx);
     fire_max();
     dashboard_brightness_gesture_refresh();
-    dashboard_trip_stats_refresh();
 
     /* Tear down the previous theme. The new screen is already the active slot
      * (and loaded, if it was on screen), so deleting the old screen here can

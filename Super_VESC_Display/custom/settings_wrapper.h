@@ -102,14 +102,6 @@ bool    settings_wrapper_head2_temps(float *fet, float *motor);
 bool    settings_wrapper_get_brightness_gesture_enabled(void);
 void    settings_wrapper_set_brightness_gesture_enabled(bool on);
 
-/* Trip statistics: the 10 s flash trip log + the dashboard's STATISTICS entry
- * point. Default false on device (every flash write/erase stalls the display);
- * true in the simulator so the statistics screen stays reachable for UI work.
- * Applied per theme through dashboard_theme_ops_t.trip_stats — see
- * dashboard_trip_stats_refresh(); the device setter also flips the logger. */
-bool    settings_wrapper_get_trip_stats_enabled(void);
-void    settings_wrapper_set_trip_stats_enabled(bool on);
-
 /* Dashboard theme — index into the dashboard-theme registry (dashboard_theme.h). */
 uint8_t settings_wrapper_get_dashboard_theme(void);
 void    settings_wrapper_set_dashboard_theme(uint8_t theme);
@@ -136,7 +128,6 @@ void settings_wrapper_set_battery_capacity_volatile(float capacity);
 void settings_wrapper_set_power_max_kw_volatile(float power_max_kw);
 void settings_wrapper_set_second_head_id_volatile(uint8_t id);
 void settings_wrapper_set_brightness_gesture_enabled_volatile(bool on);
-void settings_wrapper_set_trip_stats_enabled_volatile(bool on);
 void settings_wrapper_set_dashboard_theme_volatile(uint8_t theme);
 void settings_wrapper_set_wheel_diameter_mm_volatile(uint16_t diameter_mm);
 
@@ -147,7 +138,6 @@ void settings_wrapper_persist_battery_capacity(void);
 void settings_wrapper_persist_power_max_kw(void);
 void settings_wrapper_persist_second_head_id(void);
 void settings_wrapper_persist_brightness_gesture_enabled(void);
-void settings_wrapper_persist_trip_stats_enabled(void);
 void settings_wrapper_persist_dashboard_theme(void);
 void settings_wrapper_persist_wheel_diameter_mm(void);
 

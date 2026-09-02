@@ -39,7 +39,6 @@ static struct {
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
     bool                 display_flip;     /* 180° flip for upside-down mount */
-    bool                 trip_stats_enabled; /* trip log + STATISTICS screen */
 } s_cache;
 
 static settings_can_speed_cb_t     s_can_speed_cb;
@@ -95,7 +94,6 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
     if (nvs_get_u8 (h, "disp_flip",   &u8 ) == ESP_OK) s_cache.display_flip      = (u8 != 0);
-    if (nvs_get_u8 (h, "trip_stats",  &u8 ) == ESP_OK) s_cache.trip_stats_enabled = (u8 != 0);
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
 
@@ -152,10 +150,6 @@ void settings_init(void) {
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
     s_cache.display_flip      = false;
-    /* Opt-in: every trip-log flash write/erase stalls the display on this
-     * board (see sdkconfig.defaults, AUTO_SUSPEND) and the log is the prime
-     * suspect for the periodic dashboard freezes — off until proven clean. */
-    s_cache.trip_stats_enabled = false;
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -186,7 +180,6 @@ uint8_t             settings_get_second_head_id(void)    { return s_cache.second
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
 bool                settings_get_display_flip(void)       { return s_cache.display_flip; }
-bool                settings_get_trip_stats_enabled(void) { return s_cache.trip_stats_enabled; }
 
 /* ---------------- setters ---------------- */
 
@@ -492,26 +485,6 @@ void settings_persist_second_head_id(void) {
 void settings_set_brightness_gesture_enabled_volatile(bool on) {
     if (s_cache.brightness_gesture_enabled == on) return;
     s_cache.brightness_gesture_enabled = on;
-}
-
-void settings_set_trip_stats_enabled(bool on) {
-    if (s_cache.trip_stats_enabled == on) return;
-    s_cache.trip_stats_enabled = on;
-    nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
-    nvs_set_u8(h, "trip_stats", on ? 1 : 0);
-    commit(h);
-}
-
-void settings_set_trip_stats_enabled_volatile(bool on) {
-    s_cache.trip_stats_enabled = on;
-}
-
-void settings_persist_trip_stats_enabled(void) {
-    nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
-    nvs_set_u8(h, "trip_stats", s_cache.trip_stats_enabled ? 1 : 0);
-    commit(h);
 }
 
 void settings_persist_brightness_gesture_enabled(void) {

@@ -17,17 +17,11 @@
 extern "C" {
 #endif
 
-/* Registers the reset hook and — only if Settings → "Trip statistics" is on —
- * scans the log, seeds the running totals and starts the background writer
- * task (which also pre-erases the upcoming runway). With the switch off the
- * log stays completely idle: no flash I/O, readers report an empty log. */
+/* Scans the log, seeds the running totals, erases the dirty part of the
+ * upcoming sector runway (synchronously — call BEFORE the display is up, every
+ * flash erase stalls it), registers the reset hook and starts the background
+ * writer task. */
 void trip_log_init(void);
-
-/* Runtime master switch (wired to the Settings toggle; LVGL thread is fine).
- * Off: sampling and runway erases stop immediately. On: the ring is scanned on
- * first use (without re-seeding the running totals) and a new trip begins. */
-void trip_log_set_enabled(bool on);
-bool trip_log_is_enabled(void);
 
 /* Call every RT-data tick with the latest VESC snapshot. Internally throttles
  * the time-series sampling to ~10 s and tracks max speed. */
