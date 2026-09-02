@@ -139,7 +139,7 @@ static void push_rt_locked(void)
      * already includes any in-flight regen offset from the VESC; uptime_ms
      * is the VESC's own uptime which resets on reboot. */
     trip_persist_update(rt->tachometer_abs, rt->amp_hours, rt->uptime_ms);
-    trip_log_tick(rt);   /* per-trip history → /vescfs/trips/<id>/ (throttled to 10 s) */
+    trip_log_tick(rt);   /* 10 s trip-log sample; no-op unless Trip statistics is on */
 
     if (!ble_src) update_speed(vesc_rt_data_get_speed_kmh());
     update_current(rt->current_in);

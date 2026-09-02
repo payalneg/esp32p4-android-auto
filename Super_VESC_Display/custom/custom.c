@@ -226,6 +226,9 @@ static lv_obj_t *settings_show_fps_switch = NULL;
 static lv_obj_t *settings_show_fps_label = NULL;
 static lv_obj_t *settings_brightness_gesture_switch = NULL;
 static lv_obj_t *settings_brightness_gesture_label = NULL;
+static lv_obj_t *settings_trip_stats_switch = NULL;
+static lv_obj_t *settings_trip_stats_label = NULL;
+static lv_obj_t *settings_trip_stats_hint = NULL;
 static lv_obj_t *settings_demo_mode_switch = NULL;
 static lv_obj_t *settings_demo_mode_label = NULL;
 static lv_obj_t *settings_vesc_emulator_switch = NULL;
@@ -1138,6 +1141,20 @@ static void cockpit_cruise_control_status(bool active)
     }
 }
 
+/* The STATISTICS label alternates with the ESC-NOT-CONNECTED banner (same
+ * slot), but only ever shows when the feature is on: with Trip statistics off
+ * there is no log behind the screen it opens, so the button stays hidden. */
+static void cockpit_stats_btn_show(bool show)
+{
+    lv_obj_t *b = guider_ui.dashboard_Classic_statistics_button;
+    if (!b) return;
+    if (show && settings_wrapper_get_trip_stats_enabled()) {
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void cockpit_esc_connection_status(bool connected)
 {
     static bool old_state = true;
@@ -1155,14 +1172,14 @@ static void cockpit_esc_connection_status(bool connected)
             lv_obj_clear_flag(guider_ui.dashboard_Classic_mode_text, LV_OBJ_FLAG_HIDDEN);
             /* Re-show the STATISTICS entry point on reconnect — the blink loop
              * (which only runs while disconnected) may have left it hidden. */
-            lv_obj_clear_flag(guider_ui.dashboard_Classic_statistics_button, LV_OBJ_FLAG_HIDDEN);
+            cockpit_stats_btn_show(true);
         } else {
             // ESC disconnected - show warning text (will start blinking)
             lv_obj_clear_flag(guider_ui.dashboard_Classic_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
             //lv_obj_add_flag(guider_ui.dashboard_Classic_Ah_text, LV_OBJ_FLAG_HIDDEN);
             //lv_obj_add_flag(guider_ui.dashboard_Classic_Ah_const_text, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(guider_ui.dashboard_Classic_mode_text, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(guider_ui.dashboard_Classic_statistics_button, LV_OBJ_FLAG_HIDDEN);
+            cockpit_stats_btn_show(false);
             blink_state = true;
         }
     }
@@ -1180,12 +1197,12 @@ static void cockpit_esc_connection_status(bool connected)
                 //lv_obj_add_flag(guider_ui.dashboard_Classic_Ah_text, LV_OBJ_FLAG_HIDDEN);
                 //lv_obj_add_flag(guider_ui.dashboard_Classic_Ah_const_text, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(guider_ui.dashboard_Classic_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_add_flag(guider_ui.dashboard_Classic_statistics_button, LV_OBJ_FLAG_HIDDEN);
+                cockpit_stats_btn_show(false);
             } else {
                 lv_obj_add_flag(guider_ui.dashboard_Classic_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
                 //lv_obj_clear_flag(guider_ui.dashboard_Classic_Ah_const_text, LV_OBJ_FLAG_HIDDEN);
                 //lv_obj_clear_flag(guider_ui.dashboard_Classic_Ah_text, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(guider_ui.dashboard_Classic_statistics_button, LV_OBJ_FLAG_HIDDEN);
+                cockpit_stats_btn_show(true);
             }
         }
     }
@@ -1219,6 +1236,16 @@ static void cockpit_brightness_gesture(bool enabled)
     if (!sl) return;
     if (enabled) lv_obj_clear_flag(sl, LV_OBJ_FLAG_HIDDEN);
     else         lv_obj_add_flag(sl, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Settings → Trip statistics. Off hides the STATISTICS entry point outright;
+ * on shows it unless the ESC-NOT-CONNECTED banner currently owns the slot
+ * (the blink loop re-shows it on reconnect). */
+static void cockpit_trip_stats(bool enabled)
+{
+    lv_obj_t *warn = guider_ui.dashboard_Classic_esc_not_connected_text;
+    bool warn_up = warn && !lv_obj_has_flag(warn, LV_OBJ_FLAG_HIDDEN);
+    cockpit_stats_btn_show(enabled && !warn_up);
 }
 
 // ============================================================================
@@ -1266,6 +1293,7 @@ static debounced_commit_t s_brightness_commit;
  * brightness VALUE and the gesture FLAG would drop whichever write was armed
  * first. */
 static debounced_commit_t s_brightness_gesture_commit;
+static debounced_commit_t s_trip_stats_commit;
 static debounced_commit_t s_controller_id_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
@@ -1733,6 +1761,21 @@ static void brightness_gesture_switch_event_cb(lv_event_t *e) {
         debounced_commit_schedule(&s_brightness_gesture_commit,
                                   settings_wrapper_persist_brightness_gesture_enabled);
         dashboard_brightness_gesture_refresh();
+    }
+}
+
+// Event handler for the Trip statistics switch. Same volatile + debounced
+// commit pattern; the volatile setter already flips the logger itself
+// (settings_wrapper → trip_log_set_enabled), the refresh hides/shows the
+// dashboard's STATISTICS entry point on whichever theme is built.
+static void trip_stats_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+        settings_wrapper_set_trip_stats_enabled_volatile(checked);
+        debounced_commit_schedule(&s_trip_stats_commit,
+                                  settings_wrapper_persist_trip_stats_enabled);
+        dashboard_trip_stats_refresh();
     }
 }
 
@@ -2229,6 +2272,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_splash_loops(1);     // play boot splash once
         settings_wrapper_set_display_flip(false); // normal orientation
         settings_wrapper_set_brightness_gesture_enabled(true);
+        settings_wrapper_set_trip_stats_enabled(false);   // opt-in feature
 
         // Update UI elements
         if (s_target_id_field.label)        num_field_set(&s_target_id_field, 10);
@@ -2251,10 +2295,14 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_brightness_gesture_switch) {
             lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
         }
+        if (settings_trip_stats_switch) {
+            lv_obj_clear_state(settings_trip_stats_switch, LV_STATE_CHECKED);
+        }
         dashboard_theme_set(0);   // live-switch back to cockpit
         /* dashboard_theme_set no-ops when cockpit is already active, so push the
-         * restored gesture state in explicitly. */
+         * restored gesture / statistics state in explicitly. */
         dashboard_brightness_gesture_refresh();
+        dashboard_trip_stats_refresh();
         if (settings_brightness_slider) {
             lv_slider_set_value(settings_brightness_slider, 80, LV_ANIM_ON);
         }
@@ -2903,6 +2951,32 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += SETTINGS_ROW_H;
 
+    // ========== Trip Statistics Switch ==========
+    // Off (default): no 10 s trip log on flash and no STATISTICS button on
+    // the dashboard. Every flash write/erase stalls the display on this board,
+    // and the log is the prime suspect for the periodic dashboard freezes.
+    settings_trip_stats_label = settings_heading_create(ui->settings, y_pos, "Trip statistics");
+
+    settings_trip_stats_switch = lv_switch_create(ui->settings);
+    lv_obj_set_pos(settings_trip_stats_switch, 730, y_pos + 15);
+    lv_obj_set_size(settings_trip_stats_switch, 60, 30);
+    if (settings_wrapper_get_trip_stats_enabled()) {
+        lv_obj_add_state(settings_trip_stats_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_trip_stats_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_trip_stats_switch, lv_color_hex(0x00a9ff),
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_trip_stats_switch, trip_stats_switch_event_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    settings_trip_stats_hint = lv_label_create(ui->settings);
+    lv_label_set_text(settings_trip_stats_hint, "Trip log + STATISTICS screen (writes flash)");
+    lv_obj_set_pos(settings_trip_stats_hint, 230, y_pos + 22);
+    lv_obj_set_style_text_color(settings_trip_stats_hint, lv_color_hex(0x999999), 0);
+    lv_obj_set_style_text_font(settings_trip_stats_hint, &lv_font_montserrat_14, 0);
+
+    y_pos += SETTINGS_ROW_H;
+
     // ========== Demo Mode Switch ==========
     settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
 
@@ -3378,6 +3452,7 @@ static const dashboard_theme_ops_t cockpit_ops = {
     .navigation_text       = cockpit_navigation_text,
     .music_text            = cockpit_music_text,
     .brightness_gesture    = cockpit_brightness_gesture,
+    .trip_stats            = cockpit_trip_stats,
 };
 
 static const dashboard_theme_t cockpit_theme = {

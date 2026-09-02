@@ -17,6 +17,7 @@
     // On device - include real settings
     #include "dev_settings.h"
     #include "vesc_head2.h"
+    #include "trip_log.h"
     #include "esp_system.h"
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
@@ -41,6 +42,7 @@ static struct {
     bool use_fahrenheit;
     bool second_head_enabled;
     bool brightness_gesture_enabled;
+    bool trip_stats_enabled;
     uint8_t second_head_id;
     uint8_t dashboard_theme;
     uint8_t splash_loops;
@@ -62,6 +64,7 @@ static struct {
     .use_fahrenheit = false,
     .second_head_enabled = false,
     .brightness_gesture_enabled = true,
+    .trip_stats_enabled = true,   /* keep the statistics screen reachable in the sim */
     .second_head_id = 11,
     .dashboard_theme = 0,
     .splash_loops = 1,
@@ -444,6 +447,41 @@ void settings_wrapper_set_brightness_gesture_enabled_volatile(bool on) {
 void settings_wrapper_persist_brightness_gesture_enabled(void) {
 #if !SIMULATOR_MODE
     settings_persist_brightness_gesture_enabled();
+#endif
+}
+
+bool settings_wrapper_get_trip_stats_enabled(void) {
+#if SIMULATOR_MODE
+    return sim_settings.trip_stats_enabled;
+#else
+    return settings_get_trip_stats_enabled();
+#endif
+}
+
+/* Both device setters also flip the logger itself, so the switch takes effect
+ * without a reboot: off stops sampling and runway erases at once, on scans
+ * the ring (first time only) and starts a new trip. */
+void settings_wrapper_set_trip_stats_enabled(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.trip_stats_enabled = on;
+#else
+    settings_set_trip_stats_enabled(on);
+    trip_log_set_enabled(on);
+#endif
+}
+
+void settings_wrapper_set_trip_stats_enabled_volatile(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.trip_stats_enabled = on;
+#else
+    settings_set_trip_stats_enabled_volatile(on);
+    trip_log_set_enabled(on);
+#endif
+}
+
+void settings_wrapper_persist_trip_stats_enabled(void) {
+#if !SIMULATOR_MODE
+    settings_persist_trip_stats_enabled();
 #endif
 }
 

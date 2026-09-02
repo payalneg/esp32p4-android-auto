@@ -9,6 +9,45 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### Trip statistics are now opt-in (Settings → Trip statistics, default OFF)
+
+- New switch **Settings → Trip statistics**. Off (the default): the dashboard's
+  STATISTICS entry point is hidden on every theme and the trip log does
+  nothing at all — no boot scan, no 10 s record writes, no sector erases, no
+  flash I/O. On: behaves as before; toggling takes effect without a reboot
+  (off stops sampling and erases at once, on scans the ring and starts a new
+  trip). The Settings "Reset" button returns it to off.
+- Why: every flash write or erase on this board suspends the cache for both
+  cores AND stalls the DSI DMA that feeds the panel from PSRAM (AUTO_SUSPEND is
+  unavailable on this GD25Q256, see `sdkconfig.defaults`), so the trip log was
+  the one subsystem that touched flash *during a ride* — a 64-byte record
+  every 10 s, plus 4 KB sector erases (45–400 ms each = a frozen screen with a
+  blue flash) whenever the runway of pre-erased sectors ahead of the log's
+  head had to be rebuilt. It is the prime suspect for the "dashboard freezes
+  for a moment, often" reports. With the switch off a ride performs zero flash
+  writes; if the freezes persist with it off, the cause is elsewhere (CAN data
+  dropouts, render path) — the switch doubles as the experiment.
+- Consequence of "off": the dashboard TRIP / Ah / uptime totals no longer
+  survive a head-unit reboot (the log was their only persistence) and start
+  from zero at every power-on; the smart-battery tracker falls back to its
+  10-minute NVS backup. The odometer is unaffected (it comes from the VESC, or
+  from the BLE speed sensor's own NVS counter).
+- Firmware side (`components/trip_log`): the old boot scan never *cleaned*
+  anything — at start it only read one record per sector to find the head and
+  erased 2 sectors ahead; old trips were left for the ring to overwrite, and
+  the erases of that stale data ran from the writer's idle loop, i.e. at every
+  stop longer than ~30 s (one 45–400 ms freeze every 3 s until 64 sectors were
+  clean), or just-in-time mid-ride once the runway ran out. Now, when the
+  feature is on, the runway is rebuilt synchronously in `trip_log_init()`
+  BEFORE `display_init()` — the panel is still dark, so a dirty sector costs
+  boot time (typically a few sectors ≈ 0.1–0.3 s; capped at 3 s, the rest is
+  left to the idle trickle) instead of a mid-ride freeze. The idle trickle and
+  the just-in-time erase remain as fallbacks only.
+- Not hardware-verified: the freeze diagnosis itself. Compile-tested on
+  Waveshare + the desktop simulator.
+
 ## v1.3.8 / app 0.3.8 — 2026-08-19
 
 ### BLE wheel-speed sensor (stock Coospo-class CSC sensors)
