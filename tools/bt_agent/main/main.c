@@ -26,6 +26,7 @@
 #include "esp_sdp_api.h"
 #include "esp_spp_api.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -41,7 +42,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.6.3"
+#define BT_AGENT_FW_VERSION "0.6.4"
 
 /* NVS namespace + key for remembering the last successfully-paired phone's
  * BDA. On boot, if a value is present, we proactively HFP-connect to it so
@@ -61,6 +62,13 @@ static volatile bool g_hfp_connected  = false;
  * NVS so the agent honours the user's choice even before the first P4
  * sync arrives after boot. */
 static volatile bool g_auto_reconnect = true;
+
+/* Set when we tear HFP down on purpose (BT_CONNECT with the link already up,
+ * or AA_RECONNECT) so that hf_client_callback re-pages the phone as soon as
+ * the link is reported down — without waiting for auto_reconnect_task's next
+ * 5 s poll, and independent of the g_auto_reconnect toggle. */
+static volatile bool     g_repage_pending = false;
+static esp_timer_handle_t g_repage_timer;
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
@@ -397,6 +405,57 @@ static void sdp_callback(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *p)
     }
 }
 
+/* One-shot re-page after a deliberate HFP bounce. Runs on the esp_timer
+ * task; esp_hf_client_connect only posts to the Bluedroid task, so that is
+ * fine. The delay lets the controller finish tearing the ACL down — paging
+ * a peer whose previous link is still closing gets a silent no-op. */
+static void repage_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!g_last_bda_valid || g_spp_handle != 0 || g_hfp_connected) {
+        return;     /* phone came back on its own meanwhile */
+    }
+    ESP_LOGI(TAG, "re-paging %02x:%02x:%02x:%02x:%02x:%02x after HFP bounce",
+             g_last_bda[0], g_last_bda[1], g_last_bda[2],
+             g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+    esp_err_t e = esp_hf_client_connect(g_last_bda);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "re-page: esp_hf_client_connect: %s", esp_err_to_name(e));
+    }
+}
+
+static void schedule_repage(uint32_t delay_ms)
+{
+    if (!g_repage_timer) {
+        const esp_timer_create_args_t args = {
+            .callback = repage_timer_cb,
+            .name     = "bt_repage",
+        };
+        if (esp_timer_create(&args, &g_repage_timer) != ESP_OK) {
+            ESP_LOGW(TAG, "re-page timer create failed");
+            return;
+        }
+    }
+    esp_timer_stop(g_repage_timer);
+    esp_timer_start_once(g_repage_timer, (uint64_t)delay_ms * 1000);
+}
+
+/* Tear the HFP link down so gearhead sees its car kit go away and come back
+ * (the trigger for a fresh SPP → WifiStartRequest → AA cycle), then re-page
+ * from repage_timer_cb once the DISCONNECTED event lands. */
+static void bounce_hfp(const char *why)
+{
+    ESP_LOGI(TAG, "%s: bouncing HFP to wake gearhead", why);
+    g_repage_pending = true;
+    esp_err_t e = esp_hf_client_disconnect(g_last_bda);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "%s: esp_hf_client_disconnect: %s", why, esp_err_to_name(e));
+        g_repage_pending = false;
+        /* Link may already be gone from the stack's point of view — page now. */
+        schedule_repage(500);
+    }
+}
+
 /* ---------- HFP-HF: pretend to be a hands-free car kit ----------
  *
  * We don't actually route call audio anywhere — the goal is to make the
@@ -419,6 +478,11 @@ static void hf_client_callback(esp_hf_client_cb_event_t event,
         g_hfp_connected =
             (p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_CONNECTED ||
              p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_SLC_CONNECTED);
+        if (p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED &&
+            g_repage_pending) {
+            g_repage_pending = false;
+            schedule_repage(1500);
+        }
         break;
     case ESP_HF_CLIENT_AUDIO_STATE_EVT:
         ESP_LOGI(TAG, "HFP audio state: %d", p->audio_stat.state);
@@ -528,9 +592,10 @@ void bt_agent_set_auto_reconnect(bool on)
 /* Public hook for uart_link: P4 sent BT_CONNECT (user tapped "Connect" on
  * the idle screen). Page the last paired phone right now, regardless of the
  * g_auto_reconnect toggle — the button is the user's explicit "connect now".
- * Mirrors one iteration of auto_reconnect_task's connect path. No-op if we've
- * never paired or the SPP (AA) link is already up. Safe to call from the UART
- * rx_task context — esp_hf_client_connect just queues the page in the stack. */
+ * With HFP already up (phone linked, AA session gone) it bounces the link
+ * instead, since a page would be a no-op. No-op if we've never paired or the
+ * SPP (AA) link is already up. Safe to call from the UART rx_task context —
+ * the Bluedroid calls just queue work in the stack. */
 void bt_agent_connect_now(void)
 {
     if (!g_last_bda_valid) {
@@ -539,6 +604,14 @@ void bt_agent_connect_now(void)
     }
     if (g_spp_handle != 0) {
         ESP_LOGI(TAG, "BT_CONNECT: SPP already up");
+        return;
+    }
+    if (g_hfp_connected) {
+        /* Phone is linked but gearhead is not projecting (the AA session
+         * died and the phone kept HFP up). Paging an already-connected peer
+         * is a no-op — that was the dead "Connect" button in the field.
+         * Bounce the link instead so gearhead re-runs the wireless setup. */
+        bounce_hfp("BT_CONNECT");
         return;
     }
     ESP_LOGI(TAG, "BT_CONNECT: HFP-connecting to %02x:%02x:%02x:%02x:%02x:%02x",
@@ -583,8 +656,7 @@ void bt_agent_request_aa_reconnect(void)
         return;
     }
     s_last_bounce = now;
-    ESP_LOGI(TAG, "AA_RECONNECT: bouncing HFP to wake gearhead");
-    esp_hf_client_disconnect(g_last_bda);
+    bounce_hfp("AA_RECONNECT");
 }
 
 /* ---------- Init ---------- */

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "aa_handshake.h"
+#include "aa_reconnect.h"
 #include "aa_service.h"
 #include "aa_tls.h"
 #include "bsp/esp-bsp.h"
@@ -25,25 +26,37 @@ typedef struct {
     uint16_t port;
 } server_ctx_t;
 
-static void client_loop(int sock)
+typedef enum {
+    SESSION_NONE,          /* client never got past the handshake */
+    SESSION_LOST,          /* ran, then died: socket error, our failure */
+    SESSION_PEER_CLOSED,   /* ran, then the phone closed the socket cleanly */
+} session_end_t;
+
+/* How the client went away decides what the reconnect logic does next: a
+ * phone that closed cleanly most likely had the user exit Android Auto, and
+ * paging it back would undo that; a lost session is restarted. aa_frame_recv
+ * maps recv()==0 (FIN) to ESP_ERR_INVALID_STATE and recv errors (RST,
+ * timeouts) to ESP_FAIL, and aa_service_run passes that straight through. */
+static session_end_t client_loop(int sock)
 {
     /* aa_tls_t is ~16 KiB — heap, not stack. */
     aa_tls_t *tls = malloc(sizeof(*tls));
     if (!tls) {
         ESP_LOGE(TAG, "malloc tls");
-        return;
+        return SESSION_NONE;
     }
 
     if (aa_handshake_run(sock, tls) != ESP_OK) {
         ESP_LOGW(TAG, "handshake failed, dropping client");
         free(tls);
-        return;
+        return SESSION_NONE;
     }
 
-    aa_service_run(sock, tls);
+    esp_err_t err = aa_service_run(sock, tls);
 
     aa_tls_deinit(tls);
     free(tls);
+    return (err == ESP_ERR_INVALID_STATE) ? SESSION_PEER_CLOSED : SESSION_LOST;
 }
 
 static void accept_task(void *arg)
@@ -104,7 +117,7 @@ static void accept_task(void *arg)
             ESP_LOGW(TAG, "TCP_NODELAY: errno %d", errno);
         }
 
-        client_loop(sock);
+        session_end_t ended = client_loop(sock);
 
         shutdown(sock, SHUT_RDWR);
         close(sock);
@@ -137,6 +150,14 @@ static void accept_task(void *arg)
                     bsp_display_unlock();
                 }
             }
+        }
+
+        /* Screen is back to idle — now restart the wireless flow (kick the
+         * phone off the AP, bounce BT) so the next session can begin. Only
+         * after a real session: a client that failed the handshake is not
+         * a phone we want to keep re-paging. */
+        if (ended != SESSION_NONE) {
+            aa_reconnect_after_drop(ip, ended == SESSION_PEER_CLOSED);
         }
     }
 }

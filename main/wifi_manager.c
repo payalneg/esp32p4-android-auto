@@ -198,3 +198,52 @@ const wifi_ap_info_t *wifi_manager_get_ap_info(void)
     return NULL;
 #endif
 }
+
+esp_err_t wifi_manager_kick_sta(const char *ip_str)
+{
+#if WIFI_USE_AP
+    wifi_sta_list_t list = { 0 };
+    if (esp_wifi_ap_get_sta_list(&list) != ESP_OK || list.num <= 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    int target = -1;
+    esp_ip4_addr_t want = { 0 };
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ip_str && ap && esp_netif_str_to_ip4(ip_str, &want) == ESP_OK) {
+        esp_netif_pair_mac_ip_t pairs[ESP_WIFI_MAX_CONN_NUM] = { 0 };
+        for (int i = 0; i < list.num; i++) {
+            memcpy(pairs[i].mac, list.sta[i].mac, sizeof(pairs[i].mac));
+        }
+        if (esp_netif_dhcps_get_clients_by_mac(ap, list.num, pairs) == ESP_OK) {
+            for (int i = 0; i < list.num; i++) {
+                if (pairs[i].ip.addr == want.addr) {
+                    target = i;
+                    break;
+                }
+            }
+        }
+    }
+    if (target < 0 && list.num == 1) {
+        target = 0;     /* one station — no ambiguity about who to kick */
+    }
+    if (target < 0) {
+        ESP_LOGW(TAG, "kick: no station matches %s (%d connected) — leaving them",
+                 ip_str ? ip_str : "(any)", list.num);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    uint16_t aid = 0;
+    esp_err_t err = esp_wifi_ap_get_sta_aid(list.sta[target].mac, &aid);
+    if (err != ESP_OK || aid == 0) {
+        ESP_LOGW(TAG, "kick: no AID for " MACSTR, MAC2STR(list.sta[target].mac));
+        return err != ESP_OK ? err : ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "kicking " MACSTR " (%s) off the AP", MAC2STR(list.sta[target].mac),
+             ip_str ? ip_str : "ip unknown");
+    return esp_wifi_deauth_sta(aid);
+#else
+    (void)ip_str;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
