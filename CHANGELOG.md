@@ -9,6 +9,69 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.12 / app 0.3.12 — 2026-09-03
+
+### Android Auto reconnects after a dropped session
+
+- Field log (1.3.11, ~15 min into a ride): the phone reset the TCP session
+  (`aa_frame: recv errno 104`), the panel fell back to the idle screen — and
+  stayed there. The phone kept its Wi-Fi association with the head unit's AP
+  and its HFP link to the BT agent, gearhead never restarted projection by
+  itself, and the idle screen's **Connect** button did nothing: `BT_CONNECT`
+  only pages a phone whose BT link is *down*. The `AA_RECONNECT` hook meant
+  to bounce the link after a session end existed on both sides but was never
+  called.
+- The wireless flow is now restarted the way the dongles do it. When a
+  session ends, the phone's station is kicked off the SoftAP (found by its IP
+  in the DHCP leases) so its Wi-Fi state resets; if the session was *lost*
+  (socket error) and Settings → auto-connect is on, the BT agent bounces HFP
+  and re-pages the phone 1.5 s later, which makes gearhead run
+  SPP → WifiStartRequest → Wi-Fi join → TCP again. A session the phone closed
+  cleanly is taken as "the user exited Android Auto" and is not paged back.
+  **Connect** does the same kick + bounce regardless of the toggle.
+- BT agent **0.6.4** (the head unit reflashes it automatically at first
+  boot): `BT_CONNECT` with HFP already up bounces the link instead of being a
+  no-op, and the re-page after a bounce is a one-shot timer instead of the
+  auto-reconnect loop's 5 s poll.
+- Not field-tested yet. The lines to look for are `aa_reconnect: AA session
+  lost: …`, then the agent's `bouncing HFP` and `re-paging` lines, then
+  `tcp: client … connected`.
+
+### Smoother Android Auto video: display stage on core 0
+
+- The decode → convert → present chain ran serially on core 1: decode ~28 ms
+  + I420 shuffle ~17 + PPA ~16 (waiting on the hardware) + HUD ~6 ≈ 67 ms per
+  frame, a ~15 fps ceiling with core 0 two-thirds idle. Now the decoder task
+  only shuffles the picture into one of two staging buffers and a task on
+  core 0 does the PPA convert + rotate, the HUD overlay and the panel submit
+  while the next frame decodes. Bench logs: 16–17 fps sustained at 800×480,
+  with core 1 now the saturated one (`idle c1 2–7 %`).
+- The I420 → panel-layout shuffle packs 32-bit words instead of bytes
+  (19.5 → 16.8 ms/frame). It is PSRAM-bandwidth bound: splitting it across
+  both cores gained nothing and was dropped.
+- Decoder queue 2 deep instead of 4: gearhead never drops stale frames, so
+  every queued frame is a frame of touch-to-screen lag; two still keeps the
+  decoder fed across the TLS decrypt of the next message.
+- The video ack to the phone still fires after the frame is actually on the
+  panel (a fence queued behind the message's frames on the display stage), so
+  the phone keeps pacing to what is shown.
+- With the decoder no longer blocking on the PPA every frame it could starve
+  IDLE1 (task watchdog every 5 s); it now yields one tick whenever IDLE1 has
+  made no progress for a second.
+
+### Fixes and diagnostics
+
+- A video ack firing after the session had ended (frames still queued when
+  the socket dropped) used the just-freed TLS context. The ack path now checks
+  session liveness under the SSL mutex and the session exit detaches it first.
+- Release builds log compact pipeline stats every 5 s while video flows
+  (`aa_svc: rx …`, `h264_pipe: dec …`, `display_video: show …`, plus per-core
+  idle %), so field logs carry the numbers the video path is tuned from.
+- The LVGL render perf line (`display_init: render …`) went from every second
+  to every 5 s and stays silent while nothing renders — one line per second
+  filled the Logs screen's 16 KB tail in about three minutes and buried
+  everything around the drop in the field photo above.
+
 ## v1.3.11 / app 0.3.11 — 2026-09-02
 
 ### Faster firmware updates over Bluetooth
