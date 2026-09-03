@@ -39,8 +39,18 @@ static volatile uint32_t s_flush_seq;
 /* monitor_cb only fires when LVGL actually renders (something invalidated), so
  * a render-driven logger goes silent on a static screen — and that's
  * indistinguishable from a hang. Decouple it: monitor_cb just accumulates, and
- * a 1 Hz esp_timer (separate task) emits the line every second regardless. So
- * "render: 0 fps" = idle or hung (still alive), nonzero = rendering. */
+ * a periodic esp_timer (separate task) emits the line regardless of rendering.
+ *
+ * Cadence: 5 s, same as the AA video pipeline's stats (aa_svc rx / h264_pipe
+ * dec / display_video show). It was 1 s — one line every second filled the
+ * Logs screen's 16 KB tail in ~3 min and buried everything else (field photo
+ * 2026-09-03: a phone-side TCP reset with nothing but "render: 0 fps" around
+ * it). Idle windows are logged once — the line that marks the moment rendering
+ * stopped — and then suppressed until it resumes: the render watchdog below
+ * has its own line for "LVGL alive but not refreshing", so a stream of zeros
+ * added nothing. While the AA video owns the panel LVGL is paused and this
+ * logger is therefore silent by design. */
+#define DISPLAY_PERF_PERIOD_MS 5000
 static volatile uint32_t s_perf_frames;
 static volatile uint32_t s_perf_time_sum_ms;
 static volatile uint32_t s_perf_time_max_ms;
@@ -76,13 +86,24 @@ static void display_perf_timer_cb(void *arg)
     s_perf_time_max_ms = 0;
     s_perf_px_sum      = 0;
 
+    static bool was_idle;
+    if (frames == 0) {
+        if (was_idle) return;      /* still idle — the transition was logged */
+        was_idle = true;
+    } else {
+        was_idle = false;
+    }
+
     ESP_LOGI(TAG,
-             "render: %u fps | avg %ums max %ums | %uk px/frame | busy %u%%",
+             "render %us: %u fr %u.%u fps | avg %u ms max %u ms | %uk px/frame | busy %u%%",
+             (unsigned)(DISPLAY_PERF_PERIOD_MS / 1000),
              (unsigned)frames,
+             (unsigned)(frames * 1000u / DISPLAY_PERF_PERIOD_MS),
+             (unsigned)((frames * 10000u / DISPLAY_PERF_PERIOD_MS) % 10u),
              frames ? (unsigned)(tsum / frames) : 0u,
              (unsigned)tmax,
              frames ? (unsigned)((px / frames) / 1000) : 0u,
-             (unsigned)(tsum / 10));   /* tsum ms out of the ~1000 ms window */
+             (unsigned)(tsum * 100u / DISPLAY_PERF_PERIOD_MS));  /* render ms out of the window */
 }
 #endif /* DISPLAY_PERF_LOG */
 
@@ -226,19 +247,20 @@ esp_err_t display_init(void)
     {
         lv_disp_t *d = (lv_disp_t *)s_display;
         if (d && d->driver) {
-            /* 1 Hz logger, decoupled from rendering — always emits a line so an
-             * idle screen ("0 fps") is distinguishable from a hang, and we get
-             * steady-state numbers (the render-driven version only logged during
-             * boot churn). */
+            /* Periodic logger, decoupled from rendering — see the note at
+             * DISPLAY_PERF_PERIOD_MS for cadence and idle suppression. Gives
+             * steady-state numbers (the render-driven version only logged
+             * during boot churn). */
             const esp_timer_create_args_t targs = {
                 .callback = display_perf_timer_cb,
                 .name     = "disp_perf",
             };
             esp_timer_handle_t th;
             if (esp_timer_create(&targs, &th) == ESP_OK) {
-                esp_timer_start_periodic(th, 1000000);
+                esp_timer_start_periodic(th, (uint64_t)DISPLAY_PERF_PERIOD_MS * 1000);
             }
-            ESP_LOGI(TAG, "render perf monitor attached (1 Hz logger)");
+            ESP_LOGI(TAG, "render perf monitor attached (every %u s, idle suppressed)",
+                     (unsigned)(DISPLAY_PERF_PERIOD_MS / 1000));
 
             /* Confirm where LVGL's software renderer actually writes. On this
              * board the MIPI-DSI framebuffers (and the ROTATE_90 scratch buffer
