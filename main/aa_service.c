@@ -450,12 +450,17 @@ static esp_err_t build_sd_response(uint8_t *out, size_t cap, size_t *out_len)
  * Without this, decrypt was reading garbage plaintext (manifest as
  * "decrypt: out_buf full" once the 32 KiB plain_buf filled with junk) the
  * moment the touch task issued its first encrypt while main was inside
- * mbedtls_ssl_read. */
+ * mbedtls_ssl_read.
+ *
+ * Recursive so the AV ack path can hold it across "is the session still
+ * alive?" + send_encrypted (which takes it again): the ack fires from the
+ * display task up to a few frames after the recv loop has exited, and the
+ * TLS context is freed right after aa_service_run returns. */
 static SemaphoreHandle_t s_ssl_mutex;
 
 static void ensure_ssl_mutex(void)
 {
-    if (!s_ssl_mutex) s_ssl_mutex = xSemaphoreCreateMutex();
+    if (!s_ssl_mutex) s_ssl_mutex = xSemaphoreCreateRecursiveMutex();
 }
 
 static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
@@ -468,12 +473,12 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     /* Hold the ssl mutex across encrypt + frame_send so we don't interleave
      * AA frame bytes on the wire AND so we don't race the recv-loop's
      * ssl_read inside mbedtls. */
-    if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
     /* plaintext = [msg_id BE16][body] */
     uint8_t *plain = malloc(2 + body_len);
     if (!plain) {
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         return ESP_ERR_NO_MEM;
     }
     plain[0] = (uint8_t)(msg_id >> 8);
@@ -485,7 +490,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                                    cipher_buf, cipher_cap, &cipher_len);
     free(plain);
     if (err != ESP_OK) {
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         return err;
     }
 
@@ -519,7 +524,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                  channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
     }
     esp_err_t send_err = aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
-    xSemaphoreGive(s_ssl_mutex);
+    xSemaphoreGiveRecursive(s_ssl_mutex);
     return send_err;
 }
 
@@ -682,14 +687,14 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
          * (above) is intentionally outside the mutex so the touch sender
          * can keep firing while we block waiting for the next frame. */
         ensure_ssl_mutex();
-        if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+        if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
         if (is_bulk) {
             int64_t t_dec0 = esp_timer_get_time();
             err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                                  plain_buf, plain_cap, out_len);
             s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             if (err != ESP_OK) return err;
             *out_msg = plain_buf;
             *out_ch = ch;
@@ -703,7 +708,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             p->len = 0;
             p->active = true;
         } else if (!p->active) {
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             ESP_LOGE(TAG, "ch %d MIDDLE/LAST without prior FIRST", (int)ch);
             return ESP_ERR_INVALID_STATE;
         }
@@ -711,7 +716,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
          * short — aa_tls_decrypt's "out_buf full" is unreachable from here. */
         err = partial_reserve(p, cipher_len, ch);
         if (err != ESP_OK) {
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             p->active = false;
             p->len = 0;
             return err;
@@ -722,7 +727,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                              p->buf + p->len, p->cap - p->len, &got);
         s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         if (err != ESP_OK) return err;
         p->len += got;
 
@@ -958,12 +963,26 @@ typedef struct {
 static av_ack_ctx_t s_av_ack_ctx;
 static uint8_t      s_av_ack_cipher[AV_ACK_CIPHER_SIZE];
 
+/* Runs on the display task (h264_pipe's deferred-ack fence) — possibly after
+ * the session is gone: on a disconnect the frames still queued in h264_pipe
+ * and the display stage keep flowing for ~100-200 ms, and the TLS context is
+ * freed by tcp_server right after aa_service_run returns. The liveness check
+ * and the send are one critical section on s_ssl_mutex, and the exit path
+ * clears ctx->tls under the same mutex, so a late ack is a clean no-op
+ * instead of mbedtls_ssl_write on freed memory. */
 static esp_err_t av_ack_callback(void *ctx_v)
 {
     av_ack_ctx_t *ctx = (av_ack_ctx_t *)ctx_v;
-    if (!ctx || !ctx->tls) return ESP_ERR_INVALID_STATE;
-    return send_av_media_ack(ctx->sock, ctx->tls, ctx->ch,
-                             s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
+    if (!ctx) return ESP_ERR_INVALID_STATE;
+    ensure_ssl_mutex();
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (ctx->tls) {
+        err = send_av_media_ack(ctx->sock, ctx->tls, ctx->ch,
+                                s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
+    }
+    xSemaphoreGiveRecursive(s_ssl_mutex);
+    return err;
 }
 
 /* Video throughput accounting — folded into the periodic rx line (see
@@ -1479,6 +1498,14 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
 
     idr_timer_stop();
     touch_input_stop();
+    /* Detach the deferred AV acks from this session's TLS context before the
+     * caller frees it — see av_ack_callback. */
+    ensure_ssl_mutex();
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) == pdTRUE) {
+        s_av_ack_ctx.tls  = NULL;
+        s_av_ack_ctx.sock = -1;
+        xSemaphoreGiveRecursive(s_ssl_mutex);
+    }
     recv_partial_reset();
     free(cipher); free(plain); free(scratch); free(tx_cipher);
     return err;
