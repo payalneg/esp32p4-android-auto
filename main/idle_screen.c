@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include "aa_reconnect.h"
 #include "bsp/esp-bsp.h"
-#include "bt_link.h"
 #include "esp_log.h"
 #include "lvgl.h"
 
@@ -21,8 +21,8 @@ static bool      s_initialized;
 static void connect_btn_cb(lv_event_t *e)
 {
     (void)e;
-    ESP_LOGI(TAG, "Connect button tapped — paging paired phone");
-    bt_link_request_connect_now();
+    ESP_LOGI(TAG, "Connect button tapped — restarting the AA link");
+    aa_reconnect_manual();
 }
 
 esp_err_t idle_screen_init(void)

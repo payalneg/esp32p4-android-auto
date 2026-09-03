@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "wifi_manager.c"
         "tcp_server.c"
+        "aa_reconnect.c"
         "mdns_advertise.c"
         "display_init.c"
         "idle_screen.c"
