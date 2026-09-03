@@ -17,6 +17,7 @@
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "aa_overlay.h"
@@ -60,6 +61,46 @@ static uint16_t           *s_landscape_rgb;
 static size_t              s_landscape_rgb_bytes;
 static uint16_t            s_landscape_w;
 static uint16_t            s_landscape_h;
+
+/* ---- async display stage (production path) ------------------------------
+ *
+ * The decoder task (core 1) only does the CPU shuffle of the decoded I420 into
+ * one of two MCU-layout staging buffers and queues it; a dedicated task on
+ * core 0 runs the PPA convert+rotate, the HUD overlay and the panel submit,
+ * then fires the frame's completion callback (the AA ack). Before this the
+ * whole chain ran serially on core 1: decode 28 ms + shuffle 17 + PPA 16 (HW
+ * wait) + HUD 6 ≈ 67 ms/frame = 15 fps ceiling with core 0 two-thirds idle
+ * (logs/20260902-210010.log). Now core 1 is decode + shuffle (~45 ms) and
+ * core 0 PPA + HUD (~22 ms) in parallel.
+ *
+ * Two staging slots = the decoder may run one frame ahead of the display;
+ * when the display falls behind, the decoder blocks on the slot semaphore,
+ * the h264 queue fills and the recv loop back-pressures the phone — the same
+ * flow control as before, one stage further down. The shuffle is done on the
+ * decoder's side on purpose: it reads tinyh264's output picture, which the
+ * next decode may overwrite, so it must finish before the decoder continues. */
+#define STAGE_SLOTS      2
+#define DISP_Q_DEPTH     (STAGE_SLOTS + 2)   /* frames + fences */
+#define DISP_TASK_PRIO   8                   /* = decoder task; touch (10) preempts */
+#define DISP_TASK_CORE   0
+
+typedef struct {
+    int      slot;      /* staging slot, or -1 for a fence (callback only) */
+    uint16_t w, h;
+    uint32_t gen;       /* panel-ownership generation at submit time */
+    display_video_done_cb_t done_cb;
+    void    *done_ctx;
+} disp_item_t;
+
+static uint8_t          *s_stage[STAGE_SLOTS];
+static size_t            s_stage_bytes;
+static uint16_t          s_stage_w, s_stage_h;
+static SemaphoreHandle_t s_stage_free;   /* counting: free staging slots */
+static QueueHandle_t     s_disp_q;
+static TaskHandle_t      s_disp_task;
+static SemaphoreHandle_t s_draw_lock;    /* held across PPA+draw; yield takes it */
+static volatile uint32_t s_gen;          /* bumped by yield: drops queued frames */
+
 /* SIMD-accelerated I420→RGB565 converter handle from esp_image_effects.
  * Allocated lazily once we know the source resolution; reused for every
  * frame. Not thread-safe — only the single decoder task touches it. */
@@ -182,7 +223,43 @@ static void lv_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px)
  * Performance: same per-pixel CPU cost as the previous JPEG shuffle
  * (~16 ms at 800×480), but with the correct layout the PPA output is
  * geometrically right. */
-static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
+/* One output row: [C0 Y0 Y1][C1 Y2 Y3]... where C is the chroma sample for
+ * that pixel pair. Four pixel pairs = 12 output bytes = three 32-bit words
+ * built from one chroma word and two luma words — 6 memory ops instead of the
+ * 24 byte accesses of the naive loop (measured 19.5 ms/frame at 800×480 on the
+ * P4, it was the single biggest CPU cost of the show path). Little-endian
+ * packing; all three source rows and the destination must be 4-byte aligned. */
+static inline void shuffle_row_w4(const uint8_t *C, const uint8_t *Y,
+                                  uint8_t *out, int uv_w)
+{
+    const uint32_t *c32 = (const uint32_t *)C;
+    const uint32_t *y32 = (const uint32_t *)Y;
+    uint32_t *o32 = (uint32_t *)out;
+    int groups = uv_w / 4;
+    for (int g = 0; g < groups; g++) {
+        uint32_t c  = c32[g];          /* c0 | c1<<8 | c2<<16 | c3<<24 */
+        uint32_t ya = y32[2 * g];      /* y0 .. y3 */
+        uint32_t yb = y32[2 * g + 1];  /* y4 .. y7 */
+        /* [c0 y0 y1 c1] */
+        o32[3 * g]     = (c & 0x000000FFu) | ((ya & 0x0000FFFFu) << 8) | ((c & 0x0000FF00u) << 16);
+        /* [y2 y3 c2 y4] */
+        o32[3 * g + 1] = (ya >> 16) | (c & 0x00FF0000u) | ((yb & 0x000000FFu) << 24);
+        /* [y5 c3 y6 y7] */
+        o32[3 * g + 2] = ((yb >> 8) & 0x000000FFu) | ((c >> 16) & 0x0000FF00u) | (yb & 0xFFFF0000u);
+    }
+    /* Tail (uv_w not a multiple of 4 — never at 800×480, kept for safety). */
+    for (int cidx = groups * 4; cidx < uv_w; cidx++) {
+        out[cidx * 3 + 0] = C[cidx];
+        out[cidx * 3 + 1] = Y[cidx * 2];
+        out[cidx * 3 + 2] = Y[cidx * 2 + 1];
+    }
+}
+
+/* Shuffle row pairs [r2_from, r2_to) of an h-row picture (r2 counts pairs,
+ * so the full picture is [0, h/2)). Split this way so two cores can each take
+ * a band of the same frame — see display_video_submit_yuv420. */
+static void i420_to_ouyy_evyy_rows(const uint8_t *yuv, int w, int h, uint8_t *out,
+                                   int r2_from, int r2_to)
 {
     const uint8_t *Yp = yuv;
     const uint8_t *Up = yuv + (size_t)w * h;
@@ -190,18 +267,29 @@ static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
     const int uv_w  = w / 2;
     const int stride = w * 3 / 2;
 
-    for (int r2 = 0; r2 < h / 2; r2++) {
+    /* Word path needs every row start 4-byte aligned: the plane bases plus
+     * w, uv_w and stride all multiples of 4 (true for 800×480; the decoder's
+     * output buffer and our staging buffer are cache-line aligned). */
+    bool aligned = (((uintptr_t)yuv | (uintptr_t)out) & 3u) == 0 &&
+                   (w % 8) == 0 && (stride % 4) == 0;
+
+    for (int r2 = r2_from; r2 < r2_to; r2++) {
         const uint8_t *Y_even = Yp + (size_t)(r2 * 2)     * w;
         const uint8_t *Y_odd  = Yp + (size_t)(r2 * 2 + 1) * w;
         const uint8_t *U_row  = Up + (size_t)r2 * uv_w;
         const uint8_t *V_row  = Vp + (size_t)r2 * uv_w;
         uint8_t *out_even = out + (size_t)(r2 * 2)     * stride;
         uint8_t *out_odd  = out + (size_t)(r2 * 2 + 1) * stride;
+        /* Empirically confirmed on v1.3 silicon: even rows carry U,
+         * odd rows carry V — opposite of the LCD doc "OUYY/EVYY"
+         * naming hint. Geometry was correct with V/U; only colours
+         * were swapped (logs/20260512-002045.log). */
+        if (aligned) {
+            shuffle_row_w4(U_row, Y_even, out_even, uv_w);
+            shuffle_row_w4(V_row, Y_odd,  out_odd,  uv_w);
+            continue;
+        }
         for (int c = 0; c < uv_w; c++) {
-            /* Empirically confirmed on v1.3 silicon: even rows carry U,
-             * odd rows carry V — opposite of the LCD doc "OUYY/EVYY"
-             * naming hint. Geometry was correct with V/U; only colours
-             * were swapped (logs/20260512-002045.log). */
             out_even[c * 3 + 0] = U_row[c];
             out_even[c * 3 + 1] = Y_even[c * 2];
             out_even[c * 3 + 2] = Y_even[c * 2 + 1];
@@ -212,6 +300,11 @@ static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
     }
 }
 
+static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
+{
+    i420_to_ouyy_evyy_rows(yuv, w, h, out, 0, h / 2);
+}
+
 static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
                                       esp_lcd_dpi_panel_event_data_t *edata,
                                       void *user_ctx)
@@ -220,6 +313,8 @@ static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
     if (s_refresh_sem) xSemaphoreGiveFromISR(s_refresh_sem, &hp);
     return hp == pdTRUE;
 }
+
+static void disp_task(void *arg);
 
 esp_err_t display_video_init(void)
 {
@@ -272,13 +367,31 @@ esp_err_t display_video_init(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "ready (panel %dx%d native, user %dx%d landscape)",
-             PANEL_NATIVE_W, PANEL_NATIVE_H, USER_W, USER_H);
+    s_stage_free = xSemaphoreCreateCounting(STAGE_SLOTS, STAGE_SLOTS);
+    s_disp_q     = xQueueCreate(DISP_Q_DEPTH, sizeof(disp_item_t));
+    s_draw_lock  = xSemaphoreCreateMutex();
+    if (!s_stage_free || !s_disp_q || !s_draw_lock ||
+        xTaskCreatePinnedToCore(disp_task, "aa_disp", 8192, NULL,
+                                DISP_TASK_PRIO, &s_disp_task, DISP_TASK_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "display stage init failed");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "ready (panel %dx%d native, user %dx%d landscape, "
+             "display stage on core %d)",
+             PANEL_NATIVE_W, PANEL_NATIVE_H, USER_W, USER_H, DISP_TASK_CORE);
     return ESP_OK;
 }
 
 void display_video_yield_panel(void)
 {
+    /* Let a frame that is mid-PPA/draw on the display task finish, and make
+     * every frame still queued (or submitted from now on under the old
+     * generation) a no-op — otherwise a stale video frame could land on the
+     * panel right after LVGL took it back. */
+    bool locked = s_draw_lock &&
+                  xSemaphoreTake(s_draw_lock, pdMS_TO_TICKS(200)) == pdTRUE;
+    s_gen++;
     if (s_adapter_paused) {
         esp_lv_adapter_resume();
         s_adapter_paused = false;
@@ -286,6 +399,7 @@ void display_video_yield_panel(void)
     }
     /* Allow next AA entry to attempt pause once again. */
     s_pause_attempted = false;
+    if (locked) xSemaphoreGive(s_draw_lock);
 }
 
 /* When non-zero, skip PPA and instead fill s_fb[0] with a hard-coded
@@ -1096,4 +1210,196 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
     }
     return ESP_OK;
 #endif  /* DISPLAY_TEST_PATTERN */
+}
+
+/* ======================= async display stage (production) =================
+ *
+ * display_video_show_yuv420 above is the single-task reference path and the
+ * home of the experimental DISPLAY_* variants; the decoder now goes through
+ * display_video_submit_yuv420 + disp_task instead (see the note at the
+ * STAGE_SLOTS definition). Same output, same buffers, same PPA config — only
+ * the PPA/HUD/draw half runs on core 0 concurrently with the next decode. */
+
+/* Shared with display_video_show_yuv420's VESC-mode / first-frame handling:
+ * returns false when the frame must be dropped (LVGL owns the panel). */
+static bool take_panel_for_video(void)
+{
+    if (ui_mode_get() == UI_MODE_VESC) {
+        if (s_adapter_paused) {
+            esp_lv_adapter_resume();
+            s_adapter_paused = false;
+            ESP_LOGI(TAG, "VESC mode — resumed LVGL worker, frames dropped");
+        }
+        s_pause_attempted = false;
+        /* Drop path does no blocking work; yield a tick so IDLE0 never
+         * starves under a flood of dropped frames (TWDT, observed). */
+        vTaskDelay(1);
+        return false;
+    }
+    if (!s_adapter_paused && !s_pause_attempted) {
+        if (!s_refresh_sem) s_refresh_sem = xSemaphoreCreateBinary();
+        if (esp_lv_adapter_pause(2000) == ESP_OK) {
+            s_adapter_paused = true;
+            ESP_LOGI(TAG, "paused LVGL worker; panel ours");
+        } else {
+            ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
+        }
+        s_pause_attempted = true;
+    }
+    return true;
+}
+
+static bool stage_alloc(uint16_t w, uint16_t h)
+{
+    size_t need = ALIGN_UP((size_t)w * h * 3 / 2, s_cache_line);
+    if (s_stage[0] && need <= s_stage_bytes && w == s_stage_w && h == s_stage_h) {
+        return true;
+    }
+    /* Resolution change mid-session is not a thing AA does, but be safe:
+     * only reallocate when no slot is in flight (all STAGE_SLOTS free). */
+    for (int i = 0; i < STAGE_SLOTS; i++) {
+        free(s_stage[i]);
+        s_stage[i] = heap_caps_aligned_calloc(s_cache_line, 1, need, MALLOC_CAP_SPIRAM);
+        if (!s_stage[i]) {
+            ESP_LOGE(TAG, "staging slot %d alloc %u failed", i, (unsigned)need);
+            return false;
+        }
+    }
+    s_stage_bytes = need;
+    s_stage_w = w;
+    s_stage_h = h;
+    return true;
+}
+
+esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
+                                      uint16_t src_w, uint16_t src_h,
+                                      display_video_done_cb_t done_cb,
+                                      void *done_ctx)
+{
+    if (!s_panel || !s_ppa || !s_disp_q) return ESP_ERR_INVALID_STATE;
+    if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
+    if (!take_panel_for_video()) return ESP_ERR_INVALID_STATE;
+
+    /* Back-pressure point: both staging slots busy → the display is two
+     * frames behind → wait here (the h264 queue and then the recv loop fill
+     * up behind us, exactly as the serial path did on a slow frame). */
+    xSemaphoreTake(s_stage_free, portMAX_DELAY);
+    if (!stage_alloc(src_w, src_h)) {
+        xSemaphoreGive(s_stage_free);
+        return ESP_ERR_NO_MEM;
+    }
+    /* Any slot the display task is not holding is free; find it. Slots are
+     * handed back in completion order, so simple round-robin is exact. */
+    static int s_next_slot;
+    int slot = s_next_slot;
+    s_next_slot = (s_next_slot + 1) % STAGE_SLOTS;
+
+    /* The shuffle stays on this core, whole. Tried (2026-09-02, logs/
+     * 20260902-214324.log): splitting the rows with a helper task on core 0
+     * — no gain at all (still 17.7 fps) while core 0 went from 29 % idle to
+     * 6 %. The shuffle is PSRAM-bandwidth-bound and PSRAM is shared by both
+     * cores; running two copies concurrently just makes each one slower.
+     * Same reason the word-packed rewrite only bought 19.5 → 16.8 ms. */
+    int64_t t0 = esp_timer_get_time();
+    i420_to_ouyy_evyy(yuv, src_w, src_h, s_stage[slot]);
+    esp_cache_msync(s_stage[slot], s_stage_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    s_aa_stats.imgfx_us += (uint64_t)(esp_timer_get_time() - t0);
+
+    disp_item_t it = {
+        .slot = slot, .w = src_w, .h = src_h, .gen = s_gen,
+        .done_cb = done_cb, .done_ctx = done_ctx,
+    };
+    xQueueSend(s_disp_q, &it, portMAX_DELAY);
+    return ESP_OK;
+}
+
+esp_err_t display_video_fence(display_video_done_cb_t done_cb, void *done_ctx)
+{
+    if (!s_disp_q || !done_cb) return ESP_ERR_INVALID_ARG;
+    disp_item_t it = { .slot = -1, .gen = s_gen, .done_cb = done_cb, .done_ctx = done_ctx };
+    xQueueSend(s_disp_q, &it, portMAX_DELAY);
+    return ESP_OK;
+}
+
+/* PPA convert+rotate → HUD → panel submit for one staged frame. Mirrors the
+ * DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420 block of display_video_show_yuv420. */
+static void disp_present(const disp_item_t *it)
+{
+    int idx = s_fb_idx;
+    s_fb_idx = (s_fb_idx + 1) % s_fb_count;
+
+    int64_t t0 = esp_timer_get_time();
+    size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2, s_cache_line);
+    ppa_srm_oper_config_t op = {
+        .in = {
+            .buffer  = s_stage[it->slot],
+            .pic_w   = it->w,
+            .pic_h   = it->h,
+            .block_w = it->w,
+            .block_h = it->h,
+            .srm_cm  = PPA_SRM_COLOR_MODE_YUV420,
+            .yuv_range = COLOR_RANGE_LIMIT,
+            .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
+        },
+        .out = {
+            .buffer      = s_fb[idx],
+            .buffer_size = out_buf_size,
+            .pic_w       = PANEL_NATIVE_W,
+            .pic_h       = PANEL_NATIVE_H,
+            .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .rotation_angle = display_flip_active() ? PPA_SRM_ROTATION_ANGLE_90
+                                                : PPA_SRM_ROTATION_ANGLE_270,
+        .scale_x = 1.0f,
+        .scale_y = 1.0f,
+        .mode    = PPA_TRANS_MODE_BLOCKING,
+    };
+    esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ppa yuv420+rot: %s", esp_err_to_name(err));
+        return;
+    }
+    int64_t t_ppa_end = esp_timer_get_time();
+
+    esp_cache_msync(s_fb[idx], out_buf_size,
+                    ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    aa_overlay_draw((uint16_t *)s_fb[idx]);
+    esp_cache_msync(s_fb[idx], out_buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    int64_t t_overlay_end = esp_timer_get_time();
+
+    err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, PANEL_NATIVE_W, PANEL_NATIVE_H, s_fb[idx]);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "panel_draw_bitmap (yuv420+ppa): %s", esp_err_to_name(err));
+    }
+    int64_t t_draw_end = esp_timer_get_time();
+
+    s_aa_stats.frames++;
+    s_aa_stats.ppa_us     += (uint64_t)(t_ppa_end     - t0);
+    s_aa_stats.overlay_us += (uint64_t)(t_overlay_end - t_ppa_end);
+    s_aa_stats.draw_us    += (uint64_t)(t_draw_end    - t_overlay_end);
+    /* "total" = this task's per-frame wall time; the shuffle is accounted
+     * on the decoder side (imgfx_us) and shown separately. */
+    s_aa_stats.total_us   += (uint64_t)(t_draw_end    - t0);
+    aa_stats_log_periodic();
+}
+
+static void disp_task(void *arg)
+{
+    (void)arg;
+    disp_item_t it;
+    for (;;) {
+        if (xQueueReceive(s_disp_q, &it, portMAX_DELAY) != pdTRUE) continue;
+        if (it.slot >= 0) {
+            xSemaphoreTake(s_draw_lock, portMAX_DELAY);
+            /* Drop (don't draw) if the panel went back to LVGL since this
+             * frame was staged — mode flip or session end bumped the
+             * generation — or the mode is VESC right now. */
+            if (it.gen == s_gen && ui_mode_get() == UI_MODE_AA) {
+                disp_present(&it);
+            }
+            xSemaphoreGive(s_draw_lock);
+            xSemaphoreGive(s_stage_free);
+        }
+        if (it.done_cb) it.done_cb(it.done_ctx);
+    }
 }

@@ -23,8 +23,14 @@ static const char *TAG = "h264_pipe";
  * iterations rather than being starved by them. */
 #define H264_TASK_PRIORITY     8
 
-/* Decoder queue depth — see the note at xQueueCreate in h264_pipe_init. */
-#define H264_QUEUE_DEPTH       4
+/* Decoder queue depth. Latency = every frame the phone has in flight on our
+ * side: this queue + the 2 display-stage slots + the one being presented.
+ * gearhead does not drop stale frames (a 32-deep queue once measured as 3 s
+ * of touch→video lag, see h264_pipe_init), so when the phone outruns the
+ * decoder — any motion — the queue sits full and each slot is one frame of
+ * lag. Two is enough to keep the decoder fed across the recv loop's TLS
+ * decrypt of the next frame; anything more only adds lag. */
+#define H264_QUEUE_DEPTH       2
 
 /* In VESC mode (LVGL dashboard owns the panel) we still decode every frame —
  * H.264 is stateful and dropping P-frames here would leave the decoder unable
@@ -138,9 +144,13 @@ static void log_stats_periodic(void)
     window_start_us    = now;
 }
 
-static void decode_and_show(const uint8_t *data, size_t len)
+/* Decode one AA message worth of NAL units. Every picture it yields is
+ * handed to the display stage; returns the number of frames queued there
+ * (0 = nothing to show, or LVGL owns the panel and the frame was dropped). */
+static int decode_and_show(const uint8_t *data, size_t len)
 {
     static bool seen_resolution;
+    int queued = 0;
 
     esp_h264_dec_in_frame_t  in  = {
         .raw_data = { (uint8_t *)data, (uint32_t)len },
@@ -178,7 +188,13 @@ static void decode_and_show(const uint8_t *data, size_t len)
                 seen_resolution = true;
             }
             if (have_res) {
-                display_video_show_yuv420(out.outbuf, res.width, res.height);
+                /* Shuffles out.outbuf into a staging slot right here (the
+                 * next decode may overwrite it), then the core-0 display
+                 * task does PPA + HUD + panel while we decode the next one. */
+                if (display_video_submit_yuv420(out.outbuf, res.width, res.height,
+                                                NULL, NULL) == ESP_OK) {
+                    queued++;
+                }
             }
         }
 
@@ -187,6 +203,52 @@ static void decode_and_show(const uint8_t *data, size_t len)
         in.raw_data.len    -= in.consume;
         in.consume = 0;
     }
+    return queued;
+}
+
+/* Ack trampoline for frames that went through the display stage: fires on
+ * the display task after the message's last frame has been presented, so
+ * the phone is still paced by what is actually on the panel. */
+typedef struct {
+    h264_pipe_ack_cb_t cb;
+    void              *ctx;
+} deferred_ack_t;
+
+/* Small ring so a fence can carry its own ack pointer without heap traffic;
+ * a few more slots than the display queue can hold. */
+static deferred_ack_t s_acks[8];
+static unsigned       s_ack_next;
+
+static void deferred_ack_cb(void *arg)
+{
+    deferred_ack_t *a = (deferred_ack_t *)arg;
+    esp_err_t e = a->cb(a->ctx);
+    if (e != ESP_OK) ESP_LOGW(TAG, "ack cb returned %s", esp_err_to_name(e));
+}
+
+/* With the display stage on core 0 this task no longer blocks on the PPA
+ * every frame, so under a steady stream it is runnable back-to-back at prio
+ * 8 and IDLE1 never gets the CPU — the task watchdog then complains about
+ * IDLE1 every 5 s (seen in logs/20260902-213235.log). Once IDLE1 has made no
+ * progress for a second, sleep one tick so it can feed the watchdog (and free
+ * any task deleted on this core). Costs ≤10 ms per second of saturation. */
+static void core1_idle_guard(void)
+{
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    static uint32_t last_idle;
+    static int64_t  last_change_us;
+    uint32_t idle = (uint32_t)ulTaskGetIdleRunTimeCounterForCore(1);
+    int64_t  now  = esp_timer_get_time();
+    if (idle != last_idle || last_change_us == 0) {
+        last_idle = idle;
+        last_change_us = now;
+        return;
+    }
+    if (now - last_change_us > 1000000) {
+        vTaskDelay(1);
+        last_change_us = esp_timer_get_time();
+    }
+#endif
 }
 
 static void decoder_task(void *arg)
@@ -196,14 +258,27 @@ static void decoder_task(void *arg)
     int64_t last_ack_us = 0;
     while (true) {
         if (xQueueReceive(s_queue, &it, portMAX_DELAY) != pdTRUE) continue;
+        core1_idle_guard();
         /* Depth right after dequeue: items still waiting behind this one.
          * A persistently full queue means push is paying the warn cost on
          * every frame; a one-off spike means we just had a burst. */
         uint32_t depth = (uint32_t)uxQueueMessagesWaiting(s_queue);
         if (depth > s_queue_hwm) s_queue_hwm = depth;
-        decode_and_show(it.buf, it.len);
+        int queued = decode_and_show(it.buf, it.len);
         free(it.buf);
-        if (it.ack_cb) {
+        if (it.ack_cb && queued > 0) {
+            /* Frames are on their way to the panel via the display task:
+             * ack from there, after the last one is presented (a fence is
+             * processed in order behind the frames). The ring is deeper
+             * than the display queue, so the slot can't be reused while
+             * its fence is still pending. */
+            deferred_ack_t *a = &s_acks[s_ack_next++ % 8];
+            a->cb  = it.ack_cb;
+            a->ctx = it.ack_ctx;
+            display_video_fence(deferred_ack_cb, a);
+        } else if (it.ack_cb) {
+            /* Nothing reached the display (SPS/PPS-only message, or the
+             * VESC dashboard owns the panel and the frame was dropped). */
             /* VESC dashboard active → pace acks to 5 fps so phone backs
              * off via max_unacked. See VESC_ACK_INTERVAL_US comment above. */
             if (ui_mode_get() == UI_MODE_VESC) {
