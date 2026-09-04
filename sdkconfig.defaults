@@ -92,6 +92,18 @@ CONFIG_ESP_WIFI_TX_BUFFER_TYPE=0
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 
+# lwIP TCP receive window for the AA video socket. The IDF default of 4 MSS
+# (5760 B) caps throughput at WND/RTT: fine on the bench (RTT ~3 ms), but in
+# the field — phone in a pocket, 2.4 GHz shared with BT, SDIO hop to the C6 —
+# RTT sits around 25-30 ms and the stream starves at ~200 KB/s: 31 KiB key
+# frames took 6 round trips each and gearhead dropped to 5 fps with the P4
+# idle (2026-09-04 ride, `q hwm 0`, `tcp 4.5 s` of 5 s in recv). 16 MSS gives
+# ~7 Mbit/s at that RTT while still holding only 1-4 frames when the P4 is
+# the bottleneck, so touch→video latency stays put. RECVMBOX per the Kconfig
+# help: WND/MSS + 2.
+CONFIG_LWIP_TCP_WND_DEFAULT=23040
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=18
+
 # ===== VESC CAN pins =====
 # Wired on this board: GPIO 48 = TX → SN65HVD230 D, GPIO 47 = RX ← R.
 # The Kconfig defaults (20/24) collide with bt_agent (24) and other BSP
