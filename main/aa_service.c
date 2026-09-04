@@ -27,6 +27,8 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_PING_RESPONSE       0x000c
 #define AA_MSG_NAV_FOCUS_REQ       0x000d
 #define AA_MSG_NAV_FOCUS_RESP      0x000e
+#define AA_MSG_SHUTDOWN_REQ        0x000f   /* ByeByeRequest: phone is leaving on purpose */
+#define AA_MSG_SHUTDOWN_RESP       0x0010   /* ByeByeResponse (empty) */
 #define AA_MSG_AUDIO_FOCUS_REQ     0x0012
 #define AA_MSG_AUDIO_FOCUS_RESP    0x0013
 
@@ -852,6 +854,43 @@ static esp_err_t handle_channel_open(int sock, aa_tls_t *tls,
     return err;
 }
 
+/* ShutdownRequest (aasdk name; "ByeByeRequest" in gearhead's own logs) is
+ * the phone saying it is ending the session ON PURPOSE — the user tapped
+ * Exit in Android Auto, or the phone is switching to another car. Everything
+ * else that ends a session (a FIN with no ShutdownRequest before it, an RST,
+ * a dead link) is a loss the phone did not choose, and the reconnect logic
+ * in tcp_server / aa_reconnect pages the phone back for those. Before this
+ * was handled, every clean FIN counted as "the user exited", so a session
+ * that died with the Wi-Fi link still up (gearhead's own read timeout,
+ * gearhead killed by the OS) left the head unit waiting for a Connect tap.
+ * Reset at the start of every aa_service_run. */
+static volatile int  s_peer_shutdown_reason = -1;
+
+bool aa_service_peer_requested_shutdown(void)
+{
+    return s_peer_shutdown_reason >= 0;
+}
+
+static esp_err_t handle_shutdown_request(int sock, aa_tls_t *tls,
+                                         const uint8_t *body, size_t body_len,
+                                         uint8_t *cipher_buf, size_t cipher_cap)
+{
+    /* ShutdownRequest{ reason (enum, field 1) } — aasdk knows NONE=0 /
+     * QUIT=1; gearhead has a few more (device switch, ...). Logged only. */
+    size_t pos = 0;
+    pb_field_t f;
+    uint64_t reason = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.wire == 0 && f.field == 1) reason = f.varint;
+    }
+    s_peer_shutdown_reason = (int)reason;
+    ESP_LOGI(TAG, "phone sent ShutdownRequest (reason %d) — ending the session, "
+                  "not paging it back", (int)reason);
+    /* Same as openauto: answer ShutdownResponse, then close from our side. */
+    return send_encrypted(sock, tls, AA_CHANNEL_CONTROL, AA_MSG_SHUTDOWN_RESP,
+                          NULL, 0, cipher_buf, cipher_cap);
+}
+
 static esp_err_t handle_ping(int sock, aa_tls_t *tls,
                              const uint8_t *body, size_t body_len,
                              uint8_t *cipher_buf, size_t cipher_cap)
@@ -1373,6 +1412,7 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
     /* Drop any reassembly leftovers from a previous session — a TCP reconnect
      * shouldn't carry over half-finished video fragments. */
     recv_partial_reset();
+    s_peer_shutdown_reason = -1;
 
     touch_send_ctx_t touch_ctx = { .sock = sock, .tls = tls, .cipher = tx_cipher };
     if (touch_input_start(touch_send_event, &touch_ctx) != ESP_OK) {
@@ -1429,6 +1469,16 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             case AA_MSG_NAV_FOCUS_REQ:
                 err = handle_nav_focus(sock, tls, body, body_len,
                                        cipher, CIPHER_BUF_SIZE);
+                break;
+            case AA_MSG_SHUTDOWN_REQ:
+                err = handle_shutdown_request(sock, tls, body, body_len,
+                                              cipher, CIPHER_BUF_SIZE);
+                if (err == ESP_OK) {
+                    /* Response is out; leave the loop the way a peer close
+                     * does (tcp_server maps this to "closed by the phone"). */
+                    err = ESP_ERR_INVALID_STATE;
+                    goto done;
+                }
                 break;
             default:
                 ESP_LOGW(TAG, "control msg 0x%04x — not handled yet", msg_id);
@@ -1509,6 +1559,7 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             break;
         }
     }
+done:
 
     idr_timer_stop();
     touch_input_stop();

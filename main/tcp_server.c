@@ -36,10 +36,15 @@ typedef enum {
 } session_end_t;
 
 /* How the client went away decides what the reconnect logic does next: a
- * phone that closed cleanly most likely had the user exit Android Auto, and
- * paging it back would undo that; a lost session is restarted. aa_frame_recv
- * maps recv()==0 (FIN) to ESP_ERR_INVALID_STATE and recv errors (RST,
- * timeouts) to ESP_FAIL, and aa_service_run passes that straight through. */
+ * phone that said goodbye (ShutdownRequest, the user exited Android Auto or
+ * switched cars) is left alone — paging it back would undo that; anything
+ * else is a LOST session and gets restarted. A bare FIN is NOT "the user
+ * exited": gearhead closes the socket cleanly on its own read timeout, when
+ * the OS kills it, and when it restarts projection after a wireless-setup
+ * re-run — none of those are the user's choice. aa_frame_recv maps
+ * recv()==0 (FIN) to ESP_ERR_INVALID_STATE and recv errors (RST, keepalive
+ * abort, receive timeout) to ESP_FAIL; aa_service_run passes that through
+ * and records whether a ShutdownRequest preceded the close. */
 static session_end_t client_loop(int sock)
 {
     /* aa_tls_t is ~16 KiB — heap, not stack. */
@@ -65,7 +70,58 @@ static session_end_t client_loop(int sock)
 
     aa_tls_deinit(tls);
     free(tls);
-    return (err == ESP_ERR_INVALID_STATE) ? SESSION_PEER_CLOSED : SESSION_LOST;
+    /* The goodbye counts even if our ShutdownResponse failed to go out — the
+     * phone had already decided to leave. */
+    (void)err;
+    return aa_service_peer_requested_shutdown() ? SESSION_PEER_CLOSED : SESSION_LOST;
+}
+
+/* Dead-peer detection on the AA socket. Without it a phone that drops off
+ * the AP without a word — out of range, 2.4 GHz interference, pocket — left
+ * recv() blocked forever: nothing arrives, we send nothing unprompted, so
+ * lwIP never retransmits and never times out. The head unit then sat in a
+ * "live" session indefinitely: no idle screen, the BT agent held off air,
+ * new phone connections queued in the listen backlog with nobody to accept
+ * them, and a Connect tap (after a VESC→AA toggle) went to the dead touch
+ * channel. That is the "Connect does nothing after the link dropped" from
+ * the field. Only a reboot recovered it.
+ *
+ * TCP keepalive probes the phone's kernel after AA_KEEPALIVE_IDLE_S of
+ * silence and aborts the socket after KEEPCNT unanswered probes (~14 s) —
+ * works even when gearhead itself is idle. The receive timeout is the
+ * backstop for a phone whose kernel still answers probes while gearhead is
+ * hung: gearhead pings us every few seconds and streams video besides, so a
+ * live session is never quiet this long (its own read timeout is ~25 s).
+ * The send timeout bounds the ack/ping writes, which otherwise block the
+ * display task on a zero window for as long as the peer stays half-alive. */
+#define AA_KEEPALIVE_IDLE_S     5
+#define AA_KEEPALIVE_INTVL_S    3
+#define AA_KEEPALIVE_CNT        3
+#define AA_RECV_TIMEOUT_S       30
+#define AA_SEND_TIMEOUT_S       15
+
+static void arm_dead_peer_detection(int sock)
+{
+    int yes   = 1;
+    int idle  = AA_KEEPALIVE_IDLE_S;
+    int intvl = AA_KEEPALIVE_INTVL_S;
+    int cnt   = AA_KEEPALIVE_CNT;
+    struct timeval rto = { .tv_sec = AA_RECV_TIMEOUT_S };
+    struct timeval sto = { .tv_sec = AA_SEND_TIMEOUT_S };
+    bool ok = true;
+    ok &= setsockopt(sock, SOL_SOCKET,  SO_KEEPALIVE,  &yes,   sizeof(yes))   == 0;
+    ok &= setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof(idle))  == 0;
+    ok &= setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl)) == 0;
+    ok &= setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof(cnt))   == 0;
+    ok &= setsockopt(sock, SOL_SOCKET,  SO_RCVTIMEO,   &rto,   sizeof(rto))   == 0;
+    ok &= setsockopt(sock, SOL_SOCKET,  SO_SNDTIMEO,   &sto,   sizeof(sto))   == 0;
+    if (!ok) {
+        ESP_LOGW(TAG, "dead-peer detection: setsockopt errno %d — a silent drop "
+                      "may hang the session", errno);
+    } else {
+        ESP_LOGI(TAG, "keepalive %d/%d/%d s, recv timeout %d s, send timeout %d s",
+                 idle, intvl, cnt, AA_RECV_TIMEOUT_S, AA_SEND_TIMEOUT_S);
+    }
 }
 
 /* gearhead restarts projection by itself whenever it re-runs the wireless
@@ -151,12 +207,16 @@ static void accept_task(void *arg)
         if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) != 0) {
             ESP_LOGW(TAG, "TCP_NODELAY: errno %d", errno);
         }
+        arm_dead_peer_detection(sock);
 
         session_end_t ended = client_loop(sock);
 
         shutdown(sock, SHUT_RDWR);
         close(sock);
-        ESP_LOGI(TAG, "client closed");
+        ESP_LOGI(TAG, "client closed (%s)",
+                 ended == SESSION_PEER_CLOSED ? "phone said goodbye"
+                 : ended == SESSION_LOST      ? "session lost"
+                                             : "no session");
 
         /* Phone is gone — pry the panel back from the video sink (it had
          * paused LVGL on the first frame) and put up the idle "Waiting
