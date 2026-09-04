@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_rom_crc.h"
 #include "esp_clk_tree.h"
 #include "esp_private/esp_clk.h"
 
@@ -25,6 +26,7 @@ struct h264dec {
     storage_t     *st;
     const uint8_t *last_out;        /* data pointer of the previous output picture */
     uint32_t       content_id;
+    bool           verify;
     h264dec_stats_t stats;
 };
 
@@ -165,6 +167,13 @@ h264dec_status_t h264dec_decode(h264dec_t *dec, const uint8_t *buf, size_t len,
         pic->content_id = dec->content_id;
         pic->unchanged  = unchanged;
         pic->version    = g_h264bsd_pic_version;
+        pic->crc        = 0;
+        if (dec->verify) {
+            u32 bytes = st->picSizeInMbs * 384;   /* Y + Cb + Cr, 384 B/MB */
+            pic->crc = esp_rom_crc32_le(0, out->data, bytes);
+            ESP_LOGI(TAG, "verify: pic v%u crc %08x%s", (unsigned)pic->version,
+                     (unsigned)pic->crc, unchanged ? " (unchanged)" : "");
+        }
         dec->last_out   = out->data;
         return H264DEC_PIC;
     }
@@ -193,6 +202,11 @@ bool h264dec_changed_since(h264dec_t *dec, uint32_t from, uint32_t to,
 {
     (void)dec;
     return h264bsdDirtyChangedSince(from, to, (u32 *)mask, (u32)words) != 0;
+}
+
+void h264dec_set_verify(h264dec_t *dec, bool on)
+{
+    if (dec) dec->verify = on;
 }
 
 void h264dec_stats_take(h264dec_t *dec, h264dec_stats_t *out)

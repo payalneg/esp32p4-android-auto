@@ -14,6 +14,7 @@
 #include "esp_h264_types.h"
 #endif
 #include "esp_log.h"
+#include "esp_rom_crc.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -63,6 +64,7 @@ static esp_h264_dec_param_handle_t s_dec_param;
 #endif
 static QueueHandle_t               s_queue;
 static TaskHandle_t                s_task;
+static bool                        s_verify;   /* per-frame CRC A/B (both decoders) */
 
 /* Stats — one INFO line per STATS_WINDOW_US from the decoder task while
  * frames flow (DEBUG is compiled out of release builds and the pipeline is
@@ -287,6 +289,11 @@ static int decode_and_show(const uint8_t *data, size_t len)
                          res.width, res.height, (unsigned)out.out_size);
                 seen_resolution = true;
             }
+            if (s_verify) {
+                static uint32_t s_pv;
+                uint32_t crc = esp_rom_crc32_le(0, out.outbuf, out.out_size);
+                ESP_LOGI(TAG, "verify: pic v%u crc %08x", (unsigned)(++s_pv), (unsigned)crc);
+            }
             if (have_res) {
                 /* Shuffles out.outbuf into a staging slot right here (the
                  * next decode may overwrite it), then the core-0 display
@@ -471,6 +478,14 @@ esp_err_t h264_pipe_init(void)
 
     ESP_LOGI(TAG, "decoder ready (async, queue=%d, ack-on-display)", H264_QUEUE_DEPTH);
     return ESP_OK;
+}
+
+void h264_pipe_set_verify(bool on)
+{
+    s_verify = on;
+#if CONFIG_H264DEC_OWN
+    if (s_dec) h264dec_set_verify(s_dec, on);
+#endif
 }
 
 void h264_pipe_push(const uint8_t *data, size_t len,

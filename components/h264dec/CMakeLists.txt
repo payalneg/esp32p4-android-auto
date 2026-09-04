@@ -16,7 +16,7 @@ idf_component_register(SRCS ${H264BSD_SRCS} "h264dec.c"
 # The rest of the firmware is on -Og; the decoder is the one place where the
 # optimiser is the point. Hantro's code was written for lint, not -Wall.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    H264BSD_ESP_FASTPATH=1
+    $<$<BOOL:${CONFIG_H264DEC_FASTPATH}>:H264BSD_ESP_FASTPATH=1>
     _ERROR_PRINT=1
     $<$<BOOL:${CONFIG_H264DEC_STATS}>:H264BSD_ESP_STATS=1>)
 target_compile_options(${COMPONENT_LIB} PRIVATE

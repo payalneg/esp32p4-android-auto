@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,10 @@
 typedef esp_err_t (*h264_pipe_ack_cb_t)(void *ctx);
 
 esp_err_t h264_pipe_init(void);
+
+/* Turn on per-frame CRC logging in the decoder (own decoder only; no-op on
+ * the prebuilt). Used by the phone-free `playclip` self-test. */
+void h264_pipe_set_verify(bool on);
 
 /* Enqueue `data..data+len`. Decoder task fires ack_cb(ack_ctx) once the
  * frame has been displayed. Blocks if the queue is somehow full (never

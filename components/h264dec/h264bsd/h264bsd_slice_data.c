@@ -97,9 +97,9 @@ u64 g_h264bsd_cyc_parse, g_h264bsd_cyc_residual, g_h264bsd_cyc_mc,
 #define CYC() 0u
 #endif
 
-#ifdef H264BSD_ESP_FASTPATH
 u32 g_h264bsd_pic_aliased;
 u32 g_h264bsd_pic_copied;
+#ifdef H264BSD_ESP_FASTPATH
 
 /* Make the current picture hold the reference's pixels. With one reference
  * frame the DPB's sliding window drops the old reference the moment this

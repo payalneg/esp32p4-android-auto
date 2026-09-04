@@ -63,3 +63,4 @@ Super_VESC_Display/lvgl-simulator/dashboard_themes_auto.c
 # taken before big layout edits. The live Super_VESC_Display.guiguider IS
 # tracked; these are multi-MB binary duplicates of it.
 Super_VESC_Display/*.guiguider.*.bak
+main/aa_selftest.h264

@@ -1064,14 +1064,17 @@ void GetPredictionMv(mv_t *mv, interNeighbour_t *a, u32 refIndex)
 
 
 
-#ifdef H264BSD_ESP_FASTPATH
-/*------------------------------------------------------------------------------
-    ESP32-P4: P_Skip / zero-MV copy path (see h264bsd_esp.h)
-------------------------------------------------------------------------------*/
+/* Counters live unconditionally so h264dec.c links even with the fast paths
+ * compiled out (A/B correctness build, CONFIG_H264DEC_FASTPATH=n). */
 u32 g_h264bsd_skip_zero_mbs;
 u8 *g_h264bsd_skip_ref;
 u32 g_h264bsd_skip_ref_mixed;
 u32 g_h264bsd_mb_fastpath;
+
+#ifdef H264BSD_ESP_FASTPATH
+/*------------------------------------------------------------------------------
+    ESP32-P4: P_Skip / zero-MV copy path (see h264bsd_esp.h)
+------------------------------------------------------------------------------*/
 
 void h264bsdCopyMbFromRef(image_t *currImage, const image_t *refImage,
                           u32 colPx, u32 rowPx)

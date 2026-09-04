@@ -23,6 +23,11 @@
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
 #include "touch_input.h"
+#if CONFIG_AA_VIDEO_SELFTEST
+#include "h264_pipe.h"
+#include "ui_mode.h"
+#include "esp_timer.h"
+#endif
 
 static const char *TAG = "dbg_uart";
 
@@ -334,6 +339,98 @@ static int cmd_tasks(int argc, char **argv)
 #endif
 }
 
+#if CONFIG_AA_VIDEO_SELFTEST
+/* Embedded 800x480 baseline Annex-B clip (main/aa_selftest.h264). Regenerate:
+ *   ffmpeg -f lavfi -i testsrc=size=800x480:rate=30:duration=1.5 \
+ *          -f lavfi -i color=black:s=800x480:r=30:d=1.5 \
+ *          -filter_complex "[1:v]drawbox=x='mod(t*260,760)':y=200:w=40:h=40:\
+ *          color=red@1:t=fill[mv];[0:v][mv]concat=n=2:v=1[o]" -map "[o]" \
+ *          -c:v libx264 -profile:v baseline \
+ *          -x264-params bframes=0:cabac=0:ref=1:keyint=45:repeat-headers=1 \
+ *          -pix_fmt yuv420p -f h264 main/aa_selftest.h264 */
+extern const uint8_t clip_start[] asm("_binary_aa_selftest_h264_start");
+extern const uint8_t clip_end[]   asm("_binary_aa_selftest_h264_end");
+
+/* Start offset of the next NAL's payload (past its start code), or -1. */
+static int next_nal(const uint8_t *b, int n, int from, int *sc_len)
+{
+    for (int i = from; i + 3 < n; i++) {
+        if (b[i] == 0 && b[i+1] == 0 && b[i+2] == 1) { *sc_len = 3; return i; }
+        if (b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1) { *sc_len = 4; return i; }
+    }
+    return -1;
+}
+
+static void feed_clip(int loops)
+{
+    const uint8_t *clip = clip_start;
+    int clip_len = (int)(clip_end - clip_start);
+    ESP_LOGI(TAG, "playclip: %d loop(s), %d bytes", loops, clip_len);
+
+    ui_mode_set(UI_MODE_AA);
+    vTaskDelay(pdMS_TO_TICKS(250));
+    h264_pipe_set_verify(true);
+
+    int64_t t0 = esp_timer_get_time();
+    int total_au = 0;
+    for (int l = 0; l < loops; l++) {
+        /* Walk NAL units; group [non-VCL...][one VCL] into an access unit and
+         * push it, mimicking one AA video message per frame. VCL = types 1,5. */
+        int au_start = -1, au_has_vcl = 0, sc;
+        int p = next_nal(clip, clip_len, 0, &sc);
+        while (p >= 0) {
+            int payload = p + sc;
+            int type = clip[payload] & 0x1F;
+            int is_vcl = (type >= 1 && type <= 5);
+            if (au_start < 0) au_start = p;
+            if (is_vcl && au_has_vcl) {
+                h264_pipe_push(clip + au_start, p - au_start, NULL, NULL);
+                total_au++;
+                vTaskDelay(pdMS_TO_TICKS(15));   /* ~ real 30 fps arrival */
+                au_start = p; au_has_vcl = 0;
+            }
+            if (is_vcl) au_has_vcl = 1;
+            p = next_nal(clip, clip_len, payload, &sc);
+        }
+        if (au_start >= 0 && au_has_vcl) {
+            h264_pipe_push(clip + au_start, clip_len - au_start, NULL, NULL);
+            total_au++;
+            vTaskDelay(pdMS_TO_TICKS(15));
+        }
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));   /* let the last frames drain + stats print */
+    h264_pipe_set_verify(false);
+    int64_t dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "playclip done: %d access units in %lld ms",
+             total_au, (long long)(dt / 1000));
+}
+
+static int cmd_playclip(int argc, char **argv)
+{
+    int loops = (argc >= 2) ? atoi(argv[1]) : 1;
+    if (loops < 1) loops = 1;
+    feed_clip(loops);
+    printf("OK playclip\n");
+    return 0;
+}
+
+/* Autoplay: the console REPL input is on UART0 (GPIO37/38); on boards whose
+ * only cable is the USB-Serial-JTAG we can read logs but not type commands.
+ * So run the self-test on its own a few seconds after boot and let the CRC +
+ * per-stage stats come out over whatever console is attached. Loops forever
+ * with a pause so the pipeline can be observed at any time. */
+static void selftest_autoplay_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(14000));   /* AA UI + decoder + Wi-Fi settled */
+    ESP_LOGW(TAG, "AA_VIDEO_SELFTEST: autoplaying embedded clip (no phone)");
+    for (;;) {
+        feed_clip(3);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+#endif /* CONFIG_AA_VIDEO_SELFTEST */
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -354,6 +451,11 @@ static void register_cmds(void)
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+#if CONFIG_AA_VIDEO_SELFTEST
+        { .command = "playclip",
+          .help = "Feed the embedded H.264 clip through the decoder [loops]",
+          .hint = NULL, .func = cmd_playclip },
+#endif
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));
@@ -391,6 +493,9 @@ esp_err_t debug_uart_bridge_init(void)
 
     s_inited = true;
     ESP_LOGI(TAG, "UART debug bridge up (screenshot + touch injection)");
+#if CONFIG_AA_VIDEO_SELFTEST
+    xTaskCreatePinnedToCore(selftest_autoplay_task, "aa_selftest", 4096, NULL, 4, NULL, 0);
+#endif
     return ESP_OK;
 }
 

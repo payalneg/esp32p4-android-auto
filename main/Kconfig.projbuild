@@ -171,6 +171,27 @@ menu "Android Auto Head Unit"
             shows the AA idle screen / projection without a touch — for bench
             work on the video pipeline. Leave OFF for real builds.
 
+    config H264DEC_FASTPATH
+        bool "h264dec skip/DPB fast paths"
+        default y
+        depends on H264DEC_OWN
+        help
+            The P_Skip/zero-MV copy, whole-picture DPB alias, dirty-tracked
+            copies and deblock gating. Turn OFF to run plain h264bsd for an
+            A/B correctness check against the fast paths (same build, same
+            source) — output must be bit-identical.
+
+    config AA_VIDEO_SELFTEST
+        bool "Embed an H.264 clip + `playclip` command (phone-free video test)"
+        default n
+        depends on DEBUG_UART_BRIDGE
+        help
+            Embeds main/aa_selftest.h264 (an 800x480 baseline Annex-B clip) in
+            the firmware and registers a `playclip [loops]` console command that
+            pushes it through h264_pipe → decoder → display with no phone in the
+            loop. With per-frame CRC (see `verify` command) it also checks the
+            decoder bit-exact against the prebuilt tinyh264. Dev/bench only.
+
     config DEBUG_UART_BRIDGE
         bool "UART0 debug bridge (screenshot + touch injection)"
         default n

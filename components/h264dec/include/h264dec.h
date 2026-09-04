@@ -32,6 +32,7 @@ typedef struct {
     bool     unchanged;     /* content_id == previous picture's */
     /* Frame sequence number; pair with h264dec_changed_since(). 0 = n/a. */
     uint32_t version;
+    uint32_t crc;           /* CRC32 of the I420 data, or 0 (see h264dec_set_verify) */
 } h264dec_pic_t;
 
 typedef struct {
@@ -66,6 +67,12 @@ h264dec_status_t h264dec_decode(h264dec_t *dec, const uint8_t *buf, size_t len,
  * consumer that still holds picture `from` update only what changed. */
 bool h264dec_changed_since(h264dec_t *dec, uint32_t from, uint32_t to,
                            uint32_t *mask, size_t words);
+
+/* Verify mode: when on, each returned picture carries a CRC32 of its I420
+ * data in h264dec_pic_t.crc (0 otherwise). Lets a caller A/B the decoder
+ * against a reference (e.g. the prebuilt tinyh264) frame-by-frame, or catch
+ * corruption from a fast path. Costs a full-frame CRC walk per picture. */
+void h264dec_set_verify(h264dec_t *dec, bool on);
 
 /* Copy the counters since the last take, then reset them. */
 void h264dec_stats_take(h264dec_t *dec, h264dec_stats_t *out);

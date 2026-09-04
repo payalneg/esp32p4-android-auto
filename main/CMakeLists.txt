@@ -116,6 +116,14 @@ add_custom_target(lisp_web_gz DEPENDS "${_lisp_web_gz}")
 add_dependencies(${COMPONENT_LIB} lisp_web_gz)
 target_add_binary_data(${COMPONENT_LIB} "${_lisp_web_gz}" BINARY)
 
+# Phone-free video self-test clip (CONFIG_AA_VIDEO_SELFTEST). Embedded as-is;
+# the file is a dev asset (gitignored), regenerate with the ffmpeg line in
+# scripts or aa_selftest.c's header comment.
+if(CONFIG_AA_VIDEO_SELFTEST)
+    target_add_binary_data(${COMPONENT_LIB}
+        "${CMAKE_CURRENT_LIST_DIR}/aa_selftest.h264" BINARY)
+endif()
+
 # Reroute mbedTLS's UTCTime parser to our offset-tolerant wrapper. Required
 # to load the original aasdk head-unit certificate (whose validity uses
 # `YYMMDDHHMMSS±HHMM` instead of Zulu) — see aa_x509_patch.c.
