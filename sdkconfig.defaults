@@ -92,17 +92,21 @@ CONFIG_ESP_WIFI_TX_BUFFER_TYPE=0
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 
-# lwIP TCP receive window for the AA video socket. The IDF default of 4 MSS
-# (5760 B) caps throughput at WND/RTT: fine on the bench (RTT ~3 ms), but in
-# the field — phone in a pocket, 2.4 GHz shared with BT, SDIO hop to the C6 —
-# RTT sits around 25-30 ms and the stream starves at ~200 KB/s: 31 KiB key
-# frames took 6 round trips each and gearhead dropped to 5 fps with the P4
-# idle (2026-09-04 ride, `q hwm 0`, `tcp 4.5 s` of 5 s in recv). 16 MSS gives
-# ~7 Mbit/s at that RTT while still holding only 1-4 frames when the P4 is
-# the bottleneck, so touch→video latency stays put. RECVMBOX per the Kconfig
-# help: WND/MSS + 2.
-CONFIG_LWIP_TCP_WND_DEFAULT=23040
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=18
+# lwIP TCP receive window / mailbox for the AA video socket — IDF defaults,
+# kept on purpose. 2026-09-04 tried 16 MSS / RECVMBOX 18 for field throughput
+# (a ride saw 5 fps at ~200 KB/s, which fitted a WND/RTT cap). Measured on
+# the bench with aa_service's "sock backlog": gearhead keeps ~32 frames
+# unacked and tinyh264 spends ~30 ms on a frame of any size, so on a static
+# screen (200-byte frames, one per TCP segment) the frames queued ahead of
+# the decoder = touch latency. RECVMBOX is a SEGMENT count and is what bounds
+# that queue: 6 → ~6-12 frames (0.3-0.6 s), 18 → ~28 frames (up to 1.5 s,
+# felt as ~0.5 s). RECVMBOX must stay ≥ WND/MSS or lwIP refuses segments
+# (refused_data → drops → RTO) under big-frame bursts, so the two move
+# together and the field win was never measured — reverted. The real fix is
+# a decoder that does not pay 30 ms for an empty frame (see the own-decoder
+# work), after which a larger window can be revisited.
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=6
 # FIONREAD on the AA socket (aa_service's "sock backlog" figure) needs the
 # per-socket receive accounting this switches on.
 CONFIG_LWIP_SO_RCVBUF=y
