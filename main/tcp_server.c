@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 #include "aa_handshake.h"
 #include "aa_reconnect.h"
@@ -57,6 +59,32 @@ static session_end_t client_loop(int sock)
     aa_tls_deinit(tls);
     free(tls);
     return (err == ESP_ERR_INVALID_STATE) ? SESSION_PEER_CLOSED : SESSION_LOST;
+}
+
+/* gearhead restarts projection by itself whenever it re-runs the wireless
+ * setup — the BT link bounced, the phone re-opened SPP, the agent answered
+ * with WifiStartRequest — and it does so by closing the AA socket with a
+ * clean FIN and connecting again within the same few ms (field logs
+ * 2026-09-02 17:26 and 2026-09-04). That looks exactly like "user exited
+ * Android Auto" from the socket side, and 1.3.12 answered it by kicking the
+ * phone off the AP — right as the new connection was in the accept backlog,
+ * so the restart died and gearhead gave up. Give the phone this long to come
+ * back on its own before deciding the session is really over. */
+#define RECONNECT_GRACE_MS  3000
+
+/* Wait up to timeout_ms for a pending connection on the listen socket.
+ * Returns true when accept() would not block. */
+static bool wait_for_client(int listen_sock, uint32_t timeout_ms)
+{
+    fd_set rd;
+    FD_ZERO(&rd);
+    FD_SET(listen_sock, &rd);
+    struct timeval tv = {
+        .tv_sec  = timeout_ms / 1000,
+        .tv_usec = (timeout_ms % 1000) * 1000,
+    };
+    int r = select(listen_sock + 1, &rd, NULL, NULL, &tv);
+    return r > 0 && FD_ISSET(listen_sock, &rd);
 }
 
 static void accept_task(void *arg)
@@ -155,9 +183,15 @@ static void accept_task(void *arg)
         /* Screen is back to idle — now restart the wireless flow (kick the
          * phone off the AP, bounce BT) so the next session can begin. Only
          * after a real session: a client that failed the handshake is not
-         * a phone we want to keep re-paging. */
+         * a phone we want to keep re-paging. And only if the phone is not
+         * already knocking (see RECONNECT_GRACE_MS) — kicking it then kills
+         * the very reconnect we want. */
         if (ended != SESSION_NONE) {
-            aa_reconnect_after_drop(ip, ended == SESSION_PEER_CLOSED);
+            if (wait_for_client(listen_sock, RECONNECT_GRACE_MS)) {
+                ESP_LOGI(TAG, "phone is reconnecting by itself — leaving the AP/BT alone");
+            } else {
+                aa_reconnect_after_drop(ip, ended == SESSION_PEER_CLOSED);
+            }
         }
     }
 }
