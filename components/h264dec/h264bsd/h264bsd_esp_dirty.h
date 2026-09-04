@@ -21,12 +21,17 @@
 
 #include "basetype.h"
 
+/* DPB buffers changed places (the whole-picture alias swaps storage between
+ * slots): the pointer-to-content table is no longer valid. */
+void h264bsdDirtyBuffersMoved(void);
+
 /* Forget everything (new sequence, DPB reset, error). */
 void h264bsdDirtyReset(void);
 
 /* A picture starts decoding into `dst` (its data pointer), predicting from
  * `ref`. Computes the copy set. picSizeInMbs for sizing. */
-void h264bsdDirtyBeginPicture(const u8 *dst, const u8 *ref, u32 picSizeInMbs);
+void h264bsdDirtyBeginPicture(const u8 *dst, const u8 *ref, u32 picSizeInMbs,
+                              u32 picWidthInMbs);
 
 /* Does skipped MB `mbNum` need its pixels copied from `ref`? Always yes when
  * `ref` is not the reference the picture was begun with. */

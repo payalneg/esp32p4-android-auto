@@ -14,9 +14,18 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Skip the ~1 s walk over all 32 MB of PSRAM at boot. Useful only for the
 # first bring-up; once the chip is known good, it just steals boot time.
 CONFIG_SPIRAM_MEMTEST=n
-# (Skipping CONFIG_SPIRAM_XIP_FROM_PSRAM and CONFIG_CACHE_L2_CACHE_256KB:
-#  they sound like nice optimizations but eat enough internal SRAM that
+# (Skipping CONFIG_SPIRAM_XIP_FROM_PSRAM: it eats enough internal SRAM that
 #  FreeRTOS fails to allocate the IdleTask stack on boot.)
+# L2 cache at 256 KB, on the other hand, now fits and is worth a lot. The
+# H.264 reference frames live in PSRAM and motion compensation reads them as
+# short strided rows — one cache line per row, and the vertical interpolators
+# touch 21 rows per macroblock. Measured on the 800x480 selftest clip, a
+# frame's decode goes from 48.7 ms to 39.8 ms. Re-measured 2026-09-05: boot is
+# healthy (72 KB free before the scheduler starts, 291 KB in app_main, C6 OTA
+# + NimBLE + BLE OTA all up), so the old "IdleTask stack" warning that used to
+# cover this line no longer applies to it. 512 KB does not link at all — the
+# firmware's own internal SRAM stops fitting.
+CONFIG_CACHE_L2_CACHE_256KB=y
 
 # USB Host
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=1024
@@ -78,7 +87,7 @@ CONFIG_BT_AGENT_OTA_ENABLED=y
 # when repacking bt_agent_fw.bin.gz. Pinned here too (not just
 # Kconfig.projbuild's default) so existing sdkconfig files from old
 # checkouts don't keep a stale value and silently skip OTA.
-CONFIG_BT_AGENT_FW_VERSION="0.6.5"
+CONFIG_BT_AGENT_FW_VERSION="0.6.6"
 
 # ===== WiFi Remote (transparent esp_wifi API on P4) =====
 CONFIG_ESP_WIFI_REMOTE_ENABLED=y
@@ -294,3 +303,8 @@ CONFIG_ESP_LVGL_ADAPTER_ENABLE_DECODER=y
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_API_ENCODING_UTF_8=y
+
+# 128-bit PIE kernels for luma interpolation: 38.4 ms vs 39.8 ms per frame
+# (five runs each, ranges disjoint). Bit-exact — every kernel is checked
+# against h264bsd's own interpolator at boot and falls back to C on mismatch.
+CONFIG_H264DEC_PIE=y

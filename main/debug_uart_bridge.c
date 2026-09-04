@@ -431,6 +431,19 @@ static void selftest_autoplay_task(void *arg)
 }
 #endif /* CONFIG_AA_VIDEO_SELFTEST */
 
+/* Toggle display decimation live so 1x and 2x can be compared without a
+ * reflash — the eye is the instrument here, not a counter. */
+static int cmd_rendn(int argc, char **argv)
+{
+    if (argc >= 2) {
+        int n = atoi(argv[1]);
+        if (n < 1 || n > 4) { printf("rendn: 1..4\n"); return 1; }
+        h264_pipe_set_render_every((uint8_t)n);
+    }
+    printf("render every %u frame(s)\n", h264_pipe_get_render_every());
+    return 0;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -448,6 +461,9 @@ static void register_cmds(void)
           .hint = NULL, .func = cmd_touchmove },
         { .command = "touchup",   .help = "Release the held press",
           .hint = NULL, .func = cmd_touchup },
+        { .command = "rendn",
+          .help = "Present every Nth decoded video frame [1..4]; no arg = show",
+          .hint = NULL, .func = cmd_rendn },
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },

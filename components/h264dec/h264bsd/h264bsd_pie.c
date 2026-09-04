@@ -1,4 +1,5 @@
 #include "h264bsd_pie.h"
+#include "h264bsd_reconstruct.h"
 
 #ifdef H264BSD_ESP_PIE
 
@@ -9,6 +10,8 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include <string.h>
 
 static const char *TAG = "h264pie";
 
@@ -436,6 +439,42 @@ int h264_pie_selfcheck(void)
         }
     }
 
+    /* Diagonal quarters e/g/p/r against the stock C. This one matters: the
+     * PIE version COMPOSES the horizontal and vertical half-pel results, so
+     * the row/column the two passes start from is a derivation of mine, not
+     * something the arithmetic can confirm. The end-to-end clip only ever
+     * exercises three of the four offsets — 'r' never appears in it — so the
+     * oracle here is h264bsd's own interpolator on an interior block. */
+    if (!fails) {
+        static u8 plane[48 * 48];
+        static u8 rmb[16 * 16], pmb[16 * 16];
+        const u32 W = 48;
+        for (int t = 0; t < 200 && !fails; t++) {
+            esp_fill_random(plane, sizeof(plane));
+            for (u32 hv = 0; hv < 4 && !fails; hv++) {
+                for (u32 pw = 8; pw <= 16 && !fails; pw += 8) {
+                    /* interior: x0,y0 leave room for the 5-tap halo */
+                    const i32 x0 = 4, y0 = 4;
+                    memset(rmb, 0xA5, sizeof(rmb));
+                    memset(pmb, 0xA5, sizeof(pmb));
+                    h264bsdInterpolateHorVerQuarter(plane, rmb, x0, y0, W, W,
+                                                    pw, pw, hv);
+                    h264_pie_horverquarter(plane + (u32)y0 * W + (u32)x0, W,
+                                           pmb, pw, pw, hv);
+                    for (u32 y = 0; y < pw && !fails; y++) {
+                        if (memcmp(rmb + y * 16, pmb + y * 16, pw) == 0) continue;
+                        u32 i = 0; while (rmb[y * 16 + i] == pmb[y * 16 + i]) i++;
+                        fails++;
+                        ESP_LOGE(TAG, "horverquarter MISMATCH hv=%u pw=%u "
+                                      "row=%u col=%u ref=%02x pie=%02x",
+                                 (unsigned)hv, (unsigned)pw, (unsigned)y,
+                                 (unsigned)i, rmb[y * 16 + i], pmb[y * 16 + i]);
+                    }
+                }
+            }
+        }
+    }
+
     /* mid ('j'): 16x16 and 8x8 blocks over a random reference plane */
     if (!fails) {
         static u8 plane[32 * 32];
@@ -476,8 +515,38 @@ int h264_pie_selfcheck(void)
         ESP_LOGW(TAG, "bench 16px row x%d: hhalf C %lld us / PIE %lld us | vhalf C %lld us / PIE %lld us",
                  N, (long long)(t1-t0), (long long)(t2-t1),
                  (long long)(t3-t2), (long long)(t4-t3));
+
+        /* The same kernels again, but reading a reference picture the way the
+         * decoder really does: out of PSRAM, a different macroblock every
+         * call, so no row is ever in cache. If the numbers collapse together
+         * here, the interpolation is memory-bound and no amount of SIMD in
+         * the arithmetic will move it. */
+        const u32 W = 800, H = 480;
+        u8 *big = heap_caps_malloc((size_t)W * H, MALLOC_CAP_SPIRAM);
+        if (big) {
+            esp_fill_random(big, 4096);
+            for (u32 y = 1; y < H; y++) memcpy(big + y * W, big, W > 4096 ? 4096 : W);
+            const int M = 20000;
+            /* walk macroblock positions so consecutive calls are far apart */
+            #define POS(i) (big + ((u32)(((i) * 37u) % (H - 24)) + 2) * W \
+                                + ((u32)(((i) * 53u) % (W - 32)) + 2))
+            int64_t p0 = esp_timer_get_time();
+            for (int i = 0; i < M; i++) h264_ref_hhalf_row(POS(i), bdst, 16);
+            int64_t p1 = esp_timer_get_time();
+            for (int i = 0; i < M; i++) h264_pie_hhalf_row(POS(i), bdst, 16);
+            int64_t p2 = esp_timer_get_time();
+            for (int i = 0; i < M; i++) h264_ref_vhalf_row(POS(i), W, bdst, 16);
+            int64_t p3 = esp_timer_get_time();
+            for (int i = 0; i < M; i++) h264_pie_vhalf_row(POS(i), W, bdst, 16);
+            int64_t p4 = esp_timer_get_time();
+            #undef POS
+            ESP_LOGW(TAG, "bench PSRAM scattered x%d: hhalf C %lld us / PIE %lld us | vhalf C %lld us / PIE %lld us",
+                     M, (long long)(p1-p0), (long long)(p2-p1),
+                     (long long)(p3-p2), (long long)(p4-p3));
+            heap_caps_free(big);
+        }
     }
-    if (!fails) ESP_LOGW(TAG, "selfcheck hhalf+vhalf+midhalf: PASS (2000 cases x widths x offsets)");
+    if (!fails) ESP_LOGW(TAG, "selfcheck half + quarter + horverquarter(e/g/p/r): PASS");
     else        ESP_LOGE(TAG, "selfcheck: FAIL");
     return fails;
 }

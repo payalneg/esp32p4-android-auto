@@ -51,6 +51,12 @@ typedef struct {
     uint32_t skip_mbs, coded_mbs;
     /* coded-MB stage split (µs, summed over the window) */
     uint32_t parse_us, residual_us, mc_us, write_us, intra_us;
+    /* luma MC split by fractional position (0..15 = G,d,h,n,a,e,i,p,b,f,j,q,
+     * c,g,k,r): µs summed over the window and how many partitions hit it. */
+    uint32_t frac_us[16];
+    uint32_t frac_n[16];
+    uint32_t mvpred_us, skipcopy_us;
+    uint32_t inter_mbs;   /* denominator for mc_us: P_Skip MBs predict too */
 } h264dec_stats_t;
 
 h264dec_t *h264dec_new(void);

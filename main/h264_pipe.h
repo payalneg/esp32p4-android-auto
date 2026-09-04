@@ -36,3 +36,9 @@ void h264_pipe_set_verify(bool on);
  * observed under normal operation; logs a warning if it ever happens). */
 void h264_pipe_push(const uint8_t *data, size_t len,
                     h264_pipe_ack_cb_t ack_cb, void *ack_ctx);
+
+/* Present only every Nth decoded picture (1 = all of them). Decoding is
+ * unaffected — this halves the display stage's work at the cost of motion
+ * smoothness. Defaults to CONFIG_AA_RENDER_EVERY. */
+void    h264_pipe_set_render_every(uint8_t n);
+uint8_t h264_pipe_get_render_every(void);

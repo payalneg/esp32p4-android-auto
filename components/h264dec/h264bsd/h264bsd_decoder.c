@@ -441,7 +441,8 @@ u32 h264bsdDecodeInternal(storage_t *pStorage, u8 *byteStrm, u32 len,
                     /* first slice of the picture: reference list is final */
                     h264bsdDirtyBeginPicture(pStorage->currImage->data,
                         h264bsdGetRefPicData(pStorage->dpb, 0),
-                        pStorage->picSizeInMbs);
+                        pStorage->picSizeInMbs,
+                        pStorage->activeSps->picWidthInMbs);
                 }
 #endif
                 tmp = h264bsdDecodeSliceData(&strm, pStorage,

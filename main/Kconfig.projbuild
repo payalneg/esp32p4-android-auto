@@ -99,7 +99,7 @@ menu "Android Auto Head Unit"
         config BT_AGENT_FW_VERSION
             string "Expected BT agent firmware version"
             depends on BT_AGENT_OTA_ENABLED
-            default "0.6.5"
+            default "0.6.6"
             help
                 Must exactly match what the agent emits on boot via
                 `BT-VER:<version>`. Bump this in lockstep with the agent
@@ -192,7 +192,19 @@ menu "Android Auto Head Unit"
             back to C when the check fails. Keep OFF in releases until the
             output has been eyeballed on hardware.
 
-    config AA_VIDEO_SELFTEST
+config AA_RENDER_EVERY
+        int "Present every Nth decoded video frame"
+        default 1
+        range 1 4
+        help
+            1 presents every decoded picture. 2 puts only every second one on
+            the panel — the decoder still runs on all of them (P-frames
+            depend on each other), so this only saves the display stage:
+            shuffle, PPA and the panel flush. Motion looks half as smooth in
+            exchange. Changeable at runtime over the debug UART bridge
+            ("rendn").
+
+config AA_VIDEO_SELFTEST
         bool "Embed an H.264 clip + `playclip` command (phone-free video test)"
         default n
         depends on DEBUG_UART_BRIDGE

@@ -48,6 +48,13 @@
 #include "h264bsd_reconstruct.h"
 #include "h264bsd_dpb.h"
 
+#ifdef H264BSD_ESP_STATS
+u64 g_h264bsd_cyc_frac[16];
+u32 g_h264bsd_n_frac[16];
+u32 g_h264bsd_n_inter_mb;
+u64 g_h264bsd_cyc_mvpred, g_h264bsd_cyc_skipcopy;
+#endif
+
 /*------------------------------------------------------------------------------
     2. External compiler flags
 --------------------------------------------------------------------------------
@@ -233,8 +240,15 @@ u32 h264bsdInterPrediction(mbStorage_t *pMb, macroblockLayer_t *pMbLayer,
     {
         case P_Skip:
         case P_L0_16x16:
-            if (MvPrediction16x16(pMb, &pMbLayer->mbPred, dpb) != HANTRO_OK)
+        {
+            u32 cmv0 = H264BSD_CYC();
+            u32 mvRes = MvPrediction16x16(pMb, &pMbLayer->mbPred, dpb);
+#ifdef H264BSD_ESP_STATS
+            g_h264bsd_cyc_mvpred += H264BSD_CYC() - cmv0;
+#endif
+            if (mvRes != HANTRO_OK)
                 return(HANTRO_NOK);
+        }
             refImage.data = pMb->refAddr[0];
             tmp = (0<<24) + (0<<16) + (16<<8) + 16;
             h264bsdPredictSamples(data, pMb->mv, &refImage,
@@ -407,7 +421,13 @@ u32 h264bsdInterPrediction(mbStorage_t *pMb, macroblockLayer_t *pMbLayer,
             {
                 if (pMb->decoded <= 1 &&
                     h264bsdDirtyNeedCopy(mbNum, refImage.data))
+                {
+                    u32 ccp0 = H264BSD_CYC();
                     h264bsdCopyMbFromRef(currImage, &refImage, col, row);
+#ifdef H264BSD_ESP_STATS
+                    g_h264bsd_cyc_skipcopy += H264BSD_CYC() - ccp0;
+#endif
+                }
                 g_h264bsd_mb_fastpath = 1;
                 g_h264bsd_skip_zero_mbs++;
                 if (g_h264bsd_skip_ref != refImage.data)
@@ -491,7 +511,10 @@ u32 h264bsdInterPrediction(mbStorage_t *pMb, macroblockLayer_t *pMbLayer,
     }
 
 #ifdef H264BSD_ESP_STATS
+    /* Every inter macroblock lands here, P_Skip included — so this must be
+     * divided by the inter count, not by the coded one. */
     g_h264bsd_cyc_mc += H264BSD_CYC() - cmc0;
+    g_h264bsd_n_inter_mb++;
 #endif
     /* if decoded flag > 1 -> mb has already been successfully decoded and
      * written to output -> do not write again */

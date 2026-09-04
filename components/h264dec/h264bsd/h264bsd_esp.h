@@ -32,6 +32,14 @@ extern u32 g_h264bsd_n_skip_mb, g_h264bsd_n_coded_mb;
  * compensation (h264bsdPredictSamples), residual add + picture write, intra. */
 extern u64 g_h264bsd_cyc_parse, g_h264bsd_cyc_residual, g_h264bsd_cyc_mc,
            g_h264bsd_cyc_write, g_h264bsd_cyc_intra;
+/* Luma motion-compensation split by fractional position (0..15 = G,d,h,n,a,e,
+ * i,p,b,f,j,q,c,g,k,r). Tells which interpolators are worth hand-writing. */
+extern u64 g_h264bsd_cyc_frac[16];
+extern u32 g_h264bsd_n_frac[16];
+/* Inter macroblocks (P_Skip included) that went through h264bsdInterPrediction. */
+extern u32 g_h264bsd_n_inter_mb;
+/* Inside a skipped MB: motion-vector prediction vs the actual pixel copy. */
+extern u64 g_h264bsd_cyc_mvpred, g_h264bsd_cyc_skipcopy;
 #ifdef H264BSD_ESP_STATS
 #include "esp_cpu.h"
 #define H264BSD_CYC() ((u32)esp_cpu_get_cycle_count())

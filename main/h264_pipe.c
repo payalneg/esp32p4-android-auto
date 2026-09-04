@@ -177,12 +177,36 @@ static void log_stats_periodic(void)
                      (unsigned)(ds.loop_us / ds.pictures / 100 % 10));
             if (ds.coded_mbs) {
                 /* per coded MB, µs: where a moving frame's time goes */
-                ESP_LOGI(TAG, "h264dec: per coded MB: parse %u | dequant+idct %u | mc %u | write %u | intra %u us",
+                ESP_LOGI(TAG, "h264dec: per coded MB: parse %u | dequant+idct %u | write %u | intra %u us "
+                              "|| mc %u us x %u inter MBs (skip included)",
                          (unsigned)(ds.parse_us / ds.coded_mbs),
                          (unsigned)(ds.residual_us / ds.coded_mbs),
-                         (unsigned)(ds.mc_us / ds.coded_mbs),
                          (unsigned)(ds.write_us / ds.coded_mbs),
-                         (unsigned)(ds.intra_us / ds.coded_mbs));
+                         (unsigned)(ds.intra_us / ds.coded_mbs),
+                         (unsigned)(ds.inter_mbs ? ds.mc_us / ds.inter_mbs : 0),
+                         (unsigned)(ds.inter_mbs / (ds.pictures ? ds.pictures : 1)));
+                ESP_LOGI(TAG, "h264dec: inside MC: mvpred %u.%u us + skip copy %u.%u us per inter MB",
+                         (unsigned)(ds.inter_mbs ? ds.mvpred_us / ds.inter_mbs : 0),
+                         (unsigned)(ds.inter_mbs ? ds.mvpred_us * 10 / ds.inter_mbs % 10 : 0),
+                         (unsigned)(ds.inter_mbs ? ds.skipcopy_us / ds.inter_mbs : 0),
+                         (unsigned)(ds.inter_mbs ? ds.skipcopy_us * 10 / ds.inter_mbs % 10 : 0));
+                /* which fractional positions the clip actually spends MC in —
+                 * only the ones worth hand-writing get printed. */
+                static const char *fn[16] = {"G","d","h","n","a","e","i","p",
+                                             "b","f","j","q","c","g","k","r"};
+                uint32_t tot = 0;
+                for (int i = 0; i < 16; i++) tot += ds.frac_us[i];
+                if (tot) {
+                    char line[200]; size_t o = 0;
+                    for (int i = 0; i < 16 && o < sizeof(line) - 24; i++) {
+                        if (ds.frac_us[i] * 100 / tot == 0) continue;
+                        o += snprintf(line + o, sizeof(line) - o, "%s %u%%/%uns ",
+                                      fn[i], (unsigned)(ds.frac_us[i] * 100 / tot),
+                                      (unsigned)(ds.frac_n[i] ? ds.frac_us[i] * 1000
+                                                                 / ds.frac_n[i] : 0));
+                    }
+                    ESP_LOGI(TAG, "h264dec: MC by frac pos (%u us tot): %s", (unsigned)tot, line);
+                }
             }
         }
 #endif
@@ -209,6 +233,35 @@ static bool diff_provider(uint32_t from, uint32_t to, uint32_t *mask, size_t wor
 /* Decode one AA message worth of NAL units. Every picture it yields is
  * handed to the display stage; returns the number of frames queued there
  * (0 = nothing to show, or LVGL owns the panel and the frame was dropped). */
+/* Present only every Nth decoded picture. Decoding still runs on all of them —
+ * P-frames reference their predecessors, so nothing may be skipped there — this
+ * drops only the display stage (shuffle + PPA + panel flush) for the pictures
+ * in between. 1 = present everything. Trade-off: motion looks half as smooth,
+ * and when motion stops the final picture of a burst can be dropped, leaving
+ * the screen one frame stale until the next one arrives. */
+static uint8_t  s_render_every = CONFIG_AA_RENDER_EVERY;
+static uint32_t s_pic_seq;
+static uint32_t s_pics_dropped;
+
+void h264_pipe_set_render_every(uint8_t n)
+{
+    s_render_every = n ? n : 1;
+    s_pic_seq = 0;
+}
+uint8_t h264_pipe_get_render_every(void) { return s_render_every; }
+
+/* True when this picture is one of the ones we actually put on the panel. A
+ * picture identical to the last one is never worth a slot: let it through so
+ * the display stage's own cheap unchanged path handles it, and don't spend
+ * one of the presented slots on it. */
+static bool present_this_pic(bool unchanged)
+{
+    if (s_render_every <= 1 || unchanged) return true;
+    if (++s_pic_seq >= s_render_every) { s_pic_seq = 0; return true; }
+    s_pics_dropped++;
+    return false;
+}
+
 static int decode_and_show(const uint8_t *data, size_t len)
 {
     static bool seen_resolution;
@@ -242,7 +295,8 @@ static int decode_and_show(const uint8_t *data, size_t len)
             }
             /* content_id lets the display stage skip the shuffle for a
              * picture identical to the previous one (static screen). */
-            if (display_video_submit_pic(pic.data, (uint16_t)pic.width,
+            if (present_this_pic(pic.unchanged) &&
+                display_video_submit_pic(pic.data, (uint16_t)pic.width,
                                          (uint16_t)pic.height, pic.content_id,
                                          pic.version, NULL, NULL) == ESP_OK) {
                 queued++;
@@ -298,7 +352,8 @@ static int decode_and_show(const uint8_t *data, size_t len)
                 /* Shuffles out.outbuf into a staging slot right here (the
                  * next decode may overwrite it), then the core-0 display
                  * task does PPA + HUD + panel while we decode the next one. */
-                if (display_video_submit_yuv420(out.outbuf, res.width, res.height,
+                if (present_this_pic(false) &&
+                    display_video_submit_yuv420(out.outbuf, res.width, res.height,
                                                 NULL, NULL) == ESP_OK) {
                     queued++;
                 }

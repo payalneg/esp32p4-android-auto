@@ -36,6 +36,7 @@
 
 #include "h264bsd_slice_data.h"
 #include "h264bsd_esp.h"
+#include "h264bsd_esp_dirty.h"
 #include <stdio.h>
 #include "h264bsd_dpb.h"
 #include "h264bsd_util.h"
@@ -127,6 +128,9 @@ static void EspWholePictureFromRef(storage_t *pStorage, image_t *currImage, u8 *
         refPic->data           = tmpData;
         refPic->pAllocatedData = tmpAlloc;
         currImage->data = cur->data;
+        /* Two slots just swapped storage — every buffer-to-content mapping
+         * the elision relies on is stale. */
+        h264bsdDirtyBuffersMoved();
         g_h264bsd_pic_aliased++;
         return;
     }

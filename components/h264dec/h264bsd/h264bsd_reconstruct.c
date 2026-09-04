@@ -37,6 +37,7 @@
 #include "h264bsd_macroblock_layer.h"
 #include "h264bsd_image.h"
 #include "h264bsd_util.h"
+#include "h264bsd_esp.h"
 
 #ifdef H264DEC_OMXDL
 #include "omxtypes.h"
@@ -1926,6 +1927,12 @@ void h264bsdPredictSamples(
 
     ASSERT(lumaFracPos[xFrac][yFrac] < 16);
 
+#ifdef H264BSD_ESP_STATS
+    {
+    const u32 fracIdx = lumaFracPos[xFrac][yFrac];
+    const u32 fracT0  = H264BSD_CYC();
+#endif
+
     switch (lumaFracPos[xFrac][yFrac])
     {
         case 0: /* G */
@@ -1993,6 +2000,12 @@ void h264bsdPredictSamples(
                     xInt-2, yInt-2, width, height, partWidth, partHeight, 3);
             break;
     }
+
+#ifdef H264BSD_ESP_STATS
+    g_h264bsd_cyc_frac[fracIdx] += (u32)(H264BSD_CYC() - fracT0);
+    g_h264bsd_n_frac[fracIdx]++;
+    }
+#endif
 
     /* chroma */
     PredictChroma(
