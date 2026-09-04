@@ -12,8 +12,10 @@
  * the AP so its Wi-Fi state resets, bounce the BT link so gearhead sees its
  * car kit "come back" and re-runs SPP → WifiStartRequest → Wi-Fi join → TCP. */
 
-/* tcp_server: the AA session with `peer_ip` just ended. Kicks that station
- * off the SoftAP and, when the auto-connect setting is on and the session was
+/* tcp_server: the AA session with `peer_ip` just ended and the phone did not
+ * come back by itself within tcp_server's grace window (gearhead restarts a
+ * session on its own after re-running the wireless setup — that must not be
+ * answered with a kick). Kicks that station off the SoftAP and, when the auto-connect setting is on and the session was
  * lost rather than closed by the phone (peer_closed — the user most likely
  * exited Android Auto, so leave them be), asks the BT agent to bounce HFP and
  * re-page the phone. */
