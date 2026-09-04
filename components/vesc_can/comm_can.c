@@ -89,6 +89,10 @@ static can_config_t s_can_config;
 
 static can_packet_handler_t s_packet_handler = NULL;
 
+/* Non-NULL = virtual bus (VESC emulator): frames go to this callback instead
+ * of twai_transmit, replies come back via comm_can_virtual_rx. */
+static comm_can_virtual_tx_t s_virtual_tx = NULL;
+
 static void decode_msg(uint32_t eid, uint8_t *data8, int len);
 static void process_task(void *arg);
 static void rx_task(void *arg);
@@ -116,8 +120,9 @@ static bool set_timing_for_speed(int can_speed_kbps)
     }
 }
 
-esp_err_t comm_can_start(int pin_tx, int pin_rx,
-                         uint8_t controller_id, int can_speed_kbps)
+/* Everything comm_can_start does before touching the TWAI driver — shared
+ * with the virtual bus so the emulator runs the identical decode path. */
+static void common_init(uint8_t controller_id, int can_speed_kbps)
 {
     for (int i = 0; i < CAN_STATUS_MSGS_TO_STORE; i++) {
         stat_msgs  [i].id = -1;
@@ -146,6 +151,45 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
                                 &s_process_task, 0);
         s_sem_init_done = true;
     }
+}
+
+esp_err_t comm_can_start_virtual(uint8_t controller_id, comm_can_virtual_tx_t tx)
+{
+    if (!tx) return ESP_ERR_INVALID_ARG;
+    common_init(controller_id, 500);
+    s_virtual_tx = tx;
+    s_init_done  = true;
+    ESP_LOGW(TAG, "virtual CAN bus up (VESC emulator): ID=%u, no TWAI", controller_id);
+    return ESP_OK;
+}
+
+bool comm_can_is_virtual(void)
+{
+    return s_virtual_tx != NULL;
+}
+
+void comm_can_virtual_rx(uint32_t eid, const uint8_t *data, uint8_t len)
+{
+    if (!s_virtual_tx || len > 8) return;
+    /* Mirror of rx_task's enqueue — same ring, same wake-up. */
+    int next_write = s_rx_write + 1;
+    if (next_write >= RXBUF_LEN) next_write = 0;
+    if (next_write != s_rx_read) {
+        twai_message_t *m = &s_rx_buf[s_rx_write];
+        memset(m, 0, sizeof(*m));
+        m->extd             = 1;
+        m->identifier       = eid;
+        m->data_length_code = len;
+        memcpy(m->data, data, len);
+        s_rx_write = next_write;
+    }
+    if (s_process_task) xTaskNotifyGive(s_process_task);
+}
+
+esp_err_t comm_can_start(int pin_tx, int pin_rx,
+                         uint8_t controller_id, int can_speed_kbps)
+{
+    common_init(controller_id, can_speed_kbps);
 
     /* A 1 KB SET_MCCONF fragments into ~150 CAN frames (FILL_RX_BUFFER
      * @7B + FILL_RX_BUFFER_LONG @6B + PROCESS_RX_BUFFER). At 500 kbit/s
@@ -193,6 +237,10 @@ void comm_can_stop(void)
         vTaskDelay(1);
     }
 
+    if (s_virtual_tx) {
+        s_virtual_tx = NULL;
+        return;
+    }
     twai_stop();
     twai_driver_uninstall();
 }
@@ -200,6 +248,12 @@ void comm_can_stop(void)
 esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps)
 {
     ESP_LOGI(TAG, "reinit ID=%u speed=%d kbps", controller_id, can_speed_kbps);
+    if (s_virtual_tx) {
+        /* No driver to bounce; the emulated node reads the speed setting itself. */
+        s_can_config.controller_id      = controller_id;
+        s_can_config.can_baud_rate_kbps = can_speed_kbps;
+        return ESP_OK;
+    }
     int prev_tx = s_g_config.tx_io;
     int prev_rx = s_g_config.rx_io;
 
@@ -242,7 +296,11 @@ void comm_can_transmit_eid(uint32_t id, const uint8_t *data, uint8_t len)
         xSemaphoreGive(s_send_mutex);
         return;
     }
-    twai_transmit(&tx_msg, pdMS_TO_TICKS(5));
+    if (s_virtual_tx) {
+        s_virtual_tx(id, data, len);
+    } else {
+        twai_transmit(&tx_msg, pdMS_TO_TICKS(5));
+    }
     xSemaphoreGive(s_send_mutex);
 }
 
@@ -758,6 +816,7 @@ bool comm_can_get_bus_health(uint32_t *bus_err, uint32_t *recoveries)
 {
     if (bus_err)    *bus_err = 0;
     if (recoveries) *recoveries = 0;
+    if (s_virtual_tx) return true;      /* emulator: a perfect bus */
 
     twai_status_info_t st;
     if (twai_get_status_info(&st) != ESP_OK) return false;  /* driver not up */

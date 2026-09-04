@@ -422,17 +422,26 @@ void app_main(void)
     uint8_t ctrl_id  = settings_get_controller_id();
     uint8_t tgt_id   = settings_get_target_vesc_id();
 
-    if (settings_get_vesc_emulator()) {
-        /* Synthetic source — runs a scripted drive cycle and injects into
-         * vesc_rt_data. No CAN driver, no real polling. */
-        vesc_rt_data_init(tgt_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
-        vesc_sim_start();
-        ESP_LOGW(TAG, "VESC EMULATOR active — no real CAN");
-        /* Config menu backed by in-RAM defaults (no CAN in emulator mode). */
-        vesc_config_init();
-        vesc_ui_updater_start();
-    } else if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
-                              ctrl_id, can_kbps) == ESP_OK) {
+    /* Emulator = the same stack on a virtual bus: vesc_sim is a VESC node that
+     * answers our polls in wire format with real-bus latency, so rt_task, the
+     * reassembly buffers, the sync-poll timeouts and the dispatch chain below
+     * all run exactly as on the bike (only vesc_config stays local — it checks
+     * the emulator setting itself). */
+    bool      emulator = settings_get_vesc_emulator();
+    esp_err_t can_err  = ESP_FAIL;
+    if (emulator) {
+        can_err = vesc_sim_start();
+        if (can_err == ESP_OK) {
+            can_err = comm_can_start_virtual(ctrl_id, vesc_sim_can_tx);
+        }
+        ESP_LOGW(TAG, "VESC EMULATOR active — virtual CAN bus, no TWAI (%s)",
+                 esp_err_to_name(can_err));
+    } else {
+        can_err = comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
+                                 ctrl_id, can_kbps);
+    }
+
+    if (can_err == ESP_OK) {
         /* Identity for VESC Tool's CAN scan: it pings the bus, then asks each
          * node that answered for its firmware version, and lists whoever stays
          * quiet as "Unknown". UUID = our WiFi MAC so two units on one bus are

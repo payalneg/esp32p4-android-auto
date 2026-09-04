@@ -28,6 +28,18 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
 void      comm_can_stop(void);
 esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps);
 
+/* Virtual bus — the VESC emulator's transport. Same stack as the real one
+ * (fragmenting, per-id reassembly, process_task, the sync-poll semaphore and
+ * its timeouts), only the TWAI driver is replaced: every frame this node
+ * transmits is handed to `tx` (the simulated VESC, see main/vesc_sim.c), and
+ * whatever that node sends back arrives through comm_can_virtual_rx() into the
+ * same receive ring rx_task feeds. Exactly one producer may call
+ * comm_can_virtual_rx (the ring is single-producer). */
+typedef void (*comm_can_virtual_tx_t)(uint32_t eid, const uint8_t *data, uint8_t len);
+esp_err_t comm_can_start_virtual(uint8_t controller_id, comm_can_virtual_tx_t tx);
+void      comm_can_virtual_rx(uint32_t eid, const uint8_t *data, uint8_t len);
+bool      comm_can_is_virtual(void);
+
 /* Raw transmit (extended ID). */
 void comm_can_transmit_eid(uint32_t id, const uint8_t *data, uint8_t len);
 
