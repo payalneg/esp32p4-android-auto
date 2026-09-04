@@ -48,6 +48,16 @@ static touch_gesture_fn  s_edge_swipe_cb;
  * boot. Flipped to AA by ui_mode_set when the user triple-taps. */
 static _Atomic int       s_mode = TOUCH_MODE_LVGL;
 
+/* Real-finger blackout after a mode flip. The flip itself is a touch (the
+ * 3-finger gesture, a tap on Connect, the phone's video appearing under a
+ * finger) and the new mode reads the tail of that same touch as a fresh
+ * press — a phantom tap on whatever is now under the finger, very often
+ * (field report 2026-09-04). Ignore single-finger input for a second after
+ * every switch. Debug-bridge injection is screen-space and deliberate, so it
+ * is not gated. */
+#define MODE_SWITCH_BLACKOUT_US   (1000 * 1000)
+static _Atomic int64_t   s_mode_switch_us;
+
 /* Landscape-rotated coords for the LVGL indev. Updated by poll_task in
  * TOUCH_MODE_LVGL; LVGL pulls them via touch_input_lvgl_read(). */
 static _Atomic uint16_t  s_lvgl_x;
@@ -144,8 +154,13 @@ static void poll_task(void *arg)
              * release+regrab still register without bouncing to IDLE. */
 
             /* --- single-finger handling, demuxed by mode --- */
-            /* Common: pre-compute panel-native coords once. */
-            const bool single = (cnt == 1 && !gesture_latched);
+            /* Common: pre-compute panel-native coords once. A finger seen
+             * inside the post-switch blackout is treated as no finger: no
+             * LVGL press, no AA PRESS/DRAG, no edge swipe. A press that was
+             * already reported to AA still gets its RELEASE (cnt==0 path). */
+            const bool blackout =
+                (int64_t)ts - atomic_load(&s_mode_switch_us) < MODE_SWITCH_BLACKOUT_US;
+            const bool single = (cnt == 1 && !gesture_latched && !blackout);
             uint16_t panel_x = 0, panel_y = 0;
             if (single) {
                 panel_x = tx[0] < PANEL_NATIVE_W ? tx[0] : PANEL_NATIVE_W - 1;
@@ -340,6 +355,7 @@ void touch_input_stop(void)
 
 void touch_input_set_mode(touch_mode_t mode)
 {
+    atomic_store(&s_mode_switch_us, esp_timer_get_time());
     atomic_store(&s_mode, (int)mode);
     if (mode == TOUCH_MODE_LVGL) {
         /* Drop any pending AA state so a stale RELEASE doesn't fire when we
