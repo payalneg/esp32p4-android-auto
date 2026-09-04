@@ -76,6 +76,7 @@ idf_component_register(
         bt_agent_fw
         esp32_p4_wifi6_touch_lcd_4_3
         espressif__esp_h264
+        h264dec
         espressif__esp_lvgl_adapter
         vesc_ui
         vesc_can

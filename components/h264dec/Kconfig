@@ -1,0 +1,21 @@
+menu "H.264 decoder (AA video)"
+
+    config H264DEC_OWN
+        bool "Use the in-tree h264bsd decoder instead of esp_h264's prebuilt tinyh264"
+        default y
+        help
+            h264_pipe decodes with components/h264dec (Hantro h264bsd built from
+            source at -O2, with the P_Skip fast path and the unchanged-picture
+            signal). Off = the prebuilt libtinyh264.a inside esp_h264, kept for
+            A/B measurements.
+
+    config H264DEC_STATS
+        bool "Per-stage decode timing in the h264_pipe stats line"
+        default y
+        depends on H264DEC_OWN
+        help
+            h264dec accumulates the time spent in slice decoding vs the
+            deblocking pass per picture; h264_pipe prints the averages every
+            stats window. Costs two esp_timer reads per picture.
+
+endmenu

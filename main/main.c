@@ -395,6 +395,10 @@ void app_main(void)
          * Only meaningful once the AA stack is up. The GT911 polling task
          * starts unconditionally so LVGL touch keeps working. */
         touch_input_set_gesture_cb(ui_mode_toggle);
+#if CONFIG_UI_BOOT_INTO_AA
+        ui_mode_set(UI_MODE_AA);
+        ESP_LOGW(TAG, "CONFIG_UI_BOOT_INTO_AA: panel starts in AA mode");
+#endif
         /* Left-edge swipe opens the LISP quick-action panel. The handler
          * marshals to the LVGL task and no-ops unless the dashboard is the
          * live screen, so registering it unconditionally is safe. */

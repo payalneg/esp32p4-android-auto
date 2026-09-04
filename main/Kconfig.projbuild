@@ -161,6 +161,16 @@ menu "Android Auto Head Unit"
 
     endmenu
 
+    config UI_BOOT_INTO_AA
+        bool "Boot straight into the Android Auto screen (dev)"
+        default n
+        help
+            The panel normally comes up on the VESC dashboard and the user
+            switches to Android Auto with the 3-finger gesture. With this on,
+            ui_mode flips to AA right after init, so a freshly flashed board
+            shows the AA idle screen / projection without a touch — for bench
+            work on the video pipeline. Leave OFF for real builds.
+
     config DEBUG_UART_BRIDGE
         bool "UART0 debug bridge (screenshot + touch injection)"
         default n

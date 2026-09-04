@@ -4,10 +4,15 @@
 #include <string.h>
 
 #include "display_video.h"
+#include "sdkconfig.h"
+#if CONFIG_H264DEC_OWN
+#include "h264dec.h"
+#else
 #include "esp_h264_dec.h"
 #include "esp_h264_dec_param.h"
 #include "esp_h264_dec_sw.h"
 #include "esp_h264_types.h"
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -50,8 +55,12 @@ typedef struct {
     void               *ack_ctx;
 } pipe_item_t;
 
+#if CONFIG_H264DEC_OWN
+static h264dec_t                  *s_dec;
+#else
 static esp_h264_dec_handle_t       s_dec;
 static esp_h264_dec_param_handle_t s_dec_param;
+#endif
 static QueueHandle_t               s_queue;
 static TaskHandle_t                s_task;
 
@@ -132,6 +141,40 @@ static void log_stats_periodic(void)
                  (unsigned)s_push_blocked,
                  (unsigned long long)(s_push_blocked_us / 1000),
                  (unsigned)s_decode_errors, idle[0], idle[1]);
+#if CONFIG_H264DEC_OWN && CONFIG_H264DEC_STATS
+        h264dec_stats_t ds;
+        h264dec_stats_take(s_dec, &ds);
+        if (ds.pictures) {
+            /* decode/deblock per picture; skip = share of macroblocks that
+             * took the P_Skip/zero-MV copy path; unchanged = pictures the
+             * display stage could present without a shuffle. */
+            ESP_LOGI(TAG, "h264dec: decode %llu.%llu ms + deblock %llu.%llu ms/fr | "
+                          "skip %u%% of MBs (copied %u, in place %u) | "
+                          "unchanged %u/%u (aliased %u, copied %u)",
+                     (unsigned long long)(ds.decode_us / ds.pictures / 1000),
+                     (unsigned long long)(ds.decode_us / ds.pictures / 100 % 10),
+                     (unsigned long long)(ds.deblock_us / ds.pictures / 1000),
+                     (unsigned long long)(ds.deblock_us / ds.pictures / 100 % 10),
+                     (unsigned)(ds.total_mbs ? ds.skip_zero_mbs * 100 / ds.total_mbs : 0),
+                     (unsigned)ds.mb_copied, (unsigned)ds.mb_nocopy,
+                     (unsigned)ds.unchanged_pics, (unsigned)ds.pictures,
+                     (unsigned)ds.aliased_pics, (unsigned)ds.copied_pics);
+            /* where the macroblock loop's time goes, per picture */
+            ESP_LOGI(TAG, "h264dec: per pic: skip MBs %u x %u.%u us = %u.%u ms | coded MBs %u x %u.%u us = %u.%u ms | loop %u.%u ms",
+                     (unsigned)(ds.skip_mbs / ds.pictures),
+                     (unsigned)(ds.skip_mbs ? ds.skip_mb_us / ds.skip_mbs : 0),
+                     (unsigned)(ds.skip_mbs ? (ds.skip_mb_us * 10 / ds.skip_mbs) % 10 : 0),
+                     (unsigned)(ds.skip_mb_us / ds.pictures / 1000),
+                     (unsigned)(ds.skip_mb_us / ds.pictures / 100 % 10),
+                     (unsigned)(ds.coded_mbs / ds.pictures),
+                     (unsigned)(ds.coded_mbs ? ds.coded_mb_us / ds.coded_mbs : 0),
+                     (unsigned)(ds.coded_mbs ? (ds.coded_mb_us * 10 / ds.coded_mbs) % 10 : 0),
+                     (unsigned)(ds.coded_mb_us / ds.pictures / 1000),
+                     (unsigned)(ds.coded_mb_us / ds.pictures / 100 % 10),
+                     (unsigned)(ds.loop_us / ds.pictures / 1000),
+                     (unsigned)(ds.loop_us / ds.pictures / 100 % 10));
+        }
+#endif
     }
     s_decoded_frames   = 0;
     s_decode_errors    = 0;
@@ -144,6 +187,14 @@ static void log_stats_periodic(void)
     window_start_us    = now;
 }
 
+#if CONFIG_H264DEC_OWN
+static bool diff_provider(uint32_t from, uint32_t to, uint32_t *mask, size_t words, void *ctx)
+{
+    (void)ctx;
+    return h264dec_changed_since(s_dec, from, to, mask, words);
+}
+#endif
+
 /* Decode one AA message worth of NAL units. Every picture it yields is
  * handed to the display stage; returns the number of frames queued there
  * (0 = nothing to show, or LVGL owns the panel and the frame was dropped). */
@@ -152,6 +203,46 @@ static int decode_and_show(const uint8_t *data, size_t len)
     static bool seen_resolution;
     int queued = 0;
 
+#if CONFIG_H264DEC_OWN
+    while (len > 0) {
+        size_t        consumed = 0;
+        h264dec_pic_t pic;
+        int64_t t0 = esp_timer_get_time();
+        h264dec_status_t st = h264dec_decode(s_dec, data, len, &consumed, &pic);
+        int64_t dt = esp_timer_get_time() - t0;
+
+        if (st == H264DEC_ERROR || st == H264DEC_NOMEM) {
+            s_decode_errors++;
+            ESP_LOGW(TAG, "h264dec err=%d at %u/%u bytes", (int)st,
+                     (unsigned)consumed, (unsigned)len);
+            break;
+        }
+        if (st == H264DEC_PIC) {
+            s_decoded_frames++;
+            s_decode_total_us += (uint64_t)dt;
+            if ((uint64_t)dt > s_decode_max_us) {
+                s_decode_max_us    = (uint64_t)dt;
+                s_decode_max_bytes = (uint32_t)len;
+            }
+            if (!seen_resolution) {
+                ESP_LOGI(TAG, "first frame %ux%u (h264bsd)", (unsigned)pic.width,
+                         (unsigned)pic.height);
+                seen_resolution = true;
+            }
+            /* content_id lets the display stage skip the shuffle for a
+             * picture identical to the previous one (static screen). */
+            if (display_video_submit_pic(pic.data, (uint16_t)pic.width,
+                                         (uint16_t)pic.height, pic.content_id,
+                                         pic.version, NULL, NULL) == ESP_OK) {
+                queued++;
+            }
+        }
+        if (consumed == 0) break;
+        data += consumed;
+        len  -= consumed;
+    }
+    return queued;
+#else
     esp_h264_dec_in_frame_t  in  = {
         .raw_data = { (uint8_t *)data, (uint32_t)len },
     };
@@ -204,6 +295,7 @@ static int decode_and_show(const uint8_t *data, size_t len)
         in.consume = 0;
     }
     return queued;
+#endif
 }
 
 /* Ack trampoline for frames that went through the display stage: fires on
@@ -303,6 +395,16 @@ esp_err_t h264_pipe_init(void)
 {
     if (s_dec) return ESP_OK;
 
+#if CONFIG_H264DEC_OWN
+    s_dec = h264dec_new();
+    if (!s_dec) {
+        ESP_LOGE(TAG, "h264dec_new failed");
+        return ESP_FAIL;
+    }
+    /* Let the display stage re-shuffle only the macroblocks that changed
+     * since the picture its staging slot still holds. */
+    display_video_set_diff_provider(diff_provider, NULL);
+#else
     esp_h264_dec_cfg_sw_t cfg = {
         .pic_type = ESP_H264_RAW_FMT_I420,
     };
@@ -321,6 +423,7 @@ esp_err_t h264_pipe_init(void)
     if (esp_h264_dec_sw_get_param_hd(s_dec, &s_dec_param) != ESP_H264_ERR_OK) {
         s_dec_param = NULL;
     }
+#endif
 
     /* 4 slots. Profiling (logs/20260511-143558.log) showed gearhead ignores
      * max_unacked=1 and streams at source rate (~30 fps), while our
@@ -335,8 +438,12 @@ esp_err_t h264_pipe_init(void)
     s_queue = xQueueCreate(H264_QUEUE_DEPTH, sizeof(pipe_item_t));
     if (!s_queue) {
         ESP_LOGE(TAG, "xQueueCreate failed");
+#if CONFIG_H264DEC_OWN
+        h264dec_delete(s_dec);
+#else
         esp_h264_dec_close(s_dec);
         esp_h264_dec_del(s_dec);
+#endif
         s_dec = NULL;
         return ESP_ERR_NO_MEM;
     }

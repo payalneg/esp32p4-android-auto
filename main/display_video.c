@@ -96,6 +96,29 @@ static uint8_t          *s_stage[STAGE_SLOTS];
 static size_t            s_stage_bytes;
 static uint16_t          s_stage_w, s_stage_h;
 static SemaphoreHandle_t s_stage_free;   /* counting: free staging slots */
+/* Staging cache. The decoder tags each picture with a content_id that only
+ * moves when the pixels did (a static screen is a run of P_Skip frames with
+ * zero motion — same picture again and again). A frame whose content_id
+ * matches the last shuffled one is queued against that same slot without
+ * the 17-19 ms shuffle; PPA + HUD still run so the overlay stays live.
+ * s_slot_refs counts queued items per slot (several may point at one slot
+ * now), guarded by s_slot_mux because submit runs on core 1 and the display
+ * task on core 0. A fresh frame takes a slot with no references — the
+ * s_stage_free semaphore (STAGE_SLOTS items in flight at most) guarantees
+ * one exists once it has been taken. */
+static uint8_t           s_slot_refs[STAGE_SLOTS];
+static portMUX_TYPE      s_slot_mux = portMUX_INITIALIZER_UNLOCKED;
+static int               s_last_slot = -1;
+static uint32_t          s_last_content_id;
+static bool              s_last_content_valid;
+/* Incremental staging (see display_video_set_diff_provider): the picture
+ * version each slot currently holds, and the provider that says what
+ * changed since. A slot at version 0 gets a full shuffle. */
+static uint32_t          s_slot_version[STAGE_SLOTS];
+static display_video_diff_fn_t s_diff_fn;
+static void             *s_diff_ctx;
+#define DIFF_MAX_MBS     2400
+static uint32_t          s_diff_mask[DIFF_MAX_MBS / 32];
 static QueueHandle_t     s_disp_q;
 static TaskHandle_t      s_disp_task;
 static SemaphoreHandle_t s_draw_lock;    /* held across PPA+draw; yield takes it */
@@ -115,6 +138,9 @@ static struct {
     uint64_t overlay_us;
     uint64_t draw_us;
     uint64_t total_us;
+    uint32_t stage_reused;  /* frames queued against the cached staging slot (no shuffle) */
+    uint32_t stage_incremental; /* frames staged by re-shuffling only changed MBs */
+    uint32_t stage_mbs;         /* macroblocks shuffled in the window */
     int64_t  window_start_us;
 } s_aa_stats;
 
@@ -147,13 +173,20 @@ static void aa_stats_log_periodic(void)
         unsigned long long tt = s_aa_stats.total_us   / f / 100;
         ESP_LOGI(TAG,
                  "show %lld.%llds: %u fr | shuffle %llu.%llu | ppa %llu.%llu | "
-                 "hud %llu.%llu | draw %llu.%llu | total %llu.%llu ms/fr",
+                 "hud %llu.%llu | draw %llu.%llu | total %llu.%llu ms/fr | "
+                 "%u reused, %u incremental, %u MBs shuffled",
                  (long long)(span / 1000000), (long long)((span / 100000) % 10),
                  (unsigned)f,
                  sh / 10, sh % 10, pp / 10, pp % 10, hd / 10, hd % 10,
-                 dr / 10, dr % 10, tt / 10, tt % 10);
+                 dr / 10, dr % 10, tt / 10, tt % 10,
+                 (unsigned)s_aa_stats.stage_reused,
+                 (unsigned)s_aa_stats.stage_incremental,
+                 (unsigned)s_aa_stats.stage_mbs);
     }
     s_aa_stats.frames     = 0;
+    s_aa_stats.stage_reused = 0;
+    s_aa_stats.stage_incremental = 0;
+    s_aa_stats.stage_mbs = 0;
     s_aa_stats.imgfx_us   = 0;
     s_aa_stats.ppa_us     = 0;
     s_aa_stats.overlay_us = 0;
@@ -303,6 +336,41 @@ static void i420_to_ouyy_evyy_rows(const uint8_t *yuv, int w, int h, uint8_t *ou
 static void i420_to_ouyy_evyy(const uint8_t *yuv, int w, int h, uint8_t *out)
 {
     i420_to_ouyy_evyy_rows(yuv, w, h, out, 0, h / 2);
+}
+
+/* Same layout, one 16x16 macroblock: 16 output rows of 8 [C Y Y] triplets
+ * (24 bytes) at column 24*mbx. Even rows take U, odd rows V, like the
+ * full-frame path. Alignment holds for the same reasons it does there. */
+static void shuffle_mb(const uint8_t *yuv, int w, int h, uint8_t *out,
+                       int mbx, int mby)
+{
+    const uint8_t *Yp = yuv;
+    const uint8_t *Up = yuv + (size_t)w * h;
+    const uint8_t *Vp = Up   + ((size_t)w * h) / 4;
+    const int uv_w   = w / 2;
+    const int stride = w * 3 / 2;
+    for (int r = 0; r < 16; r++) {
+        int row = mby * 16 + r;
+        const uint8_t *Y = Yp + (size_t)row * w + mbx * 16;
+        const uint8_t *C = ((row & 1) ? Vp : Up) + (size_t)(row >> 1) * uv_w + mbx * 8;
+        uint8_t *o = out + (size_t)row * stride + mbx * 24;
+        shuffle_row_w4(C, Y, o, 8);
+    }
+}
+
+/* Bring `out` (holding the frame the mask was computed against) to `yuv`:
+ * re-shuffle only the flagged macroblocks. Returns how many. */
+static unsigned shuffle_masked(const uint8_t *yuv, int w, int h, uint8_t *out,
+                               const uint32_t *mask)
+{
+    const int mbw = w / 16, mbh = h / 16;
+    unsigned n = 0;
+    for (int i = 0; i < mbw * mbh; i++) {
+        if (!((mask[i >> 5] >> (i & 31)) & 1u)) continue;
+        shuffle_mb(yuv, w, h, out, i % mbw, i / mbw);
+        n++;
+    }
+    return n;
 }
 
 static bool IRAM_ATTR refresh_done_cb(esp_lcd_panel_handle_t panel,
@@ -1257,7 +1325,9 @@ static bool stage_alloc(uint16_t w, uint16_t h)
     }
     /* Resolution change mid-session is not a thing AA does, but be safe:
      * only reallocate when no slot is in flight (all STAGE_SLOTS free). */
+    s_last_content_valid = false;
     for (int i = 0; i < STAGE_SLOTS; i++) {
+        s_slot_version[i] = 0;
         free(s_stage[i]);
         s_stage[i] = heap_caps_aligned_calloc(s_cache_line, 1, need, MALLOC_CAP_SPIRAM);
         if (!s_stage[i]) {
@@ -1271,10 +1341,17 @@ static bool stage_alloc(uint16_t w, uint16_t h)
     return true;
 }
 
-esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
-                                      uint16_t src_w, uint16_t src_h,
-                                      display_video_done_cb_t done_cb,
-                                      void *done_ctx)
+void display_video_set_diff_provider(display_video_diff_fn_t fn, void *ctx)
+{
+    s_diff_fn  = fn;
+    s_diff_ctx = ctx;
+}
+
+esp_err_t display_video_submit_pic(const uint8_t *yuv,
+                                   uint16_t src_w, uint16_t src_h,
+                                   uint32_t content_id, uint32_t version,
+                                   display_video_done_cb_t done_cb,
+                                   void *done_ctx)
 {
     if (!s_panel || !s_ppa || !s_disp_q) return ESP_ERR_INVALID_STATE;
     if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
@@ -1288,22 +1365,64 @@ esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
         xSemaphoreGive(s_stage_free);
         return ESP_ERR_NO_MEM;
     }
-    /* Any slot the display task is not holding is free; find it. Slots are
-     * handed back in completion order, so simple round-robin is exact. */
-    static int s_next_slot;
-    int slot = s_next_slot;
-    s_next_slot = (s_next_slot + 1) % STAGE_SLOTS;
 
-    /* The shuffle stays on this core, whole. Tried (2026-09-02, logs/
-     * 20260902-214324.log): splitting the rows with a helper task on core 0
-     * — no gain at all (still 17.7 fps) while core 0 went from 29 % idle to
-     * 6 %. The shuffle is PSRAM-bandwidth-bound and PSRAM is shared by both
-     * cores; running two copies concurrently just makes each one slower.
-     * Same reason the word-packed rewrite only bought 19.5 → 16.8 ms. */
-    int64_t t0 = esp_timer_get_time();
-    i420_to_ouyy_evyy(yuv, src_w, src_h, s_stage[slot]);
-    esp_cache_msync(s_stage[slot], s_stage_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    s_aa_stats.imgfx_us += (uint64_t)(esp_timer_get_time() - t0);
+    int  slot;
+    bool reuse = s_last_content_valid && s_last_slot >= 0 &&
+                 content_id == s_last_content_id &&
+                 src_w == s_stage_w && src_h == s_stage_h;
+    portENTER_CRITICAL(&s_slot_mux);
+    if (reuse) {
+        slot = s_last_slot;
+    } else {
+        /* Among the free slots prefer the one holding the newest picture:
+         * the incremental update from it touches the fewest macroblocks. */
+        slot = -1;
+        for (int i = 0; i < STAGE_SLOTS; i++) {
+            if (s_slot_refs[i] != 0) continue;
+            if (slot < 0 || s_slot_version[i] > s_slot_version[slot]) slot = i;
+        }
+    }
+    if (slot >= 0) s_slot_refs[slot]++;
+    portEXIT_CRITICAL(&s_slot_mux);
+    if (slot < 0) {
+        /* Cannot happen while the semaphore bounds items in flight; be loud. */
+        ESP_LOGE(TAG, "no free staging slot");
+        xSemaphoreGive(s_stage_free);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!reuse) {
+        /* The shuffle stays on this core, whole. Tried (2026-09-02, logs/
+         * 20260902-214324.log): splitting the rows with a helper task on core 0
+         * — no gain at all (still 17.7 fps) while core 0 went from 29 % idle to
+         * 6 %. The shuffle is PSRAM-bandwidth-bound and PSRAM is shared by both
+         * cores; running two copies concurrently just makes each one slower.
+         * Same reason the word-packed rewrite only bought 19.5 → 16.8 ms. */
+        int64_t t0 = esp_timer_get_time();
+        size_t words = ((size_t)(src_w / 16) * (src_h / 16) + 31) / 32;
+        bool incremental = s_diff_fn && version && s_slot_version[slot] &&
+                           words <= DIFF_MAX_MBS / 32 &&
+                           s_diff_fn(s_slot_version[slot], version, s_diff_mask,
+                                     words, s_diff_ctx);
+        if (incremental) {
+            s_aa_stats.stage_mbs += shuffle_masked(yuv, src_w, src_h, s_stage[slot],
+                                                   s_diff_mask);
+            s_aa_stats.stage_incremental++;
+        } else {
+            i420_to_ouyy_evyy(yuv, src_w, src_h, s_stage[slot]);
+            s_aa_stats.stage_mbs += (uint32_t)(src_w / 16) * (src_h / 16);
+        }
+        esp_cache_msync(s_stage[slot], s_stage_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        s_aa_stats.imgfx_us += (uint64_t)(esp_timer_get_time() - t0);
+        s_slot_version[slot] = version;
+        s_last_slot          = slot;
+        s_last_content_id    = content_id;
+        s_last_content_valid = true;
+    } else {
+        /* Same pixels as the slot holds: it is now also picture `version`. */
+        if (version) s_slot_version[slot] = version;
+        s_aa_stats.stage_reused++;
+    }
 
     disp_item_t it = {
         .slot = slot, .w = src_w, .h = src_h, .gen = s_gen,
@@ -1311,6 +1430,18 @@ esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
     };
     xQueueSend(s_disp_q, &it, portMAX_DELAY);
     return ESP_OK;
+}
+
+esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
+                                      uint16_t src_w, uint16_t src_h,
+                                      display_video_done_cb_t done_cb,
+                                      void *done_ctx)
+{
+    /* No content tag → never matches the cache → always shuffled. */
+    static uint32_t s_untagged;
+    s_untagged += 2;
+    return display_video_submit_pic(yuv, src_w, src_h, 0x80000000u | s_untagged, 0,
+                                    done_cb, done_ctx);
 }
 
 esp_err_t display_video_fence(display_video_done_cb_t done_cb, void *done_ctx)
@@ -1398,6 +1529,9 @@ static void disp_task(void *arg)
                 disp_present(&it);
             }
             xSemaphoreGive(s_draw_lock);
+            portENTER_CRITICAL(&s_slot_mux);
+            if (s_slot_refs[it.slot]) s_slot_refs[it.slot]--;
+            portEXIT_CRITICAL(&s_slot_mux);
             xSemaphoreGive(s_stage_free);
         }
         if (it.done_cb) it.done_cb(it.done_ctx);
