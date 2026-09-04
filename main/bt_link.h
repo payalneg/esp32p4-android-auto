@@ -103,6 +103,21 @@ void bt_link_set_auto_reconnect(bool on);
  * itself also honours the same toggle so a stale call is harmless. */
 void bt_link_request_aa_reconnect(void);
 
+/* Tell the BT agent whether an AA session is live. On `live` the agent goes
+ * off air for the duration — closes SPP, drops HFP, stops page/inquiry scan —
+ * the way the reference dongle powers its adapter off once the phone is on
+ * TCP: any BT event on a bonded car kit makes gearhead re-run the wireless
+ * setup, and a completed setup always restarts projection. On `!live` it
+ * comes back; `peer_closed` (clean FIN, the user most likely exited AA) holds
+ * its auto-page until Connect is tapped, a lost session is re-paged. Sent by
+ * tcp_server after the handshake and by aa_reconnect after the session
+ * ends; re-sent automatically when the agent is seen rebooting. */
+void bt_link_set_aa_session(bool live, bool peer_closed);
+
+/* Last state sent with bt_link_set_aa_session(): true while the agent has
+ * been told a session is live and not yet told it ended. */
+bool bt_link_aa_session_live(void);
+
 /* Manual "Connect" — user tapped the button on the idle screen. The agent
  * unconditionally HFP-pages the last paired phone regardless of the
  * auto-reconnect toggle. No-op on the agent side if no phone is paired

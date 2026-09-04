@@ -11,6 +11,7 @@
 #include "aa_service.h"
 #include "aa_tls.h"
 #include "bsp/esp-bsp.h"
+#include "bt_link.h"
 #include "display_video.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -53,6 +54,12 @@ static session_end_t client_loop(int sock)
         free(tls);
         return SESSION_NONE;
     }
+
+    /* Authenticated phone on TCP — the BT agent leaves the air for the
+     * duration (see bt_link_set_aa_session). aa_reconnect_after_drop brings
+     * it back once the session is really over; a phone that reconnects by
+     * itself inside the grace window just re-arms this. */
+    bt_link_set_aa_session(true, false);
 
     esp_err_t err = aa_service_run(sock, tls);
 
@@ -181,12 +188,15 @@ static void accept_task(void *arg)
         }
 
         /* Screen is back to idle — now restart the wireless flow (kick the
-         * phone off the AP, bounce BT) so the next session can begin. Only
-         * after a real session: a client that failed the handshake is not
-         * a phone we want to keep re-paging. And only if the phone is not
-         * already knocking (see RECONNECT_GRACE_MS) — kicking it then kills
-         * the very reconnect we want. */
-        if (ended != SESSION_NONE) {
+         * phone off the AP, bring the BT agent back on air, page) so the next
+         * session can begin. Only after a real session: a client that failed
+         * the handshake is not a phone we want to keep re-paging — unless the
+         * agent is still off air from a previous session (the phone came back
+         * inside the grace window and then failed the handshake); leaving it
+         * there would mean nobody pages and Connect is ignored. And only if
+         * the phone is not already knocking (see RECONNECT_GRACE_MS) —
+         * kicking it then kills the very reconnect we want. */
+        if (ended != SESSION_NONE || bt_link_aa_session_live()) {
             if (wait_for_client(listen_sock, RECONNECT_GRACE_MS)) {
                 ESP_LOGI(TAG, "phone is reconnecting by itself — leaving the AP/BT alone");
             } else {
