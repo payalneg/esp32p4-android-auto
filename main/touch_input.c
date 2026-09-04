@@ -261,10 +261,25 @@ static void poll_task(void *arg)
                 edge_candidate    = false;
                 edge_fired        = false;
                 /* TOUCH_MODE_AA: same rotation, plus PRESS/DRAG/RELEASE state
-                 * machine. Multi-touch (>=2) suppresses AA events. */
-                if (single) {
-                    uint16_t aa_x = panel_y;
-                    uint16_t aa_y = (PANEL_NATIVE_W - 1) - panel_x;
+                 * machine. Multi-touch (>=2) suppresses AA events.
+                 * A live debug-bridge injection (screen-space, already
+                 * landscape) stands in for the finger here too, so UI-test
+                 * scripts can drive the phone through the projection. */
+                bool     aa_single = single;
+                uint16_t aa_x = 0, aa_y = 0;
+                if (inject_live()) {
+                    aa_single = atomic_load(&s_inject_pressed);
+                    aa_x = atomic_load(&s_inject_x);
+                    aa_y = atomic_load(&s_inject_y);
+                    cnt  = aa_single ? 1 : 0;
+                } else {
+                    if (atomic_load(&s_inject_active)) {
+                        atomic_store(&s_inject_active, false);
+                    }
+                    aa_x = panel_y;
+                    aa_y = (PANEL_NATIVE_W - 1) - panel_x;
+                }
+                if (aa_single) {
                     if (aa_x >= AA_W) aa_x = AA_W - 1;
                     if (aa_y >= AA_H) aa_y = AA_H - 1;
 
