@@ -270,20 +270,24 @@ static void draw_battery_icon(uint16_t *fb, int x, int y, int pct)
                    COLOR_TEXT, GLOBAL_ALPHA);
 }
 
-void aa_overlay_draw(uint16_t *fb)
+/* Everything the overlay renders is a function of these. Read in one
+ * place so the display stage can ask "would the HUD look any different?"
+ * without rendering it (aa_overlay_content_key). */
+typedef struct {
+    unsigned speed;
+    unsigned batt;
+    bool     cc_active;
+    bool     imperial;
+} overlay_inputs_t;
+
+static overlay_inputs_t read_inputs(void)
 {
-    if (!fb) return;
-
-    s_flip = display_flip_active();
-
+    overlay_inputs_t in = { 0 };
     /* Read VESC RT data directly. The cockpit_get_*() cache used to feed
      * this overlay is updated from an lv_timer, which freezes whenever the
      * AA path pauses the LVGL worker (esp_lv_adapter_pause in display_video).
      * vesc_rt_data has its own FreeRTOS poller and stays live regardless,
      * so it's the only source guaranteed to be fresh while AA video runs. */
-    unsigned speed = 0;
-    unsigned batt  = 0;
-    bool cc_active = false;
     /* Speed follows the user-selected source: the BLE wheel sensor keeps
      * feeding the HUD even when the VESC is silent (speed_sensor's getter is
      * spinlock-backed and safe on this decoder task). */
@@ -297,20 +301,40 @@ void aa_overlay_draw(uint16_t *fb)
          * readout agrees (Smart tracker vs Direct controller estimate). */
         float pct = battery_calc_display_percentage(rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
         int b = (int)(pct + 0.5f);
-        batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
+        in.batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
     }
     if (spd_kmh < 0) spd_kmh = -spd_kmh;
     /* Honour the km/miles toggle (same setting as the dashboard). */
-    if (settings_get_use_imperial()) spd_kmh *= 0.621371f;
+    in.imperial = settings_get_use_imperial();
+    if (in.imperial) spd_kmh *= 0.621371f;
     int s = (int)(spd_kmh + 0.5f);
-    speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
+    in.speed = s < 0 ? 0u : (s > 999 ? 999u : (unsigned)s);
     /* Cruise indicator — from the Lisp DASH packet (its own pump), so it may
      * report CC active even if the RT poll just gapped a frame. */
     vlp_dash_t dash;
     if (vesc_lisp_panel_get_dash(&dash)) {
-        cc_active = dash.cruise_active;
+        in.cc_active = dash.cruise_active;
     }
+    return in;
+}
 
+uint32_t aa_overlay_content_key(void)
+{
+    overlay_inputs_t in = read_inputs();
+    return 0x80000000u | (in.speed << 12) | (in.batt << 2) |
+           (in.cc_active ? 2u : 0u) | (in.imperial ? 1u : 0u);
+}
+
+void aa_overlay_draw(uint16_t *fb)
+{
+    if (!fb) return;
+
+    s_flip = display_flip_active();
+
+    overlay_inputs_t in = read_inputs();
+    unsigned speed = in.speed;
+    unsigned batt  = in.batt;
+    bool cc_active = in.cc_active;
     char speed_buf[8];
     char batt_buf[8];
     snprintf(speed_buf, sizeof speed_buf, "%u", speed);

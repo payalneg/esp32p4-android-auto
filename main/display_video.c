@@ -88,6 +88,7 @@ typedef struct {
     int      slot;      /* staging slot, or -1 for a fence (callback only) */
     uint16_t w, h;
     uint32_t gen;       /* panel-ownership generation at submit time */
+    uint32_t version;   /* decoder picture version (0 = unknown) */
     display_video_done_cb_t done_cb;
     void    *done_ctx;
 } disp_item_t;
@@ -141,6 +142,11 @@ static struct {
     uint32_t stage_reused;  /* frames queued against the cached staging slot (no shuffle) */
     uint32_t stage_incremental; /* frames staged by re-shuffling only changed MBs */
     uint32_t stage_mbs;         /* macroblocks shuffled in the window */
+    uint32_t ppa_partial;       /* frames converted as sub-blocks */
+    uint64_t hud_draw_us;       /* aa_overlay_draw alone (the rest of "hud" is cache sync) */
+    uint32_t hud_draws;         /* frames on which the HUD was actually redrawn */
+    uint32_t ppa_rects;         /* sub-blocks issued in the window */
+    uint64_t ppa_px;            /* pixels through the PPA in the window */
     int64_t  window_start_us;
 } s_aa_stats;
 
@@ -174,19 +180,30 @@ static void aa_stats_log_periodic(void)
         ESP_LOGI(TAG,
                  "show %lld.%llds: %u fr | shuffle %llu.%llu | ppa %llu.%llu | "
                  "hud %llu.%llu | draw %llu.%llu | total %llu.%llu ms/fr | "
-                 "%u reused, %u incremental, %u MBs shuffled",
+                 "%u reused, %u incremental, %u MBs shuffled | ppa %u partial (%u rects), %u kpx/fr | hud drawn %u x %u.%u ms",
                  (long long)(span / 1000000), (long long)((span / 100000) % 10),
                  (unsigned)f,
                  sh / 10, sh % 10, pp / 10, pp % 10, hd / 10, hd % 10,
                  dr / 10, dr % 10, tt / 10, tt % 10,
                  (unsigned)s_aa_stats.stage_reused,
                  (unsigned)s_aa_stats.stage_incremental,
-                 (unsigned)s_aa_stats.stage_mbs);
+                 (unsigned)s_aa_stats.stage_mbs,
+                 (unsigned)s_aa_stats.ppa_partial,
+                 (unsigned)s_aa_stats.ppa_rects,
+                 (unsigned)(s_aa_stats.ppa_px / f / 1000),
+                 (unsigned)s_aa_stats.hud_draws,
+                 (unsigned)(s_aa_stats.hud_draws ? s_aa_stats.hud_draw_us / s_aa_stats.hud_draws / 1000 : 0),
+                 (unsigned)(s_aa_stats.hud_draws ? s_aa_stats.hud_draw_us / s_aa_stats.hud_draws / 100 % 10 : 0));
     }
     s_aa_stats.frames     = 0;
     s_aa_stats.stage_reused = 0;
     s_aa_stats.stage_incremental = 0;
     s_aa_stats.stage_mbs = 0;
+    s_aa_stats.ppa_partial = 0;
+    s_aa_stats.ppa_rects = 0;
+    s_aa_stats.hud_draw_us = 0;
+    s_aa_stats.hud_draws = 0;
+    s_aa_stats.ppa_px = 0;
     s_aa_stats.imgfx_us   = 0;
     s_aa_stats.ppa_us     = 0;
     s_aa_stats.overlay_us = 0;
@@ -1425,7 +1442,7 @@ esp_err_t display_video_submit_pic(const uint8_t *yuv,
     }
 
     disp_item_t it = {
-        .slot = slot, .w = src_w, .h = src_h, .gen = s_gen,
+        .slot = slot, .w = src_w, .h = src_h, .gen = s_gen, .version = version,
         .done_cb = done_cb, .done_ctx = done_ctx,
     };
     xQueueSend(s_disp_q, &it, portMAX_DELAY);
@@ -1454,6 +1471,29 @@ esp_err_t display_video_fence(display_video_done_cb_t done_cb, void *done_ctx)
 
 /* PPA convert+rotate → HUD → panel submit for one staged frame. Mirrors the
  * DISPLAY_JPEG_SHUFFLE_THEN_PPA_YUV420 block of display_video_show_yuv420. */
+/* Picture version each private framebuffer holds (0 = unknown → full PPA),
+ * and the HUD content key it was last drawn with (0 = none). */
+static uint32_t s_fb_version[3];
+static uint32_t s_fb_hud_key[3];
+
+/* The HUD (aa_overlay) lives in the bottom band of the user-space frame:
+ * a 64 px font hanging from USER_H-3, cruise icon left of x=150, battery
+ * right-anchored at 678. Conservative MB-aligned box in source pixels. */
+#define HUD_USER_X0   96
+#define HUD_USER_X1   704
+#define HUD_USER_Y0   400
+#define MAX_PPA_RECTS 8
+
+/* Source-block → rotated-destination mapping for the PPA's CCW rotation.
+ * 270° CCW (normal mount): (x,y) → (H-1-y, x); 90° CCW (flipped): (x,y) → (y, W-1-x). */
+static void rotated_block(uint32_t w, uint32_t h, bool flip,
+                          uint32_t bx, uint32_t by, uint32_t bw, uint32_t bh,
+                          uint32_t *ox, uint32_t *oy)
+{
+    if (!flip) { *ox = h - (by + bh); *oy = bx; }
+    else       { *ox = by;            *oy = w - (bx + bw); }
+}
+
 static void disp_present(const disp_item_t *it)
 {
     int idx = s_fb_idx;
@@ -1461,44 +1501,152 @@ static void disp_present(const disp_item_t *it)
 
     int64_t t0 = esp_timer_get_time();
     size_t out_buf_size = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2, s_cache_line);
-    ppa_srm_oper_config_t op = {
-        .in = {
-            .buffer  = s_stage[it->slot],
-            .pic_w   = it->w,
-            .pic_h   = it->h,
-            .block_w = it->w,
-            .block_h = it->h,
-            .srm_cm  = PPA_SRM_COLOR_MODE_YUV420,
-            .yuv_range = COLOR_RANGE_LIMIT,
-            .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
-        },
-        .out = {
-            .buffer      = s_fb[idx],
-            .buffer_size = out_buf_size,
-            .pic_w       = PANEL_NATIVE_W,
-            .pic_h       = PANEL_NATIVE_H,
-            .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
-        },
-        .rotation_angle = display_flip_active() ? PPA_SRM_ROTATION_ANGLE_90
-                                                : PPA_SRM_ROTATION_ANGLE_270,
-        .scale_x = 1.0f,
-        .scale_y = 1.0f,
-        .mode    = PPA_TRANS_MODE_BLOCKING,
-    };
-    esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "ppa yuv420+rot: %s", esp_err_to_name(err));
-        return;
+    const bool flip = display_flip_active();
+
+    /* Incremental path: this framebuffer holds picture s_fb_version[idx].
+     * Convert only what changed since — as horizontal bands of macroblock
+     * rows (a clock at the top and the HUD at the bottom must not turn into
+     * one full-frame box) — plus the HUD band, whose previous rendering has
+     * to be painted over. Unknown history → the whole frame, as before. */
+    typedef struct { uint32_t x, y, w, h; } rect_t;
+    rect_t   rects[MAX_PPA_RECTS];
+    unsigned nrects = 0;
+    bool     partial = false;
+    bool     video_under_hud = false;
+    if (s_diff_fn && it->version && s_fb_version[idx] &&
+        it->w % 16 == 0 && it->h % 16 == 0) {
+        const uint32_t mbw = it->w / 16, mbh = it->h / 16;
+        size_t words = ((size_t)mbw * mbh + 31) / 32;
+        if (words <= DIFF_MAX_MBS / 32 &&
+            s_diff_fn(s_fb_version[idx], it->version, s_diff_mask, words, s_diff_ctx)) {
+            partial = true;
+            /* changed rows → bands of consecutive rows, x-extent = union */
+            int band_open = 0;
+            const uint32_t hmx0 = HUD_USER_X0 / 16;
+            const uint32_t hmx1 = (HUD_USER_X1 < it->w ? HUD_USER_X1 : it->w) / 16;
+            const uint32_t hmy0 = HUD_USER_Y0 / 16;
+            for (uint32_t r = 0; r < mbh && partial; r++) {
+                uint32_t x0 = mbw, x1 = 0;
+                for (uint32_t c = 0; c < mbw; c++) {
+                    uint32_t i = r * mbw + c;
+                    if ((s_diff_mask[i >> 5] >> (i & 31)) & 1u) {
+                        if (c < x0) x0 = c;
+                        x1 = c + 1;
+                    }
+                }
+                if (x1 == 0) { band_open = 0; continue; }
+                if (r >= hmy0 && x1 > hmx0 && x0 < hmx1) video_under_hud = true;
+                if (band_open) {
+                    rect_t *b = &rects[nrects - 1];
+                    uint32_t bx0 = b->x / 16, bx1 = (b->x + b->w) / 16;
+                    if (x0 < bx0) bx0 = x0;
+                    if (x1 > bx1) bx1 = x1;
+                    b->x = bx0 * 16; b->w = (bx1 - bx0) * 16;
+                    b->h += 16;
+                } else if (nrects < MAX_PPA_RECTS) {
+                    rects[nrects++] = (rect_t){ x0 * 16, r * 16, (x1 - x0) * 16, 16 };
+                    band_open = 1;
+                } else {
+                    partial = false;            /* too fragmented: do it all */
+                }
+            }
+        }
     }
+    /* The HUD is redrawn only when it would look different or the video
+     * under it moved — it costs ~9 ms of glyph blending per redraw. */
+    const uint32_t hud_key = aa_overlay_content_key();
+    bool need_hud = !partial || video_under_hud || hud_key != s_fb_hud_key[idx];
+    if (partial && need_hud) {
+        uint32_t hx1 = HUD_USER_X1 < it->w ? HUD_USER_X1 : it->w;
+        if (nrects < MAX_PPA_RECTS) {
+            rects[nrects++] = (rect_t){ HUD_USER_X0, HUD_USER_Y0,
+                                        hx1 - HUD_USER_X0, it->h - HUD_USER_Y0 };
+        } else {
+            partial = false;
+        }
+    }
+    if (!partial) {
+        nrects = 1;
+        rects[0] = (rect_t){ 0, 0, it->w, it->h };
+        need_hud = true;
+    }
+
+    for (unsigned i = 0; i < nrects; i++) {
+        uint32_t ox = 0, oy = 0;
+        rotated_block(it->w, it->h, flip, rects[i].x, rects[i].y, rects[i].w, rects[i].h,
+                      &ox, &oy);
+        ppa_srm_oper_config_t op = {
+            .in = {
+                .buffer  = s_stage[it->slot],
+                .pic_w   = it->w,
+                .pic_h   = it->h,
+                .block_w = rects[i].w,
+                .block_h = rects[i].h,
+                .block_offset_x = rects[i].x,
+                .block_offset_y = rects[i].y,
+                .srm_cm  = PPA_SRM_COLOR_MODE_YUV420,
+                .yuv_range = COLOR_RANGE_LIMIT,
+                .yuv_std   = COLOR_CONV_STD_RGB_YUV_BT601,
+            },
+            .out = {
+                .buffer      = s_fb[idx],
+                .buffer_size = out_buf_size,
+                .pic_w       = PANEL_NATIVE_W,
+                .pic_h       = PANEL_NATIVE_H,
+                .block_offset_x = ox,
+                .block_offset_y = oy,
+                .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
+            },
+            .rotation_angle = flip ? PPA_SRM_ROTATION_ANGLE_90
+                                   : PPA_SRM_ROTATION_ANGLE_270,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
+            .mode    = PPA_TRANS_MODE_BLOCKING,
+        };
+        esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "ppa yuv420+rot: %s", esp_err_to_name(err));
+            s_fb_version[idx] = 0;
+            return;
+        }
+        s_aa_stats.ppa_px += (uint64_t)rects[i].w * rects[i].h;
+    }
+    s_fb_version[idx] = it->version;
+    if (partial) { s_aa_stats.ppa_partial++; s_aa_stats.ppa_rects += nrects; }
     int64_t t_ppa_end = esp_timer_get_time();
 
-    esp_cache_msync(s_fb[idx], out_buf_size,
-                    ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
-    aa_overlay_draw((uint16_t *)s_fb[idx]);
-    esp_cache_msync(s_fb[idx], out_buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    /* The HUD alpha-blends onto the video. Its framebuffer band is written
+     * back AND invalidated after every draw, so the CPU holds no lines of it
+     * between frames and reads the PPA's fresh output next time without a
+     * separate invalidate. Full-frame path keeps the old two sweeps. */
+    uint32_t hx = 0, hy = 0;
+    uint32_t hbw = (HUD_USER_X1 < it->w ? HUD_USER_X1 : it->w) - HUD_USER_X0;
+    uint32_t hbh = it->h - HUD_USER_Y0;
+    rotated_block(it->w, it->h, flip, HUD_USER_X0, HUD_USER_Y0, hbw, hbh, &hx, &hy);
+    (void)hx;
+    if (need_hud) {
+        if (!partial) {
+            esp_cache_msync(s_fb[idx], out_buf_size,
+                            ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        }
+        int64_t t_hud0 = esp_timer_get_time();
+        aa_overlay_draw((uint16_t *)s_fb[idx]);
+        s_aa_stats.hud_draw_us += (uint64_t)(esp_timer_get_time() - t_hud0);
+        s_aa_stats.hud_draws++;
+        if (partial) {
+            /* dest rows [hy, hy+hbw): the rotated HUD band spans full rows */
+            uint8_t *row0 = (uint8_t *)s_fb[idx] + (size_t)hy * PANEL_NATIVE_W * 2;
+            esp_cache_msync(row0, (size_t)hbw * PANEL_NATIVE_W * 2,
+                            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        } else {
+            esp_cache_msync(s_fb[idx], out_buf_size,
+                            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        }
+        s_fb_hud_key[idx] = hud_key;
+    }
     int64_t t_overlay_end = esp_timer_get_time();
 
-    err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, PANEL_NATIVE_W, PANEL_NATIVE_H, s_fb[idx]);
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, PANEL_NATIVE_W, PANEL_NATIVE_H, s_fb[idx]);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "panel_draw_bitmap (yuv420+ppa): %s", esp_err_to_name(err));
     }

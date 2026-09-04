@@ -17,6 +17,7 @@ static u32       s_written[DIRTY_HISTORY][DIRTY_WORDS];  /* by version % HISTORY
 static u32       s_need[DIRTY_WORDS];
 static u32       s_cur[DIRTY_WORDS];
 static u32       s_seq = 1;             /* next frame's version */
+static u32       s_hist_valid_from = 1; /* versions below this have no written-set */
 static u32       s_words;
 static u32       s_need_all;            /* copy everything this picture */
 static u32       s_cur_all;             /* everything was written this picture */
@@ -46,9 +47,12 @@ static buf_ver_t *find_buf(const u8 *data, u32 create)
 
 void h264bsdDirtyReset(void)
 {
+    /* Versions stay monotonic: consumers (staging slots, framebuffers) hold
+     * old version numbers and must never see them reused with a different
+     * meaning. Only the history behind us becomes unknown. */
     memset(s_bufs, 0, sizeof(s_bufs));
     memset(s_written, 0, sizeof(s_written));
-    s_seq = 1;
+    s_hist_valid_from = s_seq;
     s_need_all = 1;
 }
 
@@ -114,6 +118,7 @@ u32 h264bsdDirtyChangedSince(u32 from, u32 to, u32 *mask, u32 words)
 {
     if (from == 0 || to <= from || to >= s_seq) return 0;
     if (to - from >= DIRTY_HISTORY) return 0;
+    if (from + 1 < s_hist_valid_from) return 0;   /* history crosses a reset */
     if (words > DIRTY_WORDS) words = DIRTY_WORDS;
     memset(mask, 0, words * sizeof(u32));
     for (u32 v = from + 1; v <= to; v++) {

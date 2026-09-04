@@ -19,3 +19,8 @@
  * for cache flushing the buffer afterwards before handing it to the LCD
  * DMA. */
 void aa_overlay_draw(uint16_t *fb);
+
+/* Non-zero key that changes exactly when the rendered overlay would: speed,
+ * battery %, cruise flag, units. Lets the display stage skip the ~9 ms
+ * redraw while nothing it shows has moved. */
+uint32_t aa_overlay_content_key(void);
