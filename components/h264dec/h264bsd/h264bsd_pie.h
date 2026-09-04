@@ -14,6 +14,21 @@
 void h264_pie_hhalf_row(const u8 *src, u8 *dst, u32 w);
 void h264_ref_hhalf_row(const u8 *src, u8 *dst, u32 w);   /* scalar reference */
 
+/* One row of VERTICAL half-pel 6-tap: taps run down the column, so for
+ *   i in [0,w):  dst[i] = clip( (s[0][i] -5 s[1][i] +20 s[2][i] +20 s[3][i]
+ *                                -5 s[4][i] + s[5][i] + 16) >> 5 )
+ * where s[k][i] = src[k*stride + i]. src must have 6 readable rows. */
+void h264_pie_vhalf_row(const u8 *src, u32 stride, u8 *dst, u32 w);
+void h264_ref_vhalf_row(const u8 *src, u32 stride, u8 *dst, u32 w);
+
+/* Position 'j': horizontal 6-tap into a full-precision intermediate, then a
+ * vertical 6-tap on it with (v + 512) >> 10 and clipping. `ref` is already
+ * offset so output (0,0) taps ref[0..5] horizontally and rows 0..5 vertically.
+ * mb rows are 16 bytes apart. Returns 0 when it handled the block, non-zero
+ * when the caller must fall back to C (widths it does not vectorise). */
+int  h264_pie_midhalf(const u8 *ref, u32 width, u8 *mb, u32 partWidth, u32 partHeight);
+void h264_ref_midhalf(const u8 *ref, u32 width, u8 *mb, u32 partWidth, u32 partHeight);
+
 /* Runs the PIE kernels against their references on many random cases and
  * edge values; logs a one-line pass/fail (+ first mismatch). Returns 0 on
  * full pass. Safe to call once at boot. */

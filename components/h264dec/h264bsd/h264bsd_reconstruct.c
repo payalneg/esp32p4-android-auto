@@ -523,6 +523,20 @@ void h264bsdInterpolateVerHalf(
 
     ref += (u32)y0 * width + (u32)x0;
 
+    #ifdef H264BSD_ESP_PIE
+    /* PIE vertical 6-tap, one output row per call (self-checked at boot). */
+    {
+        const u8 *rowSrc = ref;
+        u8 *rowDst = mb;
+        for (i = partHeight; i; i--)
+        {
+            h264_pie_vhalf_row(rowSrc, width, rowDst, partWidth);
+            rowSrc += width;
+            rowDst += 16;
+        }
+        return;
+    }
+#endif
     ptrC = ref + width;
     ptrV = ptrC + 5*width;
 
@@ -1259,6 +1273,11 @@ void h264bsdInterpolateMidHalf(
 
     ref += (u32)y0 * width + (u32)x0;
 
+    #ifdef H264BSD_ESP_PIE
+    /* PIE position 'j' (self-checked at boot); falls through for widths it
+     * does not vectorise. */
+    if (h264_pie_midhalf(ref, width, mb, partWidth, partHeight) == 0) return;
+#endif
     b1 = table;
     ptrJ = ref + 5;
 
