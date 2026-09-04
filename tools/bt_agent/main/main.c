@@ -42,7 +42,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.6.5"
+#define BT_AGENT_FW_VERSION "0.6.6"
 
 /* NVS namespace + key for remembering the last successfully-paired phone's
  * BDA. On boot, if a value is present, we proactively HFP-connect to it so
@@ -69,6 +69,16 @@ static volatile bool g_auto_reconnect = true;
  * 5 s poll, and independent of the g_auto_reconnect toggle. */
 static volatile bool     g_repage_pending = false;
 static esp_timer_handle_t g_repage_timer;
+/* repage_timer_cb re-arms itself this many times when the page it fires is
+ * refused by the stack (a previous page still pending), 2 s apart. */
+#define REPAGE_MAX_TRIES         5
+static volatile int      g_repage_tries;
+
+/* Set by a Connect tap (BT_CONNECT): auto_reconnect_task drops out of its
+ * backoff sleep — which had grown to a minute after a few misses — and
+ * restarts the campaign from the short delays, so a phone that just came
+ * back into range is paged within seconds, not up to 60 s later. */
+static volatile bool     g_backoff_reset = false;
 
 /* AA session gate (what the reference dongle does by powering its adapter
  * off once the phone is on TCP). Any Bluetooth event on a bonded car kit —
@@ -443,6 +453,8 @@ static void sdp_callback(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *p)
  * task; esp_hf_client_connect only posts to the Bluedroid task, so that is
  * fine. The delay lets the controller finish tearing the ACL down — paging
  * a peer whose previous link is still closing gets a silent no-op. */
+static void arm_repage_timer(uint32_t delay_ms);
+
 static void repage_timer_cb(void *arg)
 {
     (void)arg;
@@ -450,16 +462,26 @@ static void repage_timer_cb(void *arg)
         g_aa_session_live) {
         return;     /* phone came back on its own meanwhile, or we went off air */
     }
-    ESP_LOGI(TAG, "re-paging %02x:%02x:%02x:%02x:%02x:%02x after HFP bounce",
+    ESP_LOGI(TAG, "re-paging %02x:%02x:%02x:%02x:%02x:%02x (try %d)",
              g_last_bda[0], g_last_bda[1], g_last_bda[2],
-             g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+             g_last_bda[3], g_last_bda[4], g_last_bda[5], g_repage_tries + 1);
     esp_err_t e = esp_hf_client_connect(g_last_bda);
     if (e != ESP_OK) {
+        /* ESP_ERR_INVALID_STATE = the HF client is still busy with an
+         * earlier page (auto_reconnect_task's, or the one whose ACL is
+         * still tearing down). Dropping the request here is how a Connect
+         * tap used to end as a silent no-op — try again shortly instead. */
         ESP_LOGW(TAG, "re-page: esp_hf_client_connect: %s", esp_err_to_name(e));
+        if (++g_repage_tries < REPAGE_MAX_TRIES) {
+            arm_repage_timer(2000);
+        } else {
+            ESP_LOGW(TAG, "re-page: giving up after %d tries — auto-reconnect loop "
+                          "carries on", REPAGE_MAX_TRIES);
+        }
     }
 }
 
-static void schedule_repage(uint32_t delay_ms)
+static void arm_repage_timer(uint32_t delay_ms)
 {
     if (!g_repage_timer) {
         const esp_timer_create_args_t args = {
@@ -473,6 +495,14 @@ static void schedule_repage(uint32_t delay_ms)
     }
     esp_timer_stop(g_repage_timer);
     esp_timer_start_once(g_repage_timer, (uint64_t)delay_ms * 1000);
+}
+
+/* Fresh re-page campaign: first attempt after delay_ms, then up to
+ * REPAGE_MAX_TRIES attempts 2 s apart while the stack refuses the page. */
+static void schedule_repage(uint32_t delay_ms)
+{
+    g_repage_tries = 0;
+    arm_repage_timer(delay_ms);
 }
 
 /* Tear the HFP link down so gearhead sees its car kit go away and come back
@@ -596,7 +626,17 @@ static void auto_reconnect_task(void *arg)
 
         uint32_t d = delays_ms[idx];
         if (idx + 1 < sizeof(delays_ms) / sizeof(delays_ms[0])) idx++;
-        vTaskDelay(pdMS_TO_TICKS(d));
+        /* Sleep in slices so a Connect tap can cut the backoff short. */
+        for (uint32_t waited = 0; waited < d && !g_backoff_reset; waited += 500) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        if (g_backoff_reset) {
+            g_backoff_reset = false;
+            idx = 0;
+            /* BT_CONNECT has just paged by itself; give that page its
+             * ~3 s before this loop piles a second one on top of it. */
+            vTaskDelay(pdMS_TO_TICKS(3000));
+        }
     }
     vTaskDelete(NULL);
 }
@@ -656,6 +696,7 @@ void bt_agent_connect_now(void)
         return;
     }
     g_page_hold = false;    /* explicit user request overrides "leave them be" */
+    g_backoff_reset = true; /* auto-reconnect loop: back to the short delays */
     if (g_spp_handle != 0) {
         ESP_LOGI(TAG, "BT_CONNECT: SPP already up");
         return;
@@ -673,8 +714,13 @@ void bt_agent_connect_now(void)
              g_last_bda[3], g_last_bda[4], g_last_bda[5]);
     esp_err_t e = esp_hf_client_connect(g_last_bda);
     if (e != ESP_OK) {
-        /* INVALID_STATE = a previous page is still pending; not fatal. */
-        ESP_LOGW(TAG, "BT_CONNECT: esp_hf_client_connect: %s", esp_err_to_name(e));
+        /* INVALID_STATE = a previous page (auto_reconnect_task's, most
+         * likely, while the phone was out of range) is still pending in the
+         * stack. The tap must not evaporate on that: retry in 2 s, a few
+         * times, from the re-page timer. */
+        ESP_LOGW(TAG, "BT_CONNECT: esp_hf_client_connect: %s — retrying in 2 s",
+                 esp_err_to_name(e));
+        schedule_repage(2000);
     }
 }
 

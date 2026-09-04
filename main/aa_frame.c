@@ -27,7 +27,16 @@ static int recv_exact(int sock, uint8_t *buf, size_t len)
             return 0;
         }
         if (n < 0) {
-            ESP_LOGW(TAG, "recv errno %d", errno);
+            /* EWOULDBLOCK = the SO_RCVTIMEO tcp_server arms on the socket
+             * expired: the phone sent nothing for that long. ECONNABORTED =
+             * lwIP gave up on TCP keepalive probes / retransmits. Both mean
+             * the phone is gone without a FIN — a LOST session. */
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                ESP_LOGW(TAG, "recv timed out — no data from the phone, link dead?");
+            } else {
+                ESP_LOGW(TAG, "recv errno %d%s", errno,
+                         errno == ECONNABORTED ? " (keepalive/retransmit gave up)" : "");
+            }
             return n;
         }
 #if AA_FRAME_LOG_RAW
