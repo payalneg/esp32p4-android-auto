@@ -103,6 +103,9 @@ CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=32
 # help: WND/MSS + 2.
 CONFIG_LWIP_TCP_WND_DEFAULT=23040
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=18
+# FIONREAD on the AA socket (aa_service's "sock backlog" figure) needs the
+# per-socket receive accounting this switches on.
+CONFIG_LWIP_SO_RCVBUF=y
 
 # ===== VESC CAN pins =====
 # Wired on this board: GPIO 48 = TX → SN65HVD230 D, GPIO 47 = RX ← R.

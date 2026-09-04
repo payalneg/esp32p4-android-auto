@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 
 #include "aa_frame.h"
 #include "aa_proto.h"
@@ -553,6 +554,7 @@ static struct {
     uint64_t video_bytes;
     uint32_t video_max;    /* largest video message in the window */
     uint64_t push_wait_us; /* blocked in h264_pipe_push (queue full) */
+    uint32_t sock_buf_max; /* peak bytes queued in the socket (FIONREAD) */
     int64_t  window_start_us;
 } s_recv_stats;
 
@@ -569,7 +571,7 @@ static void recv_stats_log_periodic(void)
     if (m > 0) {
         ESP_LOGI(TAG,
                  "rx %lld.%llds: %u video fr %llu KiB (max %u KiB) | %u other msg | "
-                 "tcp %llu ms | tls %llu ms | push-wait %llu ms",
+                 "tcp %llu ms | tls %llu ms | push-wait %llu ms | sock backlog max %u B",
                  (long long)(span / 1000000), (long long)((span / 100000) % 10),
                  (unsigned)s_recv_stats.video_frames,
                  (unsigned long long)(s_recv_stats.video_bytes / 1024),
@@ -577,7 +579,8 @@ static void recv_stats_log_periodic(void)
                  (unsigned)(m - s_recv_stats.video_frames),
                  (unsigned long long)(s_recv_stats.recv_us / 1000),
                  (unsigned long long)(s_recv_stats.decrypt_us / 1000),
-                 (unsigned long long)(s_recv_stats.push_wait_us / 1000));
+                 (unsigned long long)(s_recv_stats.push_wait_us / 1000),
+                 (unsigned)s_recv_stats.sock_buf_max);
     }
     memset(&s_recv_stats, 0, sizeof(s_recv_stats));
     s_recv_stats.window_start_us = now;
@@ -664,6 +667,17 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         aa_channel_id_t ch;
         uint8_t flags;
         size_t cipher_len;
+        /* Bytes the phone has already delivered that we have not read yet =
+         * frames queued ahead of the decoder = touch-to-screen latency in the
+         * making. Bounded by CONFIG_LWIP_TCP_WND_DEFAULT; this is the number
+         * that decides how large that window may be. */
+        {
+            int avail = 0;
+            if (ioctl(sock, FIONREAD, &avail) == 0 &&
+                avail > (int)s_recv_stats.sock_buf_max) {
+                s_recv_stats.sock_buf_max = (uint32_t)avail;
+            }
+        }
         int64_t t_recv0 = esp_timer_get_time();
         esp_err_t err = aa_frame_recv(sock, &ch, &flags,
                                       cipher_buf, cipher_cap, &cipher_len);
