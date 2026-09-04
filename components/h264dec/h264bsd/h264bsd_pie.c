@@ -8,6 +8,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 
 static const char *TAG = "h264pie";
 
@@ -49,6 +50,21 @@ void h264_ref_midhalf(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph)
             mb[y*16+i] = (u8)(v < 0 ? 0 : (v > 255 ? 255 : v));
         }
     }
+}
+
+void h264_ref_hquarter_row(const u8 *s, u8 *dst, u32 w, u32 off)
+{
+    u8 half[24];
+    h264_ref_hhalf_row(s, half, w);
+    for (u32 i = 0; i < w; i++) dst[i] = (u8)((half[i] + s[i + 2 + off] + 1) >> 1);
+}
+
+void h264_ref_vquarter_row(const u8 *s, u32 stride, u8 *dst, u32 w, u32 off)
+{
+    u8 half[24];
+    h264_ref_vhalf_row(s, stride, half, w);
+    const u8 *n = s + (2 + off) * stride;
+    for (u32 i = 0; i < w; i++) dst[i] = (u8)((half[i] + n[i] + 1) >> 1);
 }
 
 /* ---------- PIE kernel ----------
@@ -189,6 +205,8 @@ void h264_pie_vhalf_row(const u8 *src, u32 stride, u8 *dst, u32 w)
 }
 
 /* mid pass 1: u8 row -> 8 raw 6-tap sums as s16 (no bias, no shift, no clamp) */
+/* avg: rounding term 1, then multiplier 1 for each operand */
+static const int16_t s_tbl_avg[4] __attribute__((aligned(16))) = { 1, 1, 0, 0 };
 static const int16_t s_tbl_m1[8] __attribute__((aligned(16))) = { 1, -5, 20, 20, -5, 1, 0, 0 };
 /* mid pass 2: bias 1*512, taps, clamp bounds */
 static const int16_t s_tbl_m2[12] __attribute__((aligned(16))) = { 1, 512, 1, -5, 20, 20, -5, 1, 0, 255, 0, 0 };
@@ -260,6 +278,76 @@ static void pie_mid_v8(const int16_t *srcp, u32 stridev, u8 *dstp)
     memcpy(dstp, out, 8);
 }
 
+/* (a + b + 1) >> 1 over 8 bytes, both operands unaligned. */
+static void pie_avg8(const u8 *ap, const u8 *bp, u8 *dstp)
+{
+    u8 out[16] __attribute__((aligned(16)));
+    register const u8      *a   asm("a0") = ap;
+    register const u8      *b   asm("a1") = bp;
+    register u8            *o   asm("a2") = out;
+    register const int16_t *tbl asm("a3") = s_tbl_avg;
+    register unsigned       sh  asm("a4") = 1;
+    asm volatile(
+        "esp.ld.128.usar.ip q4, %[a], 16     \n"
+        "esp.ld.128.usar.ip q5, %[a], 0      \n"
+        "esp.src.q.qup q0, q4, q5            \n"
+        "esp.ld.128.usar.ip q4, %[b], 16     \n"
+        "esp.ld.128.usar.ip q5, %[b], 0      \n"
+        "esp.src.q.qup q1, q4, q5            \n"
+        "esp.zero.qacc                       \n"
+        /* qacc = 1 (the rounding term), then + a*1 + b*1 */
+        "esp.vldbc.16.ip q6, %[tbl], 0       \n"
+        "addi %[tbl], %[tbl], 2              \n"
+        "esp.vldbc.16.ip q7, %[tbl], 0       \n"
+        "addi %[tbl], %[tbl], 2              \n"
+        "esp.vmulas.s16.qacc q6, q7          \n"
+        "esp.vext.u8 q2, q0, q0              \n"
+        "esp.vmulas.s16.qacc q2, q7          \n"
+        "esp.vext.u8 q2, q1, q1              \n"
+        "esp.vmulas.s16.qacc q2, q7          \n"
+        "esp.srcmb.s16.qacc q2, %[sh], 1     \n"
+        "esp.vunzip.8 q2, q3                 \n"
+        "esp.vst.128.ip q2, %[out], 0        \n"
+        : [a] "+r" (a), [b] "+r" (b), [tbl] "+r" (tbl)
+        : [out] "r" (o), [sh] "r" (sh)
+        : "memory");
+    memcpy(dstp, out, 8);
+}
+
+void h264_pie_hquarter_row(const u8 *src, u8 *dst, u32 w, u32 off)
+{
+    u8 half[24] __attribute__((aligned(16)));
+    h264_pie_hhalf_row(src, half, w);
+    u32 i = 0;
+    for (; i + 8 <= w; i += 8) pie_avg8(half + i, src + i + 2 + off, dst + i);
+    for (; i < w; i++) dst[i] = (u8)((half[i] + src[i + 2 + off] + 1) >> 1);
+}
+
+void h264_pie_vquarter_row(const u8 *src, u32 stride, u8 *dst, u32 w, u32 off)
+{
+    u8 half[24] __attribute__((aligned(16)));
+    h264_pie_vhalf_row(src, stride, half, w);
+    const u8 *n = src + (2 + off) * stride;
+    u32 i = 0;
+    for (; i + 8 <= w; i += 8) pie_avg8(half + i, n + i, dst + i);
+    for (; i < w; i++) dst[i] = (u8)((half[i] + n[i] + 1) >> 1);
+}
+
+void h264_pie_horverquarter(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph, u32 hv)
+{
+    const u32 hOff = hv & 1u, vOff = (hv >> 1) & 1u;
+    u8 tH[24] __attribute__((aligned(16)));
+    u8 tV[24] __attribute__((aligned(16)));
+    for (u32 y = 0; y < ph; y++) {
+        h264_pie_hhalf_row(ref + (y + 2 + vOff) * width, tH, pw);
+        h264_pie_vhalf_row(ref + y * width + 2 + hOff, width, tV, pw);
+        u8 *d = mb + y * 16;
+        u32 i = 0;
+        for (; i + 8 <= pw; i += 8) pie_avg8(tH + i, tV + i, d + i);
+        for (; i < pw; i++) d[i] = (u8)((tH[i] + tV[i] + 1) >> 1);
+    }
+}
+
 int h264_pie_midhalf(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph)
 {
     if (pw < 8) return 1;                       /* 4-wide: let C handle it */
@@ -328,6 +416,26 @@ int h264_pie_selfcheck(void)
             if (fails) break;
         }
     }
+    /* quarter positions */
+    if (!fails) {
+        static u8 qs[64];
+        u8 qr[24], qp[24];
+        for (int t = 0; t < 500 && !fails; t++) {
+            esp_fill_random(qs, sizeof(qs));
+            for (u32 w = 8; w <= 16; w += 8)
+                for (u32 off = 0; off < 2 && !fails; off++) {
+                    memset(qr, 0xA5, sizeof(qr)); memset(qp, 0xA5, sizeof(qp));
+                    h264_ref_hquarter_row(qs, qr, w, off);
+                    h264_pie_hquarter_row(qs, qp, w, off);
+                    if (memcmp(qr, qp, w)) { fails++; ESP_LOGE(TAG, "hquarter MISMATCH w=%u off=%u", (unsigned)w, (unsigned)off); break; }
+                    memset(qr, 0xA5, sizeof(qr)); memset(qp, 0xA5, sizeof(qp));
+                    h264_ref_vquarter_row(qs, 19, qr, w, off);
+                    h264_pie_vquarter_row(qs, 19, qp, w, off);
+                    if (memcmp(qr, qp, w)) { fails++; ESP_LOGE(TAG, "vquarter MISMATCH w=%u off=%u", (unsigned)w, (unsigned)off); break; }
+                }
+        }
+    }
+
     /* mid ('j'): 16x16 and 8x8 blocks over a random reference plane */
     if (!fails) {
         static u8 plane[32 * 32];
@@ -348,6 +456,27 @@ int h264_pie_selfcheck(void)
             }
         }
     }
+    /* Micro-benchmark: is PIE actually faster than plain C here? Both run the
+     * same work; the C side is the naive reference (h264bsd's own inner loop
+     * is hand-tuned and thus somewhat faster than this, so treat the ratio as
+     * an upper bound on the win). */
+    if (!fails) {
+        static u8 bsrc[64], bdst[32];
+        esp_fill_random(bsrc, sizeof(bsrc));
+        const int N = 20000;
+        int64_t t0 = esp_timer_get_time();
+        for (int i = 0; i < N; i++) h264_ref_hhalf_row(bsrc, bdst, 16);
+        int64_t t1 = esp_timer_get_time();
+        for (int i = 0; i < N; i++) h264_pie_hhalf_row(bsrc, bdst, 16);
+        int64_t t2 = esp_timer_get_time();
+        for (int i = 0; i < N; i++) h264_ref_vhalf_row(bsrc, 19, bdst, 16);
+        int64_t t3 = esp_timer_get_time();
+        for (int i = 0; i < N; i++) h264_pie_vhalf_row(bsrc, 19, bdst, 16);
+        int64_t t4 = esp_timer_get_time();
+        ESP_LOGW(TAG, "bench 16px row x%d: hhalf C %lld us / PIE %lld us | vhalf C %lld us / PIE %lld us",
+                 N, (long long)(t1-t0), (long long)(t2-t1),
+                 (long long)(t3-t2), (long long)(t4-t3));
+    }
     if (!fails) ESP_LOGW(TAG, "selfcheck hhalf+vhalf+midhalf: PASS (2000 cases x widths x offsets)");
     else        ESP_LOGE(TAG, "selfcheck: FAIL");
     return fails;
@@ -363,6 +492,12 @@ void h264_ref_vhalf_row(const u8 *src, u32 stride, u8 *dst, u32 w)
 { (void)src; (void)stride; (void)dst; (void)w; }
 int  h264_pie_midhalf(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph)
 { (void)ref; (void)width; (void)mb; (void)pw; (void)ph; return 1; }
+void h264_pie_hquarter_row(const u8 *s, u8 *d, u32 w, u32 o) { (void)s;(void)d;(void)w;(void)o; }
+void h264_pie_horverquarter(const u8 *r, u32 wd, u8 *m, u32 pw, u32 ph, u32 hv)
+{ (void)r;(void)wd;(void)m;(void)pw;(void)ph;(void)hv; }
+void h264_ref_hquarter_row(const u8 *s, u8 *d, u32 w, u32 o) { (void)s;(void)d;(void)w;(void)o; }
+void h264_pie_vquarter_row(const u8 *s, u32 st, u8 *d, u32 w, u32 o) { (void)s;(void)st;(void)d;(void)w;(void)o; }
+void h264_ref_vquarter_row(const u8 *s, u32 st, u8 *d, u32 w, u32 o) { (void)s;(void)st;(void)d;(void)w;(void)o; }
 void h264_ref_midhalf(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph)
 { (void)ref; (void)width; (void)mb; (void)pw; (void)ph; }
 #endif

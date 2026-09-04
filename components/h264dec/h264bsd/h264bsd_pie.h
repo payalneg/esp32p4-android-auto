@@ -26,6 +26,19 @@ void h264_ref_vhalf_row(const u8 *src, u32 stride, u8 *dst, u32 w);
  * offset so output (0,0) taps ref[0..5] horizontally and rows 0..5 vertically.
  * mb rows are 16 bytes apart. Returns 0 when it handled the block, non-zero
  * when the caller must fall back to C (widths it does not vectorise). */
+/* Quarter positions are the rounded average of a half-pel result and the
+ * neighbouring integer sample: dst = (half + integer + 1) >> 1.
+ * off selects which neighbour (0 = the left/upper one, 1 = the right/lower). */
+void h264_pie_hquarter_row(const u8 *src, u8 *dst, u32 w, u32 off);
+void h264_ref_hquarter_row(const u8 *src, u8 *dst, u32 w, u32 off);
+void h264_pie_vquarter_row(const u8 *src, u32 stride, u8 *dst, u32 w, u32 off);
+void h264_ref_vquarter_row(const u8 *src, u32 stride, u8 *dst, u32 w, u32 off);
+
+/* Positions e/g/p/r: average of the horizontal half-pel on row (y+2+vOff)
+ * and the vertical half-pel on column (x+2+hOff). horVerOffset bit0 = hOff,
+ * bit1 = vOff. ref points at G+(-2,-2). */
+void h264_pie_horverquarter(const u8 *ref, u32 width, u8 *mb, u32 pw, u32 ph, u32 horVerOffset);
+
 int  h264_pie_midhalf(const u8 *ref, u32 width, u8 *mb, u32 partWidth, u32 partHeight);
 void h264_ref_midhalf(const u8 *ref, u32 width, u8 *mb, u32 partWidth, u32 partHeight);
 

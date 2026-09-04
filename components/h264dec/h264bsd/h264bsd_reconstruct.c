@@ -656,6 +656,19 @@ void h264bsdInterpolateVerQuarter(
 
     ref += (u32)y0 * width + (u32)x0;
 
+    #ifdef H264BSD_ESP_PIE
+    {
+        const u8 *rowSrc = ref;
+        u8 *rowDst = mb;
+        for (i = partHeight; i; i--)
+        {
+            h264_pie_vquarter_row(rowSrc, width, rowDst, partWidth, verOffset);
+            rowSrc += width;
+            rowDst += 16;
+        }
+        return;
+    }
+#endif
     ptrC = ref + width;
     ptrV = ptrC + 5*width;
 
@@ -928,6 +941,20 @@ void h264bsdInterpolateHorQuarter(
 
     ref += (u32)y0 * width + (u32)x0;
 
+    #ifdef H264BSD_ESP_PIE
+    /* PIE: half-pel + rounded average with the neighbouring integer sample. */
+    {
+        const u8 *rowSrc = ref;
+        u8 *rowDst = mb;
+        for (y = partHeight; y; y--)
+        {
+            h264_pie_hquarter_row(rowSrc, rowDst, partWidth, horOffset);
+            rowSrc += width;
+            rowDst += 16;
+        }
+        return;
+    }
+#endif
     ptrJ = ref + 5;
 
     for (y = partHeight; y; y--)
@@ -1069,6 +1096,11 @@ void h264bsdInterpolateHorVerQuarter(
     ref += (u32)y0 * width + (u32)x0;
 
     /* ptrJ points to either J or Q, depending on vertical offset */
+    #ifdef H264BSD_ESP_PIE
+    /* PIE: average of the horizontal and vertical half-pel results. */
+    h264_pie_horverquarter(ref, width, mb, partWidth, partHeight, horVerOffset);
+    return;
+#endif
     ptrJ = ref + (((horVerOffset & 0x2) >> 1) + 2) * width + 5;
 
     /* ptrC points to either C or D, depending on horizontal offset */
