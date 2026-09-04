@@ -181,6 +181,17 @@ menu "Android Auto Head Unit"
             A/B correctness check against the fast paths (same build, same
             source) — output must be bit-identical.
 
+    config H264DEC_PIE
+        bool "PIE SIMD kernels in the H.264 decoder (EXPERIMENTAL)"
+        default n
+        depends on H264DEC_OWN
+        help
+            128-bit PIE kernels for the luma interpolation hot path. Every
+            kernel is verified at boot against its scalar reference
+            (h264_pie_selfcheck, byte-exact on random + edge inputs) and falls
+            back to C when the check fails. Keep OFF in releases until the
+            output has been eyeballed on hardware.
+
     config AA_VIDEO_SELFTEST
         bool "Embed an H.264 clip + `playclip` command (phone-free video test)"
         default n

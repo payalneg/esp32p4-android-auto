@@ -33,6 +33,7 @@
 
 #include "basetype.h"
 #include "h264bsd_reconstruct.h"
+#include "h264bsd_pie.h"
 #include "h264bsd_macroblock_layer.h"
 #include "h264bsd_image.h"
 #include "h264bsd_util.h"
@@ -778,6 +779,21 @@ void h264bsdInterpolateHorHalf(
 
     ptrJ = ref + 5;
 
+#ifdef H264BSD_ESP_PIE
+    /* PIE 6-tap, one row per call — byte-identical to the scalar path below
+     * (verified at boot by h264_pie_selfcheck). */
+    {
+        const u8 *rowSrc = ref;
+        u8 *rowDst = mb;
+        for (y = partHeight; y; y--)
+        {
+            h264_pie_hhalf_row(rowSrc, rowDst, partWidth);
+            rowSrc += width;
+            rowDst += 16;
+        }
+        return;
+    }
+#endif
     for (y = partHeight; y; y--)
     {
         tmp6 = *(ptrJ - 5);

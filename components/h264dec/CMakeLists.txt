@@ -11,12 +11,13 @@ file(GLOB H264BSD_SRCS "${CMAKE_CURRENT_LIST_DIR}/h264bsd/*.c")
 idf_component_register(SRCS ${H264BSD_SRCS} "h264dec.c"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "h264bsd"
-                       REQUIRES esp_timer esp_hw_support)
+                       REQUIRES esp_timer esp_hw_support esp_security)
 
 # The rest of the firmware is on -Og; the decoder is the one place where the
 # optimiser is the point. Hantro's code was written for lint, not -Wall.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     $<$<BOOL:${CONFIG_H264DEC_FASTPATH}>:H264BSD_ESP_FASTPATH=1>
+    $<$<BOOL:${CONFIG_H264DEC_PIE}>:H264BSD_ESP_PIE=1>
     _ERROR_PRINT=1
     $<$<BOOL:${CONFIG_H264DEC_STATS}>:H264BSD_ESP_STATS=1>)
 target_compile_options(${COMPONENT_LIB} PRIVATE

@@ -14,6 +14,7 @@
 #include "h264bsd_dpb.h"
 #include "h264bsd_esp.h"
 #include "h264bsd_esp_dirty.h"
+#include "h264bsd_pie.h"
 #include "h264bsd_storage.h"
 #include "h264bsd_util.h"
 
@@ -57,6 +58,9 @@ h264dec_t *h264dec_new(void)
     reset_pic_counters();
     g_h264bsd_deblock_us = 0;
     h264bsdDirtyReset();
+#ifdef H264BSD_ESP_PIE
+    h264_pie_selfcheck();
+#endif
     ESP_LOGI(TAG, "h264bsd decoder ready (fast path %s, stats %s)",
 #ifdef H264BSD_ESP_FASTPATH
              "on",
