@@ -45,16 +45,26 @@ const uart_link_wifi_t *uart_link_get_wifi(void)
 extern void bt_agent_set_auto_reconnect(bool on);
 extern void bt_agent_connect_now(void);
 extern void bt_agent_request_aa_reconnect(void);
+extern void bt_agent_set_aa_session(bool live, bool peer_closed);
 
 /* Parse one received line.
  *   WIFI|<ssid>|<password>|<bssid>|<ip>|<port>
  *   AUTO_RECONNECT|<0|1>
  *   BT_CONNECT            — page the last paired phone right now
  *   AA_RECONNECT          — bounce HFP to wake gearhead on a linked phone
+ *   AA_SESSION|1          — AA session live: leave the air for its duration
+ *   AA_SESSION|0|lost     — session lost: back on air, auto-page
+ *   AA_SESSION|0|closed   — phone closed it: back on air, no auto-page
  * Pipes split fields. Trailing newline already stripped by caller.
  * Stores into s_wifi on success and sets s_wifi_have. */
 static void parse_line(char *line)
 {
+    if (strncmp(line, "AA_SESSION|", 11) == 0) {
+        bool live = (line[11] == '1');
+        bool closed = !live && strcmp(line + 12, "|closed") == 0;
+        bt_agent_set_aa_session(live, closed);
+        return;
+    }
     if (strncmp(line, "BT_CONNECT", 10) == 0) {
         /* User tapped "Connect" on the P4 idle screen. Force an immediate
          * page regardless of the auto-reconnect toggle. */

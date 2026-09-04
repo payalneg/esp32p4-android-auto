@@ -42,7 +42,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.6.4"
+#define BT_AGENT_FW_VERSION "0.6.5"
 
 /* NVS namespace + key for remembering the last successfully-paired phone's
  * BDA. On boot, if a value is present, we proactively HFP-connect to it so
@@ -69,6 +69,23 @@ static volatile bool g_auto_reconnect = true;
  * 5 s poll, and independent of the g_auto_reconnect toggle. */
 static volatile bool     g_repage_pending = false;
 static esp_timer_handle_t g_repage_timer;
+
+/* AA session gate (what the reference dongle does by powering its adapter
+ * off once the phone is on TCP). Any Bluetooth event on a bonded car kit —
+ * the ACL dropping and coming back, gearhead re-opening SPP — makes the
+ * phone re-run the wireless setup, and a completed setup ALWAYS restarts
+ * projection (clean FIN + new TCP connect). A BT glitch 21 min into a ride
+ * cost the whole session that way (2026-09-04). So while P4 reports the
+ * session live we go off air: SPP closed, HFP down, not connectable. With
+ * no BT link there is nothing to glitch; gearhead keeps projecting over
+ * Wi-Fi alone (aawgd runs every session like that). Back on air when the
+ * session ends: a lost session is re-paged by auto_reconnect_task, one the
+ * phone closed cleanly is left alone (g_page_hold) until Connect is tapped
+ * or the phone comes to us. */
+static volatile bool g_aa_session_live = false;
+static volatile bool g_page_hold        = false;
+static TaskHandle_t  g_reconnect_task;
+static void auto_reconnect_task(void *arg);
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
@@ -271,6 +288,16 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *p)
         g_spp_handle = p->srv_open.handle;
         g_wifi_info_sent = false;
         uart_link_say("BT:CONNECTED");
+        if (g_aa_session_live) {
+            /* Off air, but the ACL can linger a few seconds after we drop
+             * HFP/SPP, and gearhead tends to re-open SPP right after it
+             * closes. Answering with WifiStartRequest here would restart
+             * the running projection — close it without a word instead. */
+            ESP_LOGW(TAG, "SPP opened during a live AA session — closing, no WifiStartRequest");
+            esp_spp_disconnect(p->srv_open.handle);
+            break;
+        }
+        g_page_hold = false;    /* phone came to us by itself */
         /* Push WifiStartRequest right away — phone is waiting for it. */
         send_wifi_start_request();
         break;
@@ -319,6 +346,13 @@ static void gap_callback(esp_bt_gap_cb_event_t event,
                 ESP_LOGI(TAG, "saved last_bda %02x:%02x:%02x:%02x:%02x:%02x",
                          g_last_bda[0], g_last_bda[1], g_last_bda[2],
                          g_last_bda[3], g_last_bda[4], g_last_bda[5]);
+            }
+            /* First pairing on this boot: app_main() only starts the
+             * re-page loop when NVS already held a phone, so without this a
+             * freshly paired phone was never paged back until a reboot. */
+            if (!g_reconnect_task) {
+                xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5,
+                            &g_reconnect_task);
             }
         } else {
             ESP_LOGW(TAG, "auth failed status=%d", p->auth_cmpl.stat);
@@ -412,8 +446,9 @@ static void sdp_callback(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *p)
 static void repage_timer_cb(void *arg)
 {
     (void)arg;
-    if (!g_last_bda_valid || g_spp_handle != 0 || g_hfp_connected) {
-        return;     /* phone came back on its own meanwhile */
+    if (!g_last_bda_valid || g_spp_handle != 0 || g_hfp_connected ||
+        g_aa_session_live) {
+        return;     /* phone came back on its own meanwhile, or we went off air */
     }
     ESP_LOGI(TAG, "re-paging %02x:%02x:%02x:%02x:%02x:%02x after HFP bounce",
              g_last_bda[0], g_last_bda[1], g_last_bda[2],
@@ -478,6 +513,16 @@ static void hf_client_callback(esp_hf_client_cb_event_t event,
         g_hfp_connected =
             (p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_CONNECTED ||
              p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_SLC_CONNECTED);
+        if (g_hfp_connected) {
+            if (g_aa_session_live) {
+                /* Phone re-attached HFP over a lingering ACL while we are
+                 * meant to be off air — drop it again. */
+                ESP_LOGW(TAG, "HFP came up during a live AA session — disconnecting");
+                esp_hf_client_disconnect(p->conn_stat.remote_bda);
+            } else {
+                g_page_hold = false;    /* phone came to us by itself */
+            }
+        }
         if (p->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED &&
             g_repage_pending) {
             g_repage_pending = false;
@@ -517,11 +562,13 @@ static void auto_reconnect_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     while (g_last_bda_valid) {
-        if (!g_auto_reconnect) {
-            /* User disabled the feature from P4 Settings. Stay parked; the
-             * loop wakes up when the flag flips back on. Keep the task
-             * alive instead of vTaskDelete-ing so we don't have to manage
-             * task creation from the UART callback path. */
+        if (!g_auto_reconnect || g_aa_session_live || g_page_hold) {
+            /* Parked: the user disabled the feature from P4 Settings, or an
+             * AA session is running (we are deliberately off air — paging
+             * would restart it), or the phone closed the last session
+             * cleanly and gets left alone until Connect / its own move.
+             * Poll rather than block so the loop resumes within a second
+             * of the flag flipping. */
             vTaskDelay(pdMS_TO_TICKS(1000));
             idx = 0;
             continue;
@@ -602,6 +649,13 @@ void bt_agent_connect_now(void)
         ESP_LOGI(TAG, "BT_CONNECT: ignored (no paired phone)");
         return;
     }
+    if (g_aa_session_live) {
+        /* P4 thinks a session is running and we are off air; a page now
+         * would only restart it. P4 sends AA_SESSION|0 first if it is not. */
+        ESP_LOGI(TAG, "BT_CONNECT: ignored (AA session live)");
+        return;
+    }
+    g_page_hold = false;    /* explicit user request overrides "leave them be" */
     if (g_spp_handle != 0) {
         ESP_LOGI(TAG, "BT_CONNECT: SPP already up");
         return;
@@ -641,6 +695,11 @@ void bt_agent_request_aa_reconnect(void)
         ESP_LOGI(TAG, "AA_RECONNECT: ignored (auto_reconnect disabled)");
         return;
     }
+    if (g_aa_session_live) {
+        ESP_LOGI(TAG, "AA_RECONNECT: ignored (AA session live)");
+        return;
+    }
+    g_page_hold = false;
     static TickType_t s_last_bounce;
     TickType_t now = xTaskGetTickCount();
     if (s_last_bounce != 0) {
@@ -657,6 +716,50 @@ void bt_agent_request_aa_reconnect(void)
     }
     s_last_bounce = now;
     bounce_hfp("AA_RECONNECT");
+}
+
+/* Public hook for uart_link: P4 sent AA_SESSION|1 (the AA TCP session passed
+ * its handshake) or AA_SESSION|0|lost / AA_SESSION|0|closed (it ended). See
+ * the g_aa_session_live comment for why we leave the air for the duration.
+ * Idempotent — P4 re-sends the live state when it sees us reboot. */
+void bt_agent_set_aa_session(bool live, bool peer_closed)
+{
+    if (live) {
+        if (g_aa_session_live) return;
+        g_aa_session_live = true;
+        g_page_hold       = false;
+        g_repage_pending  = false;      /* a bounce in flight must not re-page */
+        if (g_repage_timer) esp_timer_stop(g_repage_timer);
+        ESP_LOGI(TAG, "AA session live — off air: not connectable, dropping SPP/HFP");
+        esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+        if (g_spp_handle != 0) {
+            esp_spp_disconnect(g_spp_handle);
+        }
+        if (g_hfp_connected && g_last_bda_valid) {
+            esp_err_t e = esp_hf_client_disconnect(g_last_bda);
+            if (e != ESP_OK) {
+                ESP_LOGW(TAG, "off air: esp_hf_client_disconnect: %s", esp_err_to_name(e));
+            }
+        }
+        uart_link_say("BT:OFF_AIR");
+        return;
+    }
+
+    bool was_live = g_aa_session_live;
+    g_aa_session_live = false;
+    /* A clean close is most likely the user exiting Android Auto on the
+     * phone; re-paging would drag them straight back in. A lost session is
+     * re-paged by auto_reconnect_task (auto_reconnect permitting) now that
+     * the gate above is open. */
+    g_page_hold = peer_closed;
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+    ESP_LOGI(TAG, "AA session %s%s — back on air%s",
+             peer_closed ? "closed by phone" : "lost",
+             was_live ? "" : " (was not marked live)",
+             peer_closed ? ", holding the auto-page until Connect"
+                         : (g_auto_reconnect ? ", auto-reconnect will page"
+                                             : ", auto-reconnect off"));
+    uart_link_say("BT:ON_AIR");
 }
 
 /* ---------- Init ---------- */
@@ -811,17 +914,23 @@ void app_main(void)
     }
 
     /* OK to advertise now: any phone that pairs will get the real
-     * credentials in WifiInfoResponse and can join our AP. */
-    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-    uart_link_say("BT:DISCOVERABLE");
+     * credentials in WifiInfoResponse and can join our AP. Unless P4 has
+     * already told us (re-sync after our reboot) that a session is live —
+     * then we stay off air until it ends. */
+    if (!g_aa_session_live) {
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        uart_link_say("BT:DISCOVERABLE");
+    } else {
+        ESP_LOGI(TAG, "AA session already live per P4 — staying off air");
+    }
 
     /* Kick off the auto-reconnect loop. If NVS held a BDA from a prior
      * pairing, we'll page that phone every few seconds (with backoff) until
      * either ACL comes up or someone else pairs (overwriting the saved BDA
      * — handled inside ESP_BT_GAP_AUTH_CMPL_EVT). */
-    if (g_last_bda_valid) {
-        xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5, NULL);
-    } else {
+    if (g_last_bda_valid && !g_reconnect_task) {
+        xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5, &g_reconnect_task);
+    } else if (!g_last_bda_valid) {
         ESP_LOGI(TAG, "no saved phone BDA — waiting for first manual pair");
     }
 }
