@@ -28,6 +28,16 @@ extern u64 g_h264bsd_cyc_skip_mb;   /* skipped MBs: SetMbParams..DecodeMacrobloc
 extern u64 g_h264bsd_cyc_coded_mb;  /* coded MBs: parse + DecodeMacroblock */
 extern u64 g_h264bsd_cyc_loop;      /* MoreRbspData + NextMbAddress per MB */
 extern u32 g_h264bsd_n_skip_mb, g_h264bsd_n_coded_mb;
+/* Coded-MB stage split (cycles): CAVLC parse, dequant+IDCT, motion
+ * compensation (h264bsdPredictSamples), residual add + picture write, intra. */
+extern u64 g_h264bsd_cyc_parse, g_h264bsd_cyc_residual, g_h264bsd_cyc_mc,
+           g_h264bsd_cyc_write, g_h264bsd_cyc_intra;
+#ifdef H264BSD_ESP_STATS
+#include "esp_cpu.h"
+#define H264BSD_CYC() ((u32)esp_cpu_get_cycle_count())
+#else
+#define H264BSD_CYC() 0u
+#endif
 
 /* 16x16 luma + two 8x8 chroma blocks straight from the co-located position
  * in ref into the current image (whose luma/cb/cr pointers already sit on

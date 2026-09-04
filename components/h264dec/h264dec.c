@@ -148,6 +148,13 @@ h264dec_status_t h264dec_decode(h264dec_t *dec, const uint8_t *buf, size_t len,
             dec->stats.coded_mbs   += g_h264bsd_n_coded_mb;
             g_h264bsd_cyc_skip_mb = g_h264bsd_cyc_coded_mb = g_h264bsd_cyc_loop = 0;
             g_h264bsd_n_skip_mb = g_h264bsd_n_coded_mb = 0;
+            dec->stats.parse_us    += (uint32_t)(g_h264bsd_cyc_parse    / mhz);
+            dec->stats.residual_us += (uint32_t)(g_h264bsd_cyc_residual / mhz);
+            dec->stats.mc_us       += (uint32_t)(g_h264bsd_cyc_mc       / mhz);
+            dec->stats.write_us    += (uint32_t)(g_h264bsd_cyc_write    / mhz);
+            dec->stats.intra_us    += (uint32_t)(g_h264bsd_cyc_intra    / mhz);
+            g_h264bsd_cyc_parse = g_h264bsd_cyc_residual = g_h264bsd_cyc_mc = 0;
+            g_h264bsd_cyc_write = g_h264bsd_cyc_intra = 0;
         }
 #endif
         reset_pic_counters();

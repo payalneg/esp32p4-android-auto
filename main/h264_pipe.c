@@ -173,6 +173,15 @@ static void log_stats_periodic(void)
                      (unsigned)(ds.coded_mb_us / ds.pictures / 100 % 10),
                      (unsigned)(ds.loop_us / ds.pictures / 1000),
                      (unsigned)(ds.loop_us / ds.pictures / 100 % 10));
+            if (ds.coded_mbs) {
+                /* per coded MB, µs: where a moving frame's time goes */
+                ESP_LOGI(TAG, "h264dec: per coded MB: parse %u | dequant+idct %u | mc %u | write %u | intra %u us",
+                         (unsigned)(ds.parse_us / ds.coded_mbs),
+                         (unsigned)(ds.residual_us / ds.coded_mbs),
+                         (unsigned)(ds.mc_us / ds.coded_mbs),
+                         (unsigned)(ds.write_us / ds.coded_mbs),
+                         (unsigned)(ds.intra_us / ds.coded_mbs));
+            }
         }
 #endif
     }

@@ -90,6 +90,8 @@ static void SetMbParams(mbStorage_t *pMb, sliceHeader_t *pSlice, u32 sliceId,
 #include "esp_cpu.h"
 u64 g_h264bsd_cyc_skip_mb, g_h264bsd_cyc_coded_mb, g_h264bsd_cyc_loop;
 u32 g_h264bsd_n_skip_mb, g_h264bsd_n_coded_mb;
+u64 g_h264bsd_cyc_parse, g_h264bsd_cyc_residual, g_h264bsd_cyc_mc,
+    g_h264bsd_cyc_write, g_h264bsd_cyc_intra;
 #define CYC() ((u32)esp_cpu_get_cycle_count())
 #else
 #define CYC() 0u
@@ -254,9 +256,13 @@ u32 h264bsdDecodeSliceData(strmData_t *pStrmData, storage_t *pStorage,
         else
         {
             prevSkipped = HANTRO_FALSE;
+            u32 cp0 = CYC();
             tmp = h264bsdDecodeMacroblockLayer(pStrmData, mbLayer,
                 pStorage->mb + currMbAddr, pSliceHeader->sliceType,
                 pSliceHeader->numRefIdxL0Active);
+#ifdef H264BSD_ESP_STATS
+            g_h264bsd_cyc_parse += CYC() - cp0;
+#endif
             if (tmp != HANTRO_OK)
             {
                 EPRINT("macroblock_layer");

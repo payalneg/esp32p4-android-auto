@@ -48,6 +48,8 @@ typedef struct {
     /* macroblock-loop breakdown (per picture, µs) */
     uint32_t skip_mb_us, coded_mb_us, loop_us;
     uint32_t skip_mbs, coded_mbs;
+    /* coded-MB stage split (µs, summed over the window) */
+    uint32_t parse_us, residual_us, mc_us, write_us, intra_us;
 } h264dec_stats_t;
 
 h264dec_t *h264dec_new(void);

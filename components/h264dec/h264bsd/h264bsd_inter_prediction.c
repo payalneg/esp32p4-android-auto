@@ -386,6 +386,8 @@ u32 h264bsdInterPrediction(mbStorage_t *pMb, macroblockLayer_t *pMbLayer,
     refImage.width = currImage->width;
     refImage.height = currImage->height;
 
+    u32 cmc0 = H264BSD_CYC();
+    (void)cmc0;
     switch (pMb->mbType)
     {
         case P_Skip:
@@ -488,19 +490,28 @@ u32 h264bsdInterPrediction(mbStorage_t *pMb, macroblockLayer_t *pMbLayer,
             break;
     }
 
+#ifdef H264BSD_ESP_STATS
+    g_h264bsd_cyc_mc += H264BSD_CYC() - cmc0;
+#endif
     /* if decoded flag > 1 -> mb has already been successfully decoded and
      * written to output -> do not write again */
     if (pMb->decoded > 1)
         return HANTRO_OK;
 
-    if (pMb->mbType != P_Skip)
     {
-        h264bsdWriteOutputBlocks(currImage, mbNum, data,
-            pMbLayer->residual.level);
-    }
-    else
-    {
-        h264bsdWriteMacroblock(currImage, data);
+        u32 cw0 = H264BSD_CYC();
+        if (pMb->mbType != P_Skip)
+        {
+            h264bsdWriteOutputBlocks(currImage, mbNum, data,
+                pMbLayer->residual.level);
+        }
+        else
+        {
+            h264bsdWriteMacroblock(currImage, data);
+        }
+#ifdef H264BSD_ESP_STATS
+        g_h264bsd_cyc_write += H264BSD_CYC() - cw0;
+#endif
     }
 
     return(HANTRO_OK);
