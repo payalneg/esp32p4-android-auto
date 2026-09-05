@@ -31,6 +31,17 @@ static const char *TAG = "bt_agent_ota";
  * write succeeds (the leading FF page is silently dropped by the ROM) but
  * the second block returns FLASH_WRITE_FAIL — exactly what we saw. */
 #define BT_AGENT_FLASH_ADDR  0x1000
+/* Agent partition layout (tools/bt_agent, "single factory app, large"):
+ * nvs 0x9000 (24 K), phy_init 0xF000 (4 K), factory app 0x10000. The
+ * merged image is contiguous, so 0x9000..0x10000 in it is 0xFF padding. */
+#define BT_AGENT_NVS_ADDR    0x9000
+#define BT_AGENT_APP_ADDR    0x10000
+
+typedef struct {
+    uint32_t addr;   /* flash address on the agent */
+    size_t   off;    /* offset into the merged blob */
+    size_t   len;
+} flash_region_t;
 
 /* esp_loader_flash_write block size — library expects multiples of 1024.
  * 1 KiB chunks: smaller per-block transmission window means a single byte
@@ -104,16 +115,24 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len,
         ESP_LOGI(TAG, "baud → %d", CONFIG_BT_AGENT_FLASH_BAUD);
     }
 
-    ota_screen_set_status("Erasing flash...");
-    ota_screen_set_progress(0, size);
-    lvgl_pulse_if_paused(lvgl_paused);
-    if (esp_loader_flash_start(BT_AGENT_FLASH_ADDR, size, FLASH_BLOCK_SIZE)
-            != ESP_LOADER_SUCCESS) {
-        ESP_LOGE(TAG, "flash_start failed");
-        snprintf(err_buf, err_buf_len, "erase failed");
-        loader_port_esp32_deinit();
-        return ESP_FAIL;
+    /* Write the blob as two regions — bootloader + partition table, then the
+     * app — and leave the agent's NVS + phy_init hole between them alone.
+     * Writing the merged image in one piece erased the agent's NVS on every
+     * update: the paired phone's address and the Bluedroid bond keys went
+     * with it, the agent came up with "no saved phone BDA", and Connect had
+     * nobody to page until the user re-paired from the phone. */
+    flash_region_t regions[2];
+    int            n_regions = 0;
+    const size_t   hole_from = BT_AGENT_NVS_ADDR - BT_AGENT_FLASH_ADDR;
+    const size_t   hole_to   = BT_AGENT_APP_ADDR - BT_AGENT_FLASH_ADDR;
+    if (size > hole_to) {
+        regions[n_regions++] = (flash_region_t){ BT_AGENT_FLASH_ADDR, 0, hole_from };
+        regions[n_regions++] = (flash_region_t){ BT_AGENT_APP_ADDR, hole_to, size - hole_to };
+    } else {
+        regions[n_regions++] = (flash_region_t){ BT_AGENT_FLASH_ADDR, 0, size };
     }
+    size_t total = 0;
+    for (int r = 0; r < n_regions; r++) total += regions[r].len;
 
     /* Staging buffer in internal RAM. The decompressed blob lives in PSRAM;
      * feeding a PSRAM pointer to esp_loader_flash_write makes its UART TX
@@ -130,38 +149,59 @@ static esp_err_t do_flash_image(char *err_buf, size_t err_buf_len,
         return ESP_ERR_NO_MEM;
     }
 
-    ota_screen_set_status("Writing firmware...");
-    lvgl_pulse_if_paused(lvgl_paused);
-    size_t   off = 0;
+    size_t   done      = 0;
     int      pct_last  = -1;
     int      pct_drawn = 0;
-    while (off < size) {
-        size_t chunk = (size - off > FLASH_BLOCK_SIZE)
-                           ? FLASH_BLOCK_SIZE : (size - off);
-        memcpy(staging, data + off, chunk);
-        if (esp_loader_flash_write(staging, chunk) != ESP_LOADER_SUCCESS) {
-            ESP_LOGE(TAG, "flash_write @ 0x%x failed", (unsigned)off);
-            snprintf(err_buf, err_buf_len,
-                     "write failed @ 0x%x", (unsigned)off);
+    ota_screen_set_progress(0, total);
+    for (int r = 0; r < n_regions; r++) {
+        const flash_region_t *rg = &regions[r];
+        ota_screen_set_status("Erasing flash...");
+        lvgl_pulse_if_paused(lvgl_paused);
+        if (esp_loader_flash_start(rg->addr, rg->len, FLASH_BLOCK_SIZE)
+                != ESP_LOADER_SUCCESS) {
+            ESP_LOGE(TAG, "flash_start @ 0x%x (%u bytes) failed",
+                     (unsigned)rg->addr, (unsigned)rg->len);
+            snprintf(err_buf, err_buf_len, "erase failed @ 0x%x", (unsigned)rg->addr);
             free(staging);
             loader_port_esp32_deinit();
             return ESP_FAIL;
         }
-        off += chunk;
-        ota_screen_set_progress(off, size);
-        int pct = (int)((off * 100) / size);
-        if (pct / 10 != pct_last / 10) {
-            ESP_LOGI(TAG, "flashed %d%% (%u/%u bytes)",
-                     pct, (unsigned)off, (unsigned)size);
-            pct_last = pct;
-        }
-        /* ~5% steps → ~20 short LVGL render windows over the whole flash.
-         * Frequent enough that the user sees the bar move, rare enough
-         * that the ACK-loss issue (see the pause comment in the caller)
-         * stays away. */
-        if (pct >= pct_drawn + 5) {
-            pct_drawn = pct - (pct % 5);
-            lvgl_pulse_if_paused(lvgl_paused);
+        ESP_LOGI(TAG, "writing 0x%x..0x%x (%u bytes)", (unsigned)rg->addr,
+                 (unsigned)(rg->addr + rg->len), (unsigned)rg->len);
+
+        ota_screen_set_status("Writing firmware...");
+        lvgl_pulse_if_paused(lvgl_paused);
+        size_t off = rg->off;
+        const size_t end = rg->off + rg->len;
+        while (off < end) {
+            size_t chunk = (end - off > FLASH_BLOCK_SIZE)
+                               ? FLASH_BLOCK_SIZE : (end - off);
+            memcpy(staging, data + off, chunk);
+            if (esp_loader_flash_write(staging, chunk) != ESP_LOADER_SUCCESS) {
+                unsigned at = (unsigned)(rg->addr + (off - rg->off));
+                ESP_LOGE(TAG, "flash_write @ 0x%x failed", at);
+                snprintf(err_buf, err_buf_len, "write failed @ 0x%x", at);
+                free(staging);
+                loader_port_esp32_deinit();
+                return ESP_FAIL;
+            }
+            off  += chunk;
+            done += chunk;
+            ota_screen_set_progress(done, total);
+            int pct = (int)((done * 100) / total);
+            if (pct / 10 != pct_last / 10) {
+                ESP_LOGI(TAG, "flashed %d%% (%u/%u bytes)",
+                         pct, (unsigned)done, (unsigned)total);
+                pct_last = pct;
+            }
+            /* ~5% steps → ~20 short LVGL render windows over the whole flash.
+             * Frequent enough that the user sees the bar move, rare enough
+             * that the ACK-loss issue (see the pause comment in the caller)
+             * stays away. */
+            if (pct >= pct_drawn + 5) {
+                pct_drawn = pct - (pct % 5);
+                lvgl_pulse_if_paused(lvgl_paused);
+            }
         }
     }
     free(staging);
