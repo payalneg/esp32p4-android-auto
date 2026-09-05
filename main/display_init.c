@@ -204,6 +204,23 @@ esp_err_t display_init(void)
      * preempted by the decoder for the entire duration of a frame, blocking
      * the bsp_display_lock for hundreds of ms and stalling vesc_ui_updater. */
     cfg.lv_adapter_cfg.task_core_id = 0;
+    /* Make the worker's sleep survive the tick rate. It runs
+     * lv_timer_handler() in a loop and then vTaskDelay()s for however long
+     * LVGL says the next timer is away, clamped to [min, max] = [1, 15] ms by
+     * default. At CONFIG_FREERTOS_HZ=100 a tick is 10 ms, so pdMS_TO_TICKS()
+     * of anything under 10 rounds to ZERO and vTaskDelay(0) does not block —
+     * it only yields to tasks at the worker's own priority or above. The
+     * worker sits at priority 6 on core 0, so for as long as LVGL keeps
+     * reporting work due within 9 ms the loop spins and everything below it
+     * on that core stops: BLE and the BT-agent link at 5, the VESC sim at 4,
+     * the splash worker at 3, and IDLE0 — which is what trips the task
+     * watchdog every 5 s. Asking for one whole tick costs nothing (the panel
+     * refreshes every 33 ms and the worker measures 2% busy) and gives the
+     * rest of core 0 its time back. */
+    cfg.lv_adapter_cfg.task_min_delay_ms = portTICK_PERIOD_MS;
+    if (cfg.lv_adapter_cfg.task_max_delay_ms < portTICK_PERIOD_MS) {
+        cfg.lv_adapter_cfg.task_max_delay_ms = portTICK_PERIOD_MS;
+    }
     s_display = bsp_display_start_with_config(&cfg);
     if (!s_display) {
         ESP_LOGE(TAG, "bsp_display_start failed");

@@ -342,17 +342,22 @@ void ble_nus_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
  * touch it after this returns. */
 static int notify_chunk_with_retry(const uint8_t *data, uint16_t len)
 {
-    /* Up to ~250 ms of retries — covers a full burst of MTU-sized
-     * packets emptying onto the link. 5 ms is one connection interval
-     * at 7.5 ms minimum; longer waits don't buy anything because the
-     * controller drains mbufs at the link-layer rate, not faster. */
-    const int max_attempts = 50;
+    /* Up to ~250 ms of retries — covers a full burst of MTU-sized packets
+     * emptying onto the link. Wait one whole tick between tries: the 5 ms
+     * this used to ask for is pdMS_TO_TICKS(5) == 0 at CONFIG_FREERTOS_HZ=100,
+     * and vTaskDelay(0) does not block at all, so the "250 ms" budget was
+     * really a busy spin that gave up in microseconds without ever letting
+     * the controller drain. Deriving the count from the tick period keeps the
+     * budget at ~250 ms whatever the tick rate is. Longer individual waits
+     * buy nothing — the controller drains mbufs at the link-layer rate. */
+    const TickType_t drain_wait   = 1;                      /* one tick */
+    const int        max_attempts = 250 / portTICK_PERIOD_MS;
     for (int i = 0; i < max_attempts; i++) {
         if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return BLE_HS_ENOTCONN;
         struct os_mbuf *txom = ble_hs_mbuf_from_flat(data, len);
         if (!txom) {
             /* mbuf pool empty — wait for controller to drain. */
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(drain_wait);
             continue;
         }
         int rc = ble_gatts_notify_custom(s_conn_handle, s_tx_val_handle, txom);
@@ -361,7 +366,7 @@ static int notify_chunk_with_retry(const uint8_t *data, uint16_t len)
          * NimBLE; treat ESTALLED / EBUSY / EAGAIN identically — they
          * all clear once the controller transmits the next interval. */
         if (rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(drain_wait);
             continue;
         }
         /* Anything else (ENOTCONN, EINVAL, …) is permanent for this

@@ -23,6 +23,9 @@
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
 #include "touch_input.h"
+/* LVGL internals: the timer list, for the lvtimers dump below. */
+#include "misc/lv_gc.h"
+#include "misc/lv_ll.h"
 
 static const char *TAG = "dbg_uart";
 
@@ -334,6 +337,39 @@ static int cmd_tasks(int argc, char **argv)
 #endif
 }
 
+/* Dump every LVGL timer with its period and how overdue it is. The LVGL
+ * worker calls lv_timer_handler() in a loop and sleeps for whatever it
+ * returns — the time until the next timer is due — so a timer that is always
+ * due keeps the task spinning. At CONFIG_FREERTOS_HZ=100 anything under 10 ms
+ * rounds to vTaskDelay(0), which does not block at all, and every task on
+ * core 0 below the worker's priority 6 stops running. This says which timer
+ * it is; addr2line the callback against the elf for a name. */
+static int cmd_lvtimers(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (!bsp_display_lock(1000)) { printf("lvtimers: display busy\n"); return 1; }
+    uint32_t now = lv_tick_get();
+    lv_timer_t *t = _lv_ll_get_head(&LV_GC_ROOT(_lv_timer_ll));
+    int n = 0;
+    uint32_t soonest = UINT32_MAX;
+    while (t) {
+        uint32_t elapsed = now - t->last_run;
+        int32_t  left    = (int32_t)t->period - (int32_t)elapsed;
+        if (!t->paused && left < (int32_t)soonest) soonest = left < 0 ? 0 : (uint32_t)left;
+        printf("  cb=%p period=%4u ms  elapsed=%6u  due in %6d ms%s%s\n",
+               (void *)t->timer_cb, (unsigned)t->period, (unsigned)elapsed,
+               (int)left, t->paused ? "  [paused]" : "",
+               t->repeat_count == 0 ? "  [spent]" : "");
+        t = _lv_ll_get_next(&LV_GC_ROOT(_lv_timer_ll), t);
+        n++;
+    }
+    bsp_display_unlock();
+    printf("%d timers; soonest due in %u ms -> worker sleeps pdMS_TO_TICKS(%u) = %u tick(s)\n",
+           n, (unsigned)soonest, (unsigned)soonest,
+           (unsigned)pdMS_TO_TICKS(soonest > 15 ? 15 : (soonest < 1 ? 1 : soonest)));
+    return 0;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -351,6 +387,9 @@ static void register_cmds(void)
           .hint = NULL, .func = cmd_touchmove },
         { .command = "touchup",   .help = "Release the held press",
           .hint = NULL, .func = cmd_touchup },
+        { .command = "lvtimers",
+          .help = "List LVGL timers with period and time until due",
+          .hint = NULL, .func = cmd_lvtimers },
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
