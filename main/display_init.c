@@ -214,9 +214,16 @@ esp_err_t display_init(void)
      * reporting work due within 9 ms the loop spins and everything below it
      * on that core stops: BLE and the BT-agent link at 5, the VESC sim at 4,
      * the splash worker at 3, and IDLE0 — which is what trips the task
-     * watchdog every 5 s. Asking for one whole tick costs nothing (the panel
-     * refreshes every 33 ms and the worker measures 2% busy) and gives the
-     * rest of core 0 its time back. */
+     * watchdog every 5 s.
+     *
+     * And it is the steady state, not a rare coincidence: lv_conf.h sets both
+     * LV_DISP_DEF_REFR_PERIOD and LV_INDEV_DEF_READ_PERIOD to 10 ms. Two
+     * 10 ms timers running out of phase mean the next one due is always less
+     * than 10 ms away — fire one at t=0 and the other at t=5 and the handler
+     * answers "5 ms" forever, never the 10 it would take to round up to a
+     * tick. Asking for one whole tick costs nothing (the worker measures 2%
+     * busy, and 10 ms is the period those two timers already want) and gives
+     * the rest of core 0 its time back. */
     cfg.lv_adapter_cfg.task_min_delay_ms = portTICK_PERIOD_MS;
     if (cfg.lv_adapter_cfg.task_max_delay_ms < portTICK_PERIOD_MS) {
         cfg.lv_adapter_cfg.task_max_delay_ms = portTICK_PERIOD_MS;
