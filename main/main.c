@@ -58,6 +58,7 @@ void port_start_app_hook(void)
 #include "display_video.h"
 #include "h264_pipe.h"
 #include "idle_screen.h"
+#include "aa_link_status.h"
 #include "splash_screen.h"
 #include "log_capture.h"
 #include "mdns_advertise.h"
@@ -631,7 +632,10 @@ void app_main(void)
                  "%d.%d.%d.%d | port %d",
                  IP2STR(&ip_info.ip), AA_TCP_PORT);
     }
-    idle_screen_show("Waiting for phone", status_line);
+    idle_screen_set_info(status_line);
+    aa_link_status_init();
+    aa_link_status_set(AA_LINK_DISCONNECTED, "Tap Connect or start Android Auto on the phone");
+    idle_screen_refresh();
     /* Now that we're actually listening, give the user a manual "Connect"
      * shortcut — pages the last paired phone over BT regardless of the
      * auto-reconnect toggle. Hidden during the earlier boot states. */

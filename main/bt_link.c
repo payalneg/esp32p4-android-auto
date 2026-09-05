@@ -18,6 +18,9 @@
 
 static const char *TAG = "bt_link";
 
+/* Subscriber for BT:<event> lines (aa_link_status). */
+static bt_link_event_cb_t s_event_cb;
+
 /* Both RST and IO0 are push-pull: this board has no external pull-ups on
  * either line, so an open-drain release would leave the ESP32 reading
  * floating values — often low, which means stuck in download mode (IO0)
@@ -172,6 +175,7 @@ static void rx_task(void *arg)
                         if (strcmp(evt, "BOOT") == 0) {
                             agent_resync();
                         }
+                        if (s_event_cb) s_event_cb(evt);
                     } else if (strncmp(line, "BT-VER:", 7) == 0) {
                         /* Always parse — wait_version() depends on this even
                          * when forwarding is muted. */
@@ -363,6 +367,11 @@ void bt_link_request_aa_reconnect(void)
     static const char line[] = "AA_RECONNECT\n";
     uart_write_bytes(UART_PORT, line, sizeof(line) - 1);
     ESP_LOGI(TAG, "→ BT agent: AA_RECONNECT");
+}
+
+void bt_link_set_event_cb(bt_link_event_cb_t cb)
+{
+    s_event_cb = cb;
 }
 
 void bt_link_request_connect_now(void)

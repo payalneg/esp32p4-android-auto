@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "aa_link_status.h"
 #include "bt_link.h"
 #include "dev_settings.h"
 #include "esp_log.h"
@@ -33,7 +34,13 @@ void aa_reconnect_after_drop(const char *peer_ip, bool peer_closed)
      * somehow still up (agent rebooted mid-session and missed the gate). */
     bt_link_set_aa_session(false, peer_closed);
     if (restart) {
+        aa_link_status_set(AA_LINK_CONNECTING, "Link lost, paging the phone...");
         bt_link_request_aa_reconnect();
+    } else if (peer_closed) {
+        aa_link_status_set(AA_LINK_DISCONNECTED,
+                           "Phone ended the session. Tap Connect to start again");
+    } else {
+        aa_link_status_set(AA_LINK_DISCONNECTED, "Link lost. Tap Connect to reconnect");
     }
 }
 
@@ -45,5 +52,6 @@ void aa_reconnect_manual(void)
     /* The idle screen is up, so there is no session: make sure the agent is
      * back on air (it ignores BT_CONNECT while it believes one is live). */
     bt_link_set_aa_session(false, false);
+    aa_link_status_set(AA_LINK_CONNECTING, "Paging the phone over Bluetooth...");
     bt_link_request_connect_now();
 }

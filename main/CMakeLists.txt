@@ -4,6 +4,7 @@ idf_component_register(
         "wifi_manager.c"
         "tcp_server.c"
         "aa_reconnect.c"
+        "aa_link_status.c"
         "mdns_advertise.c"
         "display_init.c"
         "flash_shade.c"

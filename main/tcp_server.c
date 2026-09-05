@@ -7,6 +7,7 @@
 #include <sys/time.h>
 
 #include "aa_handshake.h"
+#include "aa_link_status.h"
 #include "aa_reconnect.h"
 #include "aa_service.h"
 #include "aa_tls.h"
@@ -56,6 +57,7 @@ static session_end_t client_loop(int sock)
 
     if (aa_handshake_run(sock, tls) != ESP_OK) {
         ESP_LOGW(TAG, "handshake failed, dropping client");
+        aa_link_status_set(AA_LINK_DISCONNECTED, "Handshake failed. Tap Connect to retry");
         free(tls);
         return SESSION_NONE;
     }
@@ -65,6 +67,7 @@ static session_end_t client_loop(int sock)
      * it back once the session is really over; a phone that reconnects by
      * itself inside the grace window just re-arms this. */
     bt_link_set_aa_session(true, false);
+    aa_link_status_set(AA_LINK_CONNECTED, "Android Auto running");
 
     esp_err_t err = aa_service_run(sock, tls);
 
@@ -208,6 +211,7 @@ static void accept_task(void *arg)
             ESP_LOGW(TAG, "TCP_NODELAY: errno %d", errno);
         }
         arm_dead_peer_detection(sock);
+        aa_link_status_set(AA_LINK_CONNECTING, "Phone connected, handshake...");
 
         session_end_t ended = client_loop(sock);
 
@@ -217,6 +221,13 @@ static void accept_task(void *arg)
                  ended == SESSION_PEER_CLOSED ? "phone said goodbye"
                  : ended == SESSION_LOST      ? "session lost"
                                              : "no session");
+        /* The verdict on what to do about it comes after the grace window
+         * (aa_reconnect_after_drop); until then say what is known. */
+        if (ended == SESSION_PEER_CLOSED) {
+            aa_link_status_set(AA_LINK_DISCONNECTED, "Phone ended the session");
+        } else if (ended == SESSION_LOST) {
+            aa_link_status_set(AA_LINK_CONNECTING, "Link lost, waiting for the phone...");
+        }
 
         /* Phone is gone — pry the panel back from the video sink (it had
          * paused LVGL on the first frame) and put up the idle "Waiting
@@ -259,6 +270,7 @@ static void accept_task(void *arg)
         if (ended != SESSION_NONE || bt_link_aa_session_live()) {
             if (wait_for_client(listen_sock, RECONNECT_GRACE_MS)) {
                 ESP_LOGI(TAG, "phone is reconnecting by itself — leaving the AP/BT alone");
+                aa_link_status_set(AA_LINK_CONNECTING, "Phone is reconnecting...");
             } else {
                 aa_reconnect_after_drop(ip, ended == SESSION_PEER_CLOSED);
             }

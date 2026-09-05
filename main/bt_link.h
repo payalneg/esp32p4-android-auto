@@ -123,3 +123,10 @@ bool bt_link_aa_session_live(void);
  * auto-reconnect toggle. No-op on the agent side if no phone is paired
  * yet, so this is safe to wire to a button that's always visible. */
 void bt_link_request_connect_now(void);
+
+/* Every `BT:<event>` line the agent prints (READY, PAIRED, CONNECTED,
+ * DISCONNECTED, WIFI_CONNECT_STATUS, ON_AIR, OFF_AIR, BOOT, ...) is handed
+ * to this callback with the text after "BT:". Runs on bt_link's UART rx
+ * task; keep it short. One subscriber (aa_link_status). */
+typedef void (*bt_link_event_cb_t)(const char *event);
+void bt_link_set_event_cb(bt_link_event_cb_t cb);
