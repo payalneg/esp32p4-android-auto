@@ -6,6 +6,7 @@ idf_component_register(
         "aa_reconnect.c"
         "mdns_advertise.c"
         "display_init.c"
+        "flash_shade.c"
         "idle_screen.c"
         "ota_screen.c"
         "c6_ota.c"
@@ -51,6 +52,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
+        spi_flash
         esp_event
         esp_netif
         esp_wifi
@@ -127,3 +129,13 @@ target_add_binary_data(${COMPONENT_LIB} "${_lisp_web_gz}" BINARY)
 idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_x509_get_time" APPEND)
 idf_build_set_property(LINK_OPTIONS "-u" APPEND)
 idf_build_set_property(LINK_OPTIONS "__wrap_mbedtls_x509_get_time" APPEND)
+
+# flash_shade.c sits between every caller and the flash driver's write/erase
+# entry points so the backlight can go dark for the duration of the op (each
+# one stalls the DSI scan-out — see main/flash_shade.h). The wrap applies at
+# the final link, so NVS, littlefs, esp_partition and OTA are all routed
+# through it without any call-site changes.
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=esp_flash_write"
+    "-Wl,--wrap=esp_flash_erase_region"
+    "-Wl,--wrap=esp_flash_erase_chip")

@@ -1,5 +1,7 @@
 #include "display_init.h"
 
+#include "flash_shade.h"
+
 #include "bsp/esp-bsp.h"
 #include "dev_settings.h"
 #include "esp_log.h"
@@ -329,6 +331,10 @@ esp_err_t display_init(void)
      * whatever stale data was in the framebuffer. */
     vTaskDelay(pdMS_TO_TICKS(200));
     bsp_display_backlight_on();
+
+    /* From here on every flash write/erase dims the panel for its duration
+     * instead of tearing it (see flash_shade.h). */
+    flash_shade_arm();
 
     return ESP_OK;
 }
