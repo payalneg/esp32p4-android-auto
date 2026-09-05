@@ -60,6 +60,7 @@ void port_start_app_hook(void)
 #include "idle_screen.h"
 #include "aa_link_status.h"
 #include "splash_screen.h"
+#include "charge_prompt.h"
 #include "log_capture.h"
 #include "mdns_advertise.h"
 #include "ota_http.h"
@@ -391,6 +392,10 @@ void app_main(void)
     /* Dashboard (or idle, on failure) is now the live screen underneath —
      * drop the boot splash overlay. No-op if no splash was shown. */
     splash_screen_hide();
+    /* "Battery charged — reset trip?" prompt: arm battery_calc's callback
+     * now that LVGL is up, before the CAN poller can deliver the first ESC
+     * reading (the check runs once per boot on that reading). */
+    charge_prompt_init();
     if (ui_err == ESP_OK) {
         /* 3-finger gesture toggles between VESC dashboard and AA projection.
          * Only meaningful once the AA stack is up. The GT911 polling task

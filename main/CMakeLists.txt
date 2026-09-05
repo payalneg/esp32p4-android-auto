@@ -31,6 +31,7 @@ idf_component_register(
         "ble_ota.c"
         "ble_files.c"
         "notif_toast.c"
+        "charge_prompt.c"
         "music_info_view.c"
         "fonts/aabridge_font_24.c"
         "fonts/aabridge_font_32.c"

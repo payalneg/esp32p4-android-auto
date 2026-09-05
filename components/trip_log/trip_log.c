@@ -58,7 +58,7 @@ static const char *TAG = "trip_log";
 
 #define TRIPLOG_LABEL      "triplog"
 #define REC_MAGIC          0x5452       /* "TR" */
-#define REC_VER            3            /* v2: 2nd-head temps; v3: smart-battery state */
+#define REC_VER            4            /* v2: 2nd-head temps; v3: smart-battery state; v4: boot-time pack voltage */
 #define REC_TYPE_SAMPLE    0
 #define REC_TYPE_TRIP_START 1
 #define REC_SIZE           64
@@ -101,7 +101,10 @@ typedef struct __attribute__((packed)) {
     int16_t  temp_fet2_dc;  /* 2nd head FET   °C * 10 (ver>=2) */
     float    batt_remaining_ah; /* smart-battery tracker state (ver>=3; boot seed) */
     uint32_t batt_epoch;    /* battery reset epoch — seed only if it matches NVS */
-    uint8_t  reserved[4];
+    uint16_t boot_vin_dv;   /* pack V * 10 at this boot's first valid ESC reading (ver>=4; 0 = unknown).
+                             * Carries the charge-detection baseline for the NEXT boot, so
+                             * battery_calc no longer nvs_commits it while the panel is lit. */
+    uint8_t  reserved[2];
     uint32_t crc;          /* crc32c over the first REC_SIZE-4 bytes */
 } trip_rec_t;
 
@@ -184,6 +187,7 @@ static void boot_scan(void)
         /* empty / unformatted log */
         s_head = 0; s_seq = 1; s_trip_id = 1; s_trip_t_s = 0;
         ESP_LOGI(TAG, "empty log: starting trip 1");
+        battery_calc_seed_boot_vin(true, -1.0f);   /* log alive, no baseline yet */
         return;
     }
 
@@ -211,6 +215,15 @@ static void boot_scan(void)
     if (last.ver >= 3) {
         battery_calc_seed_remaining(last.batt_remaining_ah, last.batt_epoch);
     }
+
+    /* Charge/swap baseline for battery_calc_voltage_boot_check(): the pack
+     * voltage the PREVIOUS power-on saw, carried in every record since v4. Read
+     * here, while the panel is still dark, instead of the old nvs_commit that
+     * landed right as the ESC came up (= a blue flash on every power-on). A
+     * pre-v4 newest record (first boot after the update) seeds "none" and
+     * battery_calc falls back to its legacy NVS value, read-only. */
+    battery_calc_seed_boot_vin(true, (last.ver >= 4 && last.boot_vin_dv != 0)
+                                         ? last.boot_vin_dv / 10.0f : -1.0f);
 
     ESP_LOGI(TAG, "resumed: trip=%u seq=%u head=%u dist=%um ah=%.2f",
              (unsigned)s_trip_id, (unsigned)s_seq, (unsigned)s_head,
@@ -442,6 +455,7 @@ void trip_log_init(void)
     if (!s_queue || xTaskCreate(writer_task, "trip_wr", 4096, NULL, 2, NULL) != pdPASS) {
         ESP_LOGE(TAG, "writer task/queue init failed — trip logging disabled");
         s_part = NULL;
+        battery_calc_seed_boot_vin(false, -1.0f);   /* no records → back to the NVS path */
     }
 }
 
@@ -516,6 +530,10 @@ void trip_log_tick(const vesc_setup_values_t *rt)
     battery_calc_get_persist(&batt_rem, &batt_epoch);
     rec.batt_remaining_ah = batt_rem;
     rec.batt_epoch        = batt_epoch;
+    /* This boot's first valid pack voltage — the next boot's charge-detection
+     * baseline (see boot_scan). battery_calc_voltage_boot_check() runs before
+     * us on every updater tick, so it is already set by the first record. */
+    rec.boot_vin_dv       = (uint16_t)(battery_calc_get_boot_vin() * 10.0f + 0.5f);
     rec.fault         = rt->fault_code;
     /* seq + crc are filled by the writer task */
 
