@@ -42,7 +42,7 @@ static const char *TAG = "bt_agent";
  * mismatch it forces this chip into ROM bootloader and reflashes from the
  * embedded blob. Bump together with the CONFIG_BT_AGENT_FW_VERSION default
  * in main/Kconfig.projbuild on the P4 side any time the agent code changes. */
-#define BT_AGENT_FW_VERSION "0.6.6"
+#define BT_AGENT_FW_VERSION "0.6.7"
 
 /* NVS namespace + key for remembering the last successfully-paired phone's
  * BDA. On boot, if a value is present, we proactively HFP-connect to it so
@@ -96,6 +96,7 @@ static volatile bool g_aa_session_live = false;
 static volatile bool g_page_hold        = false;
 static TaskHandle_t  g_reconnect_task;
 static void auto_reconnect_task(void *arg);
+static void remember_phone(const esp_bd_addr_t bda, const char *why);
 
 /* ---------- User-configurable identity / Wifi creds ---------- */
 
@@ -308,6 +309,9 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *p)
             break;
         }
         g_page_hold = false;    /* phone came to us by itself */
+        /* Whoever opens the AA Wireless channel is the phone Connect should
+         * page from now on, bonded-long-ago or not. */
+        remember_phone(p->srv_open.rem_bda, "opened AA Wireless");
         /* Push WifiStartRequest right away — phone is waiting for it. */
         send_wifi_start_request();
         break;
@@ -333,6 +337,43 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *p)
     }
 }
 
+/* Make `bda` the phone that Connect and auto-reconnect page. Persisted so
+ * the next boot pages it without user interaction; only the most recent
+ * phone is kept, which matches how OEM head units behave (one car key <->
+ * one phone).
+ *
+ * Called on pairing AND whenever a phone opens the AA Wireless RFCOMM to us.
+ * The second one matters: a phone bonded here long ago that walks up and
+ * starts projecting never re-pairs, so with pairing as the only trigger
+ * last_bda stayed on whichever phone paired LAST. Connect then paged that
+ * one while the user stood there with a different phone -- "the button does
+ * nothing, I have to start it from the phone". */
+static void remember_phone(const esp_bd_addr_t bda, const char *why)
+{
+    bool same = g_last_bda_valid &&
+                memcmp(g_last_bda, bda, sizeof(esp_bd_addr_t)) == 0;
+    if (!same) {
+        memcpy(g_last_bda, bda, sizeof(esp_bd_addr_t));
+        g_last_bda_valid = true;
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_blob(h, NVS_KEY_LAST_BDA, g_last_bda, sizeof(esp_bd_addr_t));
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        ESP_LOGI(TAG, "last_bda -> %02x:%02x:%02x:%02x:%02x:%02x (%s)",
+                 g_last_bda[0], g_last_bda[1], g_last_bda[2],
+                 g_last_bda[3], g_last_bda[4], g_last_bda[5], why);
+    }
+    /* First phone on this boot: app_main() only starts the re-page loop when
+     * NVS already held one, so without this a freshly paired phone was never
+     * paged back until a reboot. */
+    if (!g_reconnect_task) {
+        xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5,
+                    &g_reconnect_task);
+    }
+}
+
 static void gap_callback(esp_bt_gap_cb_event_t event,
                          esp_bt_gap_cb_param_t *p)
 {
@@ -341,29 +382,7 @@ static void gap_callback(esp_bt_gap_cb_event_t event,
         if (p->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(TAG, "auth ok with '%s'", p->auth_cmpl.device_name);
             uart_link_say("BT:PAIRED");
-            /* Persist the BDA so the next boot can HFP-connect back to this
-             * phone without user interaction. Overwrites any previous value
-             * — we track only the most-recent phone, which matches how OEM
-             * head units behave (one car key ↔ one phone). */
-            memcpy(g_last_bda, p->auth_cmpl.bda, sizeof(esp_bd_addr_t));
-            g_last_bda_valid = true;
-            nvs_handle_t h;
-            if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-                nvs_set_blob(h, NVS_KEY_LAST_BDA, g_last_bda,
-                             sizeof(esp_bd_addr_t));
-                nvs_commit(h);
-                nvs_close(h);
-                ESP_LOGI(TAG, "saved last_bda %02x:%02x:%02x:%02x:%02x:%02x",
-                         g_last_bda[0], g_last_bda[1], g_last_bda[2],
-                         g_last_bda[3], g_last_bda[4], g_last_bda[5]);
-            }
-            /* First pairing on this boot: app_main() only starts the
-             * re-page loop when NVS already held a phone, so without this a
-             * freshly paired phone was never paged back until a reboot. */
-            if (!g_reconnect_task) {
-                xTaskCreate(auto_reconnect_task, "bt_reconn", 4096, NULL, 5,
-                            &g_reconnect_task);
-            }
+            remember_phone(p->auth_cmpl.bda, "paired");
         } else {
             ESP_LOGW(TAG, "auth failed status=%d", p->auth_cmpl.stat);
         }
@@ -680,9 +699,10 @@ void bt_agent_set_auto_reconnect(bool on)
  * the idle screen). Page the last paired phone right now, regardless of the
  * g_auto_reconnect toggle — the button is the user's explicit "connect now".
  * With HFP already up (phone linked, AA session gone) it bounces the link
- * instead, since a page would be a no-op. No-op if we've never paired or the
- * SPP (AA) link is already up. Safe to call from the UART rx_task context —
- * the Bluedroid calls just queue work in the stack. */
+ * instead, since a page would be a no-op; with the SPP (AA) link up but no
+ * session behind it, it tears both down so gearhead re-runs the wireless
+ * setup. No-op only if we've never seen a phone. Safe to call from the UART
+ * rx_task context — the Bluedroid calls just queue work in the stack. */
 void bt_agent_connect_now(void)
 {
     if (!g_last_bda_valid) {
@@ -698,7 +718,21 @@ void bt_agent_connect_now(void)
     g_page_hold = false;    /* explicit user request overrides "leave them be" */
     g_backoff_reset = true; /* auto-reconnect loop: back to the short delays */
     if (g_spp_handle != 0) {
-        ESP_LOGI(TAG, "BT_CONNECT: SPP already up");
+        /* The phone holds the AA Wireless RFCOMM open to us but no TCP
+         * session ever came of it: its WifiStartRequest cycle failed (could
+         * not join the AP, TCP connect timed out, gearhead wedged) and it is
+         * sitting on the channel. Returning here was a dead Connect button.
+         * Drop the RFCOMM -- gearhead logs that as a failure and restarts its
+         * wireless setup -- and bounce HFP so the restart has a fresh
+         * ACL_CONNECTED to trigger on; the re-page then brings a new
+         * SPP open -> WifiStartRequest cycle. */
+        ESP_LOGI(TAG, "BT_CONNECT: SPP up but no AA session — restarting the wireless setup");
+        esp_spp_disconnect(g_spp_handle);
+        if (g_hfp_connected) {
+            bounce_hfp("BT_CONNECT");
+        } else {
+            schedule_repage(500);
+        }
         return;
     }
     if (g_hfp_connected) {
