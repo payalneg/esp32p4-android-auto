@@ -45,6 +45,7 @@ static void restore_cb(void *arg)
     s_shaded = false;
     bsp_display_brightness_set(settings_get_screen_brightness());
     portEXIT_CRITICAL(&s_lock);
+    ESP_LOGI(TAG, "backlight back");
 }
 
 void flash_shade_arm(void)
@@ -106,6 +107,7 @@ esp_err_t __wrap_esp_flash_write(esp_flash_t *chip, const void *buffer,
     if (length < FLASH_SHADE_MIN_WRITE) {
         return __real_esp_flash_write(chip, buffer, address, length);
     }
+    ESP_LOGI(TAG, "write 0x%06x +%u -> backlight off", (unsigned)address, (unsigned)length);
     shade_begin();
     esp_err_t r = __real_esp_flash_write(chip, buffer, address, length);
     shade_end();
@@ -114,6 +116,7 @@ esp_err_t __wrap_esp_flash_write(esp_flash_t *chip, const void *buffer,
 
 esp_err_t __wrap_esp_flash_erase_region(esp_flash_t *chip, uint32_t start, uint32_t len)
 {
+    ESP_LOGI(TAG, "erase 0x%06x +%u -> backlight off", (unsigned)start, (unsigned)len);
     shade_begin();
     esp_err_t r = __real_esp_flash_erase_region(chip, start, len);
     shade_end();
