@@ -9,6 +9,45 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.15 / app 0.3.15 — 2026-09-06
+
+Curated Android Auto branch: only the fixes and the changes that showed a
+clear effect, without the experimental in-tree decoder. Not the 1.3.12-1.3.14
+line (that stays on the video-perf branch).
+
+### Android Auto reconnect and the Connect button
+
+- A dropped session no longer strands the head unit. The socket gained TCP
+  keepalive and receive/send timeouts, so a phone that leaves the AP silently
+  (out of range, pocket) is noticed within ~15 s instead of hanging the session
+  forever. A clean goodbye (ByeBye) is told apart from a lost link, and the
+  phone is given a 3 s grace to restart projection on its own before the head
+  unit kicks it off the AP.
+- The BT agent leaves the air for the whole session (agent 0.6.4 -> 0.6.6),
+  the way the reference dongles power their radio off, so a stray Bluetooth
+  event can no longer make the phone restart projection mid-ride.
+- **Connect now works.** Two dead paths fixed in agent 0.6.7: the phone it
+  pages is the one that last ran Android Auto (not whichever paired last), and
+  a Connect tap with the link half-up but no session tears it down so the phone
+  re-runs the wireless setup instead of doing nothing.
+- Agent updates no longer wipe the agent's own pairing. The OTA used to erase
+  the agent's NVS on every write, so after each update the phone had to be
+  re-paired; it now skips the NVS region.
+
+### Screen
+
+- The Android Auto idle screen shows the link state — Disconnected /
+  Connecting... / Connected — in colour, with the step in progress as the
+  subtitle and the IP / port on a dim third line.
+- The backlight goes dark during flash erases and bulk writes instead of
+  letting them tear the panel blue, and comes back a moment after the last one.
+- The LVGL worker no longer busy-spins on core 0; it was starving Bluetooth and
+  the idle task badly enough to trip the watchdog.
+- A touch is ignored for 1 s after a dashboard <-> Android Auto switch so a
+  stray finger doesn't land on the wrong screen.
+- Boot-time "battery charged — reset trip?" prompt: the dashboard asks before
+  resetting the trip instead of doing it silently.
+
 ## v1.3.11 / app 0.3.11 — 2026-09-02
 
 ### Faster firmware updates over Bluetooth
