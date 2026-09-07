@@ -80,6 +80,22 @@ menu "Android Auto Head Unit"
             and switches CPU divider to 1 right after NVS init.
             Disable this if the chip becomes unstable or refuses to boot.
 
+    config AA_MIC_ENABLE
+        bool "Microphone to Android Auto (voice input for Google Assistant)"
+        default y
+        help
+            Answer the phone's AVInputOpenRequest on the AA mic channel and
+            stream the on-board microphone to it as 16 kHz / 16-bit / mono
+            PCM. Gives Google Assistant voice input through the head unit;
+            the Assistant's spoken reply still plays on the phone because the
+            Speech audio channel is not advertised (main/config.h).
+
+            Waveshare 4.3: two MEMS mics through the ES7210 ADC (MIC1 used).
+            Guition JC4880: mic on the ES8311's own ADC (not verified on
+            hardware). Off: the request is answered with "open failed" and
+            no audio hardware is initialised; costs no flash for the codec
+            drivers either.
+
     menu "BT Agent OTA (Mode A)"
 
         config BT_AGENT_OTA_ENABLED

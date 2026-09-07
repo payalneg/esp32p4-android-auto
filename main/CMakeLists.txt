@@ -43,6 +43,7 @@ idf_component_register(
         "display_video.c"
         "aa_overlay.c"
         "touch_input.c"
+        "mic_capture.c"
         "aa_overclock.c"
         "ui_mode.c"
         "vesc_ui_updater.c"

@@ -418,6 +418,43 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
     }
     assert(i2s_data_if);
 
+#if CONFIG_BOARD_JC4880P443C
+    /* Guition JC4880P443C has no ES7210 — its on-board mic hangs off the
+     * ES8311's own ADC. Separate codec instance in ADC-only mode; if a
+     * speaker path is ever added on this board, the two instances have to
+     * merge into one ESP_CODEC_DEV_WORK_MODE_BOTH device. pa_pin = -1 so
+     * the mic path never toggles the amplifier. Not verified on hardware. */
+    audio_codec_i2c_cfg_t i2c_cfg = {
+        .port = BSP_I2C_NUM,
+        .addr = ES8311_CODEC_DEFAULT_ADDR,
+        .bus_handle = i2c_handle,
+    };
+    const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    BSP_NULL_CHECK(i2c_ctrl_if, NULL);
+
+    es8311_codec_cfg_t es8311_cfg = {
+        .ctrl_if = i2c_ctrl_if,
+        .gpio_if = NULL,
+        .codec_mode = ESP_CODEC_DEV_WORK_MODE_ADC,
+        .pa_pin = -1,
+        .pa_reverted = false,
+        .master_mode = false,
+        .use_mclk = true,
+        .digital_mic = false,
+        .invert_mclk = false,
+        .invert_sclk = false,
+        .hw_gain = { .pa_voltage = 5.0, .codec_dac_voltage = 3.3 },
+    };
+    const audio_codec_if_t *es8311_adc = es8311_codec_new(&es8311_cfg);
+    BSP_NULL_CHECK(es8311_adc, NULL);
+
+    esp_codec_dev_cfg_t codec_dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .codec_if = es8311_adc,
+        .data_if = i2s_data_if,
+    };
+    return esp_codec_dev_new(&codec_dev_cfg);
+#else /* CONFIG_BOARD_WAVESHARE_43 — ES7210 4-ch ADC, MEMS mics MIC1/MIC2 */
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port = BSP_I2C_NUM,
         .addr = BSP_ES7210_CODEC_ADDR,
@@ -438,6 +475,7 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
         .data_if = i2s_data_if,
     };
     return esp_codec_dev_new(&codec_es7210_dev_cfg);
+#endif
 }
 
 // Bit number used to represent command and parameter

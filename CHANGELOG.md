@@ -9,6 +9,23 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.16 / app 0.3.16 — 2026-09-07
+
+### Microphone to Android Auto
+
+- The head unit's own microphone now feeds the Android Auto voice input. The
+  phone has been asking for it all along (AVInputOpenRequest on the mic
+  channel, previously logged as "not handled") — the request is now answered
+  and, while a voice session is open, the on-board mic is streamed as
+  16 kHz / 16-bit / mono PCM in 40 ms chunks. Gives Google Assistant voice
+  input through the unit; the spoken reply still plays on the phone because
+  the Speech audio channel is not advertised. Phone calls are unaffected
+  (they ride Bluetooth HFP, which the BT agent does not do).
+- Waveshare 4.3: MIC1 of the two on-board MEMS mics via the ES7210 ADC.
+  Guition JC4880: mic on the ES8311's own ADC, compile-only. Kconfig
+  `AA_MIC_ENABLE` (default on) removes the whole path — the phone then gets
+  an "open failed" answer instead of silence.
+
 ## v1.3.15 / app 0.3.15 — 2026-09-06
 
 Curated Android Auto branch: only the fixes and the changes that showed a
