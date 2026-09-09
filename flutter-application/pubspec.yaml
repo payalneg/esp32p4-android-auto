@@ -27,6 +27,13 @@ dependencies:
   # The DeepSeek API key belongs in the Android Keystore / iOS Keychain, not in
   # SharedPreferences (which lands in adb/cloud backups).
   flutter_secure_storage: ^9.2.2
+  # Offline navigator: raster OSM tiles + our own routing graph. The map
+  # widget only draws — tiles come from our cache-first TileProvider and
+  # routes from lib/nav (no online routing service).
+  flutter_map: ^8.3.2
+  latlong2: ^0.9.1
+  # 14.0.3 pulls package_info_plus ^10; the app is on ^8, so pin one patch back.
+  geolocator: ^14.0.2
 
 dev_dependencies:
   flutter_test:
