@@ -9,7 +9,7 @@
 /* On-board microphone capture for the Android Auto mic channel.
  *
  * Hardware is board-specific and lives behind the BSP:
- *   - Waveshare 4.3: two MEMS mics on the ES7210 ADC (MIC1 → L, MIC2 → R);
+ *   - Waveshare 4.3: two MEMS mics on the ES7210 ADC inputs MIC1 and MIC3 (TDM read);
  *     we keep MIC1 only.
  *   - Guition JC4880: mic on the ES8311's own ADC (mono).
  * Output is always what the AA InputStreamChannel advertises: 16 kHz,

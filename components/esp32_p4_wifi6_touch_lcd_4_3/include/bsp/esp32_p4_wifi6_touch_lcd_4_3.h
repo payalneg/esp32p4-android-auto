@@ -164,6 +164,15 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void);
  */
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void);
 
+/**
+ * @brief Microphone init with an explicit ES7210 input selection
+ *
+ * @param mic_selected OR of ES7120_SEL_MIC1..MIC4 (esp_codec_dev es7210_adc.h);
+ *                     0 = driver default (MIC1|MIC2). Ignored on boards whose
+ *                     mic is on the ES8311.
+ */
+esp_codec_dev_handle_t bsp_audio_codec_microphone_init_sel(uint32_t mic_selected);
+
 /**************************************************************************************************
  *
  * SPIFFS

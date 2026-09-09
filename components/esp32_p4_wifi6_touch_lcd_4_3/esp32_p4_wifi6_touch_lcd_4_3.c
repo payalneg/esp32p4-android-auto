@@ -409,6 +409,12 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
 
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 {
+    return bsp_audio_codec_microphone_init_sel(0);
+}
+
+esp_codec_dev_handle_t bsp_audio_codec_microphone_init_sel(uint32_t mic_selected)
+{
+    (void)mic_selected;   /* only meaningful for the ES7210 (Waveshare) */
     if (i2s_data_if == NULL)
     {
         /* Initilize I2C */
@@ -454,7 +460,7 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
         .data_if = i2s_data_if,
     };
     return esp_codec_dev_new(&codec_dev_cfg);
-#else /* CONFIG_BOARD_WAVESHARE_43 — ES7210 4-ch ADC, MEMS mics MIC1/MIC2 */
+#else /* CONFIG_BOARD_WAVESHARE_43 — ES7210 4-ch ADC, MEMS mics on MIC1 and MIC3, MIC2 = AEC ref */
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port = BSP_I2C_NUM,
         .addr = BSP_ES7210_CODEC_ADDR,
@@ -463,8 +469,13 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
     BSP_NULL_CHECK(i2c_ctrl_if, NULL);
 
+    /* mic_selected = 0 → driver default MIC1|MIC2 as an I2S stereo pair.
+     * Three or more selected → the driver switches the ES7210 to TDM and
+     * all four ADCs arrive on SDOUT1 (open the device as 2 ch × 32 bit and
+     * read each 32-bit slot as two 16-bit samples). */
     es7210_codec_cfg_t es7210_cfg = {
         .ctrl_if = i2c_ctrl_if,
+        .mic_selected = (uint8_t)mic_selected,
     };
     const audio_codec_if_t *es7210_dev = es7210_codec_new(&es7210_cfg);
     BSP_NULL_CHECK(es7210_dev, NULL);

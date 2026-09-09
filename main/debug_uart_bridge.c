@@ -4,6 +4,7 @@
 
 #if CONFIG_DEBUG_UART_BRIDGE
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
+#include "mic_capture.h"
 #include "touch_input.h"
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
@@ -370,6 +372,66 @@ static int cmd_lvtimers(int argc, char **argv)
     return 0;
 }
 
+/* ---- mic: run the AA microphone capture without a phone ---- */
+
+typedef struct {
+    uint64_t sq;        /* sum of squares, current 1 s window */
+    int32_t  peak;      /* |max| sample, current window */
+    uint32_t samples;   /* samples in the window */
+    uint32_t chunks;    /* total chunks delivered */
+} mic_stat_t;
+
+static void mic_stat_cb(const int16_t *pcm, size_t n, uint64_t ts, void *ctx)
+{
+    (void)ts;
+    mic_stat_t *st = (mic_stat_t *)ctx;
+    uint64_t sq = 0;
+    int32_t  peak = 0;
+    for (size_t i = 0; i < n; i++) {
+        int32_t v = pcm[i];
+        sq += (uint64_t)(v * v);
+        if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    /* Single producer (capture task) / single consumer (REPL task) — the
+     * numbers are diagnostic, a torn read costs one slightly-off line. */
+    st->sq += sq;
+    if (peak > st->peak) st->peak = peak;
+    st->samples += (uint32_t)n;
+    st->chunks++;
+}
+
+static int cmd_mic(int argc, char **argv)
+{
+    int secs = argc > 1 ? clampi(atoi(argv[1]), 1, 60) : 5;
+    if (mic_capture_is_running()) {
+        printf("ERR: mic busy (an AA session has it open)\n");
+        return 1;
+    }
+    static mic_stat_t st;
+    memset(&st, 0, sizeof(st));
+    esp_err_t err = mic_capture_start(mic_stat_cb, &st);
+    if (err != ESP_OK) {
+        printf("ERR: mic_capture_start: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("capturing %d s\n", secs);
+    for (int s = 1; s <= secs; s++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        uint64_t sq = st.sq;
+        uint32_t n = st.samples;
+        int32_t  peak = st.peak;
+        st.sq = 0; st.samples = 0; st.peak = 0;
+        unsigned rms = n ? (unsigned)sqrt((double)sq / n) : 0;
+        printf("t=%2ds chunks=%u rms=%u peak=%d%s\n", s, (unsigned)st.chunks, rms, (int)peak,
+               n == 0 ? "  <-- no data from the codec" : "");
+    }
+    mic_capture_stop();
+    printf("done: %u chunks in %d s (expect %d/s)\n",
+           (unsigned)st.chunks, secs, 1000 / MIC_CAPTURE_CHUNK_MS);
+    return 0;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -393,6 +455,10 @@ static void register_cmds(void)
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+        { .command = "mic",
+          .help = "Capture the AA microphone for [seconds] (default 5) without a "
+                  "phone; prints RMS/peak per second",
+          .hint = NULL, .func = cmd_mic },
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));
