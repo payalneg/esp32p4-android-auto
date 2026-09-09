@@ -9,6 +9,33 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.17 / app 0.3.17 — 2026-09-09
+
+### Waveshare microphone actually works
+
+- 1.3.16 shipped the Android Auto microphone dead on the Waveshare 4.3: the
+  two MEMS mics sit on ES7210 inputs MIC1 and MIC3 (MIC2 is the echo-cancel
+  reference fed from the speaker output, MIC4 is unconnected), while the code
+  read MIC1/MIC2 as a plain I2S stereo pair — a mode in which MIC3 never
+  reaches the ESP32-P4 at all. Found by tapping the mics with all four inputs
+  captured at once; only ADC1 and ADC3 moved. The ADC is now driven the way
+  Waveshare's own demo does it (three inputs selected, which puts the chip in
+  TDM so all four channels arrive on one line), the two mics are averaged
+  into the mono stream, and the input gain went from 24 to 30 dB. Guition
+  JC4880 (ES8311 ADC) is unchanged and worked already.
+
+### Touch
+
+- Android Auto ignores contacts shorter than 250 ms: a press is reported to
+  the phone only once the finger has stayed down that long (at the touch-down
+  point, then caught up to where the finger is), and a shorter contact sends
+  nothing. Stops vibration, knuckles and raindrops from tapping things;
+  fast flicks under the threshold are lost — deliberate.
+- Groundwork for a smaller Android Auto viewport inside the 800×480 frame
+  (video margins): touch is reported relative to the phone's content area and
+  the touch-screen descriptor advertises that area. Margins ship at 0×0, so
+  nothing changes on screen.
+
 ## v1.3.16 / app 0.3.16 — 2026-09-07
 
 ### Microphone to Android Auto
