@@ -72,6 +72,20 @@ static const char *TAG = "aa_svc";
 
 /* ---------- Service Discovery response builder ---------- */
 
+/* Codec frame is 800×480; the phone lays its UI out in
+ * (800 - MARGIN_W) × (480 - MARGIN_H) and leaves the rest blank. 0×0 = full frame. */
+#define AA_VIDEO_MARGIN_W   0
+#define AA_VIDEO_MARGIN_H   0
+
+/* gearhead CENTRES the content inside the codec frame (observed on hardware
+ * 2026-09-08 with 200×80 margins, 600×400 area) and expects touch coordinates relative to
+ * that content area, not to the frame. We display the full frame, so panel
+ * (x, y) → content (x - CONTENT_X, y - CONTENT_Y). */
+#define AA_VIDEO_CONTENT_W  (800 - AA_VIDEO_MARGIN_W)
+#define AA_VIDEO_CONTENT_H  (480 - AA_VIDEO_MARGIN_H)
+#define AA_VIDEO_CONTENT_X  (AA_VIDEO_MARGIN_W / 2)
+#define AA_VIDEO_CONTENT_Y  (AA_VIDEO_MARGIN_H / 2)
+
 /* AVChannel{stream_type=VIDEO, available_while_in_call=true,
  *           video_configs=[{resolution=_480p, fps=_30, margin=0×0, dpi=140}]}
  * → bytes.
@@ -96,8 +110,12 @@ static size_t build_video_av_channel(uint8_t *out, size_t cap)
     size_t  vp = 0;
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 1);   /* resolution = _480p (800×480) */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);   /* fps = _30 (NONE/0 didn't help — phone ignored) */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, 0);   /* margin_width */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, 0);   /* margin_height */
+    /* Margins (tested 2026-09-08 with 200×80 and 0×160): the stream stays
+     * 800×480, gearhead centres the smaller UI in the frame and leaves the
+     * rest blank; touch must then be reported relative to that content area
+     * (see touch_send_event). Back to 0×0 = full frame. */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, AA_VIDEO_MARGIN_W);   /* margin_width */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, AA_VIDEO_MARGIN_H);   /* margin_height */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 5, 140); /* dpi — typical 480p car */
 
     size_t pos = 0;
@@ -199,11 +217,12 @@ static size_t build_input_channel(uint8_t *out, size_t cap)
      * dims. The enum has no value below _480p which gearhead resolves to
      * 800×480 (see openauto ServiceFactory.cpp). So setting smaller numbers
      * here only confuses touch — the video will still arrive at 800×480.
-     * Match the AA video size so touch coords stay consistent. */
+     * Advertise the CONTENT area (frame minus margins): that is the space
+     * gearhead lays the UI out in and the space touch_send_event reports in. */
     uint8_t ts[16];
     size_t  tp = 0;
-    pb_w_uint32(ts, sizeof(ts), &tp, 1, 800);
-    pb_w_uint32(ts, sizeof(ts), &tp, 2, 480);
+    pb_w_uint32(ts, sizeof(ts), &tp, 1, AA_VIDEO_CONTENT_W);
+    pb_w_uint32(ts, sizeof(ts), &tp, 2, AA_VIDEO_CONTENT_H);
     pb_w_submsg(out, cap, &pos, 2, ts, tp);    /* touch_screen_config */
     return pos;
 }
@@ -1274,6 +1293,22 @@ static esp_err_t touch_send_event(uint64_t timestamp_us,
 {
     touch_send_ctx_t *ctx = (touch_send_ctx_t *)ctx_v;
     if (!ctx || !ctx->tls || !ctx->cipher) return ESP_ERR_INVALID_STATE;
+
+    /* Frame (800×480) → content-area coordinates. A press that starts on the
+     * blank margin is swallowed together with the rest of that gesture; a
+     * drag that started inside and wanders out is clamped to the edge so the
+     * phone still sees the RELEASE and never gets a stuck pointer. */
+    static bool s_gesture_ignored = false;
+    int cx = (int)x - AA_VIDEO_CONTENT_X;
+    int cy = (int)y - AA_VIDEO_CONTENT_Y;
+    bool inside = cx >= 0 && cy >= 0 &&
+                  cx < AA_VIDEO_CONTENT_W && cy < AA_VIDEO_CONTENT_H;
+    if (action == TOUCH_ACTION_PRESS) s_gesture_ignored = !inside;
+    if (s_gesture_ignored) return ESP_OK;
+    if (cx < 0) cx = 0; else if (cx >= AA_VIDEO_CONTENT_W) cx = AA_VIDEO_CONTENT_W - 1;
+    if (cy < 0) cy = 0; else if (cy >= AA_VIDEO_CONTENT_H) cy = AA_VIDEO_CONTENT_H - 1;
+    x = (uint16_t)cx;
+    y = (uint16_t)cy;
 
     /* TouchEvent { repeated TouchLocation touch_location = 1;
      *              uint32 action_index = 2;
