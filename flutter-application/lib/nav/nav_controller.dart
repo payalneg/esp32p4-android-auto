@@ -82,6 +82,13 @@ class NavController extends ChangeNotifier {
         return;
       case TapMode.start:
         start = p;
+        // The destination may already be known — picked from search, say — in
+        // which case asking for it again is asking twice for the same thing.
+        if (finish != null) {
+          tapMode = TapMode.none;
+          unawaited(recalc());
+          return;
+        }
         tapMode = TapMode.finish;
         messageKey = 'nav.route.tapFinish';
         notifyListeners();
