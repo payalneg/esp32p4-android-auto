@@ -19,6 +19,7 @@ import 'ble_service.dart' show BleConnState;
 import 'file_ops.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
+import 'nav_stream.dart';
 import 'messages.dart';
 
 export 'ble_service.dart' show BleConnState;
@@ -81,11 +82,14 @@ class BleProxy {
   final _helperCtrl = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get helperEvents => _helperCtrl.stream;
   final _vescTargetCtrl = StreamController<VescTargetInfo>.broadcast();
+  final _navStateCtrl = StreamController<NavDisplayState>.broadcast();
   BleConnState _state = BleConnState.idle;
   String? _savedRemoteId;
   bool _supportsFm = false;
   bool _supportsOta = false;
   bool _supportsBleOta = false;
+  bool _supportsNav = false;
+  NavDisplayState _navState = NavDisplayState.unknown;
   int _mtu = 247;
   VescTargetInfo _vescTarget = const VescTargetInfo(
       kind: VescTargetKind.headUnit, state: VescLinkState.idle);
@@ -113,6 +117,13 @@ class BleProxy {
   bool get supportsFileManager => _supportsFm;
   bool get supportsOta => _supportsOta;
   bool get supportsBleOta => _supportsBleOta;
+
+  /// Whether the head unit can show the navigator picture we render.
+  bool get supportsNavStream => _supportsNav;
+
+  /// What the head unit last said about its navigator screen.
+  NavDisplayState get navState => _navState;
+  Stream<NavDisplayState> get navStates => _navStateCtrl.stream;
   int get negotiatedMtu => _mtu;
 
   /// Wire up the port callback and prime the saved-device id from prefs. Call
@@ -223,6 +234,9 @@ class BleProxy {
       case IpcEvt.vescTarget:
         _applyVescTarget(m['target']);
         break;
+      case IpcEvt.navState:
+        _applyNavState(m);
+        break;
       case IpcEvt.helperState:
       case IpcEvt.helperStatusFrame:
       case IpcEvt.helperParams:
@@ -233,6 +247,15 @@ class BleProxy {
         _helperCtrl.add(m);
         break;
     }
+  }
+
+  void _applyNavState(Map<String, dynamic> m) {
+    _navState = NavDisplayState(
+      navMode: m['navMode'] as bool? ?? false,
+      visible: m['visible'] as bool? ?? false,
+      maxChunk: (m['maxChunk'] as num?)?.toInt() ?? 0,
+    );
+    _navStateCtrl.add(_navState);
   }
 
   void _applyVescTarget(Object? raw) {
@@ -268,6 +291,21 @@ class BleProxy {
     _supportsOta = m['supportsOta'] as bool? ?? false;
     _supportsBleOta = m['supportsBleOta'] as bool? ?? false;
     _mtu = (m['mtu'] as num?)?.toInt() ?? 247;
+    final wasNav = _supportsNav;
+    _supportsNav = m['supportsNav'] as bool? ?? false;
+    // A status snapshot carries the screen state too, so a UI that started
+    // after the head unit connected doesn't sit blind until the next change.
+    final navState = NavDisplayState(
+      navMode: m['navMode'] as bool? ?? false,
+      visible: m['navVisible'] as bool? ?? false,
+      maxChunk: _navState.maxChunk,
+    );
+    if (wasNav != _supportsNav ||
+        navState.navMode != _navState.navMode ||
+        navState.visible != _navState.visible) {
+      _navState = navState;
+      _navStateCtrl.add(_navState);
+    }
     _applyVescTarget(m['vescTarget']);
     final name = m['state'] as String?;
     _state = BleConnState.values.firstWhere((e) => e.name == name,
@@ -368,6 +406,32 @@ class BleProxy {
 
   void _sendRaw(String kind, Uint8List body) => _fireAndForget(
       IpcCmd.send, {'kind': kind, 'b64': base64Encode(body)});
+
+  // ---- navigator picture ----
+
+  /// Send one rendered frame to the head unit and wait for its verdict. Never
+  /// throws: a dead link or a missing feature comes back as a non-ok ack, and
+  /// the streamer treats every failure the same way.
+  Future<NavFrameResult> sendNavFrame(int w, int h, Uint8List jpeg) async {
+    try {
+      final r = await _request(
+        IpcCmd.navFrame,
+        {'w': w, 'h': h, 'b64': base64Encode(jpeg)},
+        const Duration(seconds: 10),
+      );
+      return NavFrameResult((r['ack'] as num?)?.toInt() ?? NavAck.timeout,
+          (r['seq'] as num?)?.toInt() ?? 0, (r['ms'] as num?)?.toInt() ?? 0);
+    } catch (_) {
+      return const NavFrameResult(NavAck.timeout, 0, 0);
+    }
+  }
+
+  /// Ask the head unit to describe its screen; the answer arrives on
+  /// [navStates].
+  void navHello() => _fireAndForget(IpcCmd.navHello, const {});
+
+  /// Tell the head unit we stopped rendering, so it can say so.
+  void navStop() => _fireAndForget(IpcCmd.navStop, const {});
 
   // ---- file manager helpers (used by FileManagerProxy) ----
 

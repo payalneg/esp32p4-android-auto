@@ -39,6 +39,17 @@ class NotifBridgeUuids {
   /// WRITE_NO_RSP. File-manager data channel: raw upload bytes streamed after
   /// the UPLOAD/READY handshake on [charFileCtrl].
   static const charFileData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000a';
+
+  /// WRITE | NOTIFY. Navigator frame control: the phone writes
+  /// BEGIN/END/STOP/HELLO, the head unit notifies STATE (is its navigator
+  /// screen the live one?) and FRAME_ACK. Optional — absent on firmware
+  /// without the navigator screen, in which case the app hides the feature.
+  /// See lib/ble/nav_stream.dart + firmware main/ble_nav.c.
+  static const charNavCtrl = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000b';
+
+  /// WRITE_NO_RSP. Navigator frame data: the JPEG bytes of one frame,
+  /// streamed between BEGIN and END on [charNavCtrl].
+  static const charNavData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000c';
 }
 
 /// Nordic UART Service — the head unit's VESC-Tool-compatible transparent

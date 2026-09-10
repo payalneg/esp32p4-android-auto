@@ -31,6 +31,7 @@ import 'file_manager.dart';
 import 'file_ops.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
+import 'nav_stream.dart';
 import 'uuids.dart';
 import 'vesc/vesc_link.dart';
 import 'vesc/vesc_target.dart';
@@ -53,6 +54,9 @@ class BleTaskHandler extends TaskHandler {
   final _consoleBatch = <LispConsoleLine>[];
   Timer? _consoleTimer;
   bool _consolePushOn = false;
+  StreamSubscription<NavDisplayState>? _navSub;
+  Timer? _navIdleTimer;
+  bool _navFast = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -92,6 +96,8 @@ class BleTaskHandler extends TaskHandler {
   Future<void> onDestroy(DateTime timestamp) async {
     _statsTimer?.cancel();
     _consoleTimer?.cancel();
+    _navIdleTimer?.cancel();
+    await _navSub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
     await _consoleSub?.cancel();
@@ -111,11 +117,52 @@ class BleTaskHandler extends TaskHandler {
         'supportsOta': _ble.supportsOta,
         'supportsBleOta': _ble.supportsBleOta,
         'mtu': _ble.negotiatedMtu,
+        'supportsNav': _ble.supportsNavStream,
+        'navMode': _ble.navStream?.state.navMode ?? false,
+        'navVisible': _ble.navStream?.state.visible ?? false,
         // Whether the head unit exposes the NUS bridge is part of the VESC
         // target info now (`headUnitAvailable`) — one source of truth for the
         // LISP editor, which may instead be riding a direct adapter.
         'vescTarget': VescTarget.instance.info.toMap(),
       };
+
+  /// Follow the head unit's navigator screen across reconnects: the frame
+  /// channel is rebuilt on every handshake, so the subscription has to be too.
+  void _rewireNav(BleConnState s) {
+    unawaited(_navSub?.cancel());
+    _navSub = null;
+    if (s != BleConnState.connected) {
+      _navIdleTimer?.cancel();
+      _navIdleTimer = null;
+      _navFast = false;
+      return;
+    }
+    final nav = _ble.navStream;
+    if (nav == null) return;
+    _navSub = nav.states.listen((st) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navState,
+        'navMode': st.navMode,
+        'visible': st.visible,
+        'maxChunk': st.maxChunk,
+      });
+    });
+  }
+
+  /// Frames want the fast connection interval, but only while they are
+  /// actually moving — the rider may leave the navigator open and parked for
+  /// an hour. Ten seconds of quiet hands the radio back.
+  void _navFrameSent() {
+    if (!_navFast) {
+      _navFast = true;
+      unawaited(_ble.setLinkSpeed(fast: true));
+    }
+    _navIdleTimer?.cancel();
+    _navIdleTimer = Timer(const Duration(seconds: 10), () {
+      _navFast = false;
+      unawaited(_ble.setLinkSpeed(fast: false));
+    });
+  }
 
   void _pushState(BleConnState s) {
     // Head-unit link changed: if that's what the LISP editor is riding on,
@@ -124,6 +171,7 @@ class BleTaskHandler extends TaskHandler {
         VescTarget.instance.kind == VescTargetKind.headUnit) {
       _stopStatsPolling();
     }
+    _rewireNav(s);
     FlutterForegroundTask.sendDataToMain({'t': IpcEvt.state, ..._statusMap()});
     // The head unit going up/down also changes whether it's a usable target.
     _pushTarget(VescTarget.instance.info);
@@ -244,6 +292,37 @@ class BleTaskHandler extends TaskHandler {
         case IpcCmd.bleRestart:
           await _ble.restart();
           _reply(id, {});
+          break;
+
+        case IpcCmd.navFrame:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden, 'seq': 0, 'ms': 0});
+            break;
+          }
+          final r = await nav.sendFrame(
+            m['w'] as int,
+            m['h'] as int,
+            base64Decode(m['b64'] as String),
+          );
+          // The link only needs the fast interval while frames are moving;
+          // an idle sweep hands it back (see _navIdleTimer).
+          _navFrameSent();
+          _reply(id, {'ack': r.ack, 'seq': r.seq, 'ms': r.decodeMs});
+          break;
+
+        case IpcCmd.navHello:
+          await _ble.navStream?.hello();
+          break;
+
+        case IpcCmd.navStop:
+          _navIdleTimer?.cancel();
+          _navIdleTimer = null;
+          if (_navFast) {
+            _navFast = false;
+            await _ble.setLinkSpeed(fast: false);
+          }
+          await _ble.navStream?.stop();
           break;
 
         case IpcCmd.send:
