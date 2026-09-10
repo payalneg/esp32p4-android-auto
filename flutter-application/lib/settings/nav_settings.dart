@@ -25,6 +25,7 @@ class NavSettings extends ChangeNotifier {
   static const _kHaptics = 'nav_haptics_v1';
   static const _kTrackUp = 'nav_track_up_v1';
   static const _kSimulator = 'nav_simulator_v1';
+  static const _kStreamToDisplay = 'nav_stream_v1';
 
   RideProfile _profile = kDefaultProfile;
   int _tileCapMb = 300;
@@ -55,6 +56,12 @@ class NavSettings extends ChangeNotifier {
   /// Show the ▶ button that rides the route without a GPS. A developer's
   /// tool; hidden unless switched on.
   bool _simulator = false;
+
+  /// Send the navigator picture to the head unit while it is showing its
+  /// navigator screen. On by default — unlike voice and vibration, this is
+  /// the point of the feature, and nothing is sent unless the head unit says
+  /// it is showing that screen.
+  bool _streamToDisplay = true;
   bool _loaded = false;
 
   RideProfile get profile => _profile;
@@ -66,6 +73,7 @@ class NavSettings extends ChangeNotifier {
   bool get haptics => _haptics;
   bool get trackUp => _trackUp;
   bool get simulator => _simulator;
+  bool get streamToDisplay => _streamToDisplay;
   bool get loaded => _loaded;
 
   /// Last map position as `lat,lon,zoom`, or null if never saved.
@@ -91,6 +99,7 @@ class NavSettings extends ChangeNotifier {
     _haptics = p.getBool(_kHaptics) ?? false;
     _trackUp = p.getBool(_kTrackUp) ?? true;
     _simulator = p.getBool(_kSimulator) ?? false;
+    _streamToDisplay = p.getBool(_kStreamToDisplay) ?? true;
     _loaded = true;
     notifyListeners();
   }
@@ -165,6 +174,14 @@ class NavSettings extends ChangeNotifier {
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kSimulator, value);
+  }
+
+  Future<void> setStreamToDisplay(bool value) async {
+    if (value == _streamToDisplay) return;
+    _streamToDisplay = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kStreamToDisplay, value);
   }
 
   /// Saved on every meaningful camera move; not a notifying change, since

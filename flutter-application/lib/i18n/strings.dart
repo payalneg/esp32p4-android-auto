@@ -586,6 +586,15 @@ const _en = <String, String>{
   'nav.voice': 'Voice guidance',
   'nav.haptics': 'Vibrate before turns',
   'nav.simulator': 'Route playback button',
+  'nav.stream': 'Show on the display',
+  // The picture the head unit gets. The preview is a thumbnail of the real
+  // frame, so the badge says why it is standing still.
+  'nav.hu.remaining': '{km} km · {min} min',
+  'nav.hu.title': 'Display',
+  'nav.hu.badge.offline': 'Display offline',
+  'nav.hu.badge.other': 'Display is on another screen',
+  'nav.hu.badge.oldFirmware': 'Display firmware is too old',
+  'nav.hu.badge.waiting': 'Waiting for the display',
   'nav.route.rerouting': 'Rerouting…',
   // Spoken. Actions are lower case: they follow "In N metres, …" and the
   // speech engine does not care about capitals.
@@ -1252,6 +1261,13 @@ const _ru = <String, String>{
   'nav.voice': 'Голосовые подсказки',
   'nav.haptics': 'Вибрация перед поворотом',
   'nav.simulator': 'Кнопка проигрывания маршрута',
+  'nav.stream': 'Показывать на дисплее',
+  'nav.hu.remaining': '{km} км · {min} мин',
+  'nav.hu.title': 'Дисплей',
+  'nav.hu.badge.offline': 'Дисплей не подключён',
+  'nav.hu.badge.other': 'На дисплее другой экран',
+  'nav.hu.badge.oldFirmware': 'Нужна свежая прошивка дисплея',
+  'nav.hu.badge.waiting': 'Жду дисплей',
   'nav.route.rerouting': 'Перестраиваю маршрут…',
   // Озвучка. Действия со строчной: идут после «Через N метров …», а движку
   // речи регистр безразличен. Расстояния кратны 50 — «метров» всегда верно.
