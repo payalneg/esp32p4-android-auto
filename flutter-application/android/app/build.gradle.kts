@@ -11,6 +11,17 @@ android {
     // flutter_local_notifications drags in a desugar dep that requires NDK 27.
     ndkVersion = "27.0.12077973"
 
+    packaging {
+        jniLibs {
+            // Keep native libs compressed. From minSdk 23 up AGP stores them
+            // uncompressed so the system can map them straight from the APK,
+            // which doubled the file (31 → 60 MB) — and release APKs are
+            // committed to this repo. Extraction at install is the old, fine
+            // behaviour.
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -28,7 +39,9 @@ android {
         applicationId = "com.aabridge.aa_bridge"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // 24, not Flutter's default 21: flutter_tts (spoken turn-by-turn in
+        // the navigator) declares minSdk 24. Android 7.0 is from 2016.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

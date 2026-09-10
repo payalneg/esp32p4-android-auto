@@ -19,7 +19,9 @@ pluginManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.7.0" apply false
-    id("org.jetbrains.kotlin.android") version "1.8.22" apply false
+    // 2.2.x: flutter_tts 4.2 ships a Kotlin 2.2 stdlib, and a 1.8 compiler
+    // cannot read its metadata. Every other plugin builds under 2.2 as well.
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
 include(":app")
