@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../i18n/strings.dart';
 import '../nav/map_data.dart';
 import '../nav/way_classes.dart';
+import 'region_picker_screen.dart';
 import '../settings/nav_settings.dart';
 
 class MapDataScreen extends StatefulWidget {
@@ -154,6 +155,15 @@ class _MapDataScreenState extends State<MapDataScreen> {
             title: Text(t(context, 'mapdata.import.title')),
             dense: true,
           ),
+          ListTile(
+            leading: const Icon(Icons.public),
+            title: Text(t(context, 'mapdata.region.title')),
+            subtitle: Text(t(context, 'mapdata.region.subtitle')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const RegionPickerScreen())),
+          ),
+          const Divider(height: 1),
           ListTile(
             leading: const Icon(Icons.file_open_outlined),
             title: Text(t(context, 'mapdata.import.graph')),

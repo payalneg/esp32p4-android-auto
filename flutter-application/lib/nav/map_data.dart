@@ -22,8 +22,10 @@ import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'geofabrik.dart';
 import 'graph_builder.dart';
 import 'overpass.dart';
+import 'pbf_graph.dart';
 import 'rgf2.dart';
 import 'router.dart';
 import 'search_index.dart';
@@ -164,6 +166,97 @@ class MapData extends ChangeNotifier {
     } on Object catch (e) {
       _fail('mapdata.err.download', <String, String>{'err': '$e'});
     }
+  }
+
+  /// Downloads a Geofabrik extract and builds the graph from it — the same
+  /// route scripts/mapgen takes.
+  ///
+  /// A whole province is one 190 MB file here against tens of gigabytes of
+  /// Overpass JSON, which is why this is the only way to have routing over
+  /// more than a few kilometres.
+  Future<void> buildFromRegion(GeofabrikRegion region) async {
+    await init();
+    _messageKey = null;
+    _messageArgs = null;
+    _set(MapDataState.downloading);
+    final pbf = File('${_dir!.path}/region.osm.pbf');
+    final client = HttpClient()..userAgent = _userAgent;
+    try {
+      final clock = Stopwatch()..start();
+      await _downloadTo(client, region.pbfUrl, pbf, (received, total) {
+        final mb = received / (1 << 20);
+        final seconds = clock.elapsedMilliseconds / 1000;
+        final rate = seconds > 0 ? mb / seconds : 0;
+        _progress = total > 0 ? received / total : 0;
+        _progressFile = '${mb.toStringAsFixed(0)}'
+            '${total > 0 ? " / ${(total / (1 << 20)).toStringAsFixed(0)}" : ""}'
+            ' MB · ${rate.toStringAsFixed(1)} MB/s';
+        notifyListeners();
+      });
+
+      _set(MapDataState.loading);
+      // Parsing a province is tens of seconds and hundreds of megabytes at
+      // its peak; an isolate keeps both off the UI and frees them on exit.
+      final built = await Isolate.run(() => PbfGraphSource.buildAsync(pbf.path));
+      if (built.edgeCount == 0) {
+        _fail('mapdata.err.emptyArea', null);
+        return;
+      }
+      await graphFile!.writeAsBytes(built.graphBytes, flush: true);
+      final index = indexFile!;
+      if (built.searchIndexTsv.isEmpty) {
+        if (await index.exists()) await index.delete();
+      } else {
+        await index.writeAsString(built.searchIndexTsv, flush: true);
+      }
+      await _loadFromDisk();
+    } on Object catch (e) {
+      _fail('mapdata.err.download', <String, String>{'err': '$e'});
+    } finally {
+      client.close(force: true);
+      // The extract is only an input; keeping it would double the footprint.
+      if (await pbf.exists()) await pbf.delete();
+    }
+  }
+
+  Future<void> _downloadTo(HttpClient client, Uri url, File dest,
+      void Function(int received, int total) onProgress) async {
+    var target = url;
+    HttpClientResponse resp;
+    for (var hop = 0;; hop++) {
+      resp = await (await client.getUrl(target)).close();
+      final location = resp.headers.value(HttpHeaders.locationHeader);
+      if (resp.statusCode >= 300 && resp.statusCode < 400 && location != null) {
+        await resp.drain<void>();
+        if (hop >= 5) throw HttpException('too many redirects', uri: url);
+        target = target.resolve(location);
+        continue;
+      }
+      break;
+    }
+    if (resp.statusCode != 200) {
+      await resp.drain<void>();
+      throw HttpException('HTTP ${resp.statusCode}', uri: target);
+    }
+    final total = resp.contentLength;
+    final part = File('${dest.path}.part');
+    final sink = part.openWrite();
+    var received = 0;
+    var lastReport = 0;
+    try {
+      await for (final chunk in resp) {
+        sink.add(chunk);
+        received += chunk.length;
+        if (received - lastReport > 1 << 20) {
+          lastReport = received;
+          onProgress(received, total);
+        }
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+    await part.rename(dest.path);
   }
 
   /// Copies a file the user picked into place and loads it.

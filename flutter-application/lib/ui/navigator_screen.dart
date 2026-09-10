@@ -76,6 +76,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   int _tilesDone = 0;
   int _tilesTotal = 0;
   int _tilesBytes = 0;
+  int _tilesBytesAtStart = 0;
   Stopwatch? _tilesClock;
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
@@ -718,6 +719,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       _tilesDone = 0;
       _tilesTotal = tiles.length;
       _tilesBytes = 0;
+      _tilesBytesAtStart = cache.bytesFetched;
       _tilesClock = Stopwatch()..start();
     });
     final messenger = ScaffoldMessenger.of(context);
@@ -727,7 +729,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           if (mounted) {
             setState(() {
               _tilesDone = done;
-              _tilesBytes = cache.bytesFetched;
+              // Delta, not the cache's lifetime total: this download is what
+              // the user is watching.
+              _tilesBytes = cache.bytesFetched - _tilesBytesAtStart;
             });
           }
         },

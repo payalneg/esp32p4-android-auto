@@ -169,7 +169,16 @@ class OverpassClient {
     for (var i = 0; i < cells.length; i++) {
       // Start each cell at a different server, so a long download is spread
       // rather than aimed at one of them.
-      final body = await _request(cells[i], userAgent, startAt: i);
+      final body = await _request(
+        cells[i],
+        userAgent,
+        startAt: i,
+        // Report while the cell is still arriving: a single update per cell
+        // leaves the figure frozen for the minute one takes, which reads
+        // exactly like a hang.
+        onBytes: (soFar) => onProgress?.call(i + 1, cells.length,
+            totalBytes + soFar),
+      );
       totalBytes += body.length;
       final part = parse(body, body.length, seenWays: seenWays);
       nodes.addAll(part.nodes);
@@ -188,7 +197,7 @@ class OverpassClient {
   /// One cell, from the first endpoint that will serve it, beginning at
   /// [startAt] so consecutive cells do not all land on the same server.
   Future<String> _request(GeoBounds cell, String? userAgent,
-      {int startAt = 0}) async {
+      {int startAt = 0, void Function(int bytesSoFar)? onBytes}) async {
     Object? lastError;
     for (var hop = 0; hop < _endpoints.length; hop++) {
       final endpoint = _endpoints[(startAt + hop) % _endpoints.length];
@@ -211,8 +220,11 @@ class OverpassClient {
               <String, String>{'code': '${resp.statusCode}'});
         }
         final buffer = StringBuffer();
+        var received = 0;
         await for (final chunk in resp.transform(utf8.decoder)) {
           buffer.write(chunk);
+          received += chunk.length;
+          onBytes?.call(received);
         }
         return buffer.toString();
       } on OverpassException catch (e) {

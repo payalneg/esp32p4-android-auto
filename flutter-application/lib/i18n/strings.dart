@@ -600,6 +600,19 @@ const _en = <String, String>{
       'The OpenStreetMap servers are busy — try again in a minute',
   'mapdata.err.overpassFormat': 'The server did not return map data',
   'mapdata.err.emptyArea': 'No roads found in that area',
+  'mapdata.region.title': 'Download a region',
+  'mapdata.region.subtitle':
+      'A whole province from Geofabrik — routes far beyond the area around you',
+  'mapdata.region.search': 'Region',
+  'mapdata.region.hint': 'Kraków, Bavaria, Catalonia…',
+  'mapdata.region.count': '{n} regions. Type to search.',
+  'mapdata.region.confirm':
+      'Downloads the extract and builds the routing graph. Expect a few '
+      'hundred megabytes and a couple of minutes — use Wi-Fi.',
+  'mapdata.pbf.ways': 'Reading roads…',
+  'mapdata.pbf.nodes': 'Reading points…',
+  'mapdata.pbf.graph': 'Building the graph…',
+  'mapdata.err.catalogFormat': 'That was not a region catalogue',
   'mapdata.title': 'Map data',
   'mapdata.import.title': 'Or add the files yourself',
   'mapdata.download': 'Download',
@@ -1229,6 +1242,19 @@ const _ru = <String, String>{
       'Серверы OpenStreetMap заняты — попробуйте через минуту',
   'mapdata.err.overpassFormat': 'Сервер вернул не данные карты',
   'mapdata.err.emptyArea': 'В этой области дорог не нашлось',
+  'mapdata.region.title': 'Скачать регион',
+  'mapdata.region.subtitle':
+      'Целое воеводство с Geofabrik — маршруты далеко за пределы округи',
+  'mapdata.region.search': 'Регион',
+  'mapdata.region.hint': 'Kraków, Bavaria, Catalonia…',
+  'mapdata.region.count': '{n} регионов. Начните вводить название.',
+  'mapdata.region.confirm':
+      'Скачает выгрузку и соберёт граф маршрутов. Это сотни мегабайт и '
+      'пара минут — лучше по Wi-Fi.',
+  'mapdata.pbf.ways': 'Читаю дороги…',
+  'mapdata.pbf.nodes': 'Читаю точки…',
+  'mapdata.pbf.graph': 'Собираю граф…',
+  'mapdata.err.catalogFormat': 'Это не каталог регионов',
   'mapdata.title': 'Данные карты',
   'mapdata.import.title': 'Или добавьте файлы сами',
   'mapdata.download': 'Скачать',
