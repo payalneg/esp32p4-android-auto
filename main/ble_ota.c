@@ -20,6 +20,7 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -167,9 +168,24 @@ static void do_begin(const ota_evt_t *ev)
         notify_status(OTA_ST_ERROR, OTA_ERR_SIZE);
         return;
     }
+    /* The whole image is staged in PSRAM and only then flushed to flash: the
+     * DATA writes arrive on the NimBLE host task, and programming flash from
+     * there — one erase/program stall per 244-byte chunk — would wreck the
+     * link's timing. So there is no streaming fallback on this path.
+     *
+     * On the ESP32-S3 board that can genuinely fail: 8 MB of PSRAM with a copy
+     * of .text/.rodata (~2.5 MB), two 460 KB framebuffers and the LVGL heap
+     * already in it leaves little room for a ~2.7 MB image. WiFi OTA does
+     * stream when it has to (main/ota_http.c), so say which way out there is
+     * instead of just reporting "alloc failed". */
     s_stage = heap_caps_malloc(ev->total_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_stage) {
-        ESP_LOGE(TAG, "PSRAM staging alloc %u failed", (unsigned)ev->total_len);
+        ESP_LOGE(TAG, "PSRAM staging alloc %u failed — %u free, largest block "
+                      "%u. Use WiFi OTA (http://%s.local/) for this update.",
+                 (unsigned)ev->total_len,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 CONFIG_WEB_MDNS_HOSTNAME);
         notify_status(OTA_ST_ERROR, OTA_ERR_ALLOC);
         return;
     }

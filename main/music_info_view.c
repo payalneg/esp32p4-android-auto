@@ -37,6 +37,11 @@ static const char *TAG = "music_info_view";
  * the width axis so it stays equal-to-or-narrower than the decoded
  * frame — lv_img tiles a smaller-than-widget source and we'd see
  * adjacent edge tiles instead of clean crop. */
+/* Design size of the art card, measured against the 800x480 dashboard's
+ * 436x108 music tile. On a narrower dashboard (the square 480x480 board) the
+ * tile GUI Guider hands us is smaller, so the card follows the tile — see
+ * s_tile_w / s_tile_h, set in music_info_view_attach(). These two stay the
+ * maximum, which is what the decode buffer is sized for. */
 #define TILE_W            344
 #define TILE_H            136
 
@@ -55,6 +60,10 @@ static const char *TAG = "music_info_view";
 
 static uint8_t *s_art_decoded;          /* RGB565, the decoded frame */
 static uint16_t s_art_w, s_art_h;       /* what the last decode produced */
+
+/* Art card size actually used, clamped to the tile we were attached to. */
+static lv_coord_t s_tile_w = TILE_W;
+static lv_coord_t s_tile_h = TILE_H;
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_art_img;
@@ -228,6 +237,16 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
 
     init_jpeg_pipeline();
 
+    /* Fit the card to the tile. GUI Guider sizes the tile explicitly, but the
+     * layout may still be dirty when the theme is built, so settle it first.
+     * The 800x480 dashboard's tile is 436x108 and leaves a margin around the
+     * 344x136 card; a narrower dashboard gives us less to work with. */
+    lv_obj_update_layout(s_root);
+    lv_coord_t avail_w = lv_obj_get_width(s_root);
+    lv_coord_t avail_h = lv_obj_get_height(s_root);
+    if (avail_w > 16 && avail_w < TILE_W) s_tile_w = avail_w;
+    if (avail_h > 16 && avail_h < TILE_H) s_tile_h = avail_h;
+
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(s_root, 0, LV_PART_MAIN);
     /* GUI Guider's tile ships with a default white bg + light border.
@@ -262,7 +281,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
      * inside the tile — the tile is wider than the art so an equal gap
      * shows on both sides instead of pinning it to the left edge. */
     s_art_img = lv_img_create(s_root);
-    lv_obj_set_size(s_art_img, TILE_W, TILE_H);
+    lv_obj_set_size(s_art_img, s_tile_w, s_tile_h);
     lv_obj_align(s_art_img, LV_ALIGN_CENTER, 0, 0);
     /* Rounded corners — LVGL v8 clips the image to the radius if
      * clip_corner is set on the same object. Matches the overlay's 18 px
@@ -278,7 +297,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
      * translucent layer evenly dims any album art and keeps the
      * title/artist legible. */
     s_overlay = lv_obj_create(s_root);
-    lv_obj_set_size(s_overlay, TILE_W, TILE_H);
+    lv_obj_set_size(s_overlay, s_tile_w, s_tile_h);
     lv_obj_align(s_overlay, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_20, 0);
@@ -308,7 +327,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_title_lbl, &aabridge_font_24, 0);
     lv_obj_set_style_text_align(s_title_lbl, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_long_mode(s_title_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(s_title_lbl, TILE_W - 28);
+    lv_obj_set_width(s_title_lbl, s_tile_w - 28);
     /* Bottom-anchored offsets sized to font 24 (≈28 px line height) —
      * artist sits 4 px from the bottom, title 28 px above that. */
     lv_obj_align(s_title_lbl, LV_ALIGN_BOTTOM_MID, 0, -28);
@@ -319,7 +338,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_artist_lbl, &aabridge_font_24, 0);
     lv_obj_set_style_text_align(s_artist_lbl, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_long_mode(s_artist_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(s_artist_lbl, TILE_W - 28);
+    lv_obj_set_width(s_artist_lbl, s_tile_w - 28);
     lv_obj_align(s_artist_lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_label_set_text(s_artist_lbl, "");
 

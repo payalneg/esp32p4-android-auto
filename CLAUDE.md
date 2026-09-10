@@ -330,20 +330,25 @@ idf.py -p <PORT> flash monitor
 
 ## Поддержка нескольких девайсов (мульти-борд)
 
-Прошивка собирается под несколько плат ESP32-P4. Обычный `idf.py build`
-собирает под **Waveshare 4.3"** (дефолт, обратная совместимость). Для выбора
-платы есть `scripts/build_board.sh <board> <аргументы idf.py>`:
+Прошивка собирается под несколько плат, и **не все на одном чипе**: две
+головные ESP32-P4 (с Android Auto) и одна ESP32-S3 (только VESC-дашборд).
+Обычный `idf.py build` собирает под **Waveshare 4.3"** (дефолт, обратная
+совместимость). Для выбора платы есть `scripts/build_board.sh <board>
+<аргументы idf.py>`:
 
 ```bash
 scripts/build_board.sh                                   # собрать ВСЕ платы (или `all`)
 scripts/build_board.sh waveshare flash monitor
 scripts/build_board.sh jc4880 -p <PORT> flash monitor   # Guition JC4880P443C, 16 МБ флеш
+scripts/build_board.sh s3touch4 -p <PORT> flash monitor # Waveshare ESP32-S3-Touch-LCD-4, 480x480
 ```
 
 Механизм:
 - **Kconfig `choice BOARD_MODEL`** (`main/Kconfig.projbuild`):
-  `CONFIG_BOARD_WAVESHARE_43` (дефолт) / `CONFIG_BOARD_JC4880P443C`. Глобален →
-  читается в BSP и `main/bt_link.h`.
+  `CONFIG_BOARD_WAVESHARE_43` (дефолт) / `CONFIG_BOARD_JC4880P443C` /
+  `CONFIG_BOARD_S3_TOUCH_LCD_4`. Каждый вариант привязан к своему чипу
+  (`depends on IDF_TARGET_*`). Глобален → читается в BSP, `main/bt_link.h`,
+  `main/touch_input.c`, `main/display_init.c`.
 - **`build_board.sh`** собирает в отдельную `build_<board>/` и накладывает
   оверлей: `SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.<board>"`
   (поздний файл переопределяет ранний). Базовый `sdkconfig.defaults` = Waveshare.
@@ -353,7 +358,9 @@ scripts/build_board.sh jc4880 -p <PORT> flash monitor   # Guition JC4880P443C, 1
   и `main/bt_link.h`.
 - **sdkconfig-оверлеи** задают флеш, имя партишен-файла, CAN-пины, выбор борда:
   `sdkconfig.defaults.waveshare` (32 МБ, `partitions.csv`, CAN 48/47) и
-  `sdkconfig.defaults.jc4880` (16 МБ, `partitions_16mb.csv`, CAN 51/52).
+  `sdkconfig.defaults.jc4880` (16 МБ, `partitions_16mb.csv`, CAN 51/52) и
+  `sdkconfig.defaults.s3touch4` (`CONFIG_IDF_TARGET="esp32s3"`, 16 МБ,
+  `partitions_s3_16mb.csv`, CAN 6/0, PSRAM octal + XIP, консоль USB-JTAG, -O2).
 - **JC = 16 МБ** → отдельная `partitions_16mb.csv`: OTA 5 МБ ×2 + storage 1 МБ +
   triplog ~4.9 МБ. Образ ~3.8 МБ → запас в слоте ~1.2 МБ (24%), следить за ростом.
 - **JC пины** (свободный хедер): BT-агент `TX=33 RX=31 RST=30 IO0=29`,
@@ -361,11 +368,61 @@ scripts/build_board.sh jc4880 -p <PORT> flash monitor   # Guition JC4880P443C, 1
   DPI 34 МГц, vendor-init по умолчанию драйвера; WiFi (SDIO→C6), I2C тача,
   SD — совпадают с Waveshare.
 - **Идентификатор модели** `BOARD_MODEL_ID` (`main/board.h`, `"waveshare"`/
-  `"jc4880"`) прошивка сообщает приложению (BLE OTA-info `…0006` 6-м полем +
-  `GET /info`), чтобы APK выбрал правильный из вшитых бинарей.
+  `"jc4880"`/`"s3touch4"`) прошивка сообщает приложению (BLE OTA-info `…0006`
+  6-м полем + `GET /info`), чтобы APK выбрал правильный из вшитых бинарей.
 - **Релиз** (`scripts/release.sh`) собирает все борды, кладёт per-device бинари
   `release/esp32p4_android_auto-<board>-<ver>.bin` и один APK с обеими прошивками.
   Блобы C6 / BT-агента общие для всех плат.
+
+### ESP32-S3-Touch-LCD-4 (`s3touch4`) — дашборд без Android Auto
+
+Waveshare ESP32-S3-Touch-LCD-4: ESP32-S3-WROOM-1-N16R8 (16 МБ флеш, 8 МБ octal
+PSRAM), экран **480×480** ST7701 по RGB565 (16 бит параллельно), тач GT911.
+Wi-Fi и BLE — на самом чипе, без ESP32-C6. Плата собирается из этого же
+дерева и получает всё, кроме Android Auto: дашборд, CAN/VESC, BLE
+(NUS/OTA/файлы/уведомления), PAS, статистика поездок, web-UI и OTA.
+
+- **Что выключено и почему.** `CONFIG_AA_ENABLE` (`depends on
+  IDF_TARGET_ESP32P4`) убирает AA-стек: видеотракт держится на PPA-блиттере P4,
+  рукопожатие с телефоном — на внешнем BT-агенте. Исходники выпадают из сборки
+  в `main/CMakeLists.txt`, вызовы в `main.c` — по `#if`, `ui_mode`
+  сворачивается в «единственный режим — дашборд».
+- **Два чипа в одном дереве.** `scripts/build_board.sh` экспортирует
+  `IDF_TARGET` под плату и даёт каждому чипу свой lock-файл
+  (`dependencies.lock.esp32p4` / `.esp32s3`); корневой `CMakeLists.txt` по
+  `IDF_TARGET` исключает компоненты чужого чипа (`EXCLUDE_COMPONENTS`), иначе
+  менеджер компонентов упрётся в `targets: [esp32p4]` у P4-BSP.
+  `managed_components/` общий — при переключении платы часть компонентов
+  докачивается из кэша, это нормально.
+- **BSP** `components/esp32_s3_touch_lcd_4/` — вендорский компонент из реестра,
+  переложенный на `esp_lvgl_adapter` (как у P4), поэтому
+  `main/display_init.c` один на все платы: `ROTATE_0` вместо `ROTATE_90`,
+  `DOUBLE_DIRECT` в два PSRAM-фреймбуфера, DMA читает их через bounce-буферы
+  во внутренней RAM. **Ревизия платы выбирается в Kconfig**
+  (`BSP_S3T4_HW_V4` — помощник CH32V003 на 0x24 с PWM-подсветкой, дефолт;
+  `BSP_S3T4_HW_V3` — экспандер TCA9554 на 0x20, подсветка только вкл/выкл):
+  сначала определи ревизию (маркировка / кто отвечает на I2C), потом прошивай.
+- **Железо, которого нет на S3**, спрятано за по одному шиму на каждое:
+  `main/img_jpeg.{c,h}` (обложка трека и скриншоты debug-моста — аппаратный
+  движок против `esp_new_jpeg`), анимированный splash из JPEG-кадров
+  недоступен → играет `/vescfs/splash.gif` через LVGL, debug-мост говорит по
+  USB-Serial-JTAG, `flash_shade` (гашение подсветки на запись флеша) — только
+  P4: на S3 панель переживает запись за счёт
+  `CONFIG_SPIRAM_FETCH_INSTRUCTIONS/RODATA` (код и константы в PSRAM, кэш не
+  выключается под LCD DMA). Цена — ~2.5 МБ PSRAM под копию `.text/.rodata`,
+  поэтому Wi-Fi-OTA умеет писать поток мимо стейджинга, а BLE-OTA при нехватке
+  PSRAM честно отказывается и просит идти через Wi-Fi.
+- **Дашборд 480×480** — второй GUI-Guider проект `Super_VESC_Display_480/`,
+  сгенерированный из 800×480 скриптом
+  `Super_VESC_Display/tools/make_480_project.py` (x и ширины ×0.6, круглые
+  виджеты сохраняют размер и едут центром, у подписей ширина не меньше нужной
+  тексту; в конце печатается список пар, которые стали пересекаться — их
+  доводить глазами в GUI Guider). Проект владеет только `generated/` —
+  `custom/`, шрифты, картинки и `import/` общие, имена виджетов совпадают,
+  поэтому `custom/` и `theme_generic` собираются под обе геометрии.
+  Экраны, собранные кодом, спрашивают ширину у дисплея через
+  `Super_VESC_Display/custom/ui_geom.h` (`UI_W`/`UI_H`/`UI_SX()`).
+  Симулятор: `cd Super_VESC_Display/lvgl-simulator && make dash480`.
 
 ## Воспроизведение игнорируемых артефактов
 
@@ -380,6 +437,8 @@ git clone --depth 1 https://github.com/f1xpl/openauto
 git clone --depth 1 https://github.com/andreknieriem/headunit-revived headunit
 git clone --depth 1 https://github.com/Nicba1010/WirelessAndroidAutoDongle
 git clone --depth 1 https://github.com/waveshareteam/ESP32-P4-WIFI6-Touch-LCD-4.3 waveshare_p4_4_3
+# Вендорские примеры и схема ESP32-S3-Touch-LCD-4 (ревизия платы, пины, тайминги)
+git clone --depth 1 https://github.com/waveshareteam/ESP32-S3-Touch-LCD-4 waveshare_s3_4
 
 # tools/c6_slave_fw — slave firmware build (нужно при апдейте network_adapter.bin)
 cd <repo_root>/tools && idf.py create-project-from-example "espressif/esp_hosted^2.12.6:slave"

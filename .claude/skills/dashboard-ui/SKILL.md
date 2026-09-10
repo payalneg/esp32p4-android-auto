@@ -5,15 +5,24 @@ description: >
   widgets, themes, fonts, layout. Use when editing the dashboard, GUI-Guider
   output, the themes framework, fonts, or any LVGL UI under Super_VESC_Display /
   main/. Encodes the hard-won LVGL pitfalls on this board (thread-safety, display
-  mode, fonts, ellipsis, keyboard) so they aren't re-hit. LVGL v8.4, RGB565.
+  mode, fonts, ellipsis, keyboard) so they aren't re-hit. LVGL v8.3, RGB565.
 ---
 
 # Working on the VESC dashboard (LVGL UI)
 
 The dashboard is a **GUI-Guider** project in `Super_VESC_Display/`, compiled into
 the firmware via the `vesc_ui` component. There's also a desktop **SDL
-simulator** for layout work without hardware. LVGL is **v8.4**, RGB565, logical
-screen **800×480 landscape**.
+simulator** for layout work without hardware. LVGL is **v8.3.11** (the docs used
+to say v8.4 — that is the config file's flavour, not the tree), RGB565.
+
+**Two panel geometries.** The GUI Guider project exists once per geometry:
+`Super_VESC_Display/` is **800×480 landscape** (the ESP32-P4 head units) and
+`Super_VESC_Display_480/` is **480×480 square** (the ESP32-S3 board), generated
+from it by `Super_VESC_Display/tools/make_480_project.py`. Only `generated/`
+differs — `custom/`, fonts, images and widget names are shared, so screens
+built in C must ask the display how wide it is: `UI_W` / `UI_H` / `UI_SX()`
+from `Super_VESC_Display/custom/ui_geom.h`, never a literal 800. Simulator for
+the square one: `cd Super_VESC_Display/lvgl-simulator && make dash480`.
 
 ## The #1 rule: `generated/` vs `custom/`
 
@@ -55,14 +64,17 @@ Switchable dashboard layouts in `custom/dashboard_theme.c` + `theme_<name>.c`
   cache + deferred persist off the LVGL thread. `CONFIG_SPI_FLASH_AUTO_SUSPEND=y`
   keeps DSI rendering alive during a NVS erase (DSI DMA never blanks, only
   rendering would stall).
-- **Display mode = DOUBLE_FULL + ROTATE_90**, with the Espressif PPA patch
+- **Display mode = DOUBLE_DIRECT** (partial render) since 2026-06-16 — the
+  older DOUBLE_FULL note below is history; on the S3 board the rotation is
+  ROTATE_0 (its panel already scans the way the UI is drawn). Was DOUBLE_FULL +
+  ROTATE_90, with the Espressif PPA patch
   applied in IDF. Do **not** switch to TRIPLE_PARTIAL with ROTATE_90 — it hits a
   PPA/DMA2D ISR-loss bug on the P4 and the UI freezes. (`main/display_init.c`,
   `esp_lvgl_adapter`.)
 - **Keyboard**: every keyboard show/hide MUST be paired with a content-container
   resize, or the focused textarea hides behind the keyboard / a black square
   appears below it. `LV_USE_KEYBOARD` is enabled (for the LISP editor).
-- **Indev API is v8.4** (`lv_indev_drv_init` / `lv_indev_drv_register`), not v9.
+- **Indev API is v8** (`lv_indev_drv_init` / `lv_indev_drv_register`), not v9.
   Touch comes through `main/touch_input.c` → the custom indev in `main.c`.
 - LVGL config single source of truth = `main/lv_conf.h` (`CONFIG_LV_CONF_SKIP=n`;
   the LVGL component's own `CONFIG_LV_*` Kconfig symbols are ignored).

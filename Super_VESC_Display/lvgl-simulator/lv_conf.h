@@ -15,11 +15,19 @@
   COLOR SETTINGS
  *====================*/
 
-/*Maximal horizontal resolution*/
+/*Maximal horizontal resolution. Overridable from the command line so one
+ *simulator builds either panel geometry:
+ *  make                      -> 800x480, the ESP32-P4 head units
+ *  make dash480              -> 480x480, the ESP32-S3 board
+ */
+#ifndef LV_HOR_RES_MAX
 #define LV_HOR_RES_MAX (800)
+#endif
 
 /*Maximal vertical resolution*/
+#ifndef LV_VER_RES_MAX
 #define LV_VER_RES_MAX (480)
+#endif
 
 /*Color depth: 1 (1 byte per pixel), 8 (RGB332), 16 (RGB565), 32 (ARGB8888)*/
 #define LV_COLOR_DEPTH 16

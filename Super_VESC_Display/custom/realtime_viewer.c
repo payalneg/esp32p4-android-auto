@@ -12,6 +12,7 @@
  * Device-only (needs vesc_can); the desktop simulator gets a placeholder.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 extern lv_ui guider_ui;
@@ -140,7 +141,7 @@ void show_realtime_viewer(void)
     if (s_screen) return;  /* re-entrancy guard */
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -230,7 +231,7 @@ void show_realtime_viewer(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);

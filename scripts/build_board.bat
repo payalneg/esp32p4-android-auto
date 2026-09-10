@@ -18,7 +18,7 @@ set ROOT=%~dp0..
 cd /d "%ROOT%"
 
 :: Keep in sync with release.bat / build_board.sh.
-set BOARDS=waveshare jc4880
+set BOARDS=waveshare jc4880 s3touch4
 
 :: Make idf.py available if the caller forgot to run export.bat.
 where idf.py >nul 2>nul
@@ -58,7 +58,7 @@ if /i "%BOARD%"=="all" (
 set VALID=0
 for %%B in (%BOARDS%) do if /i "%BOARD%"=="%%B" set VALID=1
 if "%VALID%"=="0" (
-    echo usage: %~nx0 [all^|waveshare^|jc4880] [idf.py args...] 1>&2
+    echo usage: %~nx0 [all^|waveshare^|jc4880^|s3touch4] [idf.py args...] 1>&2
     exit /b 2
 )
 
@@ -71,6 +71,12 @@ if not exist "sdkconfig.defaults.%B%" (
     echo build_board: sdkconfig.defaults.%B% not found 1>&2
     exit /b 1
 )
-echo ==^> build_board: %B% -^> idf.py%REST%
-call idf.py -B "build_%B%" -D SDKCONFIG="build_%B%/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.%B%"%REST%
+rem Chip per board: s3touch4 is an ESP32-S3, the head units are ESP32-P4. The
+rem root CMakeLists reads IDF_TARGET to pick the BSP and drop the other chip's
+rem components, and each chip keeps its own dependency lock.
+set TGT=esp32p4
+if /i "%B%"=="s3touch4" set TGT=esp32s3
+set IDF_TARGET=%TGT%
+echo ==^> build_board: %B% (%TGT%) -^> idf.py%REST%
+call idf.py -B "build_%B%" -D SDKCONFIG="build_%B%/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.%B%" -D "DEPENDENCIES_LOCK=%ROOT%\dependencies.lock.%TGT%"%REST%
 exit /b %errorlevel%

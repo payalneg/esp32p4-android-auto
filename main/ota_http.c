@@ -212,16 +212,47 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
      * Diagnostic side benefit: if the verify glitch persists even with
      * receive isolated from flash, then SDIO/WiFi isn't the suspect — the
      * problem lives entirely in the final write+verify window. */
+    esp_ota_handle_t handle = 0;
+    esp_err_t err;
+    bool streaming = false;
+
     uint8_t *stage = heap_caps_malloc(remaining,
                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!stage) {
-        ESP_LOGE(TAG, "PSRAM staging alloc %d bytes failed", remaining);
-        ota_screen_set_status_error("Out of memory");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "psram staging alloc failed");
-        return ESP_FAIL;
+    if (stage) {
+        ESP_LOGI(TAG, "staging buffer allocated in PSRAM @%p", stage);
+    } else {
+        /* Not enough free PSRAM to hold the whole image. That is the normal
+         * case on the ESP32-S3 board: 8 MB total, of which a copy of .text and
+         * .rodata (~2.5 MB, CONFIG_SPIRAM_FETCH_INSTRUCTIONS/RODATA) plus two
+         * 460 KB framebuffers and the LVGL heap are already spoken for. Fall
+         * back to writing each chunk as it arrives — slower and it does
+         * interleave flash writes with WiFi RX, but it completes. */
+        streaming = true;
+        stage = heap_caps_malloc(OTA_RX_BUF_SIZE,
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!stage) {
+            ESP_LOGE(TAG, "no memory for even a %d-byte OTA chunk buffer",
+                     OTA_RX_BUF_SIZE);
+            ota_screen_set_status_error("Out of memory");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "ota buffer alloc failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGW(TAG, "PSRAM staging of %d bytes failed — writing to flash as "
+                      "chunks arrive", remaining);
+        ota_screen_show("Erasing flash - screen may flicker");
+        ota_screen_set_status("Don't power off");
+        err = esp_ota_begin(next, remaining, &handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
+            ota_screen_set_status_error("Erase failed");
+            heap_caps_free(stage);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "esp_ota_begin failed");
+            return ESP_FAIL;
+        }
+        ota_screen_show("Receiving and writing - screen may flicker");
     }
-    ESP_LOGI(TAG, "staging buffer allocated in PSRAM @%p", stage);
 
     /* SHA-256 of the received byte stream — logged at the end so the user
      * can `shasum -a 256 build/esp32p4_android_auto.bin` locally and verify
@@ -236,17 +267,33 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     int next_ui_at  = 0;        /* refresh progress every ~64 KiB */
     while (remaining > 0) {
         int want = remaining < OTA_RX_BUF_SIZE ? remaining : OTA_RX_BUF_SIZE;
-        int n = httpd_req_recv(req, (char *)(stage + written), want);
+        uint8_t *slot = streaming ? stage : stage + written;
+        int n = httpd_req_recv(req, (char *)slot, want);
         if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (n <= 0) {
             ESP_LOGE(TAG, "recv error %d after %d/%d bytes",
                      n, written, written + remaining);
             ota_screen_set_status_error("Network error");
+            if (streaming) esp_ota_abort(handle);
             heap_caps_free(stage);
             mbedtls_sha256_free(&sha);
             return ESP_FAIL;
         }
-        mbedtls_sha256_update(&sha, stage + written, n);
+        mbedtls_sha256_update(&sha, slot, n);
+        if (streaming) {
+            err = esp_ota_write(handle, slot, n);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_ota_write @%d: %s", written,
+                         esp_err_to_name(err));
+                ota_screen_set_status_error("Write failed");
+                esp_ota_abort(handle);
+                heap_caps_free(stage);
+                mbedtls_sha256_free(&sha);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                    "flash write failed");
+                return ESP_FAIL;
+            }
+        }
         written   += n;
         remaining -= n;
         if (written >= next_log_at) {
@@ -274,12 +321,18 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
      * erase / program windows briefly stall the MIPI-DSI DMA fetching the
      * PSRAM framebuffer, so the panel may flash cyan/blue while this runs.
      * Warn the user so it doesn't look like a defect. */
+    if (streaming) {
+        /* Already on flash, chunk by chunk. */
+        heap_caps_free(stage);
+        stage = NULL;
+        goto staged;
+    }
+
     ota_screen_show("Erasing flash - screen may flicker");
     ota_screen_set_status("Don't power off");
     ota_screen_set_progress(0, written);
 
-    esp_ota_handle_t handle = 0;
-    esp_err_t err = esp_ota_begin(next, written, &handle);
+    err = esp_ota_begin(next, written, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
         ota_screen_set_status_error("Erase failed");
@@ -316,6 +369,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "flush done in %lld ms",
              (esp_timer_get_time() - t_flush_us) / 1000);
 
+staged:
     ota_screen_show("Verifying");
     err = esp_ota_end(handle);
     if (err != ESP_OK) {

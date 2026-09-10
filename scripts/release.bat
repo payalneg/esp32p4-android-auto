@@ -14,7 +14,7 @@ set ROOT=%~dp0..
 cd /d "%ROOT%"
 
 :: Keep in sync with build_board.bat / release.sh.
-set BOARDS=waveshare jc4880
+set BOARDS=waveshare jc4880 s3touch4
 
 where idf.py >nul 2>nul
 if %errorlevel% neq 0 (
@@ -111,7 +111,9 @@ for %%B in (%BOARDS%) do (
 
     for /f "delims=" %%I in ('python -c "import json,sys; fa=json.load(open(sys.argv[1]))['flash_files']; bdir=sys.argv[2]; print(' '.join('{} {}/{}'.format(a,bdir,f) for a,f in sorted(fa.items(),key=lambda kv:int(kv[0],16))))" "build_%%B\flasher_args.json" "build_%%B"') do set PAIRS=%%I
 
-    python -m esptool --chip esp32p4 merge_bin -o "release\esp32p4_android_auto-%%B-%FW_VER%-merged.bin" !PAIRS! >nul
+    set CHIP=esp32p4
+    if /i "%%B"=="s3touch4" set CHIP=esp32s3
+    python -m esptool --chip !CHIP! merge_bin -o "release\esp32p4_android_auto-%%B-%FW_VER%-merged.bin" !PAIRS! >nul
     if !errorlevel! neq 0 exit /b !errorlevel!
 )
 copy /Y "%APK%" "release\aa_bridge-%APP_VER%.apk" >nul

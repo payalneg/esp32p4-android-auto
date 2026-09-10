@@ -1,4 +1,5 @@
 #include "files_screen.h"
+#include "ui_geom.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -674,7 +675,7 @@ static void on_rename_save(lv_event_t *e)
 
 static void open_rename_modal(void)
 {
-    lv_obj_t *m = make_modal_container(800, 280);
+    lv_obj_t *m = make_modal_container(UI_W, 280);
     /* Top-aligned so the on-screen keyboard at the bottom (200 px) has
      * room without overlapping the textarea. Centered would put the
      * modal's bottom edge at y=380, and the keyboard occupies y=280..480,
@@ -712,7 +713,7 @@ static void open_rename_modal(void)
      * isn't clipped by the modal frame. Destroyed in dismiss_modal via
      * a separate path — store on s_st.modal_kb and delete explicitly. */
     s_st.modal_kb = lv_keyboard_create(s_st.screen);
-    lv_obj_set_size(s_st.modal_kb, 800, 200);
+    lv_obj_set_size(s_st.modal_kb, UI_W, 200);
     lv_obj_align(s_st.modal_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(s_st.modal_kb, ta);
     /* dismiss_modal() takes care of deleting s_st.modal_kb before the
@@ -1141,7 +1142,7 @@ void files_screen_show(void)
     /* List container: scrollable, vertical. Row spacing is 48 px; rows
      * are sized by add_row. */
     s_st.list = lv_obj_create(s_st.screen);
-    lv_obj_set_size(s_st.list, 800, 480 - 90);
+    lv_obj_set_size(s_st.list, UI_W, UI_H - 90);
     lv_obj_set_pos(s_st.list, 0, 90);
     lv_obj_set_style_bg_opa(s_st.list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_st.list, 0, 0);

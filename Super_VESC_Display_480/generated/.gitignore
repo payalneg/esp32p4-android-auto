@@ -1,0 +1,8 @@
+# Fonts and images are shared with the 800x480 project (this project changes
+# neither), and components/vesc_ui compiles them from there — see
+# Super_VESC_Display/tools/make_480_project.py. GUI Guider still writes its own
+# copies here whenever it generates code; they are not part of the repository.
+guider_fonts/
+guider_customer_fonts/
+images/
+MicroPython/

@@ -18,6 +18,7 @@
  * placeholder so layout can still be eyeballed there.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 /* ---- palette (matches the rest of the UI) ---- */
@@ -29,8 +30,11 @@
 #define COL_TEXT      0xFFFFFF
 #define COL_DIM       0x8A9499
 
-#define DRAWER_W      300
-#define SCREEN_W      800
+/* Drawer width: 300 px of a 800-wide screen is comfortable, but the same
+ * 300 px covers nearly two thirds of the square 480x480 panel — cap it at
+ * 45% of the screen there. */
+#define DRAWER_W      (UI_W >= 700 ? 300 : (lv_coord_t)((UI_W * 45) / 100))
+#define SCREEN_W      UI_W
 #define SCREEN_H      480
 #define SLIDE_MS      220
 #define DRAWER_ON_X   0

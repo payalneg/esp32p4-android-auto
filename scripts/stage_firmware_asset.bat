@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 set ROOT=%~dp0..
 set VER=%ROOT%\version.txt
 set DEST=%ROOT%\flutter-application\assets\firmware
-set BOARDS=waveshare jc4880
+set BOARDS=waveshare jc4880 s3touch4
 
 if not exist "%DEST%" mkdir "%DEST%"
 

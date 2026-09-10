@@ -1,5 +1,6 @@
 /* See charge_prompt.h. */
 #include "charge_prompt.h"
+#include "ui_geom.h"
 
 #include <stdio.h>
 
@@ -85,7 +86,7 @@ static void on_charge_detected(float prev_v, float now_v, float change_pct)
 
     /* Dimmed, click-blocking backdrop above everything. */
     s_modal = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_modal, 800, 480);
+    lv_obj_set_size(s_modal, UI_W, UI_H);
     lv_obj_set_pos(s_modal, 0, 0);
     lv_obj_set_style_bg_color(s_modal, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_modal, LV_OPA_60, 0);

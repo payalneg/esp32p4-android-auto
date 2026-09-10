@@ -16,10 +16,17 @@
  *====================*/
 
 /*Maximal horizontal resolution*/
+/* Overridable so one desktop simulator can build either panel geometry —
+ * `make dash480` in lvgl-simulator/ passes 480x480 for the ESP32-S3 board.
+ * The firmware does not use this file (main/lv_conf.h is its LVGL config). */
+#ifndef LV_HOR_RES_MAX
 #define LV_HOR_RES_MAX (800)
+#endif
 
 /*Maximal vertical resolution*/
+#ifndef LV_VER_RES_MAX
 #define LV_VER_RES_MAX (480)
+#endif
 
 /*Color depth: 1 (1 byte per pixel), 8 (RGB332), 16 (RGB565), 32 (ARGB8888)*/
 #define LV_COLOR_DEPTH 16

@@ -34,6 +34,9 @@ VESC ──CAN──▶ dashboard (when not projecting)
     real car stereo, no phone app).
   - **Mode B** `MODE_WIRELESS_HELPER` — no extra hardware; the Wireless Helper
     APK finds the unit by mDNS and starts AA.
+- **Boards**: Waveshare ESP32-S3-Touch-LCD-4 (`s3touch4`) is a third board —
+  ESP32-S3, square 480x480 panel, dashboard only (`CONFIG_AA_ENABLE` is P4-only).
+  Its screens live in `Super_VESC_Display_480/`; see CLAUDE.md for the rest.
 - **Boards**: Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 (default, 32 MB) and
   Guition JC4880P443C (16 MB). Display: ST7701 800×480 MIPI-DSI, GT911 touch.
 
@@ -44,6 +47,7 @@ VESC ──CAN──▶ dashboard (when not projecting)
 idf.py build                              # = Waveshare (default, back-compat)
 scripts/build_board.sh waveshare -p <PORT> flash monitor
 scripts/build_board.sh jc4880   -p <PORT> flash      # 16 MB board
+scripts/build_board.sh s3touch4 -p <PORT> flash      # ESP32-S3, 480x480, no AA
 scripts/build_board.sh                               # build ALL boards (release imgs)
 scripts/ota_push.sh                                  # OTA over Wi-Fi to 192.168.4.1
 ```

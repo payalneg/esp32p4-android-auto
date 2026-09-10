@@ -36,7 +36,7 @@ static const char *TAG = "notif_toast";
 #define TOAST_SLIDE_MS   220
 #define POLL_PERIOD_MS   250
 
-#define SCREEN_W         800
+#define SCREEN_W         ((lv_coord_t)lv_disp_get_hor_res(NULL))
 #define TOAST_OFF_Y      (-TOAST_HEIGHT - 24)
 #define TOAST_ON_Y       16
 

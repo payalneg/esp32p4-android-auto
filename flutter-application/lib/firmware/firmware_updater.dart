@@ -53,7 +53,7 @@ class FirmwareUpdater {
   /// Boards the APK ships an image for. Slugs match the firmware's
   /// BOARD_MODEL_ID (main/board.h) and the staged asset names
   /// (scripts/stage_firmware_asset.sh). Drives the manual firmware picker.
-  static const boards = <String>['waveshare', 'jc4880'];
+  static const boards = <String>['waveshare', 'jc4880', 's3touch4'];
 
   /// Human-readable product name for a board slug (untranslated — these are
   /// product names). Returns the raw slug for anything unrecognised.
@@ -63,6 +63,8 @@ class FirmwareUpdater {
         return 'Waveshare 4.3"';
       case 'jc4880':
         return 'Guition JC4880P443C';
+      case 's3touch4':
+        return 'Waveshare ESP32-S3 4" (480x480)';
       default:
         return model ?? '?';
     }
@@ -82,7 +84,18 @@ class FirmwareUpdater {
   static Future<Uint8List> imageFor(String? model) async =>
       (await rootBundle.load(assetFor(model))).buffer.asUint8List();
 
-  /// Default OTA host — the head unit's mDNS name (AA_MDNS_HOSTNAME + .local).
+  /// Whether this board runs the Android Auto side of the firmware. The
+  /// ESP32-S3 board is the VESC dashboard alone (no AA), which changes what
+  /// the app offers for it — see [hostFor] and the boot-splash builder.
+  static bool hasAndroidAuto(String? model) => model != 's3touch4';
+
+  /// Default OTA host — the head unit's mDNS name (CONFIG_WEB_MDNS_HOSTNAME +
+  /// .local). The dashboard-only board answers to a different name because it
+  /// is not an "android-auto" host.
+  static String hostFor(String? model) =>
+      hasAndroidAuto(model) ? 'android-auto.local' : 'vesc-display.local';
+
+  /// Default OTA host for a head unit whose model we don't know yet.
   static const defaultHost = 'android-auto.local';
 
   /// Version string of the firmware image bundled in this APK. The version is

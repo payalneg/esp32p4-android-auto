@@ -1,7 +1,7 @@
 ---
 name: build-flash
 description: >
-  Build, flash, and release the ESP32-P4 head-unit firmware across its boards
+  Build, flash, and release the head-unit firmware across its boards
   (Waveshare 4.3" and Guition JC4880). Use when asked to build, compile, flash
   (USB or OTA), select a board, bump the version, cut a release, or enable a
   build-time option (e.g. the UART debug bridge). Covers build_board.sh, idf.py,
@@ -21,12 +21,19 @@ layered on the common `sdkconfig.defaults`.
 idf.py build                                   # Waveshare (default dir: build/)
 scripts/build_board.sh waveshare build         # → build_waveshare/
 scripts/build_board.sh jc4880   build          # → build_jc4880/  (16 MB board)
+scripts/build_board.sh s3touch4 build          # → build_s3touch4/ (ESP32-S3, 480x480, no AA)
 scripts/build_board.sh                          # build EVERY board
 scripts/build_board.sh waveshare menuconfig    # change Kconfig for one board
 scripts/build_board.sh waveshare size          # partition / size report
 ```
 
-Boards live in the `BOARDS=(waveshare jc4880)` list in `build_board.sh`; board
+Boards live in the `BOARDS=(waveshare jc4880 s3touch4)` list in
+`build_board.sh`. **Not all of them are ESP32-P4**: `s3touch4` is the
+Waveshare ESP32-S3-Touch-LCD-4 (480x480, VESC dashboard only — no Android
+Auto). The script exports `IDF_TARGET` per board and points each chip at its
+own `dependencies.lock.<target>`; the root CMakeLists drops the other chip's
+components. Switching boards re-solves managed components from cache — normal,
+just slower on the first build. Board
 selection is Kconfig `CHOICE BOARD_MODEL` (read by the BSP + `bt_link.h`).
 
 ## Flash
@@ -35,6 +42,7 @@ selection is Kconfig `CHOICE BOARD_MODEL` (read by the BSP + `bt_link.h`).
 # USB (per board — picks the right build_<board>/ image)
 scripts/build_board.sh waveshare -p <PORT> flash monitor
 scripts/build_board.sh jc4880    -p <PORT> flash
+scripts/build_board.sh s3touch4  -p <PORT> flash monitor   # USB-Serial-JTAG console
 idf.py -p <PORT> flash                          # default board
 
 # Wi-Fi OTA (laptop joined the head unit's SoftAP)

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../ble/ble_proxy.dart';
 import '../ble/file_ops.dart';
+import '../firmware/firmware_updater.dart';
 import '../i18n/strings.dart';
 import '../splash/splash_builder.dart';
 
@@ -13,8 +14,13 @@ import '../splash/splash_builder.dart';
 const String kSplashDir = '/vescfs/splash';
 const String kSplashGif = '/vescfs/splash.gif';
 
-/// Configure the head unit's boot splash: slice a GIF into JPEG frames (the new
+/// Configure the head unit's boot splash: slice a GIF into JPEG frames (the
 /// hardware-decoded animated splash) or upload a raw GIF (the fallback).
+///
+/// The frame path needs the hardware JPEG decoder, which only the ESP32-P4
+/// head units have. On the ESP32-S3 board the firmware plays the GIF through
+/// LVGL instead (main/splash_screen.c, SPLASH_FRAMES_SUPPORTED), so this screen
+/// offers only that once it knows which board it is talking to.
 class SplashSetupScreen extends StatefulWidget {
   const SplashSetupScreen({super.key});
   @override
@@ -24,6 +30,26 @@ class SplashSetupScreen extends StatefulWidget {
 class _SplashSetupScreenState extends State<SplashSetupScreen> {
   final _fm = FileManagerProxy.instance;
   bool _busy = false;
+
+  /// Board model the head unit reports, once we've asked. Null until then —
+  /// which is also what old firmware answers, so both options stay available.
+  String? _model;
+
+  @override
+  void initState() {
+    super.initState();
+    _readModel();
+  }
+
+  Future<void> _readModel() async {
+    final info = await BleProxy.instance.readOtaInfo();
+    if (!mounted || info?.model == null) return;
+    setState(() => _model = info!.model);
+  }
+
+  /// Whether this head unit can play the JPEG frame sequence.
+  bool get _framesSupported =>
+      _model == null || FirmwareUpdater.hasAndroidAuto(_model);
 
   Future<Uint8List?> _pickGif() async {
     final picked = await FilePicker.platform.pickFiles(
@@ -178,15 +204,16 @@ class _SplashSetupScreenState extends State<SplashSetupScreen> {
           Text(t(context, 'splash.intro'),
               style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 16),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.gif_box_outlined),
-              title: Text(t(context, 'splash.set_animated')),
-              subtitle: Text(t(context, 'splash.set_animated.sub')),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: _busy ? null : _setAnimated,
+          if (_framesSupported)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.gif_box_outlined),
+                title: Text(t(context, 'splash.set_animated')),
+                subtitle: Text(t(context, 'splash.set_animated.sub')),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _busy ? null : _setAnimated,
+              ),
             ),
-          ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.image_outlined),

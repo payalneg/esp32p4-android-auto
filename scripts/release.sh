@@ -29,7 +29,15 @@ cd "$ROOT"
 
 # Boards to build a firmware image for. Each must have a sdkconfig.defaults.<board>
 # overlay and is built into its own build_<board>/ dir by scripts/build_board.sh.
-BOARDS=(waveshare jc4880)
+BOARDS=(waveshare jc4880 s3touch4)
+
+# board -> chip, for esptool's --chip. Keep in sync with build_board.sh.
+board_chip() {
+    case "$1" in
+        s3touch4) echo esp32s3 ;;
+        *)        echo esp32p4 ;;
+    esac
+}
 
 # --- ensure idf.py / flutter are available ------------------------------------
 if ! command -v idf.py >/dev/null 2>&1; then
@@ -154,7 +162,7 @@ fa=json.load(open(sys.argv[1]))["flash_files"]; bdir=sys.argv[2]
 print(" ".join("%s %s/%s"%(a,bdir,f) for a,f in sorted(fa.items(),key=lambda kv:int(kv[0],16))))
 ' "build_${board}/flasher_args.json" "build_${board}")
     # shellcheck disable=SC2086  # $pairs intentionally word-splits into <addr> <file> args
-    "${ESPTOOL[@]}" --chip esp32p4 merge_bin \
+    "${ESPTOOL[@]}" --chip "$(board_chip "$board")" merge_bin \
         -o "release/esp32p4_android_auto-${board}-${NEW_FW}-merged.bin" \
         $pairs >/dev/null
 done

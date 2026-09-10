@@ -58,7 +58,21 @@ CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 $(EXTRA_CFLAGS)
 #Collect the files to compile
 -include $(LVGL_DIR)/$(LVGL_DIR_NAME)/lvgl.mk
 -include $(SIMULATOR_DIR)/lv_drivers/lv_drivers.mk
+# generated.mk pulls in the shared fonts and images plus this project's own
+# screens. SCREENS_DIR swaps the screens for another project's — the 480x480
+# one bootstrapped by tools/make_480_project.py — while fonts, images, custom/
+# and lvgl stay shared. `make dash480` below sets it together with the matching
+# resolution.
 -include $(PRJ_DIR)/generated/generated.mk
+SCREENS_DIR ?= $(PRJ_DIR)
+ifneq ($(SCREENS_DIR),$(PRJ_DIR))
+GEN_CSRCS := $(filter-out $(notdir $(wildcard $(PRJ_DIR)/generated/*.c)),$(GEN_CSRCS))
+GEN_CSRCS += $(notdir $(wildcard $(SCREENS_DIR)/generated/*.c))
+DEPPATH += --dep-path $(SCREENS_DIR)/generated
+VPATH := $(SCREENS_DIR)/generated:$(VPATH)
+# Prepended, not appended: gui_guider.h must resolve to this project's copy.
+CFLAGS := "-I$(SCREENS_DIR)/generated" $(CFLAGS)
+endif
 -include $(PRJ_DIR)/custom/custom.mk
 
 CSRCS += main.c
@@ -99,7 +113,7 @@ OBJS = $(AOBJS) $(COBJS)
 GEN_SRCS = $(GEN_ASRCS) $(GEN_CSRCS)
 GEN_OBJS = $(GEN_AOBJS) $(GEN_COBJS)
 
-.PHONY: all env clean default cp_lib clean_gen run regen_fonts
+.PHONY: all env clean default cp_lib clean_gen run regen_fonts dash480
 ifeq ($(OS),Windows_NT)
 all: env regen_fonts default cp_lib
 else
@@ -122,7 +136,7 @@ regen_fonts:
 GENTHEME_TOOL := $(PRJ_DIR)/../scripts/gen_dashboard_themes.py
 # Depends on the generator too, matching the firmware's add_custom_command —
 # editing the naming convention has to regenerate even when no screen changed.
-$(THEMES_AUTO): $(PRJ_DIR)/generated/gui_guider.h $(GENTHEME_TOOL)
+$(THEMES_AUTO): $(SCREENS_DIR)/generated/gui_guider.h $(GENTHEME_TOOL)
 	@python3 $(GENTHEME_TOOL) --header $< --out $@
 
 # CSRCS names the file relatively, so the pattern rule builds a target make does
@@ -130,9 +144,19 @@ $(THEMES_AUTO): $(PRJ_DIR)/generated/gui_guider.h $(GENTHEME_TOOL)
 # be generated once and then never refreshed when a screen is added or removed.
 $(OBJ_DIR)dashboard_themes_auto.o: $(THEMES_AUTO)
 
+# Build the square 480x480 dashboard instead of the 800x480 one: the ESP32-S3
+# board's screens, in a window the same shape as its panel. Separate build dir
+# so the two geometries don't overwrite each other's objects.
+#   make dash480 && ./build480/bin/simulator
+dash480:
+	@$(MAKE) -f $(makefile_name) \
+	    SCREENS_DIR=$(PRJ_DIR)/../Super_VESC_Display_480 \
+	    BUILD_DIR=build480/ \
+	    EXTRA_CFLAGS='-DLV_HOR_RES_MAX=480 -DLV_VER_RES_MAX=480'
+
 env:
-	$(call MKDIR_P,build/bin)
-	$(call MKDIR_P,build/object/generated)
+	$(call MKDIR_P,$(BIN_DIR))
+	$(call MKDIR_P,$(GEN_OBJ_DIR))
 
 $(OBJ_DIR)main.o: main.c
 	@echo "Compiling $(makefile_path)/$<"

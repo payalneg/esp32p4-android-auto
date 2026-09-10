@@ -13,10 +13,30 @@
 
 set(SVD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../Super_VESC_Display")
 
+# The screens are authored per panel geometry, everything else is shared.
+# Super_VESC_Display is the 800x480 project the P4 head units use;
+# Super_VESC_Display_480 is the square 480x480 one for the ESP32-S3 board,
+# bootstrapped from it by Super_VESC_Display/tools/make_480_project.py. Only
+# generated/ differs — custom/ (the hand-written screens and the theme
+# framework), the fonts, the images and the import assets are one copy, shared,
+# and the widget names are identical in both projects so custom/ and
+# theme_generic bind to either without a change.
+if("${IDF_TARGET}" STREQUAL "esp32s3")
+    set(SVD_SCREENS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../Super_VESC_Display_480")
+else()
+    set(SVD_SCREENS_ROOT "${SVD_ROOT}")
+endif()
+if(NOT EXISTS "${SVD_SCREENS_ROOT}/generated/gui_guider.h")
+    message(FATAL_ERROR
+        "GUI Guider screens not found at ${SVD_SCREENS_ROOT}/generated — "
+        "run 'python3 Super_VESC_Display/tools/make_480_project.py' to "
+        "bootstrap the 480x480 project.")
+endif()
+
 # Pull every generated/custom .c, then drop _grid_480_800x480.c — that's
 # a 1.15 MB invisible (bg_img_opa=0) background that doesn't fit the
 # factory partition without bloat.
-file(GLOB SVD_GENERATED  "${SVD_ROOT}/generated/*.c")
+file(GLOB SVD_GENERATED  "${SVD_SCREENS_ROOT}/generated/*.c")
 list(FILTER SVD_GENERATED EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 # The "reference" screen is GUI Guider's own widget palette, kept in the project
 # as a design reference — nothing creates it (no setup_scr_reference call
@@ -24,6 +44,10 @@ list(FILTER SVD_GENERATED EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 # the LVGL 9 forms (lv_animimg_set_src with 4 args, ui->g_kb_top_layer). Drop it
 # rather than hand-patch a generated file that the next export would overwrite.
 list(FILTER SVD_GENERATED EXCLUDE REGEX ".*setup_scr_reference\\.c$")
+# Fonts and images come from the 800x480 project on every board: the 480
+# project changes no font size and no image, so a second copy would be ~1.5 MB
+# of identical generated C (and GUI Guider's own copies inside that project are
+# gitignored for the same reason).
 file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
@@ -87,6 +111,7 @@ idf_component_register(
         "vesc_ui.c"
     INCLUDE_DIRS
         "include"
+        "${SVD_SCREENS_ROOT}/generated"
         "${SVD_ROOT}/generated"
         "${SVD_ROOT}/custom"
     REQUIRES
@@ -127,9 +152,9 @@ set_source_files_properties(${SVD_GENTHEME_SRC} PROPERTIES GENERATED TRUE)
 add_custom_command(
     OUTPUT ${SVD_GENTHEME_SRC}
     COMMAND "${_py}" "${SVD_GENTHEME_TOOL}"
-            --header "${SVD_ROOT}/generated/gui_guider.h"
+            --header "${SVD_SCREENS_ROOT}/generated/gui_guider.h"
             --out "${SVD_GENTHEME_SRC}"
-    DEPENDS "${SVD_ROOT}/generated/gui_guider.h" "${SVD_GENTHEME_TOOL}"
+    DEPENDS "${SVD_SCREENS_ROOT}/generated/gui_guider.h" "${SVD_GENTHEME_TOOL}"
     COMMENT "Discovering dashboard_* screens -> ${SVD_GENTHEME_SRC}"
     VERBATIM)
 

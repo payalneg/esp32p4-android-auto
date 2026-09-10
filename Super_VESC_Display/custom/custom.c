@@ -17,6 +17,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 #include "settings_wrapper.h"
 #include "dashboard_theme.h"
@@ -144,12 +145,16 @@ static int step_btn_steps(lv_event_t *e) {
 
 /* Compact settings layout: one row per setting, heading on the left,
  * controls clustered on the right edge. */
+/* Column anchors for the Settings rows, scaled from the 800-wide layout they
+ * were measured in (see ui_geom.h) so the same code lays out on the square
+ * 480x480 panel. The value field and its +/- buttons keep their pixel size —
+ * they hold a number in a fixed font — while their x positions move in. */
 #define SETTINGS_ROW_H        60
 #define SETTINGS_BTN_W        60
 #define SETTINGS_VAL_W        100
-#define SETTINGS_PLUS_X       730
-#define SETTINGS_VAL_X        620
-#define SETTINGS_MINUS_X      550
+#define SETTINGS_PLUS_X       (UI_W - SETTINGS_BTN_W - 10)
+#define SETTINGS_VAL_X        (SETTINGS_PLUS_X - SETTINGS_VAL_W - 10)
+#define SETTINGS_MINUS_X      (SETTINGS_VAL_X - SETTINGS_BTN_W - 10)
 
 static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
                                           const char *glyph, uint32_t bg_color,
@@ -425,7 +430,7 @@ static void fmt_overlay_show(void)
 {
     if (s_fmt_overlay) return;
     s_fmt_overlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_fmt_overlay, 800, 480);
+    lv_obj_set_size(s_fmt_overlay, UI_W, UI_H);
     lv_obj_set_pos(s_fmt_overlay, 0, 0);
     lv_obj_set_style_bg_color(s_fmt_overlay, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_fmt_overlay, LV_OPA_COVER, 0);
@@ -1986,7 +1991,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
 #endif
 
     s_logs_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_logs_screen, 800, 480);
+    lv_obj_set_size(s_logs_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_logs_screen, lv_color_hex(0x111111), 0);
     lv_obj_set_style_bg_opa(s_logs_screen, 255, 0);
     lv_obj_clear_flag(s_logs_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -2136,7 +2141,7 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
     qr_screen_destroy();
 
     s_qr_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_qr_screen, 800, 480);
+    lv_obj_set_size(s_qr_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_qr_screen, lv_color_hex(0x111111), 0);
     lv_obj_set_style_bg_opa(s_qr_screen, 255, 0);
     lv_obj_clear_flag(s_qr_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -2589,7 +2594,9 @@ void settings_ui_init(lv_ui *ui) {
     /* Hours cluster — placed in the gap between heading and the minutes
      * cluster on the right. Mirrors the SETTINGS_*_X spacing pattern but
      * shifted ~250 px to the left so the row fits in 800 px. */
-    enum { CLK_H_MINUS_X = 300, CLK_H_VAL_X = 370, CLK_H_PLUS_X = 470 };
+    const lv_coord_t CLK_H_MINUS_X = UI_SX(300);
+    const lv_coord_t CLK_H_VAL_X    = UI_SX(370);
+    const lv_coord_t CLK_H_PLUS_X   = UI_SX(470);
     settings_clock_heading_label = settings_heading_create(ui->settings, y_pos, "Time:");
     s_clock_hour_field = (num_field_t){
         .value = clock_h_now, .min = 0, .max = 23, .step = 1, .decimals = 0,
@@ -2611,7 +2618,7 @@ void settings_ui_init(lv_ui *ui) {
     /* ':' separator between H and M clusters. */
     settings_clock_colon_label = lv_label_create(ui->settings);
     lv_label_set_text(settings_clock_colon_label, ":");
-    lv_obj_set_pos(settings_clock_colon_label, 537, y_pos + 16);
+    lv_obj_set_pos(settings_clock_colon_label, UI_SX(537), y_pos + 16);
     lv_obj_set_style_text_color(settings_clock_colon_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_clock_colon_label, &lv_font_montserrat_24, 0);
 

@@ -19,6 +19,7 @@
  * placeholder so the build still links.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 extern lv_ui guider_ui;
@@ -365,7 +366,7 @@ void show_lisp_editor(void)
     s_op_code   = NULL;
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -427,7 +428,7 @@ void show_lisp_editor(void)
 
     /* keyboard (created last so it draws on top); hidden until a field is focused */
     s_kb = lv_keyboard_create(s_screen);
-    lv_obj_set_size(s_kb, 800, 230);
+    lv_obj_set_size(s_kb, UI_W, 230);
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_ALL, NULL);
@@ -463,7 +464,7 @@ void show_lisp_editor(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);

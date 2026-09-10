@@ -17,6 +17,7 @@
  * desktop simulator gets a small placeholder so the build still links.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 #include "settings_wrapper.h"
 
@@ -46,7 +47,7 @@ extern lv_ui guider_ui;
 #define VT_MAX_BITS   16
 
 #define ROW_H         54
-#define NAME_W        470
+#define NAME_W        UI_SX(470)   /* parameter-name column */
 
 typedef struct {
     int       param_idx;
@@ -175,7 +176,7 @@ static void vt_show_spinner(const char *text)
 {
     if (s_spinner_modal) return;
     s_spinner_modal = lv_obj_create(s_screen);
-    lv_obj_set_size(s_spinner_modal, 800, 480);
+    lv_obj_set_size(s_spinner_modal, UI_W, UI_H);
     lv_obj_set_pos(s_spinner_modal, 0, 0);
     lv_obj_set_style_bg_color(s_spinner_modal, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_spinner_modal, LV_OPA_60, 0);
@@ -1283,7 +1284,7 @@ static void rt_open_cb(lv_event_t *e)   { (void)e; show_realtime_viewer(); }
 static void vt_build_screen(void)
 {
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -1443,7 +1444,7 @@ static void fs_show_format_modal(void)
 {
     if (s_fmt_modal) return;
     s_fmt_modal = lv_obj_create(s_screen);
-    lv_obj_set_size(s_fmt_modal, 800, 480);
+    lv_obj_set_size(s_fmt_modal, UI_W, UI_H);
     lv_obj_set_pos(s_fmt_modal, 0, 0);
     lv_obj_set_style_bg_color(s_fmt_modal, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_fmt_modal, LV_OPA_COVER, 0);
@@ -1569,7 +1570,7 @@ void run_vesc_tool_menu(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);

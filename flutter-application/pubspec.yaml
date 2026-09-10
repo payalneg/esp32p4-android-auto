@@ -37,12 +37,13 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    # Per-board P4 firmware images bundled for over-WiFi OTA flashing from the
+    # Per-board firmware images bundled for over-WiFi OTA flashing from the
     # app. The app picks the one matching the head unit's reported board model
     # (see lib/firmware/firmware_updater.dart). Refresh all with
     # scripts/stage_firmware_asset.sh after building each board.
     - assets/firmware/esp32p4_android_auto-waveshare.bin
     - assets/firmware/esp32p4_android_auto-jc4880.bin
+    - assets/firmware/esp32p4_android_auto-s3touch4.bin
     - assets/firmware/version.txt
     # VESC BLE Helper (ESP32-C3) firmware, so it can be flashed with no network.
     # Fetched from that project's GitHub releases by
