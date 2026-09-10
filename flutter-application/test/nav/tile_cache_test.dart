@@ -214,4 +214,128 @@ void main() {
       expect(await net.read(const TileId(16, 1, 2)), isNotNull);
     });
   });
+
+  /// Who gets the next free slot. The server holds every `/hold/<name>`
+  /// request open until the test releases it, and records the order in which
+  /// requests arrive — which, since a fetch only leaves for the network once
+  /// it owns a slot, is the order the scheduler chose.
+  group('slot scheduling', () {
+    late HttpServer server;
+    late TileCache net;
+    late List<String> arrived;
+    late Map<String, Completer<void>> holds;
+    var nextTile = 0;
+
+    setUp(() async {
+      arrived = <String>[];
+      holds = <String, Completer<void>>{};
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((HttpRequest req) async {
+        final name = req.uri.pathSegments.last;
+        arrived.add(name);
+        if (req.uri.pathSegments.first == 'hold') {
+          await holds.putIfAbsent(name, Completer<void>.new).future;
+        }
+        req.response.add(Uint8List(64));
+        await req.response.close();
+      });
+      net = TileCache(root,
+          userAgent: 'test/1.0',
+          minGap: Duration.zero,
+          maxConcurrent: 2,
+          requestTimeout: const Duration(seconds: 10));
+    });
+
+    tearDown(() async => server.close(force: true));
+
+    Uri hold(String name) =>
+        Uri.parse('http://127.0.0.1:${server.port}/hold/$name');
+    void release(String name) =>
+        holds.putIfAbsent(name, Completer<void>.new).complete();
+    // Let queued requests reach the server (or be refused a slot).
+    Future<void> settle() =>
+        Future<void>.delayed(const Duration(milliseconds: 60));
+
+    Future<Uint8List?> ask(String name,
+        {TilePriority priority = TilePriority.view,
+        int generation = 0,
+        TileId? tile}) {
+      return net.fetchAndStore(tile ?? TileId(16, 9, nextTile++), <Uri>[hold(name)],
+          priority: priority, generation: generation);
+    }
+
+    test('background work never takes the slot kept for the screen', () async {
+      final a = ask('a', priority: TilePriority.bulk);
+      final b = ask('b', priority: TilePriority.bulk);
+      await settle();
+      expect(arrived, <String>['a'], reason: 'one of two slots is reserved');
+      release('a');
+      await settle();
+      expect(arrived, <String>['a', 'b']);
+      release('b');
+      await Future.wait<Uint8List?>(<Future<Uint8List?>>[a, b]);
+    });
+
+    test('a screen request goes ahead of queued background work', () async {
+      final a = ask('a', priority: TilePriority.bulk); // takes the bulk slot
+      final v1 = ask('v1'); // takes the other slot
+      final b = ask('b', priority: TilePriority.bulk); // must wait: cap
+      final v2 = ask('v2'); // must wait: full
+      await settle();
+      expect(arrived, <String>['a', 'v1']);
+      release('a');
+      await settle();
+      expect(arrived, <String>['a', 'v1', 'v2'],
+          reason: 'the screen was waiting, so bulk sits this one out');
+      release('v1');
+      await settle();
+      expect(arrived, <String>['a', 'v1', 'v2', 'b']);
+      release('v2');
+      release('b');
+      await Future.wait<Uint8List?>(<Future<Uint8List?>>[a, v1, b, v2]);
+    });
+
+    test('the newest viewport is served first, centre-out within it',
+        () async {
+      final h1 = ask('h1', generation: 1);
+      final h2 = ask('h2', generation: 1);
+      final old = ask('old', generation: 1); // the pan that just ended
+      final n1 = ask('n1', generation: 2); // what is on screen now
+      final n2 = ask('n2', generation: 2);
+      await settle();
+      release('h1');
+      await settle();
+      release('h2');
+      await settle();
+      release('n1');
+      await settle();
+      expect(arrived, <String>['h1', 'h2', 'n1', 'n2', 'old']);
+      release('n2');
+      release('old');
+      await Future.wait<Uint8List?>(<Future<Uint8List?>>[h1, h2, old, n1, n2]);
+    });
+
+    test('asking for a queued background tile promotes it in place', () async {
+      final h1 = ask('h1');
+      final h2 = ask('h2');
+      const shared = TileId(16, 5, 5);
+      final u = ask('u', priority: TilePriority.bulk); // queued first
+      final t = ask('t', priority: TilePriority.bulk, tile: shared);
+      // The screen now wants the same tile the download had queued.
+      final again = ask('t-again', tile: shared);
+      expect(identical(again, t), isTrue, reason: 'one request, not two');
+      await settle();
+      release('h1');
+      await settle();
+      expect(arrived, <String>['h1', 'h2', 't'],
+          reason: 'promoted to view, it jumps the earlier bulk request');
+      release('h2');
+      await settle();
+      release('t');
+      await settle();
+      expect(arrived.last, 'u');
+      release('u');
+      await Future.wait<Uint8List?>(<Future<Uint8List?>>[h1, h2, u, t]);
+    });
+  });
 }

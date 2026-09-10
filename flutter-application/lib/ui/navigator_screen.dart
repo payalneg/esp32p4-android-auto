@@ -755,10 +755,15 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (mounted && !_tileReset.isClosed) _tileReset.add(null);
   }
 
-  /// Same, but only every so often during a long download, so the map fills in
-  /// as it goes without a rebuild per tile.
+  /// Same, but rarely during a long download.
+  ///
+  /// A reset drops and re-creates every tile on screen, not only the missing
+  /// ones. Tiles the rider can see are fetched ahead of the download anyway
+  /// (TilePriority.view), so this only has to catch the odd tile that failed
+  /// on a bad second of signal and has since landed on disk — every hundred
+  /// is plenty for that, and every ten made the map churn.
   void _refreshTilesEvery(int done, int total) {
-    if (done % 10 == 0 || done == total) _refreshTiles();
+    if (done % 100 == 0 || done == total) _refreshTiles();
   }
 
   /// Addresses to try for one tile: the OSMF server first, then its mirrors,

@@ -36,11 +36,31 @@ class CachedTileProvider extends TileProvider {
 
   final TileCache cache;
 
+  /// Which viewport a request belongs to — see [generation].
+  int _generation = 0;
+  bool _batchOpen = false;
+
+  /// The current request batch's number; higher is newer.
+  ///
+  /// TileLayer asks for everything a camera move uncovered in one synchronous
+  /// pass, centre first. Every call inside that pass gets the same number and
+  /// the next pass — the next pan or zoom — a bigger one, which is how the
+  /// cache knows that the tiles of the view you are looking at now outrank
+  /// the tiles of the view you just left. Nothing to reset: the flag closes
+  /// itself as soon as the pass yields.
+  @visibleForTesting
+  int get generation => _generation;
+
   @override
   ImageProvider<Object> getImage(
       TileCoordinates coordinates, TileLayer options) {
+    if (!_batchOpen) {
+      _batchOpen = true;
+      _generation++;
+      scheduleMicrotask(() => _batchOpen = false);
+    }
     final tile = tileIdFor(coordinates, options);
-    return _CachedTileImage(cache, tile, tileUrls(tile));
+    return _CachedTileImage(cache, tile, tileUrls(tile), _generation);
   }
 
   /// The real {z}/{x}/{y} behind a layer coordinate.
@@ -64,13 +84,17 @@ class CachedTileProvider extends TileProvider {
 }
 
 class _CachedTileImage extends ImageProvider<_CachedTileImage> {
-  const _CachedTileImage(this.cache, this.tile, this.urls);
+  const _CachedTileImage(this.cache, this.tile, this.urls, this.generation);
 
   final TileCache cache;
   final TileId tile;
 
   /// Primary first, mirrors after — see kTileMirrors.
   final List<Uri> urls;
+
+  /// Request batch this came from; not part of the key, so the image cache
+  /// still recognises the same tile across pans.
+  final int generation;
 
   @override
   Future<_CachedTileImage> obtainKey(ImageConfiguration configuration) =>
@@ -87,12 +111,13 @@ class _CachedTileImage extends ImageProvider<_CachedTileImage> {
   }
 
   Future<ui.Codec> _load(ImageDecoderCallback decode) async {
-    var bytes = await cache.read(tile) ?? await cache.fetchAndStore(tile, urls);
+    var bytes = await cache.read(tile) ??
+        await cache.fetchAndStore(tile, urls, generation: generation);
     if (bytes == null) {
       // One retry: riding through a dead second of signal should not blank a
       // tile until the next time the camera happens to move.
       await Future<void>.delayed(const Duration(milliseconds: 1200));
-      bytes = await cache.fetchAndStore(tile, urls);
+      bytes = await cache.fetchAndStore(tile, urls, generation: generation);
     }
     if (bytes == null) {
       throw StateError('tile $tile unavailable'); // TileLayer draws errorImage

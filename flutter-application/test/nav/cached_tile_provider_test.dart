@@ -1,4 +1,5 @@
-/// Which real tile a flutter_map layer coordinate stands for.
+/// The two things the provider must get right about flutter_map: which real
+/// tile a layer coordinate stands for, and which request batch it came from.
 library;
 
 import 'dart:io';
@@ -55,6 +56,23 @@ void main() {
       final t = CachedTileProvider.tileIdFor(
           TileCoordinates(0, 0, l.maxNativeZoom), l);
       expect(t.z, 19);
+    });
+  });
+
+  group('request generations', () {
+    test('one synchronous batch shares a number; the next pass gets a new one',
+        () async {
+      final l = layer();
+      provider.getImage(const TileCoordinates(1, 1, 16), l);
+      provider.getImage(const TileCoordinates(1, 2, 16), l);
+      provider.getImage(const TileCoordinates(2, 1, 16), l);
+      expect(provider.generation, 1, reason: 'centre-out, same viewport');
+
+      await Future<void>.value(); // the batch yields — a new camera event
+      provider.getImage(const TileCoordinates(9, 9, 16), l);
+      expect(provider.generation, 2);
+      provider.getImage(const TileCoordinates(9, 8, 16), l);
+      expect(provider.generation, 2);
     });
   });
 }
