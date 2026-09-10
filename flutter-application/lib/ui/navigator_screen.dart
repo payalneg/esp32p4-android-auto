@@ -226,7 +226,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             urlTemplate: kOsmTileUrl,
             tileProvider: CachedTileProvider(tiles),
             userAgentPackageName: 'com.aabridge.aa_bridge',
-            maxNativeZoom: 19,
+            // Retina simulation shifts the layer down a level, so these are
+            // stated one higher than OSM's real limit of 19. Left at 19 the
+            // layer would stop drawing above zoom 18 — a blank map exactly
+            // where you zoom in to read a junction.
+            maxZoom: 20,
+            maxNativeZoom: 20,
             // OSM serves 256 px tiles at 1x; on a phone at 2.6x they are
             // stretched and the labels turn to mush. There are no @2x tiles to
             // ask for, so flutter_map's simulation is the way: fetch one zoom
