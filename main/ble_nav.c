@@ -138,7 +138,8 @@ static bool ensure_decode_buffer(uint16_t w, uint16_t h)
     return true;
 }
 
-static bool decode_into(uint8_t *dst, size_t dst_bytes, uint32_t len)
+static bool decode_into(uint8_t *dst, size_t dst_bytes,
+                        const uint8_t *src, uint32_t len)
 {
     jpeg_decode_cfg_t cfg = {
         .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
@@ -147,7 +148,7 @@ static bool decode_into(uint8_t *dst, size_t dst_bytes, uint32_t len)
         .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR,
     };
     uint32_t out_size = 0;
-    esp_err_t r = jpeg_decoder_process(s_jpgd, &cfg, s_stage, len,
+    esp_err_t r = jpeg_decoder_process(s_jpgd, &cfg, (uint8_t *)src, len,
                                        dst, dst_bytes, &out_size);
     if (r != ESP_OK) {
         ESP_LOGW(TAG, "jpeg decode failed: %s", esp_err_to_name(r));
@@ -191,7 +192,8 @@ static bool scale_into(uint16_t *dst, size_t dst_bytes, uint16_t w, uint16_t h)
     return true;
 }
 
-static uint8_t present_frame(uint16_t w, uint16_t h, uint32_t len)
+static uint8_t present_frame(const uint8_t *jpeg, uint16_t w, uint16_t h,
+                             uint32_t len)
 {
     if (ui_mode_get() != UI_MODE_NAV) return NAV_ACK_HIDDEN;
 
@@ -200,10 +202,12 @@ static uint8_t present_frame(uint16_t w, uint16_t h, uint32_t len)
     const size_t dst_bytes = nav_screen_back_buffer_bytes();
 
     if (w == NAV_SCREEN_W && h == NAV_SCREEN_H) {
-        if (!decode_into((uint8_t *)dst, dst_bytes, len)) return NAV_ACK_DECODE;
+        if (!decode_into((uint8_t *)dst, dst_bytes, jpeg, len)) {
+            return NAV_ACK_DECODE;
+        }
     } else {
         if (!ensure_decode_buffer(w, h)) return NAV_ACK_DECODE;
-        if (!decode_into(s_dec, s_dec_bytes, len)) return NAV_ACK_DECODE;
+        if (!decode_into(s_dec, s_dec_bytes, jpeg, len)) return NAV_ACK_DECODE;
         if (!scale_into(dst, dst_bytes, w, h)) return NAV_ACK_DECODE;
     }
     /* DMA wrote the framebuffer; LVGL reads it with the CPU. */
@@ -225,7 +229,7 @@ static void handle_frame(const nav_evt_t *ev)
     if (s_got != s_expect) {
         ack = NAV_ACK_TRUNCATED;
     } else {
-        ack = present_frame(w, h, len);
+        ack = present_frame(s_stage, w, h, len);
     }
 
     const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
@@ -359,6 +363,19 @@ void ble_nav_on_disconnect(void)
         xQueueSend(s_q, &ev, 0);
     }
 }
+
+#if CONFIG_DEBUG_UART_BRIDGE
+uint8_t ble_nav_debug_present(const uint8_t *jpeg, uint32_t len,
+                              uint16_t w, uint16_t h)
+{
+    if (!s_jpgd || !s_ppa) return NAV_ACK_DECODE;
+    /* Runs on the console task, not the worker. Safe only because the phone
+     * is not streaming while a human drives the bridge — this is a bench
+     * shortcut, not a second producer. */
+    nav_screen_set_streaming(true);
+    return present_frame(jpeg, w, h, len);
+}
+#endif
 
 /* ---- routed from notif_bridge access_cb (NimBLE host task) ---- */
 

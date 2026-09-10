@@ -15,6 +15,7 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_cache.h"
 #include "esp_rom_crc.h"
 #include "linenoise/linenoise.h"
 #include "mbedtls/base64.h"
@@ -470,6 +471,77 @@ static int cmd_navstat(int argc, char **argv)
     return 0;
 }
 
+/* Draw a test picture, encode it exactly the way the phone app does, and push
+ * it through the navigator's decode + scale + display path. Verifies the whole
+ * picture chain — colour order, the 2x upscale, the framebuffer swap — without
+ * a phone in the room. */
+static int cmd_navtest(int argc, char **argv)
+{
+    const int w = (argc > 1) ? clampi(atoi(argv[1]), 16, 800) : 400;
+    const int h = w * 480 / 800;
+    if ((w % 16) != 0 || (h % 16) != 0) {
+        printf("ERR: width must be a multiple of 16 and keep 5:3\n");
+        return 1;
+    }
+    const size_t raw_len = (size_t)w * h * 2;
+    uint16_t *raw = heap_caps_aligned_calloc(64, 1, raw_len,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    uint8_t *jpg = heap_caps_aligned_calloc(64, 1, 96 * 1024,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!raw || !jpg) {
+        printf("ERR: no PSRAM\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    /* Colour bars with a white diagonal: bars catch a red/blue swap, the
+     * diagonal catches a wrong stride or a bad scale factor. */
+    static const uint16_t bars[8] = {
+        0xFFFF, 0xFFE0, 0x07FF, 0x07E0, 0xF81F, 0xF800, 0x001F, 0x0000,
+    };
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint16_t px = bars[(x * 8) / w];
+            if (abs(y - (x * h) / w) < 3) px = 0xFFFF;
+            raw[y * w + x] = px;
+        }
+    }
+    esp_cache_msync(raw, raw_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    if (!ensure_resources(true) || !s_enc) {
+        printf("ERR: jpeg encoder unavailable\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    jpeg_encode_cfg_t ecfg = {
+        .width = w,
+        .height = h,
+        .src_type = JPEG_ENCODE_IN_FORMAT_RGB565,
+        /* The head unit's decoder only understands 4:2:0 — same rule the
+         * phone app follows. */
+        .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
+        .image_quality = 80,
+    };
+    uint32_t jlen = 0;
+    esp_err_t e = jpeg_encoder_process(s_enc, &ecfg, (uint8_t *)raw, raw_len,
+                                       jpg, 96 * 1024, &jlen);
+    if (e != ESP_OK) {
+        printf("ERR: encode: %s\n", esp_err_to_name(e));
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const uint8_t ack = ble_nav_debug_present(jpg, jlen, (uint16_t)w, (uint16_t)h);
+    const int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    printf("navtest %dx%d jpeg=%u B ack=%u in %lld ms\n", w, h,
+           (unsigned)jlen, ack, (long long)ms);
+    heap_caps_free(raw);
+    heap_caps_free(jpg);
+    return ack == 0 ? 0 : 1;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -496,6 +568,10 @@ static void register_cmds(void)
         { .command = "uimode",
           .help = "Show or set the full-screen mode: vesc|aa|nav|toggle",
           .hint = NULL, .func = cmd_uimode },
+        { .command = "navtest",
+          .help = "Show a locally-made test frame on the navigator screen "
+                  "[width, default 400]",
+          .hint = NULL, .func = cmd_navtest },
         { .command = "navstat",
           .help = "Navigator frame stream: mode, frames, last frame size/time",
           .hint = NULL, .func = cmd_navstat },
@@ -519,8 +595,18 @@ esp_err_t debug_uart_bridge_init(void)
     repl_cfg.task_stack_size = 8192;   /* room for base64 line + handlers */
     repl_cfg.max_cmdline_length = 256;
 
+    /* The Guition JC4880 brings out no UART0 header — its console is the
+     * USB-Serial-JTAG port, which is also the only way a host script can
+     * reach it. Bind the REPL there when that port is the console; the
+     * Waveshare keeps its UART0 REPL. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    esp_console_dev_usb_serial_jtag_config_t usb_cfg =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_err_t err = esp_console_new_repl_usb_serial_jtag(&usb_cfg, &repl_cfg, &repl);
+#else
     esp_console_dev_uart_config_t uart_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     esp_err_t err = esp_console_new_repl_uart(&uart_cfg, &repl_cfg, &repl);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "repl init failed: %s", esp_err_to_name(err));
         return err;

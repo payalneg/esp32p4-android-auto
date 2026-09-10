@@ -29,8 +29,15 @@ the one recorded in the release commit.
   and sends nothing while it is not — a parked bike or a rider looking at the
   dashboard costs no air time. Unchanged pictures are not re-sent either.
 - Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
-  without the 3-finger hold, and `navstat` reports the frame stream (mode,
-  frames accepted and rejected, last frame size and decode time).
+  without the 3-finger hold, `navstat` reports the frame stream (mode, frames
+  accepted and rejected, last frame size and decode time), and `navtest` puts
+  a locally-made frame through the decode-and-scale path so the picture chain
+  can be checked without a phone. The bridge's console now follows the board:
+  on one whose console is the USB-Serial-JTAG port (the Guition JC4880 brings
+  out no UART0 header) the REPL binds there instead of UART0.
+- Verified on a Guition JC4880: a 400x240 test frame decodes, scales to the
+  full panel and appears in 9-10 ms, colours in the right order. The transfer
+  itself is still only exercised by unit tests — that needs the phone.
 
 ## v1.3.17 / app 0.3.17 — 2026-09-09
 

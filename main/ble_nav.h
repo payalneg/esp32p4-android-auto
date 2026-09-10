@@ -39,6 +39,8 @@
  * PPA scales the picture to 800x480 without letterboxing. */
 #pragma once
 
+#include "sdkconfig.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -79,6 +81,14 @@ typedef struct {
     bool     streaming;
 } ble_nav_stats_t;
 void ble_nav_get_stats(ble_nav_stats_t *out);
+
+#if CONFIG_DEBUG_UART_BRIDGE
+/* Bench shortcut: decode, scale and show a frame that never came over the
+ * air, so the picture path can be exercised without a phone. Returns a
+ * NAV_ACK_* code. Console task only, and only while nothing is streaming. */
+uint8_t ble_nav_debug_present(const uint8_t *jpeg, uint32_t len,
+                              uint16_t w, uint16_t h);
+#endif
 
 /* ---- notif_bridge wiring ---- */
 void ble_nav_set_link(uint16_t conn_handle, uint16_t ctrl_val_handle);
