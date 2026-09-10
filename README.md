@@ -259,29 +259,41 @@ A plain `idf.py` build targets the **Waveshare 4.3"** board (the default).
 
 #### Multiple boards
 
-The firmware supports more than one ESP32-P4 head-unit board. Pick the board
-with `scripts/build_board.sh <board> <idf.py args…>`, which uses a per-board
-build directory and layers the matching `sdkconfig.defaults.<board>` overlay:
+The firmware supports more than one board — and not all of them are ESP32-P4.
+Pick the board with `scripts/build_board.sh <board> <idf.py args…>`, which uses
+a per-board build directory and layers the matching
+`sdkconfig.defaults.<board>` overlay:
 
-| Board | Slug | Flash | Notes |
-|---|---|---|---|
-| Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 | `waveshare` | 32 MB | default (also what plain `idf.py` builds) |
-| Guition JC4880P443C_I_W | `jc4880` | 16 MB | ST7701S, smaller partition table (`partitions_16mb.csv`) |
+| Board | Slug | Chip | Panel | Flash | Notes |
+|---|---|---|---|---|---|
+| Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 | `waveshare` | ESP32-P4 | 800×480 | 32 MB | default (also what plain `idf.py` builds) |
+| Guition JC4880P443C_I_W | `jc4880` | ESP32-P4 | 800×480 | 16 MB | ST7701S, smaller partition table (`partitions_16mb.csv`) |
+| Waveshare ESP32-S3-Touch-LCD-4 | `s3touch4` | ESP32-S3 | 480×480 | 16 MB | **VESC dashboard only, no Android Auto** — see [docs/board_s3touch4.md](docs/board_s3touch4.md) |
 
 ```bash
 scripts/build_board.sh                              # build firmware for ALL boards
 scripts/build_board.sh waveshare flash monitor
 scripts/build_board.sh jc4880 -p /dev/cu.usbmodem* flash monitor
+scripts/build_board.sh s3touch4 -p /dev/cu.usbmodem* flash monitor
 ```
 
 Run with no board (or `all`) to build every board's image in one go.
 
-What differs per board (everything else — WiFi/SDIO→C6, touch I2C, SD,
-most of the I2S bus — is shared): MIPI-DSI panel timing + vendor init, LCD
-backlight/reset pins, the BT-agent UART pins, the CAN RX/TX pins, flash size
-and the partition table. The board is chosen by the Kconfig `BOARD_MODEL`
-choice (`CONFIG_BOARD_WAVESHARE_43` / `CONFIG_BOARD_JC4880P443C`); see the
-`#if CONFIG_BOARD_JC4880P443C` branches in the BSP and `main/bt_link.h`.
+What differs between the two P4 boards (everything else — WiFi/SDIO→C6, touch
+I2C, SD, most of the I2S bus — is shared): MIPI-DSI panel timing + vendor init,
+LCD backlight/reset pins, the BT-agent UART pins, the CAN RX/TX pins, flash
+size and the partition table. The board is chosen by the Kconfig `BOARD_MODEL`
+choice (`CONFIG_BOARD_WAVESHARE_43` / `CONFIG_BOARD_JC4880P443C` /
+`CONFIG_BOARD_S3_TOUCH_LCD_4`); see the `#if CONFIG_BOARD_JC4880P443C`
+branches in the BSP and `main/bt_link.h`.
+
+The ESP32-S3 board is a bigger step sideways: its Wi-Fi and BLE are on the
+chip itself (no ESP32-C6), its panel is a square 480×480 RGB one, and it has
+no PPA blitter, no hardware JPEG and no external BT agent — so the whole
+Android Auto side is compiled out (`CONFIG_AA_ENABLE`, ESP32-P4 only) and what
+remains is the dashboard with CAN, BLE, pedal assist, trip history, the web UI
+and OTA. It has its own 480×480 GUI Guider project (`Super_VESC_Display_480/`)
+and its own BSP; `scripts/build_board.sh` switches `IDF_TARGET` for it.
 
 The pins you actually wire (CAN transceiver and BT agent) are in the table under
 **🔌 Wiring** above. JC4880's internal panel pins (LCD backlight `23`, reset `5`)
