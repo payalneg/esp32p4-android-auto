@@ -5,6 +5,12 @@
         xmlns:tools="http://schemas.android.com/tools" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- Android 12+ lets the user grant "approximate" instead of precise;
+         without this the navigator gets no fix at all in that case.
+         Guidance is foreground-only: adding background navigation would
+         need ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE_LOCATION and
+         foregroundServiceType="connectedDevice|location" below. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- HTTP OTA upload to the head unit (release builds; Flutter only adds
          INTERNET to the debug/profile manifests by default) -->
     <uses-permission android:name="android.permission.INTERNET"/>

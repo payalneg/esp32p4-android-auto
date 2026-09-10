@@ -1,4 +1,4 @@
-/// Hub with the app's three jobs:
+/// Everything that is not the map, one tap behind the navigator's gear icon:
 ///   * Display settings — everything about the head unit (link, permissions,
 ///     pairing, firmware, files). See display_settings_screen.dart.
 ///   * BLE helper settings — the ESP32-C3 board that bridges BLE buttons and a
@@ -7,6 +7,11 @@
 ///     bridge, a stand-alone VESC BLE adapter, or the helper (it exposes the
 ///     same NUS service), so it works with no head unit at all. See
 ///     lisp_editor_screen.dart.
+///   * Map data — the routing graph and tile cache the navigator runs on.
+///
+/// This was the app's home screen until the navigator took that spot; the hub
+/// cards keep their live connection state so nothing became less visible by
+/// moving, only less prominent.
 library;
 
 import 'package:flutter/material.dart';
@@ -15,27 +20,20 @@ import '../ble/ble_proxy.dart';
 import '../ble/lisp_models.dart';
 import '../helper/helper_proxy.dart';
 import '../i18n/strings.dart';
+import '../nav/map_data.dart';
 import 'about_screen.dart';
 import 'display_settings_screen.dart';
 import 'helper_screen.dart';
 import 'lisp_editor_screen.dart';
+import 'map_data_screen.dart';
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(t(context, 'app.title')),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.translate),
-            tooltip: t(context, 'home.lang.title'),
-            onPressed: () => _showLanguagePicker(context),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(t(context, 'settings.title'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -97,6 +95,31 @@ class HomeScreen extends StatelessWidget {
             },
           ),
           const SizedBox(height: 8),
+          ListenableBuilder(
+            listenable: MapData.instance,
+            builder: (ctx, _) => Card(
+              child: ListTile(
+                leading: const Icon(Icons.map_outlined),
+                title: Text(t(context, 'settings.mapdata.title')),
+                subtitle: Text(_mapDataSubtitle(context)),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const MapDataScreen()),
+                ),
+              ),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.translate),
+              title: Text(t(context, 'settings.lang.title')),
+              subtitle: Text(t(context,
+                  'lang.${LocaleScope.of(context).locale.languageCode}')),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _showLanguagePicker(context),
+            ),
+          ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.info_outline),
@@ -111,6 +134,25 @@ class HomeScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// One line describing what map data is on the phone.
+  String _mapDataSubtitle(BuildContext context) {
+    final data = MapData.instance;
+    switch (data.state) {
+      case MapDataState.ready:
+        return tf(context, 'settings.mapdata.subtitle.ready', {
+          'nodes': data.graph?.nodeCount ?? 0,
+          'places': data.index?.length ?? 0,
+        });
+      case MapDataState.downloading:
+      case MapDataState.loading:
+        return t(context, 'settings.mapdata.subtitle.busy');
+      case MapDataState.error:
+        return t(context, 'settings.mapdata.subtitle.error');
+      case MapDataState.absent:
+        return t(context, 'settings.mapdata.subtitle.none');
+    }
   }
 
   /// Which VESC link the editor would use right now.
@@ -158,7 +200,7 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// One of the two big entry points.
+/// One big entry point in the settings list.
 class _HubCard extends StatelessWidget {
   final IconData icon;
   final Color? iconColor;

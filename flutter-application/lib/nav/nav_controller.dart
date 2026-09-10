@@ -93,6 +93,32 @@ class NavController extends ChangeNotifier {
     }
   }
 
+  /// Sets one end of the route. Routes as soon as both ends are known,
+  /// otherwise asks for the missing one.
+  Future<void> setStart(LatLon p) async {
+    start = p;
+    if (finish != null) {
+      tapMode = TapMode.none;
+      await recalc();
+    } else {
+      tapMode = TapMode.finish;
+      messageKey = 'nav.route.tapFinish';
+      notifyListeners();
+    }
+  }
+
+  Future<void> setFinish(LatLon p) async {
+    finish = p;
+    if (start != null) {
+      tapMode = TapMode.none;
+      await recalc();
+    } else {
+      tapMode = TapMode.start;
+      messageKey = 'nav.route.tapStart';
+      notifyListeners();
+    }
+  }
+
   /// Routes from the current position (or the chosen start) to [target].
   Future<void> routeTo(LatLon target) async {
     start = lastFix?.position ?? start;
