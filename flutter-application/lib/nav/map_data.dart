@@ -125,13 +125,19 @@ class MapData extends ChangeNotifier {
     _messageArgs = null;
     _set(MapDataState.downloading);
     try {
+      final clock = Stopwatch()..start();
       final result = await OverpassClient().fetch(
         bounds,
         userAgent: _userAgent,
         onProgress: (cell, cells, bytes) {
-          _progressFile = cells > 1
-              ? '$cell/$cells · ${(bytes / (1 << 20)).toStringAsFixed(1)} MB'
-              : '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+          // Bytes and speed, not just a spinner: a road download is minutes
+          // long and the only way to tell progress from a hang is numbers.
+          final mb = bytes / (1 << 20);
+          final seconds = clock.elapsedMilliseconds / 1000;
+          final rate = seconds > 0 ? mb / seconds : 0;
+          _progressFile = '${cells > 1 ? "$cell/$cells · " : ""}'
+              '${mb.toStringAsFixed(1)} MB · '
+              '${rate.toStringAsFixed(1)} MB/s';
           notifyListeners();
         },
       );

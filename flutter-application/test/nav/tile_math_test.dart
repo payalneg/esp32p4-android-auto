@@ -76,22 +76,36 @@ void main() {
       expect(tiles.last.z, 17);
     });
 
-    test('the budget cuts fine detail, never the overview', () {
+    test('never asks for more than the budget', () {
       final tiles = areaPyramid(rynek,
           radiusM: 500, zoomMin: 14, zoomMax: 19, maxTiles: 20);
-      expect(tiles.length, 20);
-      expect(tiles.first.z, 14);
-      expect(tiles.map((t) => t.z).reduce((a, b) => a > b ? a : b),
-          lessThan(19));
+      expect(tiles.length, lessThanOrEqualTo(20));
+      expect(tiles.first.z, 14, reason: 'the overview goes down first');
     });
 
-    test('the count agrees with what would be built', () {
-      const radius = 400.0;
-      final built = areaPyramid(rynek,
-          radiusM: radius, zoomMin: 15, zoomMax: 17, maxTiles: 100000);
-      final counted = areaPyramidCount(rynek,
-          radiusM: radius, zoomMin: 15, zoomMax: 17);
-      expect(built.length, counted);
+    test('a wide area still covers its coarse levels in full', () {
+      // A hundred kilometres: the point of the graduation is that the level
+      // you zoom out to is complete, even though zoom 19 cannot be.
+      final tiles = areaPyramid(rynek,
+          radiusM: 100000, zoomMin: 12, zoomMax: 19, maxTiles: 3000);
+      final byZoom = <int, int>{};
+      for (final t in tiles) {
+        byZoom[t.z] = (byZoom[t.z] ?? 0) + 1;
+      }
+      final full = tilesAround(rynek,
+          radiusM: 100000, zooms: const <int>[12], maxTiles: 100000).length;
+      expect(byZoom[12], full, reason: 'the overview is not truncated');
+      expect(byZoom[19], greaterThan(0), reason: 'and detail still shows up');
+    });
+
+    test('a small area comes down complete at every level', () {
+      final tiles = areaPyramid(rynek,
+          radiusM: 800, zoomMin: 12, zoomMax: 19, maxTiles: 100000);
+      for (var z = 12; z <= 19; z++) {
+        final full = tilesAround(rynek,
+            radiusM: 800, zooms: <int>[z], maxTiles: 100000).length;
+        expect(tiles.where((t) => t.z == z).length, full, reason: 'z$z');
+      }
     });
 
     test('asking for nothing returns nothing', () {

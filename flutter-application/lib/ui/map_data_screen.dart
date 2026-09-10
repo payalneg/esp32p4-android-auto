@@ -198,7 +198,7 @@ class _MapDataScreenState extends State<MapDataScreen> {
             title: Text(t(context, 'mapdata.area.radius')),
             trailing: DropdownButton<double>(
               value: settings.areaRadiusKm,
-              items: const <double>[1, 2, 5]
+              items: const <double>[1, 2, 5, 20, 50, 100]
                   .map((km) => DropdownMenuItem<double>(
                       value: km, child: Text('${km.round()} km')))
                   .toList(),

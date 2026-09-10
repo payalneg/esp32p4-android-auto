@@ -137,41 +137,49 @@ List<TileId> tilesAround(
   return out.length <= maxTiles ? out : out.sublist(0, maxTiles);
 }
 
-/// A whole area at every scale, coarse levels first.
+/// A whole area at every scale, with detail concentrated where you are.
 ///
-/// Offline means being able to zoom out to see where you are heading and in
-/// to read a house number, so a saved area is a pyramid rather than one
-/// level. Coarse zooms go first: they are nearly free and they are what keeps
-/// the map legible if the tile budget cuts the download short. Within a level
-/// the tiles run outwards from the middle.
+/// A flat radius across all zooms cannot work: at zoom 19 a tile is about
+/// 50 m across, so covering 100 km at that level alone would be twelve
+/// million tiles. But shrinking the radius per level is too blunt the other
+/// way — a two-kilometre neighbourhood then gets sharp tiles only in its
+/// middle, though the whole of it would fit easily.
+///
+/// So the budget is what is divided, not the radius. Every level asks for the
+/// full area and takes what its share allows, nearest first; a level that
+/// needs less passes the rest on. A small area therefore comes down complete
+/// at every zoom, while a hundred-kilometre one is complete where it is cheap
+/// and centred on the rider where it is not.
+///
+/// Coarse levels go first — they are what keeps the map legible if the budget
+/// runs out.
+/// The smallest block kept for a zoom level: seven tiles square, about what
+/// fits on a phone screen, so every level shows something around the rider.
+const int _minLevelTiles = 49;
+
 List<TileId> areaPyramid(
   LatLon centre, {
   required double radiusM,
-  int zoomMin = 13,
+  int zoomMin = 12,
   int zoomMax = 19,
   int maxTiles = 3000,
 }) {
-  if (maxTiles <= 0) return const <TileId>[];
+  if (maxTiles <= 0 || zoomMax < zoomMin) return const <TileId>[];
   final out = <TileId>[];
-  for (var z = zoomMin; z <= zoomMax && out.length < maxTiles; z++) {
+  for (var z = zoomMin; z <= zoomMax; z++) {
+    final remaining = maxTiles - out.length;
+    if (remaining <= 0) break;
+    // Hold back a small block for each finer level still to come, so a coarse
+    // level that could swallow the whole budget cannot starve them entirely.
+    final finerLevels = zoomMax - z;
+    final reserved = finerLevels * _minLevelTiles;
+    final allowance = math.max(_minLevelTiles, remaining - reserved);
     out.addAll(tilesAround(centre,
-        radiusM: radiusM, zooms: <int>[z], maxTiles: maxTiles - out.length));
+        radiusM: radiusM,
+        zooms: <int>[z],
+        maxTiles: math.min(allowance, remaining)));
   }
   return out;
-}
-
-/// How many tiles a full [areaPyramid] would be, without building the list —
-/// so the user can be told the size before agreeing to it.
-int areaPyramidCount(LatLon centre,
-    {required double radiusM, int zoomMin = 13, int zoomMax = 19}) {
-  var total = 0;
-  for (var z = zoomMin; z <= zoomMax; z++) {
-    final span =
-        40075016.686 * math.cos(centre.lat * math.pi / 180.0) / (1 << z);
-    final ring = (radiusM / span).ceil();
-    total += (2 * ring + 1) * (2 * ring + 1);
-  }
-  return total;
 }
 
 /// Every tile of [z] inside [bounds], ordered outwards from the middle.

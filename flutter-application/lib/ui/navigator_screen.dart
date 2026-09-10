@@ -49,6 +49,10 @@ const double kContextRadiusM = 1500;
 /// Riding this far since the last top-up triggers the next one.
 const double kPrefetchStepM = 200;
 
+/// How far the road network can reach in one go. Bounded by what Overpass
+/// will serve — see kMaxAreaKm2 — not by what the map can show.
+const double kMaxRoadRadiusM = 6000;
+
 class NavigatorScreen extends StatefulWidget {
   const NavigatorScreen({super.key});
 
@@ -71,6 +75,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   bool _cancelCorridor = false;
   int _tilesDone = 0;
   int _tilesTotal = 0;
+  int _tilesBytes = 0;
+  Stopwatch? _tilesClock;
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
 
@@ -192,6 +198,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             ),
           ],
         ),
+        // The map runs edge to edge — it looks better and the gesture bar sits
+        // over ground, not over controls — but everything readable or tappable
+        // is inset, or the navigation bar eats it.
+        extendBody: true,
         body: Stack(
           children: <Widget>[
             _buildMap(context),
@@ -208,7 +218,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             Positioned(
               left: 12,
               right: 12,
-              bottom: 12,
+              bottom: 12 + MediaQuery.paddingOf(context).bottom,
               child: Center(
                 child: RouteInfoBar(
                   controller: _controller,
@@ -220,7 +230,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                 ),
               ),
             ),
-            Positioned(right: 12, bottom: 72, child: _controls(context)),
+            Positioned(
+                right: 12,
+                bottom: 72 + MediaQuery.paddingOf(context).bottom,
+                child: _controls(context)),
             if (MapData.instance.state == MapDataState.downloading ||
                 MapData.instance.state == MapDataState.loading)
               _busyOverlay(context)
@@ -338,13 +351,21 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// Tiles are the long half of a download — thousands of them for a city at
   /// every scale — so they get a count, a bar and a way out, not a spinner
   /// that says nothing.
-  Widget _tilesOverlay(BuildContext context) => _statusCard(
-        context,
-        tf(context, 'mapdata.tiles.progress',
-            <String, Object?>{'done': _tilesDone, 'total': _tilesTotal}),
-        _tilesTotal > 0 ? _tilesDone / _tilesTotal : null,
-        onCancel: () => setState(() => _cancelCorridor = true),
-      );
+  Widget _tilesOverlay(BuildContext context) {
+    final mb = _tilesBytes / (1 << 20);
+    final seconds = (_tilesClock?.elapsedMilliseconds ?? 0) / 1000;
+    return _statusCard(
+      context,
+      tf(context, 'mapdata.tiles.progress', <String, Object?>{
+        'done': _tilesDone,
+        'total': _tilesTotal,
+        'mb': mb.toStringAsFixed(1),
+        'rate': (seconds > 0 ? mb / seconds : 0).toStringAsFixed(1),
+      }),
+      _tilesTotal > 0 ? _tilesDone / _tilesTotal : null,
+      onCancel: () => setState(() => _cancelCorridor = true),
+    );
+  }
 
   Widget _statusCard(BuildContext context, String text, double? progress,
       {VoidCallback? onCancel}) {
@@ -420,8 +441,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         LatLon(_map.camera.center.latitude, _map.camera.center.longitude);
     final radiusM = NavSettings.instance.areaRadiusKm * 1000.0;
     final messenger = ScaffoldMessenger.of(context);
-    // Overpass takes a box, so the disc is squared off around the centre.
-    final dLat = radiusM / 111320.0;
+    // The picture can go as wide as the user likes; the road network cannot.
+    // Overpass answers with roughly a megabyte per square kilometre, so a
+    // hundred-kilometre disc would be tens of gigabytes. Roads therefore cover
+    // the middle of the area and the tiles cover all of it.
+    final roadRadiusM = math.min(radiusM, kMaxRoadRadiusM);
+    final dLat = roadRadiusM / 111320.0;
     final dLon = dLat / math.cos(centre.lat * math.pi / 180.0);
     await MapData.instance.buildFromOverpass(GeoBounds(
       south: centre.lat - dLat,
@@ -692,12 +717,19 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       _cancelCorridor = false;
       _tilesDone = 0;
       _tilesTotal = tiles.length;
+      _tilesBytes = 0;
+      _tilesClock = Stopwatch()..start();
     });
     final messenger = ScaffoldMessenger.of(context);
     final report = await cache.downloadCorridor(tiles, _tileUrls,
         onProgress: (done, total) {
           _refreshTilesEvery(done, total);
-          if (mounted) setState(() => _tilesDone = done);
+          if (mounted) {
+            setState(() {
+              _tilesDone = done;
+              _tilesBytes = cache.bytesFetched;
+            });
+          }
         },
         cancelled: () => _cancelCorridor || !mounted);
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);

@@ -62,6 +62,11 @@ class TileCache {
   DateTime _lastRequest = DateTime.fromMillisecondsSinceEpoch(0);
   int _active = 0;
 
+  /// Bytes pulled over the network since this cache was created — the figure
+  /// the download status shows, so it counts what was actually transferred
+  /// rather than what was already on disk.
+  int bytesFetched = 0;
+
   File fileFor(TileId t) =>
       File('${root.path}/${t.z}/${t.x}/${t.y}.png');
 
@@ -137,6 +142,7 @@ class TileCache {
       }
       final bytes = builder.takeBytes();
       if (bytes.isEmpty) return null;
+      bytesFetched += bytes.length;
       await _store(t, bytes);
       return bytes;
     } on TileBlockedException {

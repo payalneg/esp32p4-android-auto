@@ -618,7 +618,8 @@ const _en = <String, String>{
   'mapdata.err.badGraph': 'Not a routing graph: {err}',
   'mapdata.err.load': 'Could not read the map data: {err}',
   'mapdata.err.import': 'Import failed: {err}',
-  'mapdata.tiles.progress': 'Saving the map… {done} of {total} tiles',
+  'mapdata.tiles.progress':
+      'Saving the map… {done} of {total} tiles · {mb} MB · {rate} MB/s',
   'mapdata.tiles.title': 'Map tiles',
   'mapdata.tiles.size': '{mb} MB in {n} tiles',
   'mapdata.tiles.empty': 'Nothing cached yet',
@@ -1246,7 +1247,8 @@ const _ru = <String, String>{
   'mapdata.err.badGraph': 'Это не граф маршрутов: {err}',
   'mapdata.err.load': 'Не удалось прочитать данные карты: {err}',
   'mapdata.err.import': 'Не удалось импортировать: {err}',
-  'mapdata.tiles.progress': 'Сохраняю карту… {done} из {total} тайлов',
+  'mapdata.tiles.progress':
+      'Сохраняю карту… {done} из {total} · {mb} МБ · {rate} МБ/с',
   'mapdata.tiles.title': 'Тайлы карты',
   'mapdata.tiles.size': '{mb} МБ в {n} тайлах',
   'mapdata.tiles.empty': 'Кэш пуст',

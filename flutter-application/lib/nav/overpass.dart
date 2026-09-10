@@ -24,10 +24,18 @@ import 'geo.dart';
 import 'graph_builder.dart';
 import 'osm_ways.dart';
 
-/// Public Overpass instances, tried in order.
+/// Public Overpass instances that take queries without a key.
+///
+/// The FOSSGIS one is canonical but describes itself as overloaded, so a
+/// multi-cell download rotates across all of them: it finishes sooner and no
+/// single volunteer server carries the whole job. Order is the fallback order
+/// for any one cell.
+/// See https://wiki.openstreetmap.org/wiki/Overpass_API
 const List<String> kOverpassEndpoints = <String>[
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
 
 /// Above this the request is refused before anything is sent. At roughly a
@@ -159,7 +167,9 @@ class OverpassClient {
     var totalBytes = 0;
 
     for (var i = 0; i < cells.length; i++) {
-      final body = await _request(cells[i], userAgent);
+      // Start each cell at a different server, so a long download is spread
+      // rather than aimed at one of them.
+      final body = await _request(cells[i], userAgent, startAt: i);
       totalBytes += body.length;
       final part = parse(body, body.length, seenWays: seenWays);
       nodes.addAll(part.nodes);
@@ -175,10 +185,13 @@ class OverpassClient {
         ways: ways, nodes: nodes, places: places, bytes: totalBytes);
   }
 
-  /// One cell, from the first endpoint that will serve it.
-  Future<String> _request(GeoBounds cell, String? userAgent) async {
+  /// One cell, from the first endpoint that will serve it, beginning at
+  /// [startAt] so consecutive cells do not all land on the same server.
+  Future<String> _request(GeoBounds cell, String? userAgent,
+      {int startAt = 0}) async {
     Object? lastError;
-    for (final endpoint in _endpoints) {
+    for (var hop = 0; hop < _endpoints.length; hop++) {
+      final endpoint = _endpoints[(startAt + hop) % _endpoints.length];
       final client = _clientFactory();
       if (userAgent != null) client.userAgent = userAgent;
       try {
