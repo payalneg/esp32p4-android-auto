@@ -46,6 +46,11 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   final _location = LocationService();
 
   List<LatLng> _routeLine = const <LatLng>[];
+
+  /// The route the line was built from. Identity, not length: two different
+  /// routes can have the same number of points, and comparing the lists
+  /// themselves on every GPS fix would be pointless work.
+  Object? _lineSource;
   bool _corridorRunning = false;
   bool _cancelCorridor = false;
 
@@ -65,14 +70,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
 
   void _onControllerChanged() {
     final route = _controller.route;
-    final line = route == null
-        ? const <LatLng>[]
-        : route.points.map((p) => LatLng(p.lat, p.lon)).toList(growable: false);
     // Rebuilding the LatLng list on every GPS fix would churn thousands of
     // objects a minute, so only do it when the route itself changed.
-    if (line.length != _routeLine.length) {
-      _routeLine = line;
-      if (line.isNotEmpty) _fitRoute(line);
+    if (!identical(route, _lineSource)) {
+      _lineSource = route;
+      _routeLine = route == null
+          ? const <LatLng>[]
+          : route.points
+              .map((p) => LatLng(p.lat, p.lon))
+              .toList(growable: false);
+      if (_routeLine.isNotEmpty) _fitRoute(_routeLine);
     }
     if (_controller.follow && _controller.lastFix != null) {
       final p = _controller.lastFix!.position;
