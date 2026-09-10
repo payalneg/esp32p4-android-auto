@@ -7,6 +7,28 @@ import 'dart:math' as math;
 
 import 'geo.dart';
 
+/// Tile servers that answer without an API key, in the order they are tried.
+///
+/// The OSMF server comes first; the others are mirrors of the same map, used
+/// only when it refuses or fails, so a blocked moment does not leave a blank
+/// screen. All are donated capacity and all require the OpenStreetMap
+/// attribution the map already carries.
+/// See https://wiki.openstreetmap.org/wiki/Raster_tile_providers
+const List<String> kTileMirrors = <String>[
+  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+  'https://a.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+];
+
+/// The addresses to try for one tile, primary first.
+List<Uri> tileUrls(TileId t) => <Uri>[
+      for (final template in kTileMirrors)
+        Uri.parse(template
+            .replaceAll('{z}', '${t.z}')
+            .replaceAll('{x}', '${t.x}')
+            .replaceAll('{y}', '${t.y}')),
+    ];
+
 /// One raster tile.
 class TileId {
   const TileId(this.z, this.x, this.y);
@@ -113,6 +135,43 @@ List<TileId> tilesAround(
     }
   }
   return out.length <= maxTiles ? out : out.sublist(0, maxTiles);
+}
+
+/// A whole area at every scale, coarse levels first.
+///
+/// Offline means being able to zoom out to see where you are heading and in
+/// to read a house number, so a saved area is a pyramid rather than one
+/// level. Coarse zooms go first: they are nearly free and they are what keeps
+/// the map legible if the tile budget cuts the download short. Within a level
+/// the tiles run outwards from the middle.
+List<TileId> areaPyramid(
+  LatLon centre, {
+  required double radiusM,
+  int zoomMin = 13,
+  int zoomMax = 19,
+  int maxTiles = 3000,
+}) {
+  if (maxTiles <= 0) return const <TileId>[];
+  final out = <TileId>[];
+  for (var z = zoomMin; z <= zoomMax && out.length < maxTiles; z++) {
+    out.addAll(tilesAround(centre,
+        radiusM: radiusM, zooms: <int>[z], maxTiles: maxTiles - out.length));
+  }
+  return out;
+}
+
+/// How many tiles a full [areaPyramid] would be, without building the list —
+/// so the user can be told the size before agreeing to it.
+int areaPyramidCount(LatLon centre,
+    {required double radiusM, int zoomMin = 13, int zoomMax = 19}) {
+  var total = 0;
+  for (var z = zoomMin; z <= zoomMax; z++) {
+    final span =
+        40075016.686 * math.cos(centre.lat * math.pi / 180.0) / (1 << z);
+    final ring = (radiusM / span).ceil();
+    total += (2 * ring + 1) * (2 * ring + 1);
+  }
+  return total;
 }
 
 /// Every tile of [z] inside [bounds], ordered outwards from the middle.

@@ -94,7 +94,7 @@ void main() {
       const TileId(16, 1, 3),
     ];
     // Any request here would be a bug: every tile is already on disk.
-    Uri boom(TileId t) => throw StateError('should not fetch $t');
+    List<Uri> boom(TileId t) => throw StateError('should not fetch $t');
 
     test('skips tiles that are already cached', () async {
       for (final t in tiles) {

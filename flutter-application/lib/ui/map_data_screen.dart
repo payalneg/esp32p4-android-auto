@@ -195,6 +195,28 @@ class _MapDataScreenState extends State<MapDataScreen> {
                   })),
           ),
           ListTile(
+            title: Text(t(context, 'mapdata.area.radius')),
+            trailing: DropdownButton<double>(
+              value: settings.areaRadiusKm,
+              items: const <double>[1, 2, 5]
+                  .map((km) => DropdownMenuItem<double>(
+                      value: km, child: Text('${km.round()} km')))
+                  .toList(),
+              onChanged: (v) => v == null ? null : settings.setAreaRadiusKm(v),
+            ),
+          ),
+          ListTile(
+            title: Text(t(context, 'mapdata.area.budget')),
+            trailing: DropdownButton<int>(
+              value: settings.tileBudget,
+              items: const <int>[1000, 3000, 10000]
+                  .map((n) =>
+                      DropdownMenuItem<int>(value: n, child: Text('$n')))
+                  .toList(),
+              onChanged: (v) => v == null ? null : settings.setTileBudget(v),
+            ),
+          ),
+          ListTile(
             title: Text(t(context, 'mapdata.tiles.cap')),
             trailing: DropdownButton<int>(
               value: settings.tileCapMb,

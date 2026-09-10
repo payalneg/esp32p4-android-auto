@@ -588,6 +588,8 @@ const _en = <String, String>{
   'settings.mapdata.subtitle.ready': '{nodes} junctions · {places} places',
   'settings.mapdata.subtitle.busy': 'Working…',
   'settings.mapdata.subtitle.error': 'Something went wrong',
+  'mapdata.area.radius': 'Area radius',
+  'mapdata.area.budget': 'Tiles per area',
   'mapdata.area.title': 'Area on the phone',
   'mapdata.area.hint':
       'Areas are downloaded from the map: pan to the town you ride in and tap Download this area.',
@@ -616,6 +618,7 @@ const _en = <String, String>{
   'mapdata.err.badGraph': 'Not a routing graph: {err}',
   'mapdata.err.load': 'Could not read the map data: {err}',
   'mapdata.err.import': 'Import failed: {err}',
+  'mapdata.tiles.progress': 'Saving the map… {done} of {total} tiles',
   'mapdata.tiles.title': 'Map tiles',
   'mapdata.tiles.size': '{mb} MB in {n} tiles',
   'mapdata.tiles.empty': 'Nothing cached yet',
@@ -1213,6 +1216,8 @@ const _ru = <String, String>{
   'settings.mapdata.subtitle.ready': '{nodes} перекрёстков · {places} мест',
   'settings.mapdata.subtitle.busy': 'Идёт работа…',
   'settings.mapdata.subtitle.error': 'Что-то пошло не так',
+  'mapdata.area.radius': 'Радиус области',
+  'mapdata.area.budget': 'Тайлов на область',
   'mapdata.area.title': 'Область на телефоне',
   'mapdata.area.hint':
       'Области скачиваются с карты: доведите её до нужного города и нажмите «Скачать эту область».',
@@ -1241,6 +1246,7 @@ const _ru = <String, String>{
   'mapdata.err.badGraph': 'Это не граф маршрутов: {err}',
   'mapdata.err.load': 'Не удалось прочитать данные карты: {err}',
   'mapdata.err.import': 'Не удалось импортировать: {err}',
+  'mapdata.tiles.progress': 'Сохраняю карту… {done} из {total} тайлов',
   'mapdata.tiles.title': 'Тайлы карты',
   'mapdata.tiles.size': '{mb} МБ в {n} тайлах',
   'mapdata.tiles.empty': 'Кэш пуст',

@@ -76,16 +76,35 @@ class TileCache {
     }
   }
 
-  /// Fetches a tile and stores it. Returns null on any network failure — the
-  /// caller draws a blank rather than an error, because a missing tile is
-  /// normal offline. Throws [TileBlockedException] on 403/429 so a bulk
-  /// download can stop instead of digging deeper.
-  Future<Uint8List?> fetchAndStore(TileId t, Uri url) {
+  /// Fetches a tile and stores it, trying each address in turn.
+  ///
+  /// Returns null on any network failure — the caller draws a blank rather
+  /// than an error, because a missing tile is normal offline. Throws
+  /// [TileBlockedException] only when every mirror refuses, so a bulk download
+  /// stops instead of digging deeper into servers that have said no.
+  Future<Uint8List?> fetchAndStore(TileId t, List<Uri> urls) {
     final pending = _inFlight[t];
     if (pending != null) return pending; // several viewport tiles, one request
-    final future = _fetch(t, url).whenComplete(() => _inFlight.remove(t));
+    final future = _fetchAny(t, urls).whenComplete(() => _inFlight.remove(t));
     _inFlight[t] = future;
     return future;
+  }
+
+  Future<Uint8List?> _fetchAny(TileId t, List<Uri> urls) async {
+    var blocked = 0;
+    for (final url in urls) {
+      try {
+        final bytes = await _fetch(t, url);
+        if (bytes != null) return bytes;
+      } on TileBlockedException {
+        blocked++;
+      }
+    }
+    // Everyone refused: that is a policy answer, not a flaky network.
+    if (blocked == urls.length && urls.isNotEmpty) {
+      throw TileBlockedException(429);
+    }
+    return null;
   }
 
   Future<Uint8List?> _fetch(TileId t, Uri url) async {
@@ -186,7 +205,7 @@ class TileCache {
   /// a scraper.
   Future<CorridorReport> downloadCorridor(
     List<TileId> tiles,
-    Uri Function(TileId) urlFor, {
+    List<Uri> Function(TileId) urlsFor, {
     void Function(int done, int total)? onProgress,
     bool Function()? cancelled,
   }) async {
@@ -207,10 +226,10 @@ class TileCache {
         skipped++;
       } else {
         try {
-          final bytes = await fetchAndStore(t, urlFor(t));
+          final bytes = await fetchAndStore(t, urlsFor(t));
           if (bytes == null) {
             // One retry: a 5xx or a dropped connection is often transient.
-            final again = await fetchAndStore(t, urlFor(t));
+            final again = await fetchAndStore(t, urlsFor(t));
             again == null ? failed++ : downloaded++;
           } else {
             downloaded++;

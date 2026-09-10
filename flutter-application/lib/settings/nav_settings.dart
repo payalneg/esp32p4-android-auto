@@ -18,6 +18,8 @@ class NavSettings extends ChangeNotifier {
   static const _kProfile = 'nav_profile_v1';
   static const _kTileCapMb = 'nav_tile_cap_mb_v1';
   static const _kCorridorMaxTiles = 'nav_corridor_max_tiles_v1';
+  static const _kAreaRadiusKm = 'nav_area_radius_km_v1';
+  static const _kTileBudget = 'nav_tile_budget_v1';
   static const _kLastView = 'nav_last_view_v1';
 
   RideProfile _profile = kDefaultProfile;
@@ -26,12 +28,22 @@ class NavSettings extends ChangeNotifier {
   /// 250 is the bulk-download line in the OSM tile usage policy; the screen
   /// offers more for long routes, as the user's own call.
   int _corridorMaxTiles = 250;
+  /// How far around the rider an offline area reaches. Two kilometres is a
+  /// town centre and a few thousand tiles across all the zoom levels;
+  /// five is a whole city and takes a while.
+  double _areaRadiusKm = 2;
+
+  /// Ceiling on the tiles one saved area may cost. The pyramid is ordered
+  /// so the cut lands on fine detail at the edges, never on the overview.
+  int _tileBudget = 3000;
   String _lastView = '';
   bool _loaded = false;
 
   RideProfile get profile => _profile;
   int get tileCapMb => _tileCapMb;
   int get corridorMaxTiles => _corridorMaxTiles;
+  double get areaRadiusKm => _areaRadiusKm;
+  int get tileBudget => _tileBudget;
   bool get loaded => _loaded;
 
   /// Last map position as `lat,lon,zoom`, or null if never saved.
@@ -50,6 +62,8 @@ class NavSettings extends ChangeNotifier {
     _profile = RideProfile.byName(p.getString(_kProfile) ?? '') ?? kDefaultProfile;
     _tileCapMb = p.getInt(_kTileCapMb) ?? 300;
     _corridorMaxTiles = p.getInt(_kCorridorMaxTiles) ?? 250;
+    _areaRadiusKm = p.getDouble(_kAreaRadiusKm) ?? 2;
+    _tileBudget = p.getInt(_kTileBudget) ?? 3000;
     _lastView = p.getString(_kLastView) ?? '';
     _loaded = true;
     notifyListeners();
@@ -77,6 +91,22 @@ class NavSettings extends ChangeNotifier {
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kCorridorMaxTiles, value);
+  }
+
+  Future<void> setAreaRadiusKm(double value) async {
+    if (value == _areaRadiusKm) return;
+    _areaRadiusKm = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setDouble(_kAreaRadiusKm, value);
+  }
+
+  Future<void> setTileBudget(int value) async {
+    if (value == _tileBudget) return;
+    _tileBudget = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_kTileBudget, value);
   }
 
   /// Saved on every meaningful camera move; not a notifying change, since

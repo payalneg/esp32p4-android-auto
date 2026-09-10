@@ -40,16 +40,18 @@ class CachedTileProvider extends TileProvider {
   ImageProvider<Object> getImage(
       TileCoordinates coordinates, TileLayer options) {
     final tile = TileId(coordinates.z, coordinates.x, coordinates.y);
-    return _CachedTileImage(cache, tile, Uri.parse(getTileUrl(coordinates, options)));
+    return _CachedTileImage(cache, tile, tileUrls(tile));
   }
 }
 
 class _CachedTileImage extends ImageProvider<_CachedTileImage> {
-  const _CachedTileImage(this.cache, this.tile, this.url);
+  const _CachedTileImage(this.cache, this.tile, this.urls);
 
   final TileCache cache;
   final TileId tile;
-  final Uri url;
+
+  /// Primary first, mirrors after — see kTileMirrors.
+  final List<Uri> urls;
 
   @override
   Future<_CachedTileImage> obtainKey(ImageConfiguration configuration) =>
@@ -66,12 +68,12 @@ class _CachedTileImage extends ImageProvider<_CachedTileImage> {
   }
 
   Future<ui.Codec> _load(ImageDecoderCallback decode) async {
-    var bytes = await cache.read(tile) ?? await cache.fetchAndStore(tile, url);
+    var bytes = await cache.read(tile) ?? await cache.fetchAndStore(tile, urls);
     if (bytes == null) {
       // One retry: riding through a dead second of signal should not blank a
       // tile until the next time the camera happens to move.
       await Future<void>.delayed(const Duration(milliseconds: 1200));
-      bytes = await cache.fetchAndStore(tile, url);
+      bytes = await cache.fetchAndStore(tile, urls);
     }
     if (bytes == null) {
       throw StateError('tile $tile unavailable'); // TileLayer draws errorImage

@@ -49,6 +49,56 @@ void main() {
         allOf(greaterThanOrEqualTo(r.xMin), lessThanOrEqualTo(r.xMax)));
   });
 
+  group('tileUrls', () {
+    test('offers the OSMF server first, then the mirrors', () {
+      final urls = tileUrls(const TileId(16, 36397, 22208));
+      expect(urls, hasLength(kTileMirrors.length));
+      expect(urls.first.host, 'tile.openstreetmap.org');
+      expect(urls.first.path, '/16/36397/22208.png');
+      expect(urls.map((u) => u.host).toSet().length, urls.length,
+          reason: 'a mirror that is the same host is not a mirror');
+      for (final u in urls) {
+        expect(u.scheme, 'https');
+        expect(u.path, endsWith('/16/36397/22208.png'));
+      }
+    });
+  });
+
+  group('areaPyramid', () {
+    const rynek = LatLon(50.0619, 19.9368);
+
+    test('covers every zoom in the range, coarse first', () {
+      final tiles =
+          areaPyramid(rynek, radiusM: 500, zoomMin: 14, zoomMax: 17,
+              maxTiles: 100000);
+      expect(tiles.map((t) => t.z).toSet(), <int>{14, 15, 16, 17});
+      expect(tiles.first.z, 14, reason: 'the overview goes down first');
+      expect(tiles.last.z, 17);
+    });
+
+    test('the budget cuts fine detail, never the overview', () {
+      final tiles = areaPyramid(rynek,
+          radiusM: 500, zoomMin: 14, zoomMax: 19, maxTiles: 20);
+      expect(tiles.length, 20);
+      expect(tiles.first.z, 14);
+      expect(tiles.map((t) => t.z).reduce((a, b) => a > b ? a : b),
+          lessThan(19));
+    });
+
+    test('the count agrees with what would be built', () {
+      const radius = 400.0;
+      final built = areaPyramid(rynek,
+          radiusM: radius, zoomMin: 15, zoomMax: 17, maxTiles: 100000);
+      final counted = areaPyramidCount(rynek,
+          radiusM: radius, zoomMin: 15, zoomMax: 17);
+      expect(built.length, counted);
+    });
+
+    test('asking for nothing returns nothing', () {
+      expect(areaPyramid(rynek, radiusM: 500, maxTiles: 0), isEmpty);
+    });
+  });
+
   group('tilesAround', () {
     const rynek = LatLon(50.0619, 19.9368);
 

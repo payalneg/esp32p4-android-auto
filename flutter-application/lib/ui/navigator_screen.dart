@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -68,6 +69,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   Object? _lineSource;
   bool _corridorRunning = false;
   bool _cancelCorridor = false;
+  int _tilesDone = 0;
+  int _tilesTotal = 0;
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
 
@@ -160,7 +163,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               onSelected: (choice) {
                 switch (choice) {
                   case 'area':
-                    _downloadVisibleArea();
+                    _downloadAreaHere();
                   case 'settings':
                     Navigator.push(
                         context,
@@ -220,7 +223,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             Positioned(right: 12, bottom: 72, child: _controls(context)),
             if (MapData.instance.state == MapDataState.downloading ||
                 MapData.instance.state == MapDataState.loading)
-              _busyOverlay(context),
+              _busyOverlay(context)
+            else if (_corridorRunning)
+              _tilesOverlay(context),
           ],
         ),
       ),
@@ -327,6 +332,22 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         ? tf(context, 'mapdata.downloading',
             <String, Object?>{'file': data.progressFile ?? ''})
         : t(context, 'mapdata.status.loading');
+    return _statusCard(context, text, null);
+  }
+
+  /// Tiles are the long half of a download — thousands of them for a city at
+  /// every scale — so they get a count, a bar and a way out, not a spinner
+  /// that says nothing.
+  Widget _tilesOverlay(BuildContext context) => _statusCard(
+        context,
+        tf(context, 'mapdata.tiles.progress',
+            <String, Object?>{'done': _tilesDone, 'total': _tilesTotal}),
+        _tilesTotal > 0 ? _tilesDone / _tilesTotal : null,
+        onCancel: () => setState(() => _cancelCorridor = true),
+      );
+
+  Widget _statusCard(BuildContext context, String text, double? progress,
+      {VoidCallback? onCancel}) {
     return Positioned(
       top: 12,
       left: 12,
@@ -335,14 +356,29 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2)),
-              const SizedBox(width: 16),
-              Expanded(child: Text(text)),
+              Row(
+                children: <Widget>[
+                  const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(width: 16),
+                  Expanded(child: Text(text)),
+                  if (onCancel != null)
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: t(context, 'nav.route.reset'),
+                      onPressed: onCancel,
+                    ),
+                ],
+              ),
+              if (progress != null) ...<Widget>[
+                const SizedBox(height: 10),
+                LinearProgressIndicator(value: progress),
+              ],
             ],
           ),
         ),
@@ -364,25 +400,34 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             subtitle: Text(t(context, 'mapdata.area.source'),
                 style: Theme.of(context).textTheme.bodySmall),
             trailing: FilledButton(
-              onPressed: _downloadVisibleArea,
+              onPressed: _downloadAreaHere,
               child: Text(t(context, 'nav.data.missing.action')),
             ),
           ),
         ),
       );
 
-  /// Downloads the roads inside the current viewport and builds the graph.
+  /// Downloads the roads around where we are, and builds the graph.
+  ///
+  /// Centred on the rider, not on the viewport: what has to work offline is
+  /// the ground you are standing on, and a map that happens to be scrolled to
+  /// another city is not a request to download that city.
   ///
   /// Replaces whatever area was loaded before — one area at a time keeps the
   /// memory budget honest, and riding two cities at once is not a thing.
-  Future<void> _downloadVisibleArea() async {
-    final bounds = _map.camera.visibleBounds;
+  Future<void> _downloadAreaHere() async {
+    final centre = _controller.lastFix?.position ??
+        LatLon(_map.camera.center.latitude, _map.camera.center.longitude);
+    final radiusM = NavSettings.instance.areaRadiusKm * 1000.0;
     final messenger = ScaffoldMessenger.of(context);
+    // Overpass takes a box, so the disc is squared off around the centre.
+    final dLat = radiusM / 111320.0;
+    final dLon = dLat / math.cos(centre.lat * math.pi / 180.0);
     await MapData.instance.buildFromOverpass(GeoBounds(
-      south: bounds.south,
-      west: bounds.west,
-      north: bounds.north,
-      east: bounds.east,
+      south: centre.lat - dLat,
+      west: centre.lon - dLon,
+      north: centre.lat + dLat,
+      east: centre.lon + dLon,
     ));
     if (!mounted) return;
     final data = MapData.instance;
@@ -394,7 +439,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     } else if (data.isReady) {
       // Roads alone leave a grey map the moment the phone loses signal, so the
       // picture of the same area comes down with them, sharpest first.
-      unawaited(_saveAreaTiles(bounds));
+      unawaited(_saveAreaTiles(centre, radiusM));
       messenger.showSnackBar(SnackBar(
         content: Text(tf(context, 'mapdata.status.ready', <String, Object?>{
           'nodes': data.graph?.nodeCount ?? 0,
@@ -606,7 +651,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final report = await cache.downloadCorridor(
       tiles,
-      _tileUrl,
+      _tileUrls,
       onProgress: (done, total) {
         _refreshTilesEvery(done, total);
         if (!mounted || done % 25 != 0) return;
@@ -631,21 +676,30 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     ));
   }
 
-  /// Downloads the picture of a just-fetched area at the sharp zoom, centre
-  /// outwards, bounded by the tile budget the user set.
-  Future<void> _saveAreaTiles(LatLngBounds bounds) async {
+  /// Saves the picture of an area at every scale the map can show.
+  ///
+  /// Offline has to survive zooming out to find your bearings as much as
+  /// zooming in to read a house number, so this is a pyramid: coarse levels
+  /// first — nearly free, and what keeps the map legible if the tile budget
+  /// cuts the download short — then finer ones, outwards from the middle.
+  Future<void> _saveAreaTiles(LatLon centre, double radiusM) async {
     final cache = MapData.instance.tiles;
     if (cache == null) return;
-    final tiles = tilesInBounds(
-      LatLon(bounds.north, bounds.west),
-      LatLon(bounds.south, bounds.east),
-      kSharpZoom,
-      maxTiles: NavSettings.instance.corridorMaxTiles,
-    );
-    setState(() => _corridorRunning = true);
+    final tiles = areaPyramid(centre,
+        radiusM: radiusM, maxTiles: NavSettings.instance.tileBudget);
+    setState(() {
+      _corridorRunning = true;
+      _cancelCorridor = false;
+      _tilesDone = 0;
+      _tilesTotal = tiles.length;
+    });
     final messenger = ScaffoldMessenger.of(context);
-    final report = await cache.downloadCorridor(tiles, _tileUrl,
-        onProgress: _refreshTilesEvery, cancelled: () => !mounted);
+    final report = await cache.downloadCorridor(tiles, _tileUrls,
+        onProgress: (done, total) {
+          _refreshTilesEvery(done, total);
+          if (mounted) setState(() => _tilesDone = done);
+        },
+        cancelled: () => _cancelCorridor || !mounted);
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
     setState(() => _corridorRunning = false);
@@ -669,10 +723,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (done % 10 == 0 || done == total) _refreshTiles();
   }
 
-  static Uri _tileUrl(TileId t) => Uri.parse(kOsmTileUrl
-      .replaceAll('{z}', '${t.z}')
-      .replaceAll('{x}', '${t.x}')
-      .replaceAll('{y}', '${t.y}'));
+  /// Addresses to try for one tile: the OSMF server first, then its mirrors,
+  /// so a refusal or a flaky host does not leave a hole in the map.
+  static List<Uri> _tileUrls(TileId t) => tileUrls(t);
 
   /// Quietly keeps the ground around the rider cached while moving.
   ///
@@ -692,7 +745,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             radiusM: kSharpRadiusM,
             zooms: const <int>[kSharpZoom],
             maxTiles: 60),
-        _tileUrl,
+        _tileUrls,
         onProgress: _refreshTilesEvery,
         cancelled: () => !mounted,
       );
