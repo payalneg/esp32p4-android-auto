@@ -34,11 +34,41 @@ void main() {
       expect(north.areaKm2, lessThan(equator.areaKm2 * 0.6));
     });
 
-    test('a city-sized box is well inside the limit', () {
+    test('a city-sized box is inside the limit', () {
       // Roughly 11 x 7 km around Kraków.
       const krakow =
           GeoBounds(south: 50.02, west: 19.88, north: 50.09, east: 20.03);
       expect(krakow.areaKm2, lessThan(kMaxAreaKm2));
+    });
+  });
+
+  group('split', () {
+    test('a small box is asked for in one go', () {
+      const small = GeoBounds(south: 50.0, west: 20.0, north: 50.01, east: 20.01);
+      expect(small.split(), hasLength(1));
+    });
+
+    test('a big box becomes cells that each fit the limit', () {
+      const big = GeoBounds(south: 50.0, west: 19.9, north: 50.09, east: 20.05);
+      final cells = big.split();
+      expect(cells.length, greaterThan(1));
+      for (final c in cells) {
+        expect(c.areaKm2, lessThanOrEqualTo(kCellKm2 * 1.05));
+      }
+    });
+
+    test('the cells tile the original exactly, with no gap at the far edge',
+        () {
+      const big = GeoBounds(south: 50.0, west: 19.9, north: 50.09, east: 20.05);
+      final cells = big.split();
+      expect(cells.map((c) => c.south).reduce((a, b) => a < b ? a : b),
+          closeTo(big.south, 1e-9));
+      expect(cells.map((c) => c.north).reduce((a, b) => a > b ? a : b),
+          closeTo(big.north, 1e-9));
+      expect(cells.map((c) => c.east).reduce((a, b) => a > b ? a : b),
+          closeTo(big.east, 1e-9));
+      final total = cells.fold<double>(0, (sum, c) => sum + c.areaKm2);
+      expect(total, closeTo(big.areaKm2, big.areaKm2 * 0.02));
     });
   });
 
@@ -79,6 +109,13 @@ void main() {
 
     test('reports the response size', () {
       expect(OverpassClient.parse(kBody, 4242).bytes, 4242);
+    });
+
+    test('a way already taken from a neighbouring cell is not taken twice', () {
+      final seen = <int>{};
+      expect(OverpassClient.parse(kBody, 0, seenWays: seen).ways, hasLength(2));
+      // Same body again: every way id is already known.
+      expect(OverpassClient.parse(kBody, 0, seenWays: seen).ways, isEmpty);
     });
 
     test('anything that is not an Overpass answer is reported as such', () {

@@ -124,11 +124,39 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                       value: p, child: Text(t(ctx, p.i18nKey))))
                   .toList(),
             ),
-            IconButton(
-              icon: const Icon(Icons.settings),
-              tooltip: t(context, 'settings.title'),
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const SettingsScreen())),
+            // Reachable whether or not data is already loaded: riding into the
+            // next town is exactly when you need another area.
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (choice) {
+                switch (choice) {
+                  case 'area':
+                    _downloadVisibleArea();
+                  case 'settings':
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const SettingsScreen()));
+                }
+              },
+              itemBuilder: (ctx) => <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'area',
+                  child: ListTile(
+                    leading: const Icon(Icons.travel_explore),
+                    title: Text(t(ctx, 'nav.data.missing.action')),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'settings',
+                  child: ListTile(
+                    leading: const Icon(Icons.settings),
+                    title: Text(t(ctx, 'settings.title')),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -159,6 +187,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               ),
             ),
             Positioned(right: 12, bottom: 72, child: _controls(context)),
+            if (MapData.instance.state == MapDataState.downloading ||
+                MapData.instance.state == MapDataState.loading)
+              _busyOverlay(context),
           ],
         ),
       ),
@@ -245,6 +276,37 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         ]),
       );
 
+  /// Fetching an area takes seconds and blocks nothing else, but the map must
+  /// say so — otherwise a tap on "download" looks like it did nothing.
+  Widget _busyOverlay(BuildContext context) {
+    final data = MapData.instance;
+    final text = data.state == MapDataState.downloading
+        ? tf(context, 'mapdata.downloading',
+            <String, Object?>{'file': data.progressFile ?? ''})
+        : t(context, 'mapdata.status.loading');
+    return Positioned(
+      top: 12,
+      left: 12,
+      right: 12,
+      child: Card(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: <Widget>[
+              const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+              const SizedBox(width: 16),
+              Expanded(child: Text(text)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Offers to fetch exactly what is on screen — the area you can see is the
   /// area you get, which beats picking a region off a list and hoping.
   Widget _dataBanner(BuildContext context) => Positioned(
@@ -267,9 +329,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       );
 
   /// Downloads the roads inside the current viewport and builds the graph.
+  ///
+  /// Replaces whatever area was loaded before — one area at a time keeps the
+  /// memory budget honest, and riding two cities at once is not a thing.
   Future<void> _downloadVisibleArea() async {
-    final camera = _map.camera;
-    final bounds = camera.visibleBounds;
+    final bounds = _map.camera.visibleBounds;
+    final messenger = ScaffoldMessenger.of(context);
     await MapData.instance.buildFromOverpass(GeoBounds(
       south: bounds.south,
       west: bounds.west,
@@ -279,9 +344,20 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (!mounted) return;
     final data = MapData.instance;
     if (data.state == MapDataState.error && data.messageKey != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      messenger.showSnackBar(SnackBar(
         content: Text(
             tf(context, data.messageKey!, data.messageArgs ?? const {})),
+      ));
+    } else if (data.isReady) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(tf(context, 'mapdata.status.ready', <String, Object?>{
+          'nodes': data.graph?.nodeCount ?? 0,
+          'edges': data.graph?.edgeCount ?? 0,
+          'mb': ((data.graphFile?.existsSync() ?? false)
+                  ? data.graphFile!.lengthSync() / (1 << 20)
+                  : 0)
+              .toStringAsFixed(1),
+        })),
       ));
     }
   }

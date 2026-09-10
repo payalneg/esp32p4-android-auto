@@ -128,8 +128,10 @@ class MapData extends ChangeNotifier {
       final result = await OverpassClient().fetch(
         bounds,
         userAgent: _userAgent,
-        onProgress: (bytes) {
-          _progressFile = '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+        onProgress: (cell, cells, bytes) {
+          _progressFile = cells > 1
+              ? '$cell/$cells · ${(bytes / (1 << 20)).toStringAsFixed(1)} MB'
+              : '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
           notifyListeners();
         },
       );

@@ -6,9 +6,13 @@
 /// a regional `.osm.pbf` extract this is a few megabytes rather than a few
 /// hundred, and it needs no PBF decoder on the phone.
 ///
-/// The public instances are donated capacity, so this asks for one bounded
-/// area at a time, names itself in the User-Agent and gives up rather than
-/// retrying a refusal.
+/// Two constraints shape this. Overpass instances are donated capacity, so the
+/// client names itself, asks for bounded areas, and gives up rather than
+/// retrying a refusal. And a city centre answers with roughly a megabyte of
+/// JSON per square kilometre, which balloons several times over once decoded —
+/// so a request is split into cells, each decoded and reduced to compact
+/// structures before the next one is asked for. Peak memory is then one cell,
+/// whatever the size of the area.
 library;
 
 import 'dart:async';
@@ -26,9 +30,15 @@ const List<String> kOverpassEndpoints = <String>[
   'https://overpass.kumi.systems/api/interpreter',
 ];
 
-/// Above this the query is refused before it is sent: a bigger area answers
-/// slowly, weighs tens of megabytes and rarely fits a ride anyway.
-const double kMaxAreaKm2 = 900;
+/// Above this the request is refused before anything is sent. At roughly a
+/// megabyte of JSON per square kilometre downtown, 150 km² is already a long
+/// download; more than that is not a ride, it is a region, and belongs in
+/// scripts/mapgen.
+const double kMaxAreaKm2 = 150;
+
+/// Each request covers at most this much ground. Small enough that one
+/// decoded response stays a manageable object graph on a phone.
+const double kCellKm2 = 9;
 
 /// Reported as an i18n key so the UI can localise it.
 class OverpassException implements Exception {
@@ -58,6 +68,28 @@ class GeoBounds {
     final h = (north - south) * kmPerDegree;
     final w = (east - west) * kmPerDegree * math.cos(midLat);
     return (h * w).abs();
+  }
+  /// Splits into cells of at most [maxCellKm2], so each request decodes on its
+  /// own. A single cell comes back as itself.
+  List<GeoBounds> split({double maxCellKm2 = kCellKm2}) {
+    final area = areaKm2;
+    if (area <= maxCellKm2) return <GeoBounds>[this];
+    // Square-ish cells: divide each side by the same factor.
+    final factor = math.sqrt(area / maxCellKm2).ceil();
+    final dLat = (north - south) / factor;
+    final dLon = (east - west) / factor;
+    final out = <GeoBounds>[];
+    for (var i = 0; i < factor; i++) {
+      for (var j = 0; j < factor; j++) {
+        out.add(GeoBounds(
+          south: south + dLat * i,
+          west: west + dLon * j,
+          north: i == factor - 1 ? north : south + dLat * (i + 1),
+          east: j == factor - 1 ? east : west + dLon * (j + 1),
+        ));
+      }
+    }
+    return out;
   }
 }
 
@@ -103,10 +135,15 @@ class OverpassClient {
         'out skel qt;';
   }
 
+  /// Everything the router needs for [bounds], cell by cell.
+  ///
+  /// Ways are deduplicated by id: Overpass returns a whole way whenever any of
+  /// it falls inside a cell, so a street crossing a cell boundary comes back
+  /// twice and would otherwise be built into the graph twice.
   Future<OverpassResult> fetch(
     GeoBounds bounds, {
     String? userAgent,
-    void Function(int bytes)? onProgress,
+    void Function(int cell, int cells, int bytes)? onProgress,
   }) async {
     if (bounds.areaKm2 > kMaxAreaKm2) {
       throw OverpassException('mapdata.err.areaTooBig', <String, String>{
@@ -114,15 +151,42 @@ class OverpassClient {
         'max': kMaxAreaKm2.round().toString(),
       });
     }
+    final cells = bounds.split();
+    final nodes = <int, LatLon>{};
+    final ways = <OsmWay>[];
+    final places = <OsmPlace>[];
+    final seenWays = <int>{};
+    var totalBytes = 0;
+
+    for (var i = 0; i < cells.length; i++) {
+      final body = await _request(cells[i], userAgent);
+      totalBytes += body.length;
+      final part = parse(body, body.length, seenWays: seenWays);
+      nodes.addAll(part.nodes);
+      ways.addAll(part.ways);
+      places.addAll(part.places);
+      onProgress?.call(i + 1, cells.length, totalBytes);
+      // Be a good guest between cells.
+      if (i + 1 < cells.length) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
+    }
+    return OverpassResult(
+        ways: ways, nodes: nodes, places: places, bytes: totalBytes);
+  }
+
+  /// One cell, from the first endpoint that will serve it.
+  Future<String> _request(GeoBounds cell, String? userAgent) async {
     Object? lastError;
     for (final endpoint in _endpoints) {
       final client = _clientFactory();
       if (userAgent != null) client.userAgent = userAgent;
       try {
         final req = await client.postUrl(Uri.parse(endpoint));
-        req.headers.contentType =
-            ContentType('application', 'x-www-form-urlencoded', charset: 'utf-8');
-        req.write('data=${Uri.encodeQueryComponent(buildQuery(bounds))}');
+        req.headers.contentType = ContentType(
+            'application', 'x-www-form-urlencoded',
+            charset: 'utf-8');
+        req.write('data=${Uri.encodeQueryComponent(buildQuery(cell))}');
         final resp = await req.close().timeout(const Duration(minutes: 4));
         if (resp.statusCode == 429 || resp.statusCode == 504) {
           await resp.drain<void>();
@@ -130,17 +194,14 @@ class OverpassClient {
         }
         if (resp.statusCode != 200) {
           await resp.drain<void>();
-          throw OverpassException(
-              'mapdata.err.http', <String, String>{'code': '${resp.statusCode}'});
+          throw OverpassException('mapdata.err.http',
+              <String, String>{'code': '${resp.statusCode}'});
         }
         final buffer = StringBuffer();
-        var received = 0;
         await for (final chunk in resp.transform(utf8.decoder)) {
           buffer.write(chunk);
-          received += chunk.length;
-          onProgress?.call(received);
         }
-        return parse(buffer.toString(), received);
+        return buffer.toString();
       } on OverpassException catch (e) {
         // A busy server is worth trying the next mirror for; a refusal is not.
         if (e.messageKey != 'mapdata.err.overpassBusy') rethrow;
@@ -157,7 +218,8 @@ class OverpassClient {
   }
 
   /// Splits an Overpass JSON answer into what the builder consumes.
-  static OverpassResult parse(String body, int bytes) {
+  static OverpassResult parse(String body, int bytes,
+      {Set<int>? seenWays}) {
     final Object? decoded;
     try {
       decoded = jsonDecode(body);
@@ -194,6 +256,10 @@ class OverpassClient {
             }
           }
         case 'way':
+          final wayId = element['id'];
+          if (wayId is num && seenWays != null && !seenWays.add(wayId.toInt())) {
+            continue; // already taken from a neighbouring cell
+          }
           final tags = _tags(element['tags']);
           if (tags == null) continue;
           final wayClass = classifyWay(tags);
