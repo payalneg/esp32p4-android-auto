@@ -289,12 +289,15 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             tileProvider: CachedTileProvider(tiles),
             reset: _tileReset.stream,
             userAgentPackageName: 'com.aabridge.aa_bridge',
-            // Retina simulation shifts the layer down a level, so these are
-            // stated one higher than OSM's real limit of 19. Left at 19 the
-            // layer would stop drawing above zoom 18 — a blank map exactly
-            // where you zoom in to read a junction.
+            // Retina simulation shifts the layer down a level: flutter_map
+            // takes one off both of these and adds it back when it asks for a
+            // tile. maxZoom 20 therefore lets the camera go to 19 — left at 19
+            // the map would stop drawing above 18, blank exactly where you
+            // zoom in to read a junction. maxNativeZoom 19 keeps the deepest
+            // tile actually requested at OSM's real limit of 19; 20 asked for
+            // a zoom that does not exist and came back 400.
             maxZoom: 20,
-            maxNativeZoom: 20,
+            maxNativeZoom: 19,
             // OSM serves 256 px tiles at 1x; on a phone at 2.6x they are
             // stretched and the labels turn to mush. There are no @2x tiles to
             // ask for, so flutter_map's simulation is the way: fetch one zoom

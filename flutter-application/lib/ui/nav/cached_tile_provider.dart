@@ -39,8 +39,27 @@ class CachedTileProvider extends TileProvider {
   @override
   ImageProvider<Object> getImage(
       TileCoordinates coordinates, TileLayer options) {
-    final tile = TileId(coordinates.z, coordinates.x, coordinates.y);
+    final tile = tileIdFor(coordinates, options);
     return _CachedTileImage(cache, tile, tileUrls(tile));
+  }
+
+  /// The real {z}/{x}/{y} behind a layer coordinate.
+  ///
+  /// The layer's zoom is not the tile's. With retina simulation flutter_map
+  /// hands out coordinates one level deeper than it numbers them and expects
+  /// the URL to add `zoomOffset` back — the same arithmetic its own
+  /// `generateReplacementMap` does. Taking `coordinates.z` at face value asked
+  /// tile.openstreetmap.org for zoom 19 with zoom-20 coordinates, so every
+  /// request came back 400: a black map, a busy network and a tile download
+  /// that never left zero.
+  static TileId tileIdFor(TileCoordinates c, TileLayer options) {
+    final z = (options.zoomOffset +
+            (options.zoomReverse
+                ? options.maxZoom - c.z.toDouble()
+                : c.z.toDouble()))
+        .round();
+    final y = options.tms ? ((1 << z) - 1) - c.y : c.y;
+    return TileId(z, c.x, y);
   }
 }
 
