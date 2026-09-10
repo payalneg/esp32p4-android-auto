@@ -215,7 +215,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         body: Stack(
           children: <Widget>[
             _buildMap(context),
-            if (MapData.instance.state == MapDataState.absent)
+            if (MapData.instance.state == MapDataState.absent ||
+                MapData.instance.state == MapDataState.error)
               _dataBanner(context),
             if (_controller.guidance != null && _controller.hasRoute)
               Positioned(
@@ -427,8 +428,19 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           color: Theme.of(context).colorScheme.secondaryContainer,
           child: ListTile(
             leading: const Icon(Icons.map_outlined),
-            title: Text(t(context, 'nav.data.missing')),
-            subtitle: Text(t(context, 'mapdata.area.source'),
+            title: Text(MapData.instance.state == MapDataState.error
+                ? t(context, 'settings.mapdata.subtitle.error')
+                : t(context, 'nav.data.missing')),
+            // An error used to leave this screen blank: no banner, no
+            // progress, nothing to act on. Say what happened here, where the
+            // user is, not only on the map-data screen.
+            subtitle: Text(
+                MapData.instance.messageKey == null
+                    ? t(context, 'mapdata.area.source')
+                    : tf(context, MapData.instance.messageKey!,
+                        MapData.instance.messageArgs ?? const {}),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall),
             trailing: FilledButton(
               onPressed: () => Navigator.push(context,

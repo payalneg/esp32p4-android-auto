@@ -17,7 +17,6 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -144,12 +143,13 @@ class MapData extends ChangeNotifier {
       // Parsing a province is tens of seconds and hundreds of megabytes at
       // its peak; an isolate keeps both off the UI and frees them on exit.
       //
-      // The closure must capture a plain String and nothing else. Referring to
-      // `pbf` here would drag this MapData in with it, and a ChangeNotifier
-      // holds its listeners — meaning the whole widget tree, which cannot
-      // cross an isolate boundary.
-      final path = pbf.path;
-      final built = await Isolate.run(() => PbfGraphSource.buildAsync(path));
+      // Started from a static method on purpose. Dart allocates one closure
+      // context per function, and this one also holds the progress callback
+      // above, which touches `this` — so a closure written here would carry
+      // MapData, its listeners and the whole widget tree across the isolate
+      // boundary, which is not allowed. A static entry point has a context of
+      // its own, holding nothing but the path.
+      final built = await PbfGraphSource.buildInIsolate(pbf.path);
       if (built.edgeCount == 0) {
         _fail('mapdata.err.emptyArea', null);
         return;
