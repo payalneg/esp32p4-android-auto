@@ -18,6 +18,7 @@ import '../nav/location_service.dart';
 import '../nav/map_data.dart';
 import '../nav/nav_controller.dart';
 import '../nav/search_index.dart';
+import '../nav/tile_cache.dart';
 import '../nav/tile_math.dart';
 import '../nav/way_classes.dart';
 import '../settings/nav_settings.dart';
@@ -73,6 +74,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   int _tilesTotal = 0;
   int _tilesBytes = 0;
   int _tilesBytesAtStart = 0;
+  int _tilesFailedAtStart = 0;
   Stopwatch? _tilesClock;
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
@@ -365,14 +367,24 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   Widget _tilesOverlay(BuildContext context) {
     final mb = _tilesBytes / (1 << 20);
     final seconds = (_tilesClock?.elapsedMilliseconds ?? 0) / 1000;
+    final cache = MapData.instance.tiles;
+    final failed = (cache?.failures ?? 0) - _tilesFailedAtStart;
     return _statusCard(
       context,
       tf(context, 'mapdata.tiles.progress', <String, Object?>{
-        'done': _tilesDone,
-        'total': _tilesTotal,
-        'mb': mb.toStringAsFixed(1),
-        'rate': (seconds > 0 ? mb / seconds : 0).toStringAsFixed(1),
-      }),
+            'done': _tilesDone,
+            'total': _tilesTotal,
+            'mb': mb.toStringAsFixed(1),
+            'rate': (seconds > 0 ? mb / seconds : 0).toStringAsFixed(1),
+          }) +
+          // A count that sits at zero means one of two very different things;
+          // the failure tally is what tells them apart at a glance.
+          (failed > 0
+              ? tf(context, 'mapdata.tiles.failing', <String, Object?>{
+                  'n': failed,
+                  'err': cache?.lastError ?? '',
+                })
+              : ''),
       _tilesTotal > 0 ? _tilesDone / _tilesTotal : null,
       onCancel: () => setState(() => _cancelCorridor = true),
     );
@@ -677,13 +689,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (!mounted) return;
     setState(() => _corridorRunning = false);
     _refreshTiles();
-    messenger.showSnackBar(SnackBar(
-      content: Text(report.blocked
-          ? t(context, 'mapdata.corridor.blocked')
-          : tf(context, 'mapdata.corridor.done', <String, Object?>{
-              'n': report.downloaded + report.skipped,
-            })),
-    ));
+    messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
   }
 
   /// Saves the picture of an area at every scale the map can show.
@@ -704,6 +710,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       _tilesTotal = tiles.length;
       _tilesBytes = 0;
       _tilesBytesAtStart = cache.bytesFetched;
+      _tilesFailedAtStart = cache.failures;
       _tilesClock = Stopwatch()..start();
     });
     final messenger = ScaffoldMessenger.of(context);
@@ -724,12 +731,20 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (!mounted) return;
     setState(() => _corridorRunning = false);
     _refreshTiles();
-    messenger.showSnackBar(SnackBar(
-      content: Text(report.blocked
-          ? t(context, 'mapdata.corridor.blocked')
-          : tf(context, 'mapdata.corridor.done',
-              <String, Object?>{'n': report.downloaded + report.skipped})),
-    ));
+    messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
+  }
+
+  /// What to say when a tile job ends — refused, given up on, or finished.
+  String _corridorMessage(CorridorReport report) {
+    if (report.blocked) return t(context, 'mapdata.corridor.blocked');
+    if (report.stalled) {
+      return tf(context, 'mapdata.corridor.stalled', <String, Object?>{
+        'n': report.downloaded + report.skipped,
+        'err': report.lastError ?? '',
+      });
+    }
+    return tf(context, 'mapdata.corridor.done',
+        <String, Object?>{'n': report.downloaded + report.skipped});
   }
 
   /// Asks the layer to re-read its tiles; cached ones then paint immediately.
