@@ -227,6 +227,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             tileProvider: CachedTileProvider(tiles),
             userAgentPackageName: 'com.aabridge.aa_bridge',
             maxNativeZoom: 19,
+            // OSM serves 256 px tiles at 1x; on a phone at 2.6x they are
+            // stretched and the labels turn to mush. There are no @2x tiles to
+            // ask for, so flutter_map's simulation is the way: fetch one zoom
+            // deeper and draw it at half size. Costs four times the tiles,
+            // buys a readable map.
+            retinaMode: RetinaMode.isHighDensity(context),
             errorImage: MemoryImage(kTransparentPng),
             evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
           ),
@@ -500,8 +506,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final route = _controller.route;
     final cache = MapData.instance.tiles;
     if (route == null || cache == null) return;
-    final tiles = corridorTiles(route.points,
-        maxTiles: NavSettings.instance.corridorMaxTiles);
+    // Retina simulation draws zoom z from tiles at z+1, so an offline corridor
+    // has to hold the zooms actually fetched or the saved area comes up blank.
+    final retina = RetinaMode.isHighDensity(context);
+    final tiles = corridorTiles(
+      route.points,
+      zooms: retina ? const <int>[17, 15] : const <int>[16, 14],
+      maxTiles: NavSettings.instance.corridorMaxTiles,
+    );
     setState(() {
       _corridorRunning = true;
       _cancelCorridor = false;
