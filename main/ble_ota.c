@@ -31,7 +31,7 @@
 #include "host/ble_hs_mbuf.h"
 #include "os/os_mbuf.h"
 
-#include "ble_central_arb.h"
+#include "ble_link_boost.h"
 #include "ota_screen.h"
 
 static const char *TAG = "ble_ota";
@@ -115,37 +115,18 @@ static void stage_free(void)
     s_total = s_recv = s_next_progress = 0;
 }
 
-/* Link tuning for the transfer (see the speed note in ble_ota.h).
- *
- * on:  ask the central for an 11.25–15 ms connection interval — the phone
- *      writes one DATA chunk per ATT round trip, so the interval is the
- *      throughput; Android's default is ~45 ms and it refuses < 11.25 ms.
- *      Also park the sensor-connect arbiter: with a bound sensor asleep it
- *      keeps an initiator scan running (NimBLE's default connect params scan
- *      at 100 % duty) that competes with this link for the radio.
- * off: back to a balanced 30–50 ms interval and let the arbiter resume. The
- *      update request is best-effort — the phone may ignore or override it
- *      (the app asks for high priority on its side too). */
+/* Link tuning for the transfer (see the speed note in ble_ota.h): ask the
+ * central for an 11.25-15 ms connection interval and park the sensor-connect
+ * arbiter, whose idle initiator scan otherwise shares the radio with this
+ * link for the whole transfer. Shared with the navigator frame path, which
+ * asks for the interval without parking the arbiter — see ble_link_boost.h. */
 static bool s_link_boosted;
 
 static void link_boost(bool on)
 {
     if (on == s_link_boosted) return;
     s_link_boosted = on;
-    if (on) ble_arb_scan_suspend();
-    else    ble_arb_scan_resume();
-
-    if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
-    struct ble_gap_upd_params p = {
-        .itvl_min            = on ? 9  : BLE_GAP_INITIAL_CONN_ITVL_MIN,   /* 11.25 ms : 30 ms */
-        .itvl_max            = on ? 12 : BLE_GAP_INITIAL_CONN_ITVL_MAX,   /* 15 ms    : 50 ms */
-        .latency             = 0,
-        .supervision_timeout = 400,    /* 4 s */
-        .min_ce_len          = 0,
-        .max_ce_len          = 0,
-    };
-    int rc = ble_gap_update_params(s_conn, &p);
-    if (rc != 0) ESP_LOGW(TAG, "conn param update (%s) rc=%d", on ? "fast" : "normal", rc);
+    ble_link_boost_request(s_conn, on, true);
 }
 
 /* ---- worker-task handlers (the only place notifies / flash happen) ---- */

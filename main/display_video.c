@@ -481,15 +481,16 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
     if (!s_panel || !s_ppa || !s_disp) return ESP_ERR_INVALID_STATE;
     if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
 
-    /* VESC dashboard owns the panel via LVGL — drop the frame and resume
-     * the LVGL worker if we'd previously paused it. The H.264 decoder keeps
-     * running (cheap to drop, expensive to tear down/restart), so frames
-     * are silently discarded until the user toggles back to AA. */
-    if (ui_mode_get() == UI_MODE_VESC) {
+    /* LVGL owns the panel — the VESC dashboard or the navigator picture is
+     * up — so drop the frame and resume the LVGL worker if we'd previously
+     * paused it. The H.264 decoder keeps running (cheap to drop, expensive
+     * to tear down/restart), so frames are silently discarded until the user
+     * toggles back to AA. */
+    if (ui_mode_get() != UI_MODE_AA) {
         if (s_adapter_paused) {
             esp_lv_adapter_resume();
             s_adapter_paused = false;
-            ESP_LOGI(TAG, "VESC mode — resumed LVGL worker, frames dropped");
+            ESP_LOGI(TAG, "LVGL owns the panel — resumed its worker, frames dropped");
         }
         /* Reset the once-per-session pause gate so the next AA entry
          * gets one fresh attempt. */
@@ -1207,15 +1208,16 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
  * STAGE_SLOTS definition). Same output, same buffers, same PPA config — only
  * the PPA/HUD/draw half runs on core 0 concurrently with the next decode. */
 
-/* Shared with display_video_show_yuv420's VESC-mode / first-frame handling:
- * returns false when the frame must be dropped (LVGL owns the panel). */
+/* Shared with display_video_show_yuv420's LVGL-mode / first-frame handling:
+ * returns false when the frame must be dropped (LVGL owns the panel — the
+ * VESC dashboard or the navigator screen). */
 static bool take_panel_for_video(void)
 {
-    if (ui_mode_get() == UI_MODE_VESC) {
+    if (ui_mode_get() != UI_MODE_AA) {
         if (s_adapter_paused) {
             esp_lv_adapter_resume();
             s_adapter_paused = false;
-            ESP_LOGI(TAG, "VESC mode — resumed LVGL worker, frames dropped");
+            ESP_LOGI(TAG, "LVGL owns the panel — resumed its worker, frames dropped");
         }
         s_pause_attempted = false;
         /* Drop path does no blocking work; yield a tick so IDLE0 never

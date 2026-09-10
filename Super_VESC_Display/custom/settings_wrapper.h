@@ -115,6 +115,12 @@ void    settings_wrapper_set_splash_loops(uint8_t loops);
 bool settings_wrapper_get_display_flip(void);
 void settings_wrapper_set_display_flip(bool on);
 
+/* What the 3-finger gesture brings up from the dashboard: 0 = Android Auto,
+ * 1 = Navigator (the map the phone app streams over BLE). Only one of them
+ * can own the panel. */
+uint8_t settings_wrapper_get_phone_screen(void);
+void    settings_wrapper_set_phone_screen(uint8_t which);
+
 uint32_t settings_wrapper_get_clock_secs_of_day(void);
 void     settings_wrapper_set_clock_secs_of_day(uint32_t secs_of_day);
 

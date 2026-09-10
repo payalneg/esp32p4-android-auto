@@ -30,6 +30,8 @@ idf_component_register(
         "speed_sensor.c"
         "ble_ota.c"
         "ble_files.c"
+        "ble_nav.c"
+        "ble_link_boost.c"
         "notif_toast.c"
         "charge_prompt.c"
         "music_info_view.c"
@@ -51,6 +53,7 @@ idf_component_register(
         "vbat_routing.c"
         "files_screen.c"
         "splash_screen.c"
+        "nav_screen.c"
         "debug_uart_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES

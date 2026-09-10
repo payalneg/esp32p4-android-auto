@@ -9,6 +9,29 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### Navigator picture from the phone
+
+- The head unit can now show the companion app's navigator: the phone renders
+  the map — it has the route, the graph and the tiles — and streams what to
+  show as small JPEG frames over the existing Bluetooth link. Two new
+  characteristics on the NotifBridge service (`...000B` control, `...000C`
+  data) carry one frame at a time; the P4 decodes with its hardware JPEG
+  engine, scales to 800x480 with the PPA and shows the picture through a
+  single `lv_img`. The head unit draws no map of its own.
+- New on-device setting, **Settings -> Phone screen**: what the 3-finger hold
+  brings up from the dashboard, Android Auto (default) or Navigator. Only one
+  of them can own the panel, so it is one choice rather than two switches. An
+  Android Auto session is untouched in Navigator mode — its video is dropped
+  the same way it already is while the dashboard is up.
+- The phone is told when the navigator screen is and is not the live screen,
+  and sends nothing while it is not — a parked bike or a rider looking at the
+  dashboard costs no air time. Unchanged pictures are not re-sent either.
+- Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
+  without the 3-finger hold, and `navstat` reports the frame stream (mode,
+  frames accepted and rejected, last frame size and decode time).
+
 ## v1.3.17 / app 0.3.17 — 2026-09-09
 
 ### Waveshare microphone actually works

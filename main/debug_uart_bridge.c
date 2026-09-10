@@ -23,8 +23,12 @@
 
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
+#include "ble_nav.h"
+#include "esp_timer.h"
 #include "mic_capture.h"
+#include "nav_screen.h"
 #include "touch_input.h"
+#include "ui_mode.h"
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
 #include "misc/lv_ll.h"
@@ -432,6 +436,40 @@ static int cmd_mic(int argc, char **argv)
     return 0;
 }
 
+/* The 3-finger hold can't be injected through the touch override (it needs
+ * three simultaneous contacts the GT911 shim doesn't fake), so the bridge gets
+ * its own way into every full-screen mode. */
+static int cmd_uimode(int argc, char **argv)
+{
+    if (argc > 1) {
+        if      (strcmp(argv[1], "vesc") == 0)   ui_mode_set(UI_MODE_VESC);
+        else if (strcmp(argv[1], "aa") == 0)     ui_mode_set(UI_MODE_AA);
+        else if (strcmp(argv[1], "nav") == 0)    ui_mode_set(UI_MODE_NAV);
+        else if (strcmp(argv[1], "toggle") == 0) ui_mode_toggle();
+        else { printf("ERR: expected vesc|aa|nav|toggle\n"); return 1; }
+    }
+    printf("mode=%s\n", ui_mode_name(ui_mode_get()));
+    return 0;
+}
+
+static int cmd_navstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    ble_nav_stats_t st;
+    ble_nav_get_stats(&st);
+    const int64_t last = nav_screen_last_frame_us();
+    const int64_t age_ms = last ? (esp_timer_get_time() - last) / 1000 : -1;
+    printf("mode=%s live=%d streaming=%d\n", ui_mode_name(ui_mode_get()),
+           nav_screen_active() ? 1 : 0, st.streaming ? 1 : 0);
+    printf("frames ok=%u failed=%u shown=%u last_shown=%lld ms ago\n",
+           (unsigned)st.frames_ok, (unsigned)st.frames_failed,
+           (unsigned)nav_screen_frames_shown(), (long long)age_ms);
+    printf("last frame %ux%u %u B decode=%u ms ack=%u\n",
+           st.last_w, st.last_h, (unsigned)st.last_bytes,
+           (unsigned)st.last_decode_ms, st.last_ack);
+    return 0;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -455,6 +493,12 @@ static void register_cmds(void)
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+        { .command = "uimode",
+          .help = "Show or set the full-screen mode: vesc|aa|nav|toggle",
+          .hint = NULL, .func = cmd_uimode },
+        { .command = "navstat",
+          .help = "Navigator frame stream: mode, frames, last frame size/time",
+          .hint = NULL, .func = cmd_navstat },
         { .command = "mic",
           .help = "Capture the AA microphone for [seconds] (default 5) without a "
                   "phone; prints RMS/peak per second",
