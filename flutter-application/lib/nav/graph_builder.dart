@@ -31,6 +31,79 @@ class OsmWay {
   final List<int> nodeIds;
 }
 
+/// Where the builder looks up a node's position.
+///
+/// The two sources differ enormously in scale: an Overpass answer is a map of
+/// a few tens of thousands of nodes, while a provincial extract is millions —
+/// and a HashMap of those, each boxing a [LatLon], costs hundreds of megabytes
+/// on its own. So the PBF path passes sorted typed arrays instead and this
+/// hides the difference.
+abstract class NodeSource {
+  const NodeSource();
+
+  /// The node's position, or null when the extract did not contain it —
+  /// normal at the edges of a download, where ways run out of the area.
+  LatLon? operator [](int id);
+
+  /// How many ids this source can address densely, or 0 when it cannot.
+  ///
+  /// When it can, the builder counts junctions and numbers vertices in flat
+  /// arrays instead of hash maps — which is the difference between a province
+  /// fitting on a phone and not.
+  int get denseCount => 0;
+
+  /// Position of [id] in that dense space, or -1.
+  int indexOf(int id) => -1;
+}
+
+/// Straightforward lookup, for the tens of thousands an Overpass area holds.
+class MapNodeSource extends NodeSource {
+  const MapNodeSource(this.nodes);
+
+  final Map<int, LatLon> nodes;
+
+  @override
+  LatLon? operator [](int id) => nodes[id];
+}
+
+/// Sorted ids with parallel coordinates, for the millions a province holds.
+/// Costs 17 bytes per node against roughly a hundred for a map entry.
+class SortedNodeSource extends NodeSource {
+  const SortedNodeSource(this.ids, this.latE7, this.lonE7, this.seen);
+
+  final Int64List ids;
+  final Int32List latE7;
+  final Int32List lonE7;
+  final Uint8List seen;
+
+  @override
+  int get denseCount => ids.length;
+
+  @override
+  int indexOf(int id) {
+    var lo = 0;
+    var hi = ids.length - 1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      final v = ids[mid];
+      if (v == id) return mid;
+      if (v < id) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return -1;
+  }
+
+  @override
+  LatLon? operator [](int id) {
+    final at = indexOf(id);
+    if (at < 0 || seen[at] == 0) return null;
+    return LatLon(latE7[at] / 1e7, lonE7[at] / 1e7);
+  }
+}
+
 /// A place worth putting in the search index.
 class OsmPlace {
   const OsmPlace(this.display, this.kind, this.position);
@@ -57,48 +130,85 @@ class BuiltGraph {
 }
 
 class GraphBuilder {
-  /// [ways] in OSM order, [nodes] their coordinates by id, [places] optional.
+  /// [ways] in OSM order, [nodes] their coordinates, [places] optional.
   static BuiltGraph build({
     required List<OsmWay> ways,
-    required Map<int, LatLon> nodes,
+    required NodeSource nodes,
     List<OsmPlace> places = const <OsmPlace>[],
   }) {
     // A node shared by two ways is a junction. Way endpoints count twice so
     // they are always vertices — otherwise two ways meeting end to end would
     // silently merge into one edge.
-    final usage = <int, int>{};
-    for (final way in ways) {
-      for (final id in way.nodeIds) {
-        usage[id] = (usage[id] ?? 0) + 1;
-      }
-      if (way.nodeIds.isNotEmpty) {
-        usage[way.nodeIds.first] = (usage[way.nodeIds.first] ?? 0) + 1;
-        usage[way.nodeIds.last] = (usage[way.nodeIds.last] ?? 0) + 1;
+    //
+    // Only "one use or more than one" matters, so the counter saturates at 2
+    // and fits in a byte per node where the source can index densely.
+    final dense = nodes.denseCount;
+    final usageDense = dense > 0 ? Uint8List(dense) : null;
+    final usageMap = dense > 0 ? null : <int, int>{};
+    void countUse(int id) {
+      if (usageDense != null) {
+        final at = nodes.indexOf(id);
+        if (at >= 0 && usageDense[at] < 2) usageDense[at]++;
+      } else {
+        usageMap![id] = (usageMap[id] ?? 0) + 1;
       }
     }
 
-    final vertexOf = <int, int>{};
+    int useCount(int id) {
+      if (usageDense != null) {
+        final at = nodes.indexOf(id);
+        return at < 0 ? 0 : usageDense[at];
+      }
+      return usageMap![id] ?? 0;
+    }
+
+    for (final way in ways) {
+      for (final id in way.nodeIds) {
+        countUse(id);
+      }
+      if (way.nodeIds.isNotEmpty) {
+        countUse(way.nodeIds.first);
+        countUse(way.nodeIds.last);
+      }
+    }
+
+    final vertexDense = dense > 0 ? (Int32List(dense)..fillRange(0, dense, -1)) : null;
+    final vertexOf = dense > 0 ? null : <int, int>{};
     final vertexLat = <double>[];
     final vertexLon = <double>[];
-    int vertex(int id, LatLon at) => vertexOf.putIfAbsent(id, () {
-          vertexLat.add(at.lat);
-          vertexLon.add(at.lon);
-          return vertexLat.length - 1;
-        });
+    int vertex(int id, LatLon at) {
+      if (vertexDense != null) {
+        final slot = nodes.indexOf(id);
+        if (slot >= 0 && vertexDense[slot] >= 0) return vertexDense[slot];
+        vertexLat.add(at.lat);
+        vertexLon.add(at.lon);
+        final index = vertexLat.length - 1;
+        if (slot >= 0) vertexDense[slot] = index;
+        return index;
+      }
+      return vertexOf!.putIfAbsent(id, () {
+        vertexLat.add(at.lat);
+        vertexLon.add(at.lon);
+        return vertexLat.length - 1;
+      });
+    }
 
     final edges = <_Edge>[];
     for (final way in ways) {
       if (way.nodeIds.length < 2) continue;
-      // Skip ways whose geometry Overpass did not deliver in full.
-      if (way.nodeIds.any((id) => !nodes.containsKey(id))) continue;
+      // Skip ways whose geometry did not arrive in full — normal at the edge
+      // of any extract, where a road runs out of the downloaded area.
+      final first = nodes[way.nodeIds.first];
+      if (first == null) continue;
+      if (way.nodeIds.any((id) => nodes[id] == null)) continue;
 
       var segIds = <int>[way.nodeIds.first];
-      var segPts = <LatLon>[nodes[way.nodeIds.first]!];
+      var segPts = <LatLon>[first];
       for (var i = 1; i < way.nodeIds.length; i++) {
         final id = way.nodeIds[i];
         segIds.add(id);
         segPts.add(nodes[id]!);
-        final isJunction = (usage[id] ?? 0) >= 2;
+        final isJunction = useCount(id) >= 2;
         if (!isJunction && i != way.nodeIds.length - 1) continue;
 
         var pts = segPts;

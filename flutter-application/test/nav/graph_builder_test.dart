@@ -135,7 +135,7 @@ void main() {
               direction: WayDirection.both,
               nodeIds: const <int>[2, 4]),
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
       );
       // 1-2, 2-3 and 2-4: the through street is split at the crossing.
       expect(built.edgeCount, 3);
@@ -158,7 +158,7 @@ void main() {
               direction: WayDirection.both,
               nodeIds: const <int>[1, 2, 3]),
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
       );
       expect(built.nodeCount, 2, reason: 'only the two ends');
       expect(built.edgeCount, 1);
@@ -174,7 +174,7 @@ void main() {
               direction: WayDirection.forward,
               nodeIds: const <int>[1, 2]),
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
       );
       expect(RouteGraph.parse(forward.graphBytes).edgeFlags[0] & kFlagBidir, 0);
 
@@ -185,7 +185,7 @@ void main() {
               direction: WayDirection.backward,
               nodeIds: const <int>[1, 2]),
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
       );
       final g = RouteGraph.parse(backward.graphBytes);
       // Reversed: the edge now starts at node 2, which sits further east.
@@ -209,11 +209,11 @@ void main() {
               direction: WayDirection.both,
               nodeIds: const <int>[10, 11]),
         ],
-        nodes: <int, LatLon>{
+        nodes: MapNodeSource(<int, LatLon>{
           ...nodes,
           10: const LatLon(51.0, 21.0),
           11: const LatLon(51.001, 21.0),
-        },
+        }),
       );
       expect(built.edgeCount, 2);
       expect(built.nodeCount, 3);
@@ -231,14 +231,14 @@ void main() {
               direction: WayDirection.both,
               nodeIds: const <int>[2, 999]), // 999 was clipped by the bbox
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
       );
       expect(built.edgeCount, 1);
     });
 
     test('an empty area builds an empty graph rather than throwing', () {
       final built =
-          GraphBuilder.build(ways: const <OsmWay>[], nodes: <int, LatLon>{});
+          GraphBuilder.build(ways: const <OsmWay>[], nodes: MapNodeSource(<int, LatLon>{}));
       expect(built.edgeCount, 0);
       expect(built.nodeCount, 0);
       expect(RouteGraph.parse(built.graphBytes).edgeCount, 0);
@@ -252,7 +252,7 @@ void main() {
               direction: WayDirection.both,
               nodeIds: const <int>[1, 2]),
         ],
-        nodes: nodes,
+        nodes: MapNodeSource(nodes),
         places: <OsmPlace>[
           const OsmPlace('Floriańska 12', 'address', LatLon(50.0, 20.0)),
           const OsmPlace('Kawiarnia Florian', 'cafe', LatLon(50.001, 20.001)),

@@ -146,7 +146,7 @@ class MapData extends ChangeNotifier {
       _set(MapDataState.loading);
       final built = await Isolate.run(() => GraphBuilder.build(
             ways: result.ways,
-            nodes: result.nodes,
+            nodes: MapNodeSource(result.nodes),
             places: result.places,
           ));
       if (built.edgeCount == 0) {

@@ -36,7 +36,9 @@ void main() {
     final parsed = OverpassClient.parse(body, body.length);
     final afterParse = sw.elapsedMilliseconds;
     built = GraphBuilder.build(
-        ways: parsed.ways, nodes: parsed.nodes, places: parsed.places);
+        ways: parsed.ways,
+        nodes: MapNodeSource(parsed.nodes),
+        places: parsed.places);
     // ignore: avoid_print
     print('parsed ${(body.length / (1 << 20)).toStringAsFixed(1)} MB in '
         '$afterParse ms, built in ${sw.elapsedMilliseconds - afterParse} ms: '

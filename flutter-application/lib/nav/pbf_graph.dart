@@ -32,8 +32,12 @@ class PbfGraphSource {
     final file = PbfFile(path);
 
     // Pass one: every routable way, and the ids of the nodes it uses.
+    //
+    // The ids go straight into a typed buffer that grows in place. A province
+    // names on the order of ten million of them, and collecting into a plain
+    // List only to copy it into an Int64List would hold both at once.
     final ways = <OsmWay>[];
-    final needed = <int>[];
+    final needed = _IdBuffer();
     await file.forEachBlock(
       (block) {
         for (final group in block.groups) {
@@ -46,12 +50,13 @@ class PbfGraphSource {
     );
     if (cancelled?.call() ?? false) return _cancelledResult();
 
-    // A sorted id list plus a parallel coordinate array: a province's road
+    // A sorted id list plus parallel coordinate arrays: a province's road
     // network is millions of nodes, and a HashMap of them would not fit.
-    final ids = Int64List.fromList(needed)..sort();
-    final unique = _dedupe(ids);
-    final lat = Float64List(unique.length);
-    final lon = Float64List(unique.length);
+    // Coordinates are kept as the same 1e-7 integers the graph file stores,
+    // which halves what doubles would cost.
+    final unique = _dedupe(needed.sorted());
+    final latE7 = Int32List(unique.length);
+    final lonE7 = Int32List(unique.length);
     final seen = Uint8List(unique.length);
 
     // Pass two: the coordinates of exactly those nodes, plus named places.
@@ -59,7 +64,7 @@ class PbfGraphSource {
     await file.forEachBlock(
       (block) {
         for (final group in block.groups) {
-          _readNodes(block, group, unique, lat, lon, seen, places);
+          _readNodes(block, group, unique, latE7, lonE7, seen, places);
         }
       },
       onProgress: (read, total) => onProgress
@@ -68,11 +73,11 @@ class PbfGraphSource {
     );
 
     onProgress?.call(const PbfProgress('mapdata.pbf.graph', 0.98));
-    final nodes = <int, LatLon>{};
-    for (var i = 0; i < unique.length; i++) {
-      if (seen[i] != 0) nodes[unique[i]] = LatLon(lat[i], lon[i]);
-    }
-    return GraphBuilder.build(ways: ways, nodes: nodes, places: places);
+    return GraphBuilder.build(
+      ways: ways,
+      nodes: SortedNodeSource(unique, latE7, lonE7, seen),
+      places: places,
+    );
   }
 
   /// Same work, off the calling isolate.
@@ -106,7 +111,7 @@ class PbfGraphSource {
   }
 
   static void _readWays(PrimitiveBlock block, Uint8List group,
-      List<OsmWay> ways, List<int> needed) {
+      List<OsmWay> ways, _IdBuffer needed) {
     final r = ProtoReader(group);
     while (!r.isDone) {
       final (field, wire) = r.readTag();
@@ -120,7 +125,7 @@ class PbfGraphSource {
   }
 
   static void _readWay(PrimitiveBlock block, Uint8List bytes,
-      List<OsmWay> ways, List<int> needed) {
+      List<OsmWay> ways, _IdBuffer needed) {
     final r = ProtoReader(bytes);
     final keys = <int>[];
     final vals = <int>[];
@@ -169,8 +174,8 @@ class PbfGraphSource {
     PrimitiveBlock block,
     Uint8List group,
     Int64List wanted,
-    Float64List lat,
-    Float64List lon,
+    Int32List latE7,
+    Int32List lonE7,
     Uint8List seen,
     List<OsmPlace> places,
   ) {
@@ -178,7 +183,8 @@ class PbfGraphSource {
     while (!r.isDone) {
       final (field, wire) = r.readTag();
       if (field == 2) {
-        _readDenseNodes(block, r.readBytes(), wanted, lat, lon, seen, places);
+        _readDenseNodes(block, r.readBytes(), wanted, latE7, lonE7, seen,
+            places);
       } else {
         r.skip(wire);
       }
@@ -191,8 +197,8 @@ class PbfGraphSource {
     PrimitiveBlock block,
     Uint8List bytes,
     Int64List wanted,
-    Float64List lat,
-    Float64List lon,
+    Int32List latE7,
+    Int32List lonE7,
     Uint8List seen,
     List<OsmPlace> places,
   ) {
@@ -253,8 +259,8 @@ class PbfGraphSource {
       final lonDeg = block.lon(lons[i]);
       final index = _indexOf(wanted, ids[i]);
       if (index >= 0) {
-        lat[index] = latDeg;
-        lon[index] = lonDeg;
+        latE7[index] = (latDeg * 1e7).round();
+        lonE7[index] = (lonDeg * 1e7).round();
         seen[index] = 1;
       }
       if (tags != null) {
@@ -274,3 +280,30 @@ BuiltGraph _cancelledResult() => BuiltGraph(
       edgeCount: 0,
       placeCount: 0,
     );
+
+/// A growable Int64List. Dart has no such thing, and a plain List of ten
+/// million ids costs the same memory twice the moment it is copied into a
+/// typed list to be sorted.
+class _IdBuffer {
+  Int64List _data = Int64List(1 << 16);
+  int _length = 0;
+
+  void addAll(List<int> values) {
+    if (_length + values.length > _data.length) {
+      var capacity = _data.length;
+      while (capacity < _length + values.length) {
+        capacity *= 2;
+      }
+      _data = Int64List(capacity)..setRange(0, _length, _data);
+    }
+    _data.setRange(_length, _length + values.length, values);
+    _length += values.length;
+  }
+
+  /// The ids, sorted in place. The buffer must not be used afterwards.
+  Int64List sorted() {
+    final view = Int64List.sublistView(_data, 0, _length);
+    view.sort();
+    return view;
+  }
+}
