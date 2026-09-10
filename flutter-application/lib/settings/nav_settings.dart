@@ -22,7 +22,9 @@ class NavSettings extends ChangeNotifier {
   static const _kTileBudget = 'nav_tile_budget_v1';
   static const _kLastView = 'nav_last_view_v1';
   static const _kVoice = 'nav_voice_v1';
+  static const _kHaptics = 'nav_haptics_v1';
   static const _kTrackUp = 'nav_track_up_v1';
+  static const _kSimulator = 'nav_simulator_v1';
 
   RideProfile _profile = kDefaultProfile;
   int _tileCapMb = 300;
@@ -40,11 +42,19 @@ class NavSettings extends ChangeNotifier {
   int _tileBudget = 3000;
   String _lastView = '';
 
-  /// Spoken turn instructions while navigating.
-  bool _voice = true;
+  /// Spoken turn instructions while navigating. Off unless asked for: the
+  /// phone is not what the rider looks at or listens to — the head unit is.
+  bool _voice = false;
+
+  /// A buzz before each turn. Off by default, same reasoning.
+  bool _haptics = false;
 
   /// Rotate the map so the direction of travel is up while navigating.
   bool _trackUp = true;
+
+  /// Show the ▶ button that rides the route without a GPS. A developer's
+  /// tool; hidden unless switched on.
+  bool _simulator = false;
   bool _loaded = false;
 
   RideProfile get profile => _profile;
@@ -53,7 +63,9 @@ class NavSettings extends ChangeNotifier {
   double get areaRadiusKm => _areaRadiusKm;
   int get tileBudget => _tileBudget;
   bool get voice => _voice;
+  bool get haptics => _haptics;
   bool get trackUp => _trackUp;
+  bool get simulator => _simulator;
   bool get loaded => _loaded;
 
   /// Last map position as `lat,lon,zoom`, or null if never saved.
@@ -75,8 +87,10 @@ class NavSettings extends ChangeNotifier {
     _areaRadiusKm = p.getDouble(_kAreaRadiusKm) ?? 2;
     _tileBudget = p.getInt(_kTileBudget) ?? 3000;
     _lastView = p.getString(_kLastView) ?? '';
-    _voice = p.getBool(_kVoice) ?? true;
+    _voice = p.getBool(_kVoice) ?? false;
+    _haptics = p.getBool(_kHaptics) ?? false;
     _trackUp = p.getBool(_kTrackUp) ?? true;
+    _simulator = p.getBool(_kSimulator) ?? false;
     _loaded = true;
     notifyListeners();
   }
@@ -129,12 +143,28 @@ class NavSettings extends ChangeNotifier {
     await p.setBool(_kVoice, value);
   }
 
+  Future<void> setHaptics(bool value) async {
+    if (value == _haptics) return;
+    _haptics = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kHaptics, value);
+  }
+
   Future<void> setTrackUp(bool value) async {
     if (value == _trackUp) return;
     _trackUp = value;
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kTrackUp, value);
+  }
+
+  Future<void> setSimulator(bool value) async {
+    if (value == _simulator) return;
+    _simulator = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kSimulator, value);
   }
 
   /// Saved on every meaningful camera move; not a notifying change, since

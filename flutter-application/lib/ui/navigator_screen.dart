@@ -13,14 +13,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../bridge/nav_intent_bridge.dart';
 import '../bridge/screen_bridge.dart';
 import '../i18n/strings.dart';
 import '../nav/announcer.dart';
 import '../nav/geo.dart';
+import '../nav/link_resolver.dart';
 import '../nav/location_service.dart';
 import '../nav/map_data.dart';
 import '../nav/nav_camera.dart';
 import '../nav/nav_controller.dart';
+import '../nav/nav_link.dart';
+import '../nav/router.dart';
 import '../nav/voice.dart';
 import '../nav/search_index.dart';
 import '../nav/tile_cache.dart';
@@ -44,6 +48,11 @@ const String kOsmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 /// and covers the ground around it, so zooming out does not hit holes.
 const int kSharpZoom = 19;
 const int kContextZoom = 17;
+
+/// What the navigating camera shows at speed (zoom 16.5–17 → tiles at 18):
+/// the level a whole route is kept at, so the ride never runs off the map,
+/// with 19 layered on top from the start for as far as the budget goes.
+const int kRouteZoom = 18;
 
 /// How far around the rider each of those reaches. The sharp level is kept
 /// tight on purpose: at zoom 19 a tile is about 50 m across, so a wide radius
@@ -69,6 +78,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   final _camera = NavCamera();
   final Voice _voice = TtsVoice();
   StreamSubscription<Announcement>? _announceSub;
+  StreamSubscription<String>? _linkSub;
+
+  /// A map link that arrived before the routing graph was loaded.
+  NavLink? _pendingLink;
 
   /// Whether we hold FLAG_KEEP_SCREEN_ON; follows [NavController.navigating].
   bool _screenPinned = false;
@@ -81,6 +94,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   Object? _lineSource;
   bool _corridorRunning = false;
   bool _cancelCorridor = false;
+
+  /// The running tile job, so a newer one can wait for — or cancel — it.
+  Future<void>? _corridorJob;
+
+  /// True while the running job is an automatic route prefetch, which a new
+  /// route may cancel; a download the rider started is left to finish.
+  bool _autoCorridor = false;
+  RouteResult? _prefetchedRoute;
   int _tilesDone = 0;
   int _tilesTotal = 0;
   int _tilesBytes = 0;
@@ -103,10 +124,17 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     super.initState();
     _controller.addListener(_onControllerChanged);
     _announceSub = _controller.announcements.listen(_onAnnouncement);
+    _linkSub = NavIntentBridge.incoming.listen(_openLink);
+    MapData.instance.addListener(_onMapDataChanged);
+    unawaited(NavIntentBridge.initial().then((payload) {
+      if (payload != null && mounted) _openLink(payload);
+    }));
   }
 
   @override
   void dispose() {
+    MapData.instance.removeListener(_onMapDataChanged);
+    _linkSub?.cancel();
     _announceSub?.cancel();
     unawaited(_voice.stop());
     if (_screenPinned) unawaited(ScreenBridge.keepOn(false));
@@ -133,6 +161,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       if (_routeLine.isNotEmpty && !_controller.navigating) {
         _fitRoute(_routeLine);
       }
+      if (route != null) unawaited(_prefetchRoute(route));
     }
     final fix = _controller.lastFix;
     if (fix != null) {
@@ -150,6 +179,95 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     setState(() {});
   }
 
+  /// A link held back for want of a graph is acted on once there is one.
+  void _onMapDataChanged() {
+    final link = _pendingLink;
+    if (link == null || !MapData.instance.isReady) return;
+    _pendingLink = null;
+    unawaited(_actOnLink(link));
+  }
+
+  /// Another app handed us a place — show it, route to it, or go, whichever
+  /// the sender asked for.
+  void _openLink(String payload) {
+    final link = parseNavText(payload);
+    if (link == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(t(context, 'nav.link.bad'))));
+      return;
+    }
+    if (!MapData.instance.isReady) {
+      _pendingLink = link; // routing and search both need the data
+      return;
+    }
+    unawaited(_actOnLink(link));
+  }
+
+  Future<void> _actOnLink(NavLink link) async {
+    final short = link.expand;
+    if (short != null) {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 10),
+          content: Text(t(context, 'nav.link.resolving'))));
+      final full = await expandShortLink(short);
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      final resolved = full == null ? null : parseMapUrl(full);
+      if (resolved == null || resolved.expand != null) {
+        messenger.showSnackBar(
+            SnackBar(content: Text(t(context, 'nav.link.bad'))));
+        return;
+      }
+      return _actOnLink(resolved);
+    }
+    var point = link.point;
+    var display = point == null ? '' : formatCoordinates(point);
+    final query = link.query;
+    if (point == null && query != null) {
+      final hit = MapData.instance.index?.search(query).firstOrNull;
+      if (hit == null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tf(context, 'nav.link.notFound',
+                <String, Object?>{'q': query}))));
+        return;
+      }
+      point = hit.position;
+      display = hit.display;
+    }
+    if (point == null) return;
+    if (link.intent != LinkIntent.show) {
+      // A route needs a start. Bring the position up first — the cached fix
+      // lands within the frame — instead of asking the rider to tap one.
+      if (await _ensureGps()) await _awaitFix(const Duration(seconds: 3));
+      if (!mounted) return;
+    }
+    switch (link.intent) {
+      case LinkIntent.navigate:
+        await _controller.routeTo(point);
+        if (_controller.hasRoute) await _startNavigation();
+      case LinkIntent.route:
+        await _controller.routeTo(point);
+      case LinkIntent.show:
+        _map.move(LatLng(point.lat, point.lon), 16);
+        await _offerDestination(
+            SearchHit(display, t(context, 'nav.link.kind'), point));
+    }
+  }
+
+  /// Resolves once a position is known, or after [limit] without one.
+  Future<void> _awaitFix(Duration limit) {
+    if (_controller.lastFix != null) return Future<void>.value();
+    final done = Completer<void>();
+    void check() {
+      if (_controller.lastFix != null && !done.isCompleted) done.complete();
+    }
+    _controller.addListener(check);
+    return done.future.timeout(limit, onTimeout: () {}).whenComplete(() {
+      _controller.removeListener(check);
+    });
+  }
+
   /// Keeps the rider in view. Plain recentring when merely following;
   /// while navigating, the full pose — heading up, ahead-biased, zoom by
   /// speed and by how close the next turn is.
@@ -165,19 +283,22 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         LatLng(pose.center.lat, pose.center.lon), pose.zoom, pose.rotationDeg);
   }
 
-  /// A turn coming up is felt as well as heard, and heard only if wanted.
+  /// A turn coming up is felt and heard — each only if switched on.
   Future<void> _onAnnouncement(Announcement a) async {
-    switch (a.kind) {
-      case AnnouncementKind.now:
-      case AnnouncementKind.arrived:
-        unawaited(HapticFeedback.heavyImpact());
-      case AnnouncementKind.prepare:
-      case AnnouncementKind.arriveSoon:
-        unawaited(HapticFeedback.mediumImpact());
-      case AnnouncementKind.rerouting:
-        unawaited(HapticFeedback.vibrate());
+    final prefs = NavSettings.instance;
+    if (prefs.haptics) {
+      switch (a.kind) {
+        case AnnouncementKind.now:
+        case AnnouncementKind.arrived:
+          unawaited(HapticFeedback.heavyImpact());
+        case AnnouncementKind.prepare:
+        case AnnouncementKind.arriveSoon:
+          unawaited(HapticFeedback.mediumImpact());
+        case AnnouncementKind.rerouting:
+          unawaited(HapticFeedback.vibrate());
+      }
     }
-    if (!mounted || !NavSettings.instance.voice) return;
+    if (!mounted || !prefs.voice) return;
     final text = _phrase(a);
     final lang = LocaleScope.of(context).locale.languageCode == 'ru'
         ? 'ru-RU'
@@ -261,8 +382,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                             builder: (_) => const SettingsScreen()));
                   case 'voice':
                     NavSettings.instance.setVoice(!NavSettings.instance.voice);
+                  case 'haptics':
+                    NavSettings.instance
+                        .setHaptics(!NavSettings.instance.haptics);
                   case 'trackUp':
                     _controller.setTrackUp(!_controller.trackUp);
+                  case 'simulator':
+                    NavSettings.instance
+                        .setSimulator(!NavSettings.instance.simulator);
                 }
               },
               itemBuilder: (ctx) => <PopupMenuEntry<String>>[
@@ -272,9 +399,19 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                   child: Text(t(ctx, 'nav.voice')),
                 ),
                 CheckedPopupMenuItem<String>(
+                  value: 'haptics',
+                  checked: NavSettings.instance.haptics,
+                  child: Text(t(ctx, 'nav.haptics')),
+                ),
+                CheckedPopupMenuItem<String>(
                   value: 'trackUp',
                   checked: _controller.trackUp,
                   child: Text(t(ctx, 'nav.trackUp')),
+                ),
+                CheckedPopupMenuItem<String>(
+                  value: 'simulator',
+                  checked: NavSettings.instance.simulator,
+                  child: Text(t(ctx, 'nav.simulator')),
                 ),
                 const PopupMenuDivider(),
                 PopupMenuItem<String>(
@@ -345,8 +482,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             if (MapData.instance.state == MapDataState.downloading ||
                 MapData.instance.state == MapDataState.loading)
               _busyOverlay(context)
-            else if (_corridorRunning)
-              _tilesOverlay(context),
+            // Below the turn plate when there is one; never over it mid-ride.
+            else if (_corridorRunning && !_controller.navigating)
+              _tilesOverlay(context,
+                  top: _controller.guidance != null && _controller.hasRoute
+                      ? 92
+                      : 12),
           ],
         ),
       ),
@@ -368,6 +509,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         maxZoom: 19,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
         onTap: (_, p) => _controller.onMapTap(LatLon(p.latitude, p.longitude)),
+        // Press and hold anywhere: the same choices a search result gets.
+        onLongPress: (_, p) => _offerPoint(LatLon(p.latitude, p.longitude)),
         onPositionChanged: (camera, hasGesture) {
           if (hasGesture && _controller.follow) _controller.setFollow(false);
           unawaited(NavSettings.instance.saveLastView(
@@ -462,18 +605,25 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// Tiles are the long half of a download — thousands of them for a city at
   /// every scale — so they get a count, a bar and a way out, not a spinner
   /// that says nothing.
-  Widget _tilesOverlay(BuildContext context) {
+  Widget _tilesOverlay(BuildContext context, {double top = 12}) {
     final mb = _tilesBytes / (1 << 20);
     final seconds = (_tilesClock?.elapsedMilliseconds ?? 0) / 1000;
     final cache = MapData.instance.tiles;
     final failed = (cache?.failures ?? 0) - _tilesFailedAtStart;
+    // Tiles come in at tens of kilobytes a second; in MB/s that reads 0.0.
+    final mbps = seconds > 0 ? mb / seconds : 0.0;
+    final rate = mbps >= 0.1
+        ? tf(context, 'mapdata.tiles.rateMb',
+            <String, Object?>{'n': mbps.toStringAsFixed(1)})
+        : tf(context, 'mapdata.tiles.rateKb',
+            <String, Object?>{'n': (mbps * 1024).round()});
     return _statusCard(
       context,
       tf(context, 'mapdata.tiles.progress', <String, Object?>{
             'done': _tilesDone,
             'total': _tilesTotal,
             'mb': mb.toStringAsFixed(1),
-            'rate': (seconds > 0 ? mb / seconds : 0).toStringAsFixed(1),
+            'rate': rate,
           }) +
           // A count that sits at zero means one of two very different things;
           // the failure tally is what tells them apart at a glance.
@@ -485,13 +635,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               : ''),
       _tilesTotal > 0 ? _tilesDone / _tilesTotal : null,
       onCancel: () => setState(() => _cancelCorridor = true),
+      top: top,
     );
   }
 
   Widget _statusCard(BuildContext context, String text, double? progress,
-      {VoidCallback? onCancel}) {
+      {VoidCallback? onCancel, double top = 12}) {
     return Positioned(
-      top: 12,
+      top: top,
       left: 12,
       right: 12,
       child: Card(
@@ -615,17 +766,20 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           ),
         ],
         if (hasRoute) ...<Widget>[
-          const SizedBox(height: 8),
-          FloatingActionButton.small(
-            heroTag: 'nav-sim',
-            tooltip: t(context,
-                _controller.simulating ? 'nav.sim.stop' : 'nav.sim.start'),
-            onPressed: () => _controller.simulating
-                ? _controller.stopSim()
-                : _controller.startSim(),
-            child: Icon(
-                _controller.simulating ? Icons.stop : Icons.play_arrow),
-          ),
+          // A developer's ride-along; off the screen unless asked for.
+          if (NavSettings.instance.simulator || _controller.simulating) ...<Widget>[
+            const SizedBox(height: 8),
+            FloatingActionButton.small(
+              heroTag: 'nav-sim',
+              tooltip: t(context,
+                  _controller.simulating ? 'nav.sim.stop' : 'nav.sim.start'),
+              onPressed: () => _controller.simulating
+                  ? _controller.stopSim()
+                  : _controller.startSim(),
+              child: Icon(
+                  _controller.simulating ? Icons.stop : Icons.play_arrow),
+            ),
+          ],
           if (!navigating) ...<Widget>[
             const SizedBox(height: 8),
             FloatingActionButton.small(
@@ -717,6 +871,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     await _offerDestination(hit);
   }
 
+  /// A spot on the map, held down.
+  Future<void> _offerPoint(LatLon p) => _offerDestination(
+      SearchHit(formatCoordinates(p), t(context, 'nav.search.coordinates'), p));
+
   Future<void> _offerDestination(SearchHit hit) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -762,7 +920,29 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// Three places matter and they are not the same place: where you are now,
   /// the line you will follow, and the streets around the destination where
   /// you will be looking for a door.
-  Future<void> _saveOffline() async {
+  Future<void> _saveOffline({bool quiet = false}) =>
+      _corridorJob = _runSaveOffline(quiet: quiet);
+
+  /// Tiles along a new route, fetched as soon as it exists — quietly, behind
+  /// the map's own requests — so the ride survives a dead patch of signal
+  /// without anyone remembering to press "save". A route that is replaced
+  /// (a reroute, a new destination) cancels the download for the old one; a
+  /// download the rider started themselves is left to finish first.
+  Future<void> _prefetchRoute(RouteResult route) async {
+    if (identical(_prefetchedRoute, route)) return;
+    _prefetchedRoute = route;
+    if (_corridorRunning && _autoCorridor) _cancelCorridor = true;
+    await _corridorJob;
+    if (!mounted || !identical(_prefetchedRoute, route)) return; // superseded
+    _autoCorridor = true;
+    try {
+      await _saveOffline(quiet: true);
+    } finally {
+      _autoCorridor = false;
+    }
+  }
+
+  Future<void> _runSaveOffline({required bool quiet}) async {
     final cache = MapData.instance.tiles;
     if (cache == null) return;
     final route = _controller.route;
@@ -777,15 +957,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       }
     }
 
-    // Nearest first, so a capped download still covers the ground underfoot.
+    // Order is what survives the cap. The whole route at the riding zoom
+    // first — cheap, and it means the map never runs out under the line —
+    // then full detail: where you stand, then along the route from its
+    // start, then the far end where you will be looking for a door.
+    if (route != null) {
+      add(corridorTiles(route.points,
+          zooms: const <int>[kRouteZoom], maxTiles: 1 << 20));
+    }
     if (here != null) {
       add(tilesAround(here,
-          radiusM: kSharpRadiusM,
-          zooms: const <int>[kSharpZoom],
-          maxTiles: 1 << 20));
-    }
-    if (finish != null) {
-      add(tilesAround(finish,
           radiusM: kSharpRadiusM,
           zooms: const <int>[kSharpZoom],
           maxTiles: 1 << 20));
@@ -793,6 +974,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (route != null) {
       add(corridorTiles(route.points,
           zooms: const <int>[kSharpZoom], maxTiles: 1 << 20));
+    }
+    if (finish != null) {
+      add(tilesAround(finish,
+          radiusM: kSharpRadiusM,
+          zooms: const <int>[kSharpZoom],
+          maxTiles: 1 << 20));
     }
     // Context last: it is the part worth dropping when the cap bites.
     for (final centre in <LatLon?>[here, finish]) {
@@ -802,13 +989,11 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           zooms: const <int>[kContextZoom],
           maxTiles: 1 << 20));
     }
-    if (route != null) {
-      add(corridorTiles(route.points,
-          zooms: const <int>[kContextZoom], maxTiles: 1 << 20));
-    }
     if (wanted.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(t(context, 'mapdata.corridor.needRoute'))));
+      if (!quiet) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(t(context, 'mapdata.corridor.needRoute'))));
+      }
       return;
     }
 
@@ -817,6 +1002,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     setState(() {
       _corridorRunning = true;
       _cancelCorridor = false;
+      _tilesDone = 0;
+      _tilesTotal = tiles.length;
+      _tilesBytes = 0;
+      _tilesBytesAtStart = cache.bytesFetched;
+      _tilesFailedAtStart = cache.failures;
+      _tilesClock = Stopwatch()..start();
     });
     final messenger = ScaffoldMessenger.of(context);
     final report = await cache.downloadCorridor(
@@ -824,20 +1015,23 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       _tileUrls,
       onProgress: (done, total) {
         _refreshTilesEvery(done, total);
-        if (!mounted || done % 25 != 0) return;
-        messenger.showSnackBar(SnackBar(
-          duration: const Duration(seconds: 2),
-          content: Text(tf(context, 'mapdata.corridor.progress',
-              <String, Object?>{'done': done, 'total': total})),
-        ));
+        if (!mounted) return;
+        setState(() {
+          _tilesDone = done;
+          _tilesBytes = cache.bytesFetched - _tilesBytesAtStart;
+        });
       },
-      cancelled: () => _cancelCorridor,
+      cancelled: () => _cancelCorridor || !mounted,
     );
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
     setState(() => _corridorRunning = false);
     _refreshTiles();
-    messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
+    // Quiet means quiet — except a refusal from the tile server, which the
+    // rider should know about whoever started the download.
+    if (!quiet || report.blocked) {
+      messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
+    }
   }
 
   /// Saves the picture of an area at every scale the map can show.
@@ -846,7 +1040,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// zooming in to read a house number, so this is a pyramid: coarse levels
   /// first — nearly free, and what keeps the map legible if the tile budget
   /// cuts the download short — then finer ones, outwards from the middle.
-  Future<void> _saveAreaTiles(LatLon centre, double radiusM) async {
+  Future<void> _saveAreaTiles(LatLon centre, double radiusM) =>
+      _corridorJob = _runSaveAreaTiles(centre, radiusM);
+
+  Future<void> _runSaveAreaTiles(LatLon centre, double radiusM) async {
     final cache = MapData.instance.tiles;
     if (cache == null) return;
     final tiles = areaPyramid(centre,
