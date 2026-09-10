@@ -31,6 +31,10 @@ class GeoFix {
 
 enum LocationStatus { ok, serviceOff, denied, deniedForever }
 
+/// A cached position older than this is somewhere you were, not where you
+/// are; it is not shown.
+const Duration kLastKnownMaxAge = Duration(minutes: 10);
+
 class LocationService {
   /// Asks for what it needs, once. Returns why it cannot proceed, so the UI
   /// can offer the right remedy — the system location toggle and the app's
@@ -55,17 +59,36 @@ class LocationService {
     }
   }
 
-  Stream<GeoFix> fixes() => Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-          distanceFilter: 2, // metres; a stationary phone stops emitting
-        ),
-      ).map((p) => GeoFix(
-            position: LatLon(p.latitude, p.longitude),
-            speedMs: p.speed,
-            headingDeg: p.heading,
-            accuracyM: p.accuracy,
-          ));
+  /// Positions, starting with whatever the platform already knows.
+  ///
+  /// The first live fix can take a while — indoors, for ever — and until it
+  /// came the map had no dot and the rider was told to wait. A recent cached
+  /// position is good enough to draw, to route from and to start guiding;
+  /// the live feed corrects it as soon as it has something better.
+  Stream<GeoFix> fixes() async* {
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null &&
+          DateTime.now().difference(last.timestamp) < kLastKnownMaxAge) {
+        yield _toFix(last);
+      }
+    } on Object {
+      // Nothing cached yet — the normal first run; the live feed follows.
+    }
+    yield* Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 2, // metres; a stationary phone stops emitting
+      ),
+    ).map(_toFix);
+  }
+
+  static GeoFix _toFix(Position p) => GeoFix(
+        position: LatLon(p.latitude, p.longitude),
+        speedMs: p.speed,
+        headingDeg: p.heading,
+        accuracyM: p.accuracy,
+      );
 
   Future<void> openSystemSettings(LocationStatus status) async {
     if (status == LocationStatus.serviceOff) {

@@ -72,6 +72,34 @@ String normalizeQuery(String s) {
   return buffer.toString();
 }
 
+/// "50.0619, 19.9368" typed or pasted into the search box, as a position.
+///
+/// Decimal degrees, latitude first — what every map app puts on the
+/// clipboard. Accepts a comma, semicolon or space between the two, and
+/// decimal commas when there is a space between the pair ("50,0619 19,9368").
+LatLon? parseCoordinates(String text) {
+  var s = text.trim().replaceAll(';', ' ');
+  final commas = s.split(',').length - 1;
+  if (commas == 1) {
+    s = s.replaceAll(',', ' '); // separator
+  } else if (commas == 2 && s.contains(RegExp(r'\s'))) {
+    s = s.replaceAll(',', '.'); // decimal commas, space-separated pair
+  } else if (commas > 0) {
+    return null;
+  }
+  final parts = s.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+  if (parts.length != 2) return null;
+  final lat = double.tryParse(parts[0]);
+  final lon = double.tryParse(parts[1]);
+  if (lat == null || lon == null) return null;
+  if (lat.abs() > 90 || lon.abs() > 180) return null;
+  return LatLon(lat, lon);
+}
+
+/// Five decimals: a metre, and short enough to read back.
+String formatCoordinates(LatLon p) =>
+    '${p.lat.toStringAsFixed(5)}, ${p.lon.toStringAsFixed(5)}';
+
 class SearchHit {
   const SearchHit(this.display, this.kind, this.position);
 

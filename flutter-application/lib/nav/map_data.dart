@@ -35,6 +35,14 @@ class MapData extends ChangeNotifier {
   MapData._();
   static final MapData instance = MapData._();
 
+  /// A ready instance around an in-memory graph, for controller tests that
+  /// need a router without files or isolates.
+  @visibleForTesting
+  MapData.forTest(RouteGraph graph)
+      : _graph = graph,
+        _router = Router(graph),
+        _state = MapDataState.ready;
+
   static const graphFileName = 'route_graph.bin';
   static const indexFileName = 'search_index.tsv';
 

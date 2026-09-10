@@ -1,3 +1,4 @@
+import 'package:aa_bridge/nav/geo.dart';
 import 'package:aa_bridge/nav/search_index.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,6 +74,46 @@ void main() {
       ].join('\n'));
       expect(messy.length, 1);
       expect(messy.search('ok').single.display, 'Ok');
+    });
+  });
+
+  group('parseCoordinates', () {
+    test('accepts the forms people paste', () {
+      const want = LatLon(50.0619, 19.9368);
+      for (final q in <String>[
+        '50.0619, 19.9368',
+        '50.0619,19.9368',
+        '50.0619 19.9368',
+        '50.0619; 19.9368',
+        '  50.0619 ,  19.9368 ',
+        '50,0619 19,9368', // decimal commas, as a Polish keyboard types them
+      ]) {
+        final p = parseCoordinates(q);
+        expect(p, isNotNull, reason: q);
+        expect(p!.lat, closeTo(want.lat, 1e-9), reason: q);
+        expect(p.lon, closeTo(want.lon, 1e-9), reason: q);
+      }
+      expect(parseCoordinates('-33.8688, 151.2093')!.lat, lessThan(0));
+    });
+
+    test('rejects what is not a pair of coordinates', () {
+      for (final q in <String>[
+        'Floriańska',
+        '50.0619',
+        '50.0619, 19.9368, 7',
+        '91, 19', // no such latitude
+        '50, 181',
+        '50,0619,19,9368', // decimal commas without a separator: ambiguous
+        '',
+      ]) {
+        expect(parseCoordinates(q), isNull, reason: q);
+      }
+    });
+
+    test('formats to a metre and reads back', () {
+      const p = LatLon(50.061947, 19.936856);
+      expect(formatCoordinates(p), '50.06195, 19.93686');
+      expect(parseCoordinates(formatCoordinates(p)), isNotNull);
     });
   });
 }

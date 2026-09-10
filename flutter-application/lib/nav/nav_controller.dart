@@ -11,6 +11,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../settings/nav_settings.dart';
+import 'announcer.dart';
 import 'geo.dart';
 import 'location_service.dart';
 import 'map_data.dart';
@@ -27,7 +28,16 @@ class NavController extends ChangeNotifier {
       : _mapData = mapData ?? MapData.instance,
         _settings = settings ?? NavSettings.instance {
     _profile = _settings.profile;
+    trackUp = _settings.trackUp;
   }
+
+  /// Off-route fixes closer together than this do not each trigger a new
+  /// route: one reroute, then time to actually take it.
+  static const Duration kRerouteCooldown = Duration(seconds: 10);
+
+  /// A fix this uncertain says nothing about whether the rider left the
+  /// route, so it never triggers a reroute.
+  static const double kRerouteMaxAccuracyM = 50;
 
   final MapData _mapData;
   final NavSettings _settings;
@@ -43,6 +53,22 @@ class NavController extends ChangeNotifier {
   bool routing = false;
   bool simulating = false;
   bool follow = false;
+
+  /// Guiding, as opposed to merely showing a route: announcements are
+  /// spoken, leaving the route gets a new one, the screen stays on.
+  bool navigating = false;
+
+  /// Heading-up camera while navigating; north-up otherwise. Seeded from the
+  /// preference, persisted by [setTrackUp].
+  late bool trackUp;
+
+  final TurnAnnouncer _announcer = TurnAnnouncer();
+  final StreamController<Announcement> _events =
+      StreamController<Announcement>.broadcast();
+  DateTime? _lastReroute;
+
+  /// What to say and buzz, in order. Only while [navigating].
+  Stream<Announcement> get announcements => _events.stream;
 
   /// i18n key for a transient hint or error under the map.
   String? messageKey;
@@ -147,7 +173,11 @@ class NavController extends ChangeNotifier {
     if (start != null && finish != null) await recalc();
   }
 
-  Future<void> recalc() async {
+  /// Builds the route between [start] and [finish].
+  ///
+  /// [reroute] marks a recalculation from the road, mid-ride: the message
+  /// says so, and a running simulation is left alone.
+  Future<void> recalc({bool reroute = false}) async {
     final router = _mapData.router;
     final from = start;
     final to = finish;
@@ -158,9 +188,9 @@ class NavController extends ChangeNotifier {
     }
     if (from == null || to == null) return;
 
-    stopSim();
+    if (!reroute) stopSim();
     routing = true;
-    messageKey = 'nav.route.routing';
+    messageKey = reroute ? 'nav.route.rerouting' : 'nav.route.routing';
     notifyListeners();
 
     final sw = Stopwatch()..start();
@@ -184,7 +214,56 @@ class NavController extends ChangeNotifier {
       final at = lastFix?.position ?? from;
       guidance = guide!.update(at);
     }
+    _announcer.reset(); // new turns, nothing said about them yet
     notifyListeners();
+  }
+
+  // --- navigation ---
+
+  /// Starts guiding along the current route. False, with a hint, if there
+  /// is no route to guide along.
+  bool startNavigation() {
+    if (guide == null) {
+      messageKey = 'nav.sim.needRoute';
+      notifyListeners();
+      return false;
+    }
+    navigating = true;
+    follow = true;
+    messageKey = null;
+    _announcer.reset();
+    notifyListeners();
+    return true;
+  }
+
+  /// Stops guiding; the route and the position feed stay.
+  void stopNavigation() {
+    if (!navigating) return;
+    navigating = false;
+    notifyListeners();
+  }
+
+  void setTrackUp(bool value) {
+    if (value == trackUp) return;
+    trackUp = value;
+    notifyListeners();
+    unawaited(_settings.setTrackUp(value));
+  }
+
+  /// Off the route for good (the guide's hysteresis has already spoken):
+  /// route again from here. Rate-limited, and never on a poor fix or from
+  /// the simulator, which cannot leave the route in the first place.
+  void _maybeReroute(GeoFix fix) {
+    if (routing || simulating || finish == null) return;
+    final acc = fix.accuracyM;
+    if (acc != null && acc > kRerouteMaxAccuracyM) return;
+    final now = DateTime.now();
+    final last = _lastReroute;
+    if (last != null && now.difference(last) < kRerouteCooldown) return;
+    _lastReroute = now;
+    _events.add(const Announcement(AnnouncementKind.rerouting));
+    start = fix.position;
+    unawaited(recalc(reroute: true));
   }
 
   /// Clears the route. [keepFixes] leaves the position feed running, which is
@@ -197,8 +276,10 @@ class NavController extends ChangeNotifier {
     route = null;
     guide = null;
     guidance = null;
+    navigating = false;
     tapMode = TapMode.none;
     messageKey = null;
+    _announcer.reset();
     notifyListeners();
   }
 
@@ -225,9 +306,17 @@ class NavController extends ChangeNotifier {
     lastFix = fix;
     final g = guide;
     if (g != null) {
-      guidance = g.update(fix.position);
-      if (guidance!.arrived) {
+      final gd = g.update(fix.position);
+      guidance = gd;
+      if (navigating) {
+        for (final a in _announcer.update(gd, fix.speedMs)) {
+          _events.add(a);
+        }
+        if (gd.offRoute) _maybeReroute(fix);
+      }
+      if (gd.arrived) {
         messageKey = 'nav.guide.arrived';
+        navigating = false;
         stopSim();
       }
     }
@@ -264,6 +353,7 @@ class NavController extends ChangeNotifier {
   @override
   void dispose() {
     _fixes?.cancel();
+    _events.close();
     super.dispose();
   }
 }

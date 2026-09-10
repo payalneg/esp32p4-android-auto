@@ -21,6 +21,8 @@ class NavSettings extends ChangeNotifier {
   static const _kAreaRadiusKm = 'nav_area_radius_km_v1';
   static const _kTileBudget = 'nav_tile_budget_v1';
   static const _kLastView = 'nav_last_view_v1';
+  static const _kVoice = 'nav_voice_v1';
+  static const _kTrackUp = 'nav_track_up_v1';
 
   RideProfile _profile = kDefaultProfile;
   int _tileCapMb = 300;
@@ -37,6 +39,12 @@ class NavSettings extends ChangeNotifier {
   /// so the cut lands on fine detail at the edges, never on the overview.
   int _tileBudget = 3000;
   String _lastView = '';
+
+  /// Spoken turn instructions while navigating.
+  bool _voice = true;
+
+  /// Rotate the map so the direction of travel is up while navigating.
+  bool _trackUp = true;
   bool _loaded = false;
 
   RideProfile get profile => _profile;
@@ -44,6 +52,8 @@ class NavSettings extends ChangeNotifier {
   int get corridorMaxTiles => _corridorMaxTiles;
   double get areaRadiusKm => _areaRadiusKm;
   int get tileBudget => _tileBudget;
+  bool get voice => _voice;
+  bool get trackUp => _trackUp;
   bool get loaded => _loaded;
 
   /// Last map position as `lat,lon,zoom`, or null if never saved.
@@ -65,6 +75,8 @@ class NavSettings extends ChangeNotifier {
     _areaRadiusKm = p.getDouble(_kAreaRadiusKm) ?? 2;
     _tileBudget = p.getInt(_kTileBudget) ?? 3000;
     _lastView = p.getString(_kLastView) ?? '';
+    _voice = p.getBool(_kVoice) ?? true;
+    _trackUp = p.getBool(_kTrackUp) ?? true;
     _loaded = true;
     notifyListeners();
   }
@@ -107,6 +119,22 @@ class NavSettings extends ChangeNotifier {
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kTileBudget, value);
+  }
+
+  Future<void> setVoice(bool value) async {
+    if (value == _voice) return;
+    _voice = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kVoice, value);
+  }
+
+  Future<void> setTrackUp(bool value) async {
+    if (value == _trackUp) return;
+    _trackUp = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kTrackUp, value);
   }
 
   /// Saved on every meaningful camera move; not a notifying change, since

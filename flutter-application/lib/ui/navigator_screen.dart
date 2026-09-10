@@ -9,14 +9,19 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../bridge/screen_bridge.dart';
 import '../i18n/strings.dart';
+import '../nav/announcer.dart';
 import '../nav/geo.dart';
 import '../nav/location_service.dart';
 import '../nav/map_data.dart';
+import '../nav/nav_camera.dart';
 import '../nav/nav_controller.dart';
+import '../nav/voice.dart';
 import '../nav/search_index.dart';
 import '../nav/tile_cache.dart';
 import '../nav/tile_math.dart';
@@ -61,6 +66,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   final _map = MapController();
   final _controller = NavController();
   final _location = LocationService();
+  final _camera = NavCamera();
+  final Voice _voice = TtsVoice();
+  StreamSubscription<Announcement>? _announceSub;
+
+  /// Whether we hold FLAG_KEEP_SCREEN_ON; follows [NavController.navigating].
+  bool _screenPinned = false;
 
   List<LatLng> _routeLine = const <LatLng>[];
 
@@ -91,10 +102,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onControllerChanged);
+    _announceSub = _controller.announcements.listen(_onAnnouncement);
   }
 
   @override
   void dispose() {
+    _announceSub?.cancel();
+    unawaited(_voice.stop());
+    if (_screenPinned) unawaited(ScreenBridge.keepOn(false));
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     _tileReset.close();
@@ -113,16 +128,81 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           : route.points
               .map((p) => LatLng(p.lat, p.lon))
               .toList(growable: false);
-      if (_routeLine.isNotEmpty) _fitRoute(_routeLine);
+      // Not mid-ride: a reroute must not yank the camera out to the whole
+      // route while the rider is looking at the next junction.
+      if (_routeLine.isNotEmpty && !_controller.navigating) {
+        _fitRoute(_routeLine);
+      }
     }
     final fix = _controller.lastFix;
     if (fix != null) {
-      if (_controller.follow) {
-        _map.move(LatLng(fix.position.lat, fix.position.lon), _map.camera.zoom);
-      }
+      if (_controller.follow) _followCamera(fix);
       unawaited(_topUpAroundPosition(fix.position));
     }
+    if (_controller.navigating != _screenPinned) {
+      _screenPinned = _controller.navigating;
+      unawaited(ScreenBridge.keepOn(_screenPinned));
+      if (!_screenPinned) {
+        _camera.reset();
+        _map.rotate(0); // back to north-up, where a paused map reads best
+      }
+    }
     setState(() {});
+  }
+
+  /// Keeps the rider in view. Plain recentring when merely following;
+  /// while navigating, the full pose — heading up, ahead-biased, zoom by
+  /// speed and by how close the next turn is.
+  void _followCamera(GeoFix fix) {
+    if (!_controller.navigating) {
+      _map.move(LatLng(fix.position.lat, fix.position.lon), _map.camera.zoom);
+      return;
+    }
+    final pose = _camera.pose(fix, _controller.guidance,
+        trackUp: _controller.trackUp,
+        viewportHeightPx: _map.camera.nonRotatedSize.height);
+    _map.moveAndRotate(
+        LatLng(pose.center.lat, pose.center.lon), pose.zoom, pose.rotationDeg);
+  }
+
+  /// A turn coming up is felt as well as heard, and heard only if wanted.
+  Future<void> _onAnnouncement(Announcement a) async {
+    switch (a.kind) {
+      case AnnouncementKind.now:
+      case AnnouncementKind.arrived:
+        unawaited(HapticFeedback.heavyImpact());
+      case AnnouncementKind.prepare:
+      case AnnouncementKind.arriveSoon:
+        unawaited(HapticFeedback.mediumImpact());
+      case AnnouncementKind.rerouting:
+        unawaited(HapticFeedback.vibrate());
+    }
+    if (!mounted || !NavSettings.instance.voice) return;
+    final text = _phrase(a);
+    final lang = LocaleScope.of(context).locale.languageCode == 'ru'
+        ? 'ru-RU'
+        : 'en-US';
+    await _voice.say(text, language: lang);
+  }
+
+  String _phrase(Announcement a) {
+    String metres() =>
+        tf(context, 'nav.say.metres', <String, Object?>{'n': a.distM ?? 0});
+    String action() => t(context, 'nav.say.act.${a.maneuver!.name}');
+    switch (a.kind) {
+      case AnnouncementKind.prepare:
+        return tf(context, 'nav.say.prepare',
+            <String, Object?>{'dist': metres(), 'action': action()});
+      case AnnouncementKind.now:
+        return action();
+      case AnnouncementKind.arriveSoon:
+        return tf(context, 'nav.say.arriveSoon',
+            <String, Object?>{'dist': metres()});
+      case AnnouncementKind.arrived:
+        return t(context, 'nav.say.arrived');
+      case AnnouncementKind.rerouting:
+        return t(context, 'nav.say.rerouting');
+    }
   }
 
   void _fitRoute(List<LatLng> line) {
@@ -179,9 +259,24 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                         context,
                         MaterialPageRoute(
                             builder: (_) => const SettingsScreen()));
+                  case 'voice':
+                    NavSettings.instance.setVoice(!NavSettings.instance.voice);
+                  case 'trackUp':
+                    _controller.setTrackUp(!_controller.trackUp);
                 }
               },
               itemBuilder: (ctx) => <PopupMenuEntry<String>>[
+                CheckedPopupMenuItem<String>(
+                  value: 'voice',
+                  checked: NavSettings.instance.voice,
+                  child: Text(t(ctx, 'nav.voice')),
+                ),
+                CheckedPopupMenuItem<String>(
+                  value: 'trackUp',
+                  checked: _controller.trackUp,
+                  child: Text(t(ctx, 'nav.trackUp')),
+                ),
+                const PopupMenuDivider(),
                 PopupMenuItem<String>(
                   value: 'region',
                   child: ListTile(
@@ -480,30 +575,45 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
 
   Widget _controls(BuildContext context) {
     final hasRoute = _controller.hasRoute;
+    final navigating = _controller.navigating;
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: <Widget>[
         FloatingActionButton.small(
           heroTag: 'nav-follow',
           tooltip: t(context, 'nav.follow'),
-          backgroundColor: _controller.follow
-              ? Theme.of(context).colorScheme.primaryContainer
-              : null,
+          backgroundColor: _controller.follow ? scheme.primaryContainer : null,
           onPressed: _toggleFollow,
           child: Icon(_controller.gpsActive
               ? Icons.my_location
               : Icons.location_searching),
         ),
-        const SizedBox(height: 8),
-        FloatingActionButton.small(
-          heroTag: 'nav-pick',
-          tooltip: t(context, 'nav.route.mode'),
-          backgroundColor: _controller.tapMode != TapMode.none
-              ? Theme.of(context).colorScheme.primaryContainer
-              : null,
-          onPressed: _controller.toggleTapMode,
-          child: const Icon(Icons.add_location_alt_outlined),
-        ),
+        if (navigating) ...<Widget>[
+          const SizedBox(height: 8),
+          FloatingActionButton.small(
+            heroTag: 'nav-compass',
+            tooltip: t(context, 'nav.trackUp'),
+            backgroundColor:
+                _controller.trackUp ? scheme.primaryContainer : null,
+            onPressed: () => _controller.setTrackUp(!_controller.trackUp),
+            child: Icon(_controller.trackUp
+                ? Icons.navigation
+                : Icons.explore_outlined),
+          ),
+        ] else ...<Widget>[
+          const SizedBox(height: 8),
+          FloatingActionButton.small(
+            heroTag: 'nav-pick',
+            tooltip: t(context, 'nav.route.mode'),
+            backgroundColor: _controller.tapMode != TapMode.none
+                ? scheme.primaryContainer
+                : null,
+            onPressed: _controller.toggleTapMode,
+            child: const Icon(Icons.add_location_alt_outlined),
+          ),
+        ],
         if (hasRoute) ...<Widget>[
           const SizedBox(height: 8),
           FloatingActionButton.small(
@@ -516,16 +626,43 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             child: Icon(
                 _controller.simulating ? Icons.stop : Icons.play_arrow),
           ),
+          if (!navigating) ...<Widget>[
+            const SizedBox(height: 8),
+            FloatingActionButton.small(
+              heroTag: 'nav-reset',
+              tooltip: t(context, 'nav.route.reset'),
+              onPressed: () => _controller.reset(keepFixes: true),
+              child: const Icon(Icons.close),
+            ),
+          ],
           const SizedBox(height: 8),
-          FloatingActionButton.small(
-            heroTag: 'nav-reset',
-            tooltip: t(context, 'nav.route.reset'),
-            onPressed: () => _controller.reset(keepFixes: true),
-            child: const Icon(Icons.close),
-          ),
+          // The one big button: what you press when the route looks right.
+          navigating
+              ? FloatingActionButton.extended(
+                  heroTag: 'nav-go',
+                  backgroundColor: scheme.errorContainer,
+                  foregroundColor: scheme.onErrorContainer,
+                  onPressed: _controller.stopNavigation,
+                  icon: const Icon(Icons.stop),
+                  label: Text(t(context, 'nav.stop')),
+                )
+              : FloatingActionButton.extended(
+                  heroTag: 'nav-go',
+                  onPressed: _startNavigation,
+                  icon: const Icon(Icons.navigation),
+                  label: Text(t(context, 'nav.start')),
+                ),
         ],
       ],
     );
+  }
+
+  Future<void> _startNavigation() async {
+    // The simulator is a position feed too; otherwise we need the GPS.
+    if (!_controller.simulating && !await _ensureGps()) return;
+    if (!mounted) return;
+    _camera.reset();
+    _controller.startNavigation();
   }
 
   Future<void> _toggleFollow() async {
@@ -533,8 +670,15 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       _controller.setFollow(!_controller.follow);
       return;
     }
+    if (await _ensureGps()) _controller.setFollow(true);
+  }
+
+  /// Starts the GPS feed if it is not running. False — with the remedy on a
+  /// snackbar — when it cannot.
+  Future<bool> _ensureGps() async {
+    if (_controller.gpsActive) return true;
     final status = await _location.ensurePermission();
-    if (!mounted) return;
+    if (!mounted) return false;
     if (status != LocationStatus.ok) {
       final key = switch (status) {
         LocationStatus.serviceOff => 'nav.gps.off',
@@ -548,25 +692,26 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           onPressed: () => _location.openSystemSettings(status),
         ),
       ));
-      return;
+      return false;
     }
     _controller.attachFixes(_location.fixes());
-    _controller.setFollow(true);
-    if (mounted) {
+    // Only say "waiting" if there is actually a wait: a cached position
+    // normally lands within the frame.
+    unawaited(Future<void>.delayed(const Duration(seconds: 3), () {
+      if (!mounted || _controller.lastFix != null || !_controller.gpsActive) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(t(context, 'nav.gps.waiting'))));
-    }
+    }));
+    return true;
   }
 
   Future<void> _openSearch() async {
-    final index = MapData.instance.index;
-    if (index == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t(context, 'nav.search.noindex'))));
-      return;
-    }
+    // No index is no reason not to open it: coordinates need none.
     final hit = await showSearch<SearchHit?>(
-        context: context, delegate: _PlaceSearchDelegate(index, context));
+        context: context,
+        delegate: _PlaceSearchDelegate(MapData.instance.index, context));
     if (hit == null || !mounted) return;
     _map.move(LatLng(hit.position.lat, hit.position.lon), 16);
     await _offerDestination(hit);
@@ -841,7 +986,8 @@ class _PlaceSearchDelegate extends SearchDelegate<SearchHit?> {
   _PlaceSearchDelegate(this.index, BuildContext context)
       : super(searchFieldLabel: t(context, 'nav.search.hint'));
 
-  final SearchIndex index;
+  /// Null until a region is downloaded; coordinates still work.
+  final SearchIndex? index;
 
   @override
   List<Widget> buildActions(BuildContext context) => <Widget>[
@@ -860,19 +1006,36 @@ class _PlaceSearchDelegate extends SearchDelegate<SearchHit?> {
 
   @override
   Widget buildSuggestions(BuildContext context) {
-    if (query.trim().isEmpty) return const SizedBox.shrink();
-    final hits = index.search(query);
-    if (hits.isEmpty) {
-      return Center(child: Text(t(context, 'nav.search.empty')));
+    final q = query.trim();
+    if (q.isEmpty) return const SizedBox.shrink();
+    final coord = parseCoordinates(q);
+    final hits = index?.search(q) ?? const <SearchHit>[];
+    if (coord == null && hits.isEmpty) {
+      return Center(
+          child: Text(t(
+              context, index == null ? 'nav.search.noindex' : 'nav.search.empty')));
     }
-    return ListView.builder(
-      itemCount: hits.length,
-      itemBuilder: (ctx, i) => ListTile(
-        leading: const Icon(Icons.place_outlined),
-        title: Text(hits[i].display),
-        subtitle: Text(hits[i].kind),
-        onTap: () => close(context, hits[i]),
-      ),
+    final kind = t(context, 'nav.search.coordinates');
+    return ListView(
+      children: <Widget>[
+        // A pasted pair of numbers is a place too — first, since it is what
+        // was typed rather than a guess at it.
+        if (coord != null)
+          ListTile(
+            leading: const Icon(Icons.my_location),
+            title: Text(formatCoordinates(coord)),
+            subtitle: Text(kind),
+            onTap: () =>
+                close(context, SearchHit(formatCoordinates(coord), kind, coord)),
+          ),
+        for (final h in hits)
+          ListTile(
+            leading: const Icon(Icons.place_outlined),
+            title: Text(h.display),
+            subtitle: Text(h.kind),
+            onTap: () => close(context, h),
+          ),
+      ],
     );
   }
 }
