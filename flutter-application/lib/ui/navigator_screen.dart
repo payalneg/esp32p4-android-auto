@@ -17,11 +17,11 @@ import '../nav/geo.dart';
 import '../nav/location_service.dart';
 import '../nav/map_data.dart';
 import '../nav/nav_controller.dart';
+import '../nav/overpass.dart';
 import '../nav/search_index.dart';
 import '../nav/tile_math.dart';
 import '../nav/way_classes.dart';
 import '../settings/nav_settings.dart';
-import 'map_data_screen.dart';
 import 'nav/cached_tile_provider.dart';
 import 'nav/maneuver_banner.dart';
 import 'nav/route_info_bar.dart';
@@ -245,6 +245,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         ]),
       );
 
+  /// Offers to fetch exactly what is on screen — the area you can see is the
+  /// area you get, which beats picking a region off a list and hoping.
   Widget _dataBanner(BuildContext context) => Positioned(
         top: 12,
         left: 12,
@@ -254,14 +256,35 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           child: ListTile(
             leading: const Icon(Icons.map_outlined),
             title: Text(t(context, 'nav.data.missing')),
+            subtitle: Text(t(context, 'mapdata.area.source'),
+                style: Theme.of(context).textTheme.bodySmall),
             trailing: FilledButton(
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const MapDataScreen())),
+              onPressed: _downloadVisibleArea,
               child: Text(t(context, 'nav.data.missing.action')),
             ),
           ),
         ),
       );
+
+  /// Downloads the roads inside the current viewport and builds the graph.
+  Future<void> _downloadVisibleArea() async {
+    final camera = _map.camera;
+    final bounds = camera.visibleBounds;
+    await MapData.instance.buildFromOverpass(GeoBounds(
+      south: bounds.south,
+      west: bounds.west,
+      north: bounds.north,
+      east: bounds.east,
+    ));
+    if (!mounted) return;
+    final data = MapData.instance;
+    if (data.state == MapDataState.error && data.messageKey != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            tf(context, data.messageKey!, data.messageArgs ?? const {})),
+      ));
+    }
+  }
 
   Widget _controls(BuildContext context) {
     final hasRoute = _controller.hasRoute;

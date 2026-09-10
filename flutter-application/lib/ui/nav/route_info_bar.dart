@@ -28,8 +28,9 @@ class RouteInfoBar extends StatelessWidget {
     String? text;
     if (route != null) {
       // While riding, the remaining distance is the useful number; before
-      // setting off, the whole trip is.
-      text = guidance != null && guidance.alongM > 1
+      // setting off, the whole trip is — including how much of it runs on
+      // pavements, which is what the profile choice is really about.
+      text = guidance != null && controller.lastFix != null
           ? tf(context, 'nav.guide.remaining', <String, Object?>{
               'km': (guidance.remainingM / 1000).toStringAsFixed(1),
               'min': (guidance.remainingS / 60).round(),

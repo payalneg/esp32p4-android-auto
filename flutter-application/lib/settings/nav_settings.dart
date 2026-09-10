@@ -15,16 +15,11 @@ class NavSettings extends ChangeNotifier {
   NavSettings._();
   static final NavSettings instance = NavSettings._();
 
-  static const _kServerUrl = 'nav_server_url_v1';
   static const _kProfile = 'nav_profile_v1';
   static const _kTileCapMb = 'nav_tile_cap_mb_v1';
   static const _kCorridorMaxTiles = 'nav_corridor_max_tiles_v1';
   static const _kLastView = 'nav_last_view_v1';
 
-  /// Where the generated map data is served from. No default: the dev server
-  /// is whatever machine ran scripts/mapgen, and guessing an address would
-  /// only produce a confusing timeout.
-  String _serverUrl = '';
   RideProfile _profile = kDefaultProfile;
   int _tileCapMb = 300;
 
@@ -34,7 +29,6 @@ class NavSettings extends ChangeNotifier {
   String _lastView = '';
   bool _loaded = false;
 
-  String get serverUrl => _serverUrl;
   RideProfile get profile => _profile;
   int get tileCapMb => _tileCapMb;
   int get corridorMaxTiles => _corridorMaxTiles;
@@ -53,21 +47,12 @@ class NavSettings extends ChangeNotifier {
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
-    _serverUrl = p.getString(_kServerUrl) ?? '';
     _profile = RideProfile.byName(p.getString(_kProfile) ?? '') ?? kDefaultProfile;
     _tileCapMb = p.getInt(_kTileCapMb) ?? 300;
     _corridorMaxTiles = p.getInt(_kCorridorMaxTiles) ?? 250;
     _lastView = p.getString(_kLastView) ?? '';
     _loaded = true;
     notifyListeners();
-  }
-
-  Future<void> setServerUrl(String value) async {
-    if (value == _serverUrl) return;
-    _serverUrl = value;
-    notifyListeners();
-    final p = await SharedPreferences.getInstance();
-    await p.setString(_kServerUrl, value);
   }
 
   Future<void> setProfile(RideProfile value) async {
