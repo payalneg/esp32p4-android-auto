@@ -46,6 +46,17 @@ class GeofabrikRegion {
   }
 }
 
+/// Strips the markup Geofabrik puts in its names.
+///
+/// Several entries carry a literal `<br />` between the local name and the
+/// English one — the index is generated from their web pages — and a raw tag
+/// in a list of places to download looks like a bug, because it is one.
+String cleanName(String raw) => raw
+    .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), ' ')
+    .replaceAll(RegExp(r'<[^>]*>'), '')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
 class GeofabrikException implements Exception {
   GeofabrikException(this.messageKey, [this.args]);
   final String messageKey;
@@ -107,7 +118,7 @@ class GeofabrikIndex {
       final parent = props['parent'];
       out.add(GeofabrikRegion(
         id: id,
-        name: name,
+        name: cleanName(name),
         pbfUrl: Uri.parse(pbf),
         parent: parent is String ? parent : null,
       ));

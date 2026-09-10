@@ -144,10 +144,13 @@ class MapData extends ChangeNotifier {
         },
       );
       _set(MapDataState.loading);
+      final ways = result.ways;
+      final nodes = result.nodes;
+      final places = result.places;
       final built = await Isolate.run(() => GraphBuilder.build(
-            ways: result.ways,
-            nodes: MapNodeSource(result.nodes),
-            places: result.places,
+            ways: ways,
+            nodes: MapNodeSource(nodes),
+            places: places,
           ));
       if (built.edgeCount == 0) {
         _fail('mapdata.err.emptyArea', null);
@@ -197,7 +200,13 @@ class MapData extends ChangeNotifier {
       _set(MapDataState.loading);
       // Parsing a province is tens of seconds and hundreds of megabytes at
       // its peak; an isolate keeps both off the UI and frees them on exit.
-      final built = await Isolate.run(() => PbfGraphSource.buildAsync(pbf.path));
+      //
+      // The closure must capture a plain String and nothing else. Referring to
+      // `pbf` here would drag this MapData in with it, and a ChangeNotifier
+      // holds its listeners — meaning the whole widget tree, which cannot
+      // cross an isolate boundary.
+      final path = pbf.path;
+      final built = await Isolate.run(() => PbfGraphSource.buildAsync(path));
       if (built.edgeCount == 0) {
         _fail('mapdata.err.emptyArea', null);
         return;

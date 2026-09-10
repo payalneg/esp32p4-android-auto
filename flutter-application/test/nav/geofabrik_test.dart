@@ -24,6 +24,24 @@ const String kIndex = '''
 ''';
 
 void main() {
+  test('strips the markup Geofabrik leaves in its names', () {
+    // Their index is generated from web pages, so several names carry a
+    // literal <br /> between the local and English forms.
+    expect(cleanName('Województwo małopolskie<br />(Lesser Poland)'),
+        'Województwo małopolskie (Lesser Poland)');
+    expect(cleanName('Bavaria'), 'Bavaria');
+    expect(cleanName('A<BR/>B'), 'A B');
+    expect(cleanName('  spaced   out  '), 'spaced out');
+  });
+
+  test('names come out of the catalogue already cleaned', () {
+    final index = GeofabrikIndex.parse('''
+      {"features": [{"properties": {"id": "x", "name": "Foo<br />(Bar)",
+        "urls": {"pbf": "https://example.org/x.osm.pbf"}}}]}
+    ''');
+    expect(index.regions.single.name, 'Foo (Bar)');
+  });
+
   test('reads the regions and skips the malformed entries', () {
     final index = GeofabrikIndex.parse(kIndex);
     expect(index.regions.map((r) => r.id),

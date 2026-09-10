@@ -52,6 +52,7 @@ class _MapDataScreenState extends State<MapDataScreen> {
           children: <Widget>[
             _statusCard(context),
             _areaCard(context),
+            _regionCard(context),
             _importCard(context),
             _tilesCard(context),
             _profileCard(context),
@@ -146,6 +147,21 @@ class _MapDataScreenState extends State<MapDataScreen> {
     );
   }
 
+  /// The other way to get data, and the only one that reaches beyond the
+  /// area around the rider.
+  Widget _regionCard(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.public),
+        title: Text(t(context, 'mapdata.region.title')),
+        subtitle: Text(t(context, 'mapdata.region.subtitle')),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const RegionPickerScreen())),
+      ),
+    );
+  }
+
   Widget _importCard(BuildContext context) {
     return Card(
       child: Column(
@@ -155,15 +171,6 @@ class _MapDataScreenState extends State<MapDataScreen> {
             title: Text(t(context, 'mapdata.import.title')),
             dense: true,
           ),
-          ListTile(
-            leading: const Icon(Icons.public),
-            title: Text(t(context, 'mapdata.region.title')),
-            subtitle: Text(t(context, 'mapdata.region.subtitle')),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const RegionPickerScreen())),
-          ),
-          const Divider(height: 1),
           ListTile(
             leading: const Icon(Icons.file_open_outlined),
             title: Text(t(context, 'mapdata.import.graph')),
