@@ -33,6 +33,21 @@ const LatLon kFallbackCentre = LatLon(50.0619, 19.9368);
 
 const String kOsmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+/// Zooms a saved area is kept at. 19 is the sharpest OSM serves and is what
+/// makes a junction readable; 17 is four times cheaper per square kilometre
+/// and covers the ground around it, so zooming out does not hit holes.
+const int kSharpZoom = 19;
+const int kContextZoom = 17;
+
+/// How far around the rider each of those reaches. The sharp level is kept
+/// tight on purpose: at zoom 19 a tile is about 50 m across, so a wide radius
+/// there would be thousands of tiles.
+const double kSharpRadiusM = 300;
+const double kContextRadiusM = 1500;
+
+/// Riding this far since the last top-up triggers the next one.
+const double kPrefetchStepM = 200;
+
 class NavigatorScreen extends StatefulWidget {
   const NavigatorScreen({super.key});
 
@@ -53,6 +68,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   Object? _lineSource;
   bool _corridorRunning = false;
   bool _cancelCorridor = false;
+  bool _prefetching = false;
+  LatLon? _lastPrefetchAt;
+
+  /// Nudges the tile layer to ask for its tiles again.
+  ///
+  /// A tile that failed once — a tunnel, a dead second of signal — is marked
+  /// errored and is not retried while the camera sits still, which is how the
+  /// map ends up blank and stays blank. Firing this after tiles land makes
+  /// them appear where they are, without the user having to pan to provoke it.
+  final StreamController<void> _tileReset = StreamController<void>.broadcast();
 
   @override
   void initState() {
@@ -64,6 +89,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   void dispose() {
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
+    _tileReset.close();
     _map.dispose();
     super.dispose();
   }
@@ -81,9 +107,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               .toList(growable: false);
       if (_routeLine.isNotEmpty) _fitRoute(_routeLine);
     }
-    if (_controller.follow && _controller.lastFix != null) {
-      final p = _controller.lastFix!.position;
-      _map.move(LatLng(p.lat, p.lon), _map.camera.zoom);
+    final fix = _controller.lastFix;
+    if (fix != null) {
+      if (_controller.follow) {
+        _map.move(LatLng(fix.position.lat, fix.position.lon), _map.camera.zoom);
+      }
+      unawaited(_topUpAroundPosition(fix.position));
     }
     setState(() {});
   }
@@ -180,8 +209,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               child: Center(
                 child: RouteInfoBar(
                   controller: _controller,
-                  onSaveOffline: _controller.hasRoute && !_corridorRunning
-                      ? _saveCorridor
+                  onSaveOffline: (_controller.hasRoute ||
+                          _controller.lastFix != null) &&
+                          !_corridorRunning
+                      ? _saveOffline
                       : null,
                 ),
               ),
@@ -225,6 +256,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           TileLayer(
             urlTemplate: kOsmTileUrl,
             tileProvider: CachedTileProvider(tiles),
+            reset: _tileReset.stream,
             userAgentPackageName: 'com.aabridge.aa_bridge',
             // Retina simulation shifts the layer down a level, so these are
             // stated one higher than OSM's real limit of 19. Left at 19 the
@@ -360,6 +392,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             tf(context, data.messageKey!, data.messageArgs ?? const {})),
       ));
     } else if (data.isReady) {
+      // Roads alone leave a grey map the moment the phone loses signal, so the
+      // picture of the same area comes down with them, sharpest first.
+      unawaited(_saveAreaTiles(bounds));
       messenger.showSnackBar(SnackBar(
         content: Text(tf(context, 'mapdata.status.ready', <String, Object?>{
           'nodes': data.graph?.nodeCount ?? 0,
@@ -506,19 +541,64 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     );
   }
 
-  /// Pre-fetches the tiles along the route so the ride survives losing signal.
-  Future<void> _saveCorridor() async {
-    final route = _controller.route;
+  /// Saves the map around the rider, along the route and at its far end, so
+  /// the ride survives losing signal.
+  ///
+  /// Three places matter and they are not the same place: where you are now,
+  /// the line you will follow, and the streets around the destination where
+  /// you will be looking for a door.
+  Future<void> _saveOffline() async {
     final cache = MapData.instance.tiles;
-    if (route == null || cache == null) return;
-    // Retina simulation draws zoom z from tiles at z+1, so an offline corridor
-    // has to hold the zooms actually fetched or the saved area comes up blank.
-    final retina = RetinaMode.isHighDensity(context);
-    final tiles = corridorTiles(
-      route.points,
-      zooms: retina ? const <int>[17, 15] : const <int>[16, 14],
-      maxTiles: NavSettings.instance.corridorMaxTiles,
-    );
+    if (cache == null) return;
+    final route = _controller.route;
+    final here = _controller.lastFix?.position;
+    final finish = _controller.finish;
+
+    final wanted = <TileId>[];
+    final seen = <TileId>{};
+    void add(Iterable<TileId> tiles) {
+      for (final t in tiles) {
+        if (seen.add(t)) wanted.add(t);
+      }
+    }
+
+    // Nearest first, so a capped download still covers the ground underfoot.
+    if (here != null) {
+      add(tilesAround(here,
+          radiusM: kSharpRadiusM,
+          zooms: const <int>[kSharpZoom],
+          maxTiles: 1 << 20));
+    }
+    if (finish != null) {
+      add(tilesAround(finish,
+          radiusM: kSharpRadiusM,
+          zooms: const <int>[kSharpZoom],
+          maxTiles: 1 << 20));
+    }
+    if (route != null) {
+      add(corridorTiles(route.points,
+          zooms: const <int>[kSharpZoom], maxTiles: 1 << 20));
+    }
+    // Context last: it is the part worth dropping when the cap bites.
+    for (final centre in <LatLon?>[here, finish]) {
+      if (centre == null) continue;
+      add(tilesAround(centre,
+          radiusM: kContextRadiusM,
+          zooms: const <int>[kContextZoom],
+          maxTiles: 1 << 20));
+    }
+    if (route != null) {
+      add(corridorTiles(route.points,
+          zooms: const <int>[kContextZoom], maxTiles: 1 << 20));
+    }
+    if (wanted.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(t(context, 'mapdata.corridor.needRoute'))));
+      return;
+    }
+
+    final cap = NavSettings.instance.corridorMaxTiles;
+    final tiles = wanted.length <= cap ? wanted : wanted.sublist(0, cap);
     setState(() {
       _corridorRunning = true;
       _cancelCorridor = false;
@@ -526,15 +606,22 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final report = await cache.downloadCorridor(
       tiles,
-      (t) => Uri.parse(kOsmTileUrl
-          .replaceAll('{z}', '${t.z}')
-          .replaceAll('{x}', '${t.x}')
-          .replaceAll('{y}', '${t.y}')),
+      _tileUrl,
+      onProgress: (done, total) {
+        _refreshTilesEvery(done, total);
+        if (!mounted || done % 25 != 0) return;
+        messenger.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(tf(context, 'mapdata.corridor.progress',
+              <String, Object?>{'done': done, 'total': total})),
+        ));
+      },
       cancelled: () => _cancelCorridor,
     );
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
     setState(() => _corridorRunning = false);
+    _refreshTiles();
     messenger.showSnackBar(SnackBar(
       content: Text(report.blocked
           ? t(context, 'mapdata.corridor.blocked')
@@ -542,6 +629,79 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               'n': report.downloaded + report.skipped,
             })),
     ));
+  }
+
+  /// Downloads the picture of a just-fetched area at the sharp zoom, centre
+  /// outwards, bounded by the tile budget the user set.
+  Future<void> _saveAreaTiles(LatLngBounds bounds) async {
+    final cache = MapData.instance.tiles;
+    if (cache == null) return;
+    final tiles = tilesInBounds(
+      LatLon(bounds.north, bounds.west),
+      LatLon(bounds.south, bounds.east),
+      kSharpZoom,
+      maxTiles: NavSettings.instance.corridorMaxTiles,
+    );
+    setState(() => _corridorRunning = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final report = await cache.downloadCorridor(tiles, _tileUrl,
+        onProgress: _refreshTilesEvery, cancelled: () => !mounted);
+    await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
+    if (!mounted) return;
+    setState(() => _corridorRunning = false);
+    _refreshTiles();
+    messenger.showSnackBar(SnackBar(
+      content: Text(report.blocked
+          ? t(context, 'mapdata.corridor.blocked')
+          : tf(context, 'mapdata.corridor.done',
+              <String, Object?>{'n': report.downloaded + report.skipped})),
+    ));
+  }
+
+  /// Asks the layer to re-read its tiles; cached ones then paint immediately.
+  void _refreshTiles() {
+    if (mounted && !_tileReset.isClosed) _tileReset.add(null);
+  }
+
+  /// Same, but only every so often during a long download, so the map fills in
+  /// as it goes without a rebuild per tile.
+  void _refreshTilesEvery(int done, int total) {
+    if (done % 10 == 0 || done == total) _refreshTiles();
+  }
+
+  static Uri _tileUrl(TileId t) => Uri.parse(kOsmTileUrl
+      .replaceAll('{z}', '${t.z}')
+      .replaceAll('{x}', '${t.x}')
+      .replaceAll('{y}', '${t.y}'));
+
+  /// Quietly keeps the ground around the rider cached while moving.
+  ///
+  /// Only a tight ring at the sharp zoom, only once the rider has actually
+  /// travelled, and never two at a time — this rides along with a journey, it
+  /// is not a download job.
+  Future<void> _topUpAroundPosition(LatLon at) async {
+    final cache = MapData.instance.tiles;
+    if (cache == null || _prefetching || _corridorRunning) return;
+    final last = _lastPrefetchAt;
+    if (last != null && haversineM(last, at) < kPrefetchStepM) return;
+    _prefetching = true;
+    _lastPrefetchAt = at;
+    try {
+      final report = await cache.downloadCorridor(
+        tilesAround(at,
+            radiusM: kSharpRadiusM,
+            zooms: const <int>[kSharpZoom],
+            maxTiles: 60),
+        _tileUrl,
+        onProgress: _refreshTilesEvery,
+        cancelled: () => !mounted,
+      );
+      if (report.downloaded > 0) _refreshTiles();
+    } on Object {
+      // Offline is the normal case here; the map simply stays as it was.
+    } finally {
+      _prefetching = false;
+    }
   }
 }
 

@@ -66,7 +66,13 @@ class _CachedTileImage extends ImageProvider<_CachedTileImage> {
   }
 
   Future<ui.Codec> _load(ImageDecoderCallback decode) async {
-    final bytes = await cache.read(tile) ?? await cache.fetchAndStore(tile, url);
+    var bytes = await cache.read(tile) ?? await cache.fetchAndStore(tile, url);
+    if (bytes == null) {
+      // One retry: riding through a dead second of signal should not blank a
+      // tile until the next time the camera happens to move.
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      bytes = await cache.fetchAndStore(tile, url);
+    }
     if (bytes == null) {
       throw StateError('tile $tile unavailable'); // TileLayer draws errorImage
     }

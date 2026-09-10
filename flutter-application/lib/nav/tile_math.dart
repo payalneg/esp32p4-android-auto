@@ -72,6 +72,71 @@ LatLon tile2deg(double x, double y, int z) {
   );
 }
 
+/// Tiles covering a disc of [radiusM] around [centre], nearest first.
+///
+/// Nearest first matters: [maxTiles] truncates the list, and the ground under
+/// the rider is worth more than the ground behind the horizon. Used to keep
+/// the map ahead cached while riding.
+List<TileId> tilesAround(
+  LatLon centre, {
+  double radiusM = 600,
+  List<int> zooms = const <int>[16],
+  int maxTiles = 60,
+}) {
+  if (maxTiles <= 0) return const <TileId>[];
+  final out = <TileId>[];
+  final seen = <TileId>{};
+  for (final z in zooms.toList()..sort()) {
+    final n = 1 << z;
+    // Tile side in metres at this latitude, so the radius becomes a tile count.
+    final tileSpanM =
+        40075016.686 * math.cos(centre.lat * math.pi / 180.0) / n;
+    final ring = (radiusM / tileSpanM).ceil();
+    final middle = deg2tile(centre.lat, centre.lon, z);
+    final candidates = <({TileId tile, int distance})>[];
+    for (var dx = -ring; dx <= ring; dx++) {
+      for (var dy = -ring; dy <= ring; dy++) {
+        final x = middle.x + dx;
+        final y = middle.y + dy;
+        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+        // Chebyshev distance keeps it a square of rings, which is what the
+        // viewport actually is.
+        candidates.add((
+          tile: TileId(z, x, y),
+          distance: math.max(dx.abs(), dy.abs()),
+        ));
+      }
+    }
+    candidates.sort((a, b) => a.distance.compareTo(b.distance));
+    for (final c in candidates) {
+      if (seen.add(c.tile)) out.add(c.tile);
+    }
+  }
+  return out.length <= maxTiles ? out : out.sublist(0, maxTiles);
+}
+
+/// Every tile of [z] inside [bounds], ordered outwards from the middle.
+///
+/// Centre-first because a cap will cut the tail, and the middle of the area a
+/// rider chose is the part they meant.
+List<TileId> tilesInBounds(LatLon nw, LatLon se, int z, {int maxTiles = 2000}) {
+  if (maxTiles <= 0) return const <TileId>[];
+  final r = bboxTiles(nw, se, z);
+  final cx = (r.xMin + r.xMax) / 2;
+  final cy = (r.yMin + r.yMax) / 2;
+  final all = <({TileId tile, double d})>[];
+  for (var x = r.xMin; x <= r.xMax; x++) {
+    for (var y = r.yMin; y <= r.yMax; y++) {
+      final dx = x - cx;
+      final dy = y - cy;
+      all.add((tile: TileId(z, x, y), d: dx * dx + dy * dy));
+    }
+  }
+  all.sort((a, b) => a.d.compareTo(b.d));
+  final out = <TileId>[for (final e in all) e.tile];
+  return out.length <= maxTiles ? out : out.sublist(0, maxTiles);
+}
+
 /// Tiles covering a corridor around a route, ordered along it.
 ///
 /// Ordering matters, because [maxTiles] truncates the list. Coarse zooms go

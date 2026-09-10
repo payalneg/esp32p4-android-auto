@@ -49,6 +49,76 @@ void main() {
         allOf(greaterThanOrEqualTo(r.xMin), lessThanOrEqualTo(r.xMax)));
   });
 
+  group('tilesAround', () {
+    const rynek = LatLon(50.0619, 19.9368);
+
+    test('covers a disc and includes the tile under the point', () {
+      final tiles = tilesAround(rynek, radiusM: 300, zooms: const <int>[19]);
+      expect(tiles, contains(deg2tile(rynek.lat, rynek.lon, 19)));
+      expect(tiles.length, greaterThan(9));
+    });
+
+    test('nearest first, so a cap keeps the ground underfoot', () {
+      final centre = deg2tile(rynek.lat, rynek.lon, 19);
+      final tiles =
+          tilesAround(rynek, radiusM: 600, zooms: const <int>[19], maxTiles: 9);
+      expect(tiles.length, 9);
+      expect(tiles.first, centre);
+      for (final t in tiles) {
+        expect((t.x - centre.x).abs(), lessThanOrEqualTo(1));
+        expect((t.y - centre.y).abs(), lessThanOrEqualTo(1));
+      }
+    });
+
+    test('a bigger radius asks for more', () {
+      // Past the default cap both would come back the same length, which is
+      // the cap doing its job rather than the radius being ignored.
+      final near = tilesAround(rynek,
+          radiusM: 200, zooms: const <int>[19], maxTiles: 10000);
+      final far = tilesAround(rynek,
+          radiusM: 800, zooms: const <int>[19], maxTiles: 10000);
+      expect(far.length, greaterThan(near.length));
+    });
+
+    test('the cap is what limits a wide radius', () {
+      expect(
+          tilesAround(rynek, radiusM: 5000, zooms: const <int>[19]).length, 60);
+    });
+
+    test('several zooms come back together, without duplicates', () {
+      final tiles =
+          tilesAround(rynek, radiusM: 400, zooms: const <int>[19, 17]);
+      expect(tiles.map((t) => t.z).toSet(), <int>{17, 19});
+      expect(tiles.toSet().length, tiles.length);
+    });
+
+    test('asking for nothing returns nothing', () {
+      expect(tilesAround(rynek, maxTiles: 0), isEmpty);
+    });
+  });
+
+  group('tilesInBounds', () {
+    test('covers the box and starts from the middle', () {
+      const nw = LatLon(50.07, 19.92);
+      const se = LatLon(50.05, 19.95);
+      final tiles = tilesInBounds(nw, se, 16);
+      final r = bboxTiles(nw, se, 16);
+      expect(tiles.length, (r.xMax - r.xMin + 1) * (r.yMax - r.yMin + 1));
+      final first = tiles.first;
+      expect(first.x, closeTo((r.xMin + r.xMax) / 2, 1));
+      expect(first.y, closeTo((r.yMin + r.yMax) / 2, 1));
+    });
+
+    test('the cap cuts the outside, not the middle', () {
+      const nw = LatLon(50.07, 19.92);
+      const se = LatLon(50.05, 19.95);
+      final full = tilesInBounds(nw, se, 16);
+      final capped = tilesInBounds(nw, se, 16, maxTiles: 4);
+      expect(capped.length, 4);
+      expect(capped, full.take(4));
+    });
+  });
+
   group('corridorTiles', () {
     final route = <LatLon>[
       const LatLon(50.0619, 19.9368),
