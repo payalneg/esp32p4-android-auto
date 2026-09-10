@@ -7,7 +7,6 @@
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -18,7 +17,6 @@ import '../nav/geo.dart';
 import '../nav/location_service.dart';
 import '../nav/map_data.dart';
 import '../nav/nav_controller.dart';
-import '../nav/overpass.dart';
 import '../nav/search_index.dart';
 import '../nav/tile_math.dart';
 import '../nav/way_classes.dart';
@@ -26,6 +24,7 @@ import '../settings/nav_settings.dart';
 import 'nav/cached_tile_provider.dart';
 import 'nav/maneuver_banner.dart';
 import 'nav/route_info_bar.dart';
+import 'region_picker_screen.dart';
 import 'settings_screen.dart';
 
 /// Rynek Główny — the centre of the sample data, and a better first view than
@@ -49,9 +48,6 @@ const double kContextRadiusM = 1500;
 /// Riding this far since the last top-up triggers the next one.
 const double kPrefetchStepM = 200;
 
-/// How far the road network can reach in one go. Bounded by what Overpass
-/// will serve — see kMaxAreaKm2 — not by what the map can show.
-const double kMaxRoadRadiusM = 6000;
 
 class NavigatorScreen extends StatefulWidget {
   const NavigatorScreen({super.key});
@@ -169,8 +165,13 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               icon: const Icon(Icons.more_vert),
               onSelected: (choice) {
                 switch (choice) {
-                  case 'area':
-                    _downloadAreaHere();
+                  case 'region':
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const RegionPickerScreen()));
+                  case 'tiles':
+                    _saveMapAroundMe();
                   case 'settings':
                     Navigator.push(
                         context,
@@ -180,10 +181,18 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               },
               itemBuilder: (ctx) => <PopupMenuEntry<String>>[
                 PopupMenuItem<String>(
-                  value: 'area',
+                  value: 'region',
                   child: ListTile(
-                    leading: const Icon(Icons.travel_explore),
-                    title: Text(t(ctx, 'nav.data.missing.action')),
+                    leading: const Icon(Icons.public),
+                    title: Text(t(ctx, 'mapdata.region.title')),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'tiles',
+                  child: ListTile(
+                    leading: const Icon(Icons.download_for_offline_outlined),
+                    title: Text(t(ctx, 'mapdata.area.save')),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -408,8 +417,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     );
   }
 
-  /// Offers to fetch exactly what is on screen — the area you can see is the
-  /// area you get, which beats picking a region off a list and hoping.
+  /// Without a graph there is nothing to route on, so this leads straight to
+  /// the one place that provides one.
   Widget _dataBanner(BuildContext context) => Positioned(
         top: 12,
         left: 12,
@@ -422,62 +431,25 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             subtitle: Text(t(context, 'mapdata.area.source'),
                 style: Theme.of(context).textTheme.bodySmall),
             trailing: FilledButton(
-              onPressed: _downloadAreaHere,
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const RegionPickerScreen())),
               child: Text(t(context, 'nav.data.missing.action')),
             ),
           ),
         ),
       );
 
-  /// Downloads the roads around where we are, and builds the graph.
+  /// Saves the picture around the rider at every scale.
   ///
-  /// Centred on the rider, not on the viewport: what has to work offline is
-  /// the ground you are standing on, and a map that happens to be scrolled to
-  /// another city is not a request to download that city.
-  ///
-  /// Replaces whatever area was loaded before — one area at a time keeps the
-  /// memory budget honest, and riding two cities at once is not a thing.
-  Future<void> _downloadAreaHere() async {
-    final centre = _controller.lastFix?.position ??
-        LatLon(_map.camera.center.latitude, _map.camera.center.longitude);
-    final radiusM = NavSettings.instance.areaRadiusKm * 1000.0;
-    final messenger = ScaffoldMessenger.of(context);
-    // The picture can go as wide as the user likes; the road network cannot.
-    // Overpass answers with roughly a megabyte per square kilometre, so a
-    // hundred-kilometre disc would be tens of gigabytes. Roads therefore cover
-    // the middle of the area and the tiles cover all of it.
-    final roadRadiusM = math.min(radiusM, kMaxRoadRadiusM);
-    final dLat = roadRadiusM / 111320.0;
-    final dLon = dLat / math.cos(centre.lat * math.pi / 180.0);
-    await MapData.instance.buildFromOverpass(GeoBounds(
-      south: centre.lat - dLat,
-      west: centre.lon - dLon,
-      north: centre.lat + dLat,
-      east: centre.lon + dLon,
-    ));
-    if (!mounted) return;
-    final data = MapData.instance;
-    if (data.state == MapDataState.error && data.messageKey != null) {
-      messenger.showSnackBar(SnackBar(
-        content: Text(
-            tf(context, data.messageKey!, data.messageArgs ?? const {})),
-      ));
-    } else if (data.isReady) {
-      // Roads alone leave a grey map the moment the phone loses signal, so the
-      // picture of the same area comes down with them, sharpest first.
-      unawaited(_saveAreaTiles(centre, radiusM));
-      messenger.showSnackBar(SnackBar(
-        content: Text(tf(context, 'mapdata.status.ready', <String, Object?>{
-          'nodes': data.graph?.nodeCount ?? 0,
-          'edges': data.graph?.edgeCount ?? 0,
-          'mb': ((data.graphFile?.existsSync() ?? false)
-                  ? data.graphFile!.lengthSync() / (1 << 20)
-                  : 0)
-              .toStringAsFixed(1),
-        })),
-      ));
-    }
-  }
+  /// Roads come from a regional extract now; this is only the map behind
+  /// them, and the two are worth keeping separate — a region is a rare,
+  /// deliberate download, while the tiles you want are wherever you happen
+  /// to be standing.
+  Future<void> _saveMapAroundMe() =>
+      _saveAreaTiles(
+          _controller.lastFix?.position ??
+              LatLon(_map.camera.center.latitude, _map.camera.center.longitude),
+          NavSettings.instance.areaRadiusKm * 1000.0);
 
   Widget _controls(BuildContext context) {
     final hasRoute = _controller.hasRoute;

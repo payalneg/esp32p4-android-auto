@@ -51,7 +51,6 @@ class _MapDataScreenState extends State<MapDataScreen> {
           padding: const EdgeInsets.all(16),
           children: <Widget>[
             _statusCard(context),
-            _areaCard(context),
             _regionCard(context),
             _importCard(context),
             _tilesCard(context),
@@ -119,36 +118,7 @@ class _MapDataScreenState extends State<MapDataScreen> {
     );
   }
 
-  /// Where areas come from, and why this screen has no button for it.
-  Widget _areaCard(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                const Icon(Icons.travel_explore),
-                const SizedBox(width: 12),
-                Text(t(context, 'mapdata.area.title'),
-                    style: Theme.of(context).textTheme.titleMedium),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(t(context, 'mapdata.area.hint'),
-                style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 4),
-            Text(t(context, 'mapdata.area.source'),
-                style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// The other way to get data, and the only one that reaches beyond the
-  /// area around the rider.
+  /// Where a routing graph comes from.
   Widget _regionCard(BuildContext context) {
     return Card(
       child: ListTile(

@@ -1,10 +1,9 @@
 /// Builds a routing graph straight out of a regional .osm.pbf — the same
 /// input, and the same rules, as scripts/mapgen.
 ///
-/// The trade against Overpass: a whole province is one 190 MB download here
-/// instead of tens of gigabytes of JSON, at the cost of reading the file
-/// twice and of a decoder for the format. Which is why this exists at all —
-/// routes over a hundred kilometres are not reachable any other way.
+/// What it costs: reading the file twice, and a decoder for a format nothing
+/// in Dart reads. What it buys: a whole province in one 190 MB download,
+/// which is the only practical way to route beyond a neighbourhood.
 library;
 
 import 'dart:isolate';

@@ -33,11 +33,10 @@ class OsmWay {
 
 /// Where the builder looks up a node's position.
 ///
-/// The two sources differ enormously in scale: an Overpass answer is a map of
-/// a few tens of thousands of nodes, while a provincial extract is millions —
-/// and a HashMap of those, each boxing a [LatLon], costs hundreds of megabytes
-/// on its own. So the PBF path passes sorted typed arrays instead and this
-/// hides the difference.
+/// Scale is why this is an abstraction rather than a Map. A provincial
+/// extract names millions of nodes, and a HashMap of those — each entry boxing
+/// a [LatLon] — costs hundreds of megabytes on its own, so the PBF path passes
+/// sorted typed arrays instead. Smaller sources can still hand over a map.
 abstract class NodeSource {
   const NodeSource();
 
@@ -56,7 +55,7 @@ abstract class NodeSource {
   int indexOf(int id) => -1;
 }
 
-/// Straightforward lookup, for the tens of thousands an Overpass area holds.
+/// Straightforward lookup, for sources small enough not to care.
 class MapNodeSource extends NodeSource {
   const MapNodeSource(this.nodes);
 

@@ -576,7 +576,7 @@ const _en = <String, String>{
   'nav.gps.openSettings': 'Open settings',
   'nav.gps.waiting': 'Waiting for a GPS fix…',
   'nav.data.missing': 'No map data yet',
-  'nav.data.missing.action': 'Download this area',
+  'nav.data.missing.action': 'Download a region',
   'nav.data.loading': 'Loading the map data…',
   'nav.attribution': '© OpenStreetMap contributors',
   'nav.zoomIn': 'Zoom in',
@@ -590,16 +590,8 @@ const _en = <String, String>{
   'settings.mapdata.subtitle.error': 'Something went wrong',
   'mapdata.area.radius': 'Area radius',
   'mapdata.area.budget': 'Tiles per area',
-  'mapdata.area.title': 'Area on the phone',
-  'mapdata.area.hint':
-      'Areas are downloaded from the map: pan to the town you ride in and tap Download this area.',
-  'mapdata.area.source': 'Roads come from OpenStreetMap via Overpass',
-  'mapdata.err.areaTooBig':
-      'That area is too big ({km2} km², limit {max}). Zoom in and try again.',
-  'mapdata.err.overpassBusy':
-      'The OpenStreetMap servers are busy — try again in a minute',
-  'mapdata.err.overpassFormat': 'The server did not return map data',
-  'mapdata.err.emptyArea': 'No roads found in that area',
+  'mapdata.area.source': 'Road data comes from OpenStreetMap',
+  'mapdata.area.save': 'Save the map around me',
   'mapdata.region.title': 'Download a region',
   'mapdata.region.subtitle':
       'A whole province from Geofabrik — routes far beyond the area around you',
@@ -616,7 +608,7 @@ const _en = <String, String>{
   'mapdata.title': 'Map data',
   'mapdata.import.title': 'Or add the files yourself',
   'mapdata.download': 'Download',
-  'mapdata.downloading': 'Downloading roads… {file}',
+  'mapdata.downloading': 'Downloading the extract… {file}',
   'mapdata.import.graph': 'Import routing graph…',
   'mapdata.import.index': 'Import search index…',
   'mapdata.status.none': 'No map data on this phone',
@@ -1218,7 +1210,7 @@ const _ru = <String, String>{
   'nav.gps.openSettings': 'Открыть настройки',
   'nav.gps.waiting': 'Жду сигнал GPS…',
   'nav.data.missing': 'Данные карты не загружены',
-  'nav.data.missing.action': 'Скачать эту область',
+  'nav.data.missing.action': 'Скачать регион',
   'nav.data.loading': 'Загружаю данные карты…',
   'nav.attribution': '© OpenStreetMap contributors',
   'nav.zoomIn': 'Приблизить',
@@ -1232,16 +1224,8 @@ const _ru = <String, String>{
   'settings.mapdata.subtitle.error': 'Что-то пошло не так',
   'mapdata.area.radius': 'Радиус области',
   'mapdata.area.budget': 'Тайлов на область',
-  'mapdata.area.title': 'Область на телефоне',
-  'mapdata.area.hint':
-      'Области скачиваются с карты: доведите её до нужного города и нажмите «Скачать эту область».',
-  'mapdata.area.source': 'Дороги берутся из OpenStreetMap через Overpass',
-  'mapdata.err.areaTooBig':
-      'Слишком большая область ({km2} км², предел {max}). Приблизьте карту.',
-  'mapdata.err.overpassBusy':
-      'Серверы OpenStreetMap заняты — попробуйте через минуту',
-  'mapdata.err.overpassFormat': 'Сервер вернул не данные карты',
-  'mapdata.err.emptyArea': 'В этой области дорог не нашлось',
+  'mapdata.area.source': 'Данные дорог — из OpenStreetMap',
+  'mapdata.area.save': 'Сохранить карту вокруг меня',
   'mapdata.region.title': 'Скачать регион',
   'mapdata.region.subtitle':
       'Целое воеводство с Geofabrik — маршруты далеко за пределы округи',
@@ -1258,7 +1242,7 @@ const _ru = <String, String>{
   'mapdata.title': 'Данные карты',
   'mapdata.import.title': 'Или добавьте файлы сами',
   'mapdata.download': 'Скачать',
-  'mapdata.downloading': 'Качаю дороги… {file}',
+  'mapdata.downloading': 'Качаю выгрузку… {file}',
   'mapdata.import.graph': 'Импортировать граф маршрутов…',
   'mapdata.import.index': 'Импортировать поисковый индекс…',
   'mapdata.status.none': 'Данных карты на телефоне нет',

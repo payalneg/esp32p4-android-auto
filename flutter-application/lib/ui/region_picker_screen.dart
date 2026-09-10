@@ -1,9 +1,9 @@
 /// Picking a regional extract to build the routing graph from.
 ///
-/// This is the path that makes routes longer than a few kilometres possible:
 /// Geofabrik publishes the OSM planet cut into countries and provinces, and a
-/// whole province is one file of a couple of hundred megabytes — against tens
-/// of gigabytes if the same ground were asked of Overpass.
+/// whole province is one file of a couple of hundred megabytes — the same
+/// input scripts/mapgen reads, and the only practical way to have a routing
+/// graph that covers more than a neighbourhood.
 library;
 
 import 'package:flutter/material.dart';

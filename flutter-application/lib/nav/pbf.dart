@@ -1,11 +1,9 @@
 /// Reader for the OSM PBF format — the same regional extracts scripts/mapgen
 /// feeds to pyosmium.
 ///
-/// Why this exists: Overpass answers with about a megabyte of JSON per square
-/// kilometre, so a whole province is tens of gigabytes and simply cannot be
-/// asked for. The same province from Geofabrik is under two hundred megabytes,
-/// because PBF is protobuf in zlib blobs. Nothing in Dart reads it, so this
-/// does — only the parts a routing graph needs.
+/// Why this exists: a whole province from Geofabrik is under two hundred
+/// megabytes, because PBF is protobuf in zlib blobs. Nothing in Dart reads
+/// the format, so this does — only the parts a routing graph needs.
 ///
 /// Layout, per https://wiki.openstreetmap.org/wiki/PBF_Format:
 ///

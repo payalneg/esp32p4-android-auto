@@ -1,10 +1,11 @@
 /// Owns the downloaded map data: the routing graph, the search index and the
 /// tile cache.
 ///
-/// There are two ways data gets here. Either the phone downloads raw OSM data
-/// for an area from Overpass and builds the graph itself (overpass.dart +
+/// There are two ways data gets here. Either the phone downloads a regional
+/// extract from Geofabrik and builds the graph itself (pbf_graph.dart +
 /// graph_builder.dart), or the user supplies files built on a desktop by
-/// scripts/mapgen. Both produce the same RGF2 format.
+/// scripts/mapgen. Both produce the same RGF2 format, and both are the same
+/// input pyosmium reads — an .osm.pbf.
 ///
 /// Files land in the app's support directory — not the cache directory, which
 /// the OS is free to purge — and are parsed in an isolate, because a 17 MB
@@ -23,8 +24,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'geofabrik.dart';
-import 'graph_builder.dart';
-import 'overpass.dart';
 import 'pbf_graph.dart';
 import 'rgf2.dart';
 import 'router.dart';
@@ -116,67 +115,11 @@ class MapData extends ChangeNotifier {
     }
   }
 
-  /// Downloads the road network for [bounds] from Overpass and builds the
-  /// routing graph on the phone.
-  ///
-  /// The heavy half — parsing tens of megabytes of JSON and walking every way
-  /// — runs in an isolate; only the finished bytes come back.
-  Future<void> buildFromOverpass(GeoBounds bounds) async {
-    await init();
-    _messageKey = null;
-    _messageArgs = null;
-    _set(MapDataState.downloading);
-    try {
-      final clock = Stopwatch()..start();
-      final result = await OverpassClient().fetch(
-        bounds,
-        userAgent: _userAgent,
-        onProgress: (cell, cells, bytes) {
-          // Bytes and speed, not just a spinner: a road download is minutes
-          // long and the only way to tell progress from a hang is numbers.
-          final mb = bytes / (1 << 20);
-          final seconds = clock.elapsedMilliseconds / 1000;
-          final rate = seconds > 0 ? mb / seconds : 0;
-          _progressFile = '${cells > 1 ? "$cell/$cells · " : ""}'
-              '${mb.toStringAsFixed(1)} MB · '
-              '${rate.toStringAsFixed(1)} MB/s';
-          notifyListeners();
-        },
-      );
-      _set(MapDataState.loading);
-      final ways = result.ways;
-      final nodes = result.nodes;
-      final places = result.places;
-      final built = await Isolate.run(() => GraphBuilder.build(
-            ways: ways,
-            nodes: MapNodeSource(nodes),
-            places: places,
-          ));
-      if (built.edgeCount == 0) {
-        _fail('mapdata.err.emptyArea', null);
-        return;
-      }
-      await graphFile!.writeAsBytes(built.graphBytes, flush: true);
-      final index = indexFile!;
-      if (built.searchIndexTsv.isEmpty) {
-        if (await index.exists()) await index.delete();
-      } else {
-        await index.writeAsString(built.searchIndexTsv, flush: true);
-      }
-      await _loadFromDisk();
-    } on OverpassException catch (e) {
-      _fail(e.messageKey, e.args);
-    } on Object catch (e) {
-      _fail('mapdata.err.download', <String, String>{'err': '$e'});
-    }
-  }
-
   /// Downloads a Geofabrik extract and builds the graph from it — the same
   /// route scripts/mapgen takes.
   ///
-  /// A whole province is one 190 MB file here against tens of gigabytes of
-  /// Overpass JSON, which is why this is the only way to have routing over
-  /// more than a few kilometres.
+  /// A whole province is one 190 MB file, which is what makes routing over
+  /// more than a neighbourhood practical at all.
   Future<void> buildFromRegion(GeofabrikRegion region) async {
     await init();
     _messageKey = null;
