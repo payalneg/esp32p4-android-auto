@@ -1,0 +1,109 @@
+menu "Board Support Package (ESP32-S3-Touch-LCD-4)"
+    depends on IDF_TARGET_ESP32S3
+
+    choice BSP_S3T4_HW_REV
+        prompt "Board hardware revision"
+        default BSP_S3T4_HW_V4
+        help
+            The two revisions differ in the I2C helper that holds the display
+            and touch resets and drives the backlight. Getting this wrong shows
+            up as a black screen on a cold boot (no reset pulse) and a log line
+            from bsp_io_expander_init about nothing answering at the expected
+            address.
+
+            Tell them apart from the silkscreen, or by which address answers on
+            the shared I2C bus (SDA 15 / SCL 7): 0x24 is the CH32V003 (V4.0),
+            0x20 is the TCA9554 (V3.0). The touch controller answers at 0x5D
+            either way.
+
+        config BSP_S3T4_HW_V4
+            bool "V4.0 — CH32V003 helper at 0x24 (PWM backlight, buzzer, battery ADC)"
+
+        config BSP_S3T4_HW_V3
+            bool "V3.0 — TCA9554 expander at 0x20 (backlight on/off only)"
+    endchoice
+
+    config BSP_ERROR_CHECK
+        bool "Enable error check in BSP"
+        default y
+        help
+            Error check assert the application before returning the error code.
+
+    menu "I2C"
+        config BSP_I2C_NUM
+            int "I2C peripheral index"
+            default 0
+            range 0 1
+
+        config BSP_I2C_FAST_MODE
+            bool "Enable I2C fast mode"
+            default y
+            help
+                I2C has two speed modes: normal (100kHz) and fast (400kHz).
+
+        config BSP_I2C_CLK_SPEED_HZ
+            int
+            default 400000 if BSP_I2C_FAST_MODE
+            default 100000
+    endmenu
+
+    menu "uSD card - Virtual File System"
+        config BSP_SD_FORMAT_ON_MOUNT_FAIL
+            bool "Format uSD card if mounting fails"
+            default n
+
+        config BSP_SD_MOUNT_POINT
+            string "uSD card mount point"
+            default "/sdcard"
+    endmenu
+
+    menu "SPIFFS - Virtual File System"
+        config BSP_SPIFFS_FORMAT_ON_MOUNT_FAIL
+            bool "Format SPIFFS if mounting fails"
+            default n
+
+        config BSP_SPIFFS_MOUNT_POINT
+            string "SPIFFS mount point"
+            default "/spiffs"
+
+        config BSP_SPIFFS_PARTITION_LABEL
+            string "Partition label of SPIFFS"
+            default "storage"
+
+        config BSP_SPIFFS_MAX_FILES
+            int "Maximum files that could be open at the same time"
+            default 2
+    endmenu
+
+    menu "Display"
+        config BSP_LCD_RGB_BUFFER_NUMS
+            int "Number of RGB frame buffers"
+            default 2
+            range 1 3
+            help
+                The LVGL adapter's tear-avoidance modes draw straight into the
+                panel's framebuffers: DOUBLE_DIRECT (what main/display_init.c
+                asks for) needs two of them, three only if it also has to
+                rotate. Each one is 480*480*2 = 460 800 bytes of PSRAM.
+
+        config BSP_LCD_RGB_BOUNCE_BUFFER_HEIGHT
+            int "RGB bounce buffer height (lines)"
+            default 20
+            range 0 120
+            help
+                The panel's DMA reads the framebuffer out of PSRAM through two
+                internal-RAM bounce buffers of this many lines each (480 px
+                wide, 2 bytes per pixel, so 20 lines = 19 200 bytes each).
+                Bigger buffers ride out longer PSRAM stalls at the cost of
+                internal RAM; 0 disables them and lets the DMA read PSRAM
+                directly, which tears as soon as anything else hogs the bus.
+
+        config BSP_DISPLAY_BRIGHTNESS_LEDC_CH
+            int "LEDC channel index"
+            default 1
+            range 0 7
+            help
+                Unused on this board — the backlight hangs off the I2C helper,
+                not off a GPIO. Kept so board-independent code can reference it.
+    endmenu
+endmenu

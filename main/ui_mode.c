@@ -5,17 +5,22 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bsp/esp-bsp.h"
-#include "display_video.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "sdkconfig.h"
 #include "touch_input.h"
 #include "vesc_ui.h"
+#if CONFIG_AA_ENABLE
+#include "display_video.h"
+#endif
 
 static const char *TAG = "ui_mode";
 
 static atomic_int s_mode = UI_MODE_VESC;
-static lv_obj_t  *s_aa_screen;
 static bool       s_inited;
+#if CONFIG_AA_ENABLE
+static lv_obj_t  *s_aa_screen;   /* what lv_scr_act() was before the dashboard */
+#endif
 
 esp_err_t ui_mode_init(void)
 {
@@ -24,7 +29,9 @@ esp_err_t ui_mode_init(void)
         ESP_LOGE(TAG, "lvgl lock timeout");
         return ESP_FAIL;
     }
+#if CONFIG_AA_ENABLE
     s_aa_screen = lv_scr_act();
+#endif
     vesc_ui_init();
     lv_obj_t *vesc = vesc_ui_get_screen();
     if (vesc) lv_scr_load(vesc);
@@ -35,6 +42,17 @@ esp_err_t ui_mode_init(void)
 
 ui_mode_t ui_mode_get(void) { return atomic_load(&s_mode); }
 
+#if !CONFIG_AA_ENABLE
+/* Dashboard-only board: UI_MODE_VESC is the only mode there is. The setter
+ * stays (vesc_ui_updater and the header are shared with the AA boards) but
+ * has nothing to switch to, so it just reports the attempt. */
+void ui_mode_set(ui_mode_t mode)
+{
+    if (mode != UI_MODE_VESC) {
+        ESP_LOGW(TAG, "ui_mode_set(AA) ignored — no Android Auto in this build");
+    }
+}
+#else
 void ui_mode_set(ui_mode_t mode)
 {
     if (!s_inited) return;
@@ -87,6 +105,8 @@ void ui_mode_set(ui_mode_t mode)
     touch_input_set_mode(mode == UI_MODE_VESC ? TOUCH_MODE_LVGL : TOUCH_MODE_AA);
     ESP_LOGI(TAG, "switched to %s", mode == UI_MODE_VESC ? "VESC" : "AA");
 }
+
+#endif /* CONFIG_AA_ENABLE */
 
 void ui_mode_toggle(void)
 {

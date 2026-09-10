@@ -1,0 +1,76 @@
+# Per-board overlay: Waveshare ESP32-S3-Touch-LCD-4 (480x480, 16 MB flash).
+#
+# Layered on top of sdkconfig.defaults via scripts/build_board.sh:
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.s3touch4"
+# The base file is the Waveshare-P4 config; the keys below override it. Base
+# keys that don't exist on the ESP32-S3 (ESP_HOSTED_*, SPIRAM_MODE_HEX,
+# ESP32P4_*, ESP_VBAT_*, ESP_H264_*, and everything under a component we drop
+# for this target) are silently ignored by Kconfig — that's why this overlay
+# only has to state the differences.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_BOARD_S3_TOUCH_LCD_4=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Flash — 16 MB on the ESP32-S3-WROOM-1-N16R8 module.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_s3_16mb.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_s3_16mb.csv"
+
+# PSRAM — 8 MB octal.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Keep DMA-capable internal RAM available for WiFi/BLE/LCD: push medium-sized
+# allocations out to PSRAM (default keeps everything under 16 KB internal) and
+# reserve more internal heap than the 32 KB default.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+# Run code and read constants from PSRAM instead of memory-mapped flash. This
+# is what keeps the RGB panel alive across a flash write/erase: the LCD DMA
+# streams the framebuffer out of PSRAM continuously, and with XIP-from-PSRAM a
+# flash operation no longer has to disable the cache for everyone (which on
+# this class of board shows up as the picture tearing or drifting sideways
+# whenever NVS commits). It is also why flash_shade's backlight blanking (a
+# P4-only workaround, see main/flash_shade.h) is not armed on this board.
+# Cost: a copy of .text/.rodata lives in PSRAM — budget ~3 MB of the 8 MB.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+# 64-byte data cache lines match the LCD/PSRAM burst size.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# RGB LCD driver — refill the bounce buffers from an IRAM-resident ISR and
+# restart the transfer in the VSYNC gap so a late refill can't shift the image.
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
+
+# Bluetooth — the S3 has its own radio, so NimBLE talks to the on-chip
+# controller instead of the P4's VHCI-over-SDIO link to the ESP32-C6.
+# Roles/MTU/heap-placement are inherited from the base config.
+CONFIG_BT_CONTROLLER_ENABLED=y
+
+# The USB-C port is the chip's native USB peripheral; there is no UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# No 32.768 kHz crystal on the ESP32 side (the one on the board belongs to the
+# PCF85063A RTC).
+CONFIG_RTC_CLK_SRC_INT_RC=y
+
+# -O2 rather than the base -Og: 240 MHz Xtensa with no PPA does every pixel of
+# the dashboard in software. Watch `idf.py size` — the OTA slot is 4 MB.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# WiFi buffers — trimmed from the P4 numbers because they come out of the
+# 512 KB of internal RAM that also has to hold the BLE controller and lwIP.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=16
+
+# VESC CAN — TJA1051 transceiver on the board's external header.
+CONFIG_VESC_CAN_TX_GPIO=6
+CONFIG_VESC_CAN_RX_GPIO=0

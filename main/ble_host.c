@@ -2,8 +2,11 @@
 
 #include <string.h>
 
+#include "sdkconfig.h"
+#if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_hosted.h"
 #include "esp_hosted_misc.h"
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "host/ble_gap.h"
@@ -257,10 +260,16 @@ esp_err_t ble_host_init(void)
      * keeping its WARN/ERROR. Our own logs use TAG "ble_host", unaffected. */
     esp_log_level_set("NimBLE", ESP_LOG_WARN);
 
-    /* SDIO transport to C6 should already be up via c6_ota's
-     * esp_hosted_init/connect_to_slave; calling controller_init/enable
-     * here is the BT-specific bring-up step. */
-    esp_err_t err = esp_hosted_bt_controller_init();
+    esp_err_t err;
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* The P4 has no radio: the controller lives on the on-board ESP32-C6 and
+     * NimBLE reaches it over a virtual HCI on the SDIO link. The SDIO
+     * transport is already up via c6_ota's esp_hosted_init/connect_to_slave;
+     * these two calls are the BT-specific bring-up step. Boards whose chip has
+     * its own radio (ESP32-S3) skip this — nimble_port_init() initialises and
+     * enables the on-chip controller itself when CONFIG_BT_CONTROLLER_ENABLED
+     * is set. */
+    err = esp_hosted_bt_controller_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_hosted_bt_controller_init: %s", esp_err_to_name(err));
         return err;
@@ -270,6 +279,7 @@ esp_err_t ble_host_init(void)
         ESP_LOGE(TAG, "esp_hosted_bt_controller_enable: %s", esp_err_to_name(err));
         return err;
     }
+#endif
 
     err = nimble_port_init();
     if (err != ESP_OK) {

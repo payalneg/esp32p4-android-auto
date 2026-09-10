@@ -1,0 +1,18 @@
+menu "Log capture"
+
+    config LOG_CAPTURE_SIZE_KB
+        int "Boot-log ring buffer size (KiB, PSRAM)"
+        default 256 if IDF_TARGET_ESP32S3
+        default 1024
+        range 32 4096
+        help
+            Every ESP_LOG line is mirrored into this PSRAM ring so the Logs
+            screen and the companion app can show the boot log after the fact.
+            Allocated once at the very start of app_main and never freed.
+
+            1 MiB is comfortable on the P4 boards (32 MiB PSRAM). The ESP32-S3
+            board has 8 MiB total and spends 0.9 MiB of it on the two LCD frame
+            buffers plus up to ~3 MiB on an OTA image being staged, so it takes
+            a quarter of that.
+
+endmenu

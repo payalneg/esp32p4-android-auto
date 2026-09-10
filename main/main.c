@@ -39,7 +39,22 @@ void port_start_app_hook(void)
                    (unsigned)internal8, (unsigned)largest);
 }
 
+#include "sdkconfig.h"
+
+#if CONFIG_IDF_TARGET_ESP32P4
 #include "aa_overclock.h"
+#include "vbat_routing.h"
+#endif
+#if CONFIG_AA_ENABLE
+#include "aa_link_status.h"
+#include "bt_agent_ota.h"
+#include "bt_link.h"
+#include "c6_ota.h"
+#include "display_video.h"
+#include "h264_pipe.h"
+#include "idle_screen.h"
+#include "tcp_server.h"
+#endif
 #include "ble_host.h"
 #include "ble_nus.h"
 #include "notif_bridge.h"
@@ -49,16 +64,10 @@ void port_start_app_hook(void)
 #include "music_info_view.h"
 #include "gui_guider.h"
 #include "dashboard_theme.h"
-#include "bt_agent_ota.h"
-#include "bt_link.h"
-#include "c6_ota.h"
+#include "board.h"
 #include "config.h"
 #include "dev_settings.h"
 #include "display_init.h"
-#include "display_video.h"
-#include "h264_pipe.h"
-#include "idle_screen.h"
-#include "aa_link_status.h"
 #include "splash_screen.h"
 #include "charge_prompt.h"
 #include "log_capture.h"
@@ -67,11 +76,9 @@ void port_start_app_hook(void)
 #include "files_http.h"
 #include "lisp_http.h"
 #include "ota_screen.h"
-#include "tcp_server.h"
 #include "touch_input.h"
 #include "ui_mode.h"
 #include "debug_uart_bridge.h"
-#include "vbat_routing.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
@@ -253,6 +260,7 @@ static void on_target_id_changed(uint8_t new_id)
     ESP_LOGI(TAG, "VESC target ID → %u", new_id);
 }
 
+#if CONFIG_AA_ENABLE
 /* settings_set_aa_autoconnect → here. Forwards to the BT agent so it can
  * arm or disarm its auto-reconnect-on-boot loop without a P4 restart. The
  * agent persists the value to its own NVS, so this call is also fine if
@@ -263,6 +271,7 @@ static void on_aa_autoconnect_changed(bool on)
 {
     bt_link_set_auto_reconnect(on);
 }
+#endif /* CONFIG_AA_ENABLE */
 
 void app_main(void)
 {
@@ -271,7 +280,12 @@ void app_main(void)
      * sequence (PMU register dumps, NVS contents, BLE init, …). */
     log_capture_init();
 
-    ESP_LOGI(TAG, "ESP32-P4 Android Auto boot, aa_submode=%d", CONNECTION_MODE);
+#if CONFIG_AA_ENABLE
+    ESP_LOGI(TAG, "%s boot (Android Auto, aa_submode=%d)",
+             BOARD_MODEL_NAME, CONNECTION_MODE);
+#else
+    ESP_LOGI(TAG, "%s boot (VESC dashboard)", BOARD_MODEL_NAME);
+#endif
 
     /* Why did we (re)start? A mid-ride restart is invisible on the dashboard
      * but resets every in-RAM total, so the Logs screen has to be able to
@@ -341,9 +355,11 @@ void app_main(void)
      * freezes the screen otherwise. */
     trip_log_init();
 
+#if CONFIG_IDF_TARGET_ESP32P4
     /* Bump CPU to 400 MHz before any peripheral / WiFi init so APB ratio
      * stays consistent. No-op unless CONFIG_AA_OVERCLOCK_400 is set. */
     aa_overclock_400mhz_apply();
+#endif
 
     if (display_init() != ESP_OK) {
         ESP_LOGW(TAG, "display init failed — UI disabled");
@@ -360,8 +376,12 @@ void app_main(void)
     splash_screen_show();
 
     /* idle first, ota second so the OTA overlay sits on top in z-order
-     * (children of lv_scr_act() are stacked in creation order). */
+     * (children of lv_scr_act() are stacked in creation order). The idle
+     * screen is the AA one ("waiting for phone" + Connect); the dashboard-only
+     * board never shows it. */
+#if CONFIG_AA_ENABLE
     idle_screen_init();
+#endif
     ota_screen_init();
 
     /* Replace BSP's auto-installed LVGL touch indev with our own that reads
@@ -397,10 +417,12 @@ void app_main(void)
      * reading (the check runs once per boot on that reading). */
     charge_prompt_init();
     if (ui_err == ESP_OK) {
+#if CONFIG_AA_ENABLE
         /* 3-finger gesture toggles between VESC dashboard and AA projection.
          * Only meaningful once the AA stack is up. The GT911 polling task
          * starts unconditionally so LVGL touch keeps working. */
         touch_input_set_gesture_cb(ui_mode_toggle);
+#endif
         /* Left-edge swipe opens the LISP quick-action panel. The handler
          * marshals to the LVGL task and no-ops unless the dashboard is the
          * live screen, so registering it unconditionally is safe. */
@@ -535,13 +557,19 @@ void app_main(void)
      * hook into trip_log (speed provider) + trip_persist (trip reset). */
     speed_sensor_init();
 
+#if CONFIG_AA_ENABLE
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");
+#endif
 
-#if CONNECTION_MODE == MODE_WIRELESS_HELPER
+    /* WiFi comes up on every board. On the AA head units it is the network
+     * the phone joins for projection; everywhere it is how the on-device web
+     * UI (/ota, /files, /lisp) and the Settings QR code are reachable. */
     ESP_ERROR_CHECK(wifi_manager_start());
     if (wifi_manager_wait_ready(30000) != ESP_OK) {
         ESP_LOGE(TAG, "wifi setup failed, halting");
+#if CONFIG_AA_ENABLE
         idle_screen_show("Android Auto", "Wi-Fi setup failed");
+#endif
         return;
     }
 
@@ -551,19 +579,26 @@ void app_main(void)
                  ap->ssid, ap->password, ap->bssid_str, (unsigned)ap->channel);
     }
 
+    /* mDNS hostname (CONFIG_WEB_MDNS_HOSTNAME) — makes the web UI reachable
+     * as http://<hostname>.local/ and, on the AA boards, is what the Wireless
+     * Helper APK looks the head unit up by. */
     ESP_ERROR_CHECK(mdns_advertise_start());
-    ESP_ERROR_CHECK(tcp_server_start(AA_TCP_PORT));
-    /* Plain HTTP OTA server — phone joins the SoftAP for AA anyway, so
-     * scripts/ota_push.sh can hit http://<gw>/ota from a laptop on the
-     * same AP. No-op when CONFIG_OTA_HTTP_ENABLED is unset. */
+
+    /* Plain HTTP OTA server on the SoftAP, so scripts/ota_push.sh can hit
+     * http://<gw>/ota from a laptop on the same AP. No-op when
+     * CONFIG_OTA_HTTP_ENABLED is unset. */
     ota_http_start();
     /* Attach the web file manager (/files) to the OTA HTTP server — browse
      * /vescfs + microSD from any browser on the SoftAP. No-op if the server
      * didn't start. */
     files_http_register(ota_http_get_server());
     /* Web LISP editor (/lisp) on the same server — edit + upload the VESC's
-     * LispBM script from a browser instead of the 800x480 touch keyboard. */
+     * LispBM script from a browser instead of the on-screen keyboard. */
     lisp_http_register(ota_http_get_server());
+
+#if CONFIG_AA_ENABLE
+#if CONNECTION_MODE == MODE_WIRELESS_HELPER
+    ESP_ERROR_CHECK(tcp_server_start(AA_TCP_PORT));
 
     /* Display sink first — it captures the panel handle from BSP and waits
      * idle until first frame. Then the H.264 pipe; push() is a no-op until
@@ -651,5 +686,15 @@ void app_main(void)
 #error "MODE_BT_CLASSIC: not implemented yet (Stage 1 covers Mode B only)"
 #else
 #error "CONNECTION_MODE not set"
-#endif
+#endif  /* CONNECTION_MODE */
+#else   /* !CONFIG_AA_ENABLE — VESC dashboard only */
+    {
+        esp_netif_ip_info_t ip_info = {0};
+        esp_netif_t *n = esp_netif_get_handle_from_ifkey(ap ? "WIFI_AP_DEF"
+                                                            : "WIFI_STA_DEF");
+        if (n) esp_netif_get_ip_info(n, &ip_info);
+        ESP_LOGI(TAG, "dashboard ready — web UI on http://" IPSTR "/ (%s.local)",
+                 IP2STR(&ip_info.ip), CONFIG_WEB_MDNS_HOSTNAME);
+    }
+#endif  /* CONFIG_AA_ENABLE */
 }

@@ -9,7 +9,12 @@
 #   scripts/build_board.sh all [idf.py args...]  # same, optionally with custom args
 #   scripts/build_board.sh waveshare build
 #   scripts/build_board.sh jc4880 -p /dev/cu.usbmodem* flash monitor
+#   scripts/build_board.sh s3touch4 -p /dev/cu.usbmodem* flash monitor
 #   scripts/build_board.sh jc4880 size
+#
+# Boards do not all share a chip: waveshare/jc4880 are ESP32-P4, s3touch4 is an
+# ESP32-S3. The target is exported per board (IDF_TARGET) and each chip gets its
+# own dependency lock file, because the managed component set differs.
 #
 # With no board (or "all"), runs the given idf.py command — defaulting to
 # `build` — for each board in turn. A plain `idf.py build` (no wrapper) still
@@ -20,7 +25,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # Boards with a sdkconfig.defaults.<board> overlay. Keep in sync with release.sh.
-BOARDS=(waveshare jc4880)
+BOARDS=(waveshare jc4880 s3touch4)
+
+# board -> chip. Anything not listed here is an ESP32-P4 head unit.
+board_target() {
+    case "$1" in
+        s3touch4) echo esp32s3 ;;
+        *)        echo esp32p4 ;;
+    esac
+}
 
 # Make idf.py available if the caller forgot to source export.sh.
 if ! command -v idf.py >/dev/null 2>&1; then
@@ -46,6 +59,12 @@ run_board() (
     local overlay="sdkconfig.defaults.${board}"
     [[ -f "$overlay" ]] || { echo "build_board: $overlay not found" >&2; exit 1; }
 
+    # Chip selection. IDF_TARGET is what the root CMakeLists reads to pick the
+    # board's BSP and drop the other chip's components; the overlay sets the
+    # matching CONFIG_IDF_TARGET so a fresh sdkconfig agrees with it.
+    local target; target="$(board_target "$board")"
+    export IDF_TARGET="$target"
+
     local cache="build_${board}/CMakeCache.txt"
     if [[ -f "$cache" ]]; then
         local py
@@ -63,6 +82,7 @@ run_board() (
     idf.py -B "build_${board}" \
            -D SDKCONFIG="build_${board}/sdkconfig" \
            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;${overlay}" \
+           -D DEPENDENCIES_LOCK="${ROOT}/dependencies.lock.${target}" \
            "$@"
 )
 
@@ -78,12 +98,12 @@ case "$board" in
             run_board "$b" "${args[@]}"
         done
         ;;
-    waveshare|jc4880)
+    waveshare|jc4880|s3touch4)
         shift
         run_board "$board" "$@"
         ;;
     *)
-        echo "usage: $0 [all|waveshare|jc4880] [idf.py args...]" >&2
+        echo "usage: $0 [all|waveshare|jc4880|s3touch4] [idf.py args...]" >&2
         exit 2
         ;;
 esac

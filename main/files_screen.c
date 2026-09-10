@@ -130,15 +130,23 @@ static bool is_under_vescfs(const char *path)
            (path[n] == '\0' || path[n] == '/');
 }
 
+/* Join dir + name. strlcpy/strlcat rather than snprintf("%s/%s"): at -O2 the
+ * compiler proves a 255-byte name may not fit the caller's buffer and
+ * -Werror=format-truncation rejects the format call, while these two truncate
+ * by contract. */
 static void path_join(char *out, size_t out_sz,
                       const char *dir, const char *name)
 {
     /* At the synthetic root, dir == "/" — avoid the "//name" double slash.
-     * Elsewhere dir has no trailing slash, so "%s/%s" is safe. */
+     * Elsewhere dir has no trailing slash. */
     if (strcmp(dir, SYN_ROOT) == 0) {
-        snprintf(out, out_sz, "/%s", name);
+        strlcpy(out, "/", out_sz);
     } else {
-        snprintf(out, out_sz, "%s/%s", dir, name);
+        strlcpy(out, dir, out_sz);
+        strlcat(out, "/", out_sz);
+    }
+    if (strlcat(out, name, out_sz) >= out_sz) {
+        ESP_LOGW(TAG, "path truncated: %s/%s", dir, name);
     }
 }
 

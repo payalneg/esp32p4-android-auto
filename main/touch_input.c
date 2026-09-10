@@ -5,6 +5,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "display_init.h"
+#include "sdkconfig.h"
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -18,15 +19,37 @@ static const char *TAG = "touch_input";
  * already smooth) and lines up with the BSP example's polling cadence. */
 #define POLL_INTERVAL_MS    20
 
-/* Coordinate mapping: panel native is 480×800 portrait. The video pipeline
+/* Coordinate mapping, per board.
+ *
+ * P4 head units: the panel scans 480×800 portrait and the LVGL adapter renders
+ * ROTATE_90, so glass (tx, ty) has to be rotated into the 800×480 landscape
+ * space the UI and Android Auto both use. The video pipeline
  * (display_video.c BYPASS path) writes panel pixel (dx, dy) from AA pixel
- * (sx=dy, sy=479-dx). Inverting: panel touch (tx, ty) shows AA pixel
- * (ax=ty, ay=479-tx). AA frame is 800×480 landscape, which matches the
- * touch_screen_config we advertise in InputChannel (width=800, height=480). */
+ * (sx=dy, sy=479-dx); inverting that gives the mapping below, and it matches
+ * the touch_screen_config we advertise in InputChannel (width=800,
+ * height=480).
+ *
+ * ESP32-S3 board: the RGB panel scans 480×480 in the same orientation the UI
+ * is drawn in (ROTATE_0), so glass coords already are screen coords. */
+#if CONFIG_BOARD_S3_TOUCH_LCD_4
+#define PANEL_NATIVE_W      480
+#define PANEL_NATIVE_H      480
+#define SCREEN_W            480
+#define SCREEN_H            480
+#define PANEL_TO_SCREEN_X(px, py)  (px)
+#define PANEL_TO_SCREEN_Y(px, py)  (py)
+#else
 #define PANEL_NATIVE_W      480
 #define PANEL_NATIVE_H      800
-#define AA_W                800
-#define AA_H                480
+#define SCREEN_W            800
+#define SCREEN_H            480
+#define PANEL_TO_SCREEN_X(px, py)  (py)
+#define PANEL_TO_SCREEN_Y(px, py)  ((uint16_t)((PANEL_NATIVE_W - 1) - (px)))
+#endif
+
+/* Legacy names — the AA input channel calls the screen space "AA space".  */
+#define AA_W                SCREEN_W
+#define AA_H                SCREEN_H
 
 #define MAX_POINTS          5
 #define GESTURE_FINGERS     3
@@ -223,14 +246,14 @@ static void poll_task(void *arg)
                     if (atomic_load(&s_inject_active)) {
                         atomic_store(&s_inject_active, false);
                     }
-                    /* Rotate panel-native portrait (480x800) to LVGL landscape
-                     * (800x480) — matches BSP's ESP_LV_ADAPTER_ROTATE_90.
-                     *  lx = panel_y, ly = (PANEL_NATIVE_W - 1) - panel_x. */
+                    /* Panel-native -> screen space (see PANEL_TO_SCREEN_*
+                     * above): a rotation on the portrait P4 panels, identity
+                     * on the square S3 one. */
                     if (single) {
-                        uint16_t lvgl_x = panel_y;
-                        uint16_t lvgl_y = (PANEL_NATIVE_W - 1) - panel_x;
-                        if (lvgl_x >= AA_W) lvgl_x = AA_W - 1;
-                        if (lvgl_y >= AA_H) lvgl_y = AA_H - 1;
+                        uint16_t lvgl_x = PANEL_TO_SCREEN_X(panel_x, panel_y);
+                        uint16_t lvgl_y = PANEL_TO_SCREEN_Y(panel_x, panel_y);
+                        if (lvgl_x >= SCREEN_W) lvgl_x = SCREEN_W - 1;
+                        if (lvgl_y >= SCREEN_H) lvgl_y = SCREEN_H - 1;
                         atomic_store(&s_lvgl_x, lvgl_x);
                         atomic_store(&s_lvgl_y, lvgl_y);
                     }
@@ -244,7 +267,7 @@ static void poll_task(void *arg)
                 /* --- left-edge swipe detector (opens the LISP panel) ---
                  * Runs on the effective landscape coords reported to LVGL this
                  * cycle (real finger OR a live injection), so UI-test swipes
-                 * trigger it the same as a real one. Landscape x = panel_y. */
+                 * trigger it the same as a real one. */
                 bool     eff_pressed;
                 uint16_t eff_x;
                 if (inject_live()) {
@@ -252,7 +275,7 @@ static void poll_task(void *arg)
                     eff_x       = atomic_load(&s_inject_x);
                 } else {
                     eff_pressed = single;
-                    eff_x       = panel_y;
+                    eff_x       = PANEL_TO_SCREEN_X(panel_x, panel_y);
                 }
                 if (eff_pressed && !edge_prev_pressed) {
                     edge_candidate = (eff_x < EDGE_SWIPE_START_PX);
@@ -276,8 +299,8 @@ static void poll_task(void *arg)
                 /* TOUCH_MODE_AA: same rotation, plus PRESS/DRAG/RELEASE state
                  * machine. Multi-touch (>=2) suppresses AA events. */
                 if (single) {
-                    uint16_t aa_x = panel_y;
-                    uint16_t aa_y = (PANEL_NATIVE_W - 1) - panel_x;
+                    uint16_t aa_x = PANEL_TO_SCREEN_X(panel_x, panel_y);
+                    uint16_t aa_y = PANEL_TO_SCREEN_Y(panel_x, panel_y);
                     if (aa_x >= AA_W) aa_x = AA_W - 1;
                     if (aa_y >= AA_H) aa_y = AA_H - 1;
 

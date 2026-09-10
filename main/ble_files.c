@@ -186,11 +186,20 @@ static bool path_safe(char *path) {
     return true;
 }
 
-/* Join via a helper with a runtime size arg so the compiler's
- * -Werror=format-truncation analysis (which fires on compile-time-known sizes)
- * stays quiet — snprintf truncates safely regardless. */
-static void join_path(char *out, size_t out_sz, const char *dir, const char *name) {
-    snprintf(out, out_sz, "%s/%s", dir, name);
+/* Join dir + name. strlcpy/strlcat rather than snprintf("%s/%s") because at
+ * -O2 the compiler proves a 255-byte name may not fit the caller's buffer and
+ * -Werror=format-truncation rejects the format call; these two truncate by
+ * contract. A truncated path would name the wrong file, so say so instead of
+ * silently using it. */
+static bool join_path(char *out, size_t out_sz, const char *dir, const char *name) {
+    strlcpy(out, dir, out_sz);
+    size_t n = strlcat(out, "/", out_sz);
+    n = strlcat(out, name, out_sz);
+    if (n >= out_sz) {
+        ESP_LOGW(TAG, "path too long: %s/%s", dir, name);
+        return false;
+    }
+    return true;
 }
 
 static bool sd_try_mount(void) {
@@ -407,10 +416,11 @@ static void do_list(const char *path) {
         if (nl > 255) nl = 255;
         uint32_t need = 2 + nl + 1 + 4 + 4;
         if (off + need > LIST_BODY_MAX || count == 0xFFFF) { truncated = 1; break; }
-        join_path(full, sizeof full, p, de->d_name);
         struct stat st;
         uint8_t is_dir = 0; uint32_t sz = 0, mt = 0;
-        if (stat(full, &st) == 0) {
+        /* A path that didn't fit would stat some other file — list the entry
+         * with zeroed metadata rather than the wrong file's. */
+        if (join_path(full, sizeof full, p, de->d_name) && stat(full, &st) == 0) {
             is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
             sz = (uint32_t)st.st_size;
             mt = (uint32_t)st.st_mtime;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sdkconfig.h"
+
 #define MODE_BT_CLASSIC       1
 #define MODE_WIRELESS_HELPER  2
 
@@ -10,8 +12,16 @@
 /* Real AA head unit listens on 5288. Wireless Helper APK has this port
  * hardcoded — it grabs only the IP from mDNS and ignores the published port. */
 #define AA_TCP_PORT            5288
-#define AA_MDNS_HOSTNAME       "android-auto"
+/* Hostname/instance the device answers to over mDNS. Comes from Kconfig
+ * (CONFIG_WEB_MDNS_HOSTNAME) because the dashboard-only ESP32-S3 board is not
+ * an "android-auto" host — see main/Kconfig.projbuild. components/qr_info gets
+ * the same value injected through its CMakeLists. */
+#define AA_MDNS_HOSTNAME       CONFIG_WEB_MDNS_HOSTNAME
+#if CONFIG_AA_ENABLE
 #define AA_MDNS_INSTANCE_NAME  "ESP32-P4 Android Auto"
+#else
+#define AA_MDNS_INSTANCE_NAME  "Super VESC Display"
+#endif
 /* Wireless Helper APK browses for _aawireless._tcp; this is the de-facto
  * service type used by hostapd-based AA dongles. */
 #define AA_MDNS_SERVICE_TYPE   "_aawireless"

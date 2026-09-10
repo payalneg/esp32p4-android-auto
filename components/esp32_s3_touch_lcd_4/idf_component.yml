@@ -1,0 +1,28 @@
+dependencies:
+  idf: '>=5.5'
+  # Same LVGL + adapter pins as the P4 BSP so one lv_conf.h and one
+  # main/display_init.c serve every board.
+  espressif/esp_lvgl_adapter:
+    public: true
+    version: "^0.1.*"
+    pre_release: true
+  lvgl/lvgl:
+    public: true
+    version: '~8.3.0'
+  espressif/esp_lcd_st7701: '*'
+  espressif/esp_lcd_panel_io_additions: '^1'
+  espressif/esp_lcd_touch_gt911: '^1'
+  # Board helper controller — which one depends on the hardware revision
+  # (CONFIG_BSP_S3T4_HW_V3 / _V4). Both are pulled: the unused one costs a
+  # download and is dead-stripped at link.
+  # public: the BSP header names the helper's pins (BSP_LCD_RST and friends)
+  # with the IO_EXPANDER_PIN_NUM_* macros, so anything including bsp/esp-bsp.h
+  # needs these headers on its include path too.
+  waveshare/custom_io_expander_ch32v003:
+    public: true
+    version: '*'
+  espressif/esp_io_expander_tca9554:
+    public: true
+    version: '^2'
+description: BSP for the Waveshare ESP32-S3-Touch-LCD-4 (480x480), reworked for esp_lvgl_adapter
+version: 0.1.0

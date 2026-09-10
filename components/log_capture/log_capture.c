@@ -17,7 +17,11 @@
  * the tail of this (~32 KB) at a time since lv_label can't usefully
  * scroll through a million chars, but the rest stays available for
  * future "save to SD" / dump-over-USB workflows. */
+#ifdef CONFIG_LOG_CAPTURE_SIZE_KB
+#define LOG_CAPTURE_SIZE   ((size_t)CONFIG_LOG_CAPTURE_SIZE_KB * 1024u)
+#else
 #define LOG_CAPTURE_SIZE   (1024u * 1024u)
+#endif
 
 /* Formatted log lines from ESP_LOG rarely exceed 200 bytes — but we
  * occasionally hex-dump large packets. Cap each formatted message

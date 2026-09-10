@@ -1,0 +1,25 @@
+# Name,     Type, SubType,  Offset,    Size
+# Waveshare ESP32-S3-Touch-LCD-4 — 16 MB flash, no Android Auto.
+#
+# Layout:
+#   0x00000..0x12000   bootloader (at 0x0 on S3) + nvs + otadata + phy_init
+#   0x20000..0x420000  ota_0   (4 MB)
+#   0x420000..0x820000 ota_1   (4 MB)
+#   0x820000..0xB20000 storage (LittleFS /vescfs, 3 MB — boot splash.gif,
+#                               the /lisp script library, VESC config backups)
+#   0xB20000..0x1000000 triplog (~4.875 MB raw circular trip log)
+#
+# The app image is smaller here than on the P4 boards (no AA service, no TLS
+# certs, no H.264, no ESP-Hosted, no AA fonts), which is what pays for the
+# 3 MB storage partition. Check `idf.py -B build_s3touch4 size` after adding
+# screens or fonts: if the image approaches 4 MB, shrink storage/triplog
+# rather than the OTA slots. trip_log reads its partition size dynamically
+# (esp_partition), so resizing triplog needs no code change — but it does
+# need a full reflash, which wipes storage + triplog.
+nvs,        data, nvs,      0x9000,    0x6000
+otadata,    data, ota,      0xf000,    0x2000
+phy_init,   data, phy,      0x11000,   0x1000
+ota_0,      app,  ota_0,    0x20000,   0x400000
+ota_1,      app,  ota_1,    0x420000,  0x400000
+storage,    data, spiffs,   0x820000,  0x300000
+triplog,    data, 0x40,     0xB20000,  0x4E0000

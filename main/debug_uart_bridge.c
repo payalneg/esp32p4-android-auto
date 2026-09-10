@@ -18,25 +18,29 @@
 #include "esp_rom_crc.h"
 #include "linenoise/linenoise.h"
 #include "mbedtls/base64.h"
-#include "driver/jpeg_encode.h"
+#if CONFIG_ESP_CONSOLE_UART
 #include "driver/uart.h"
+#endif
 
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
-#include "mic_capture.h"
+#include "img_jpeg.h"
 #include "touch_input.h"
+#if CONFIG_AA_MIC_ENABLE
+#include "mic_capture.h"
+#endif
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
 #include "misc/lv_ll.h"
 
 static const char *TAG = "dbg_uart";
 
-/* lv_scr_act() is the 800x480 landscape screen. We size the snapshot buffer for
- * the full screen; a smaller active object just fills less of it (we trust the
- * dsc dimensions, not these constants, for the wire header / encode). */
-#define SHOT_W            800
-#define SHOT_H            480
-#define SHOT_BUF_SIZE     (SHOT_W * SHOT_H * 2)   /* RGB565, 768000 B */
+/* lv_scr_act() is the whole screen (800x480 landscape on the P4 head units,
+ * 480x480 on the S3 board). The snapshot buffer is sized for it from the BSP's
+ * panel dimensions — the product is the same whichever axis the panel scans —
+ * and a smaller active object just fills less of it: the wire header and the
+ * encode take their size from the LVGL descriptor, not from these constants. */
+#define SHOT_BUF_SIZE     (BSP_LCD_H_RES * BSP_LCD_V_RES * 2)   /* RGB565 */
 #define JPEG_OUT_CAP      (384 * 1024)            /* worst-case q100 fits easily */
 #define CHUNK_RAW         768                     /* 768 raw -> exactly 1024 b64 */
 #define B64_LINE_CAP      1025                    /* 1024 + NUL */
@@ -45,9 +49,8 @@ static const char *TAG = "dbg_uart";
  * PSRAM. The JPEG engine is shared with no one else here (the album-art decoder
  * in music_info_view.c uses a separate decoder engine). */
 static uint8_t              *s_shot_buf;          /* RGB565 snapshot target */
-static uint8_t              *s_jpeg_out;          /* HW-JPEG bitstream out */
+static uint8_t              *s_jpeg_out;          /* JPEG bitstream out */
 static size_t                s_jpeg_cap;
-static jpeg_encoder_handle_t s_enc;
 
 /* Last injected point, so `touchup` can release at where the finger was. */
 static uint16_t s_last_x, s_last_y;
@@ -67,28 +70,17 @@ static inline int clampi(int v, int lo, int hi)
 static bool ensure_resources(bool need_jpeg)
 {
     if (!s_shot_buf) {
-        /* DMA-capable PSRAM, cache-line aligned — matches the JPEG decoder
-         * scratch in music_info_view.c and satisfies the encoder's DMA read. */
-        s_shot_buf = heap_caps_aligned_calloc(64, 1, SHOT_BUF_SIZE,
-                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+        /* PSRAM with the alignment/caps this chip's JPEG backend wants to read
+         * from (DMA-capable on the P4, 16-byte aligned on the S3). */
+        s_shot_buf = img_jpeg_alloc_rgb565(SHOT_BUF_SIZE);
         if (!s_shot_buf) {
             ESP_LOGE(TAG, "no PSRAM for %d-byte snapshot buffer", SHOT_BUF_SIZE);
             return false;
         }
     }
-    if (need_jpeg && !s_enc) {
-        jpeg_encode_engine_cfg_t cfg = { .intr_priority = 0, .timeout_ms = 1000 };
-        if (jpeg_new_encoder_engine(&cfg, &s_enc) != ESP_OK) {
-            s_enc = NULL;   /* raw mode still works */
-        }
-    }
-    if (need_jpeg && s_enc && !s_jpeg_out) {
-        jpeg_encode_memory_alloc_cfg_t mcfg = {
-            .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER,
-        };
-        size_t got = 0;
-        s_jpeg_out = jpeg_alloc_encoder_mem(JPEG_OUT_CAP, &mcfg, &got);
-        if (s_jpeg_out) s_jpeg_cap = got;
+    if (need_jpeg && !s_jpeg_out) {
+        s_jpeg_out = img_jpeg_alloc_encoded(JPEG_OUT_CAP);
+        s_jpeg_cap = s_jpeg_out ? JPEG_OUT_CAP : 0;   /* raw mode still works */
     }
     return true;
 }
@@ -127,9 +119,13 @@ static void send_frame(const char *fmt, int w, int h,
     printf("SCR-END\n");
 
     fflush(stdout);
+#if CONFIG_ESP_CONSOLE_UART
     /* Drain the UART TX FIFO/ring before re-enabling logs so a queued log line
-     * can't tail-splice into the last chunk. The REPL installed this driver. */
+     * can't tail-splice into the last chunk. The REPL installed this driver.
+     * The USB-Serial-JTAG console (S3 board) has no such driver — fflush plus
+     * the host-side framing checks cover it there. */
     uart_wait_tx_done(CONFIG_ESP_CONSOLE_UART_NUM, pdMS_TO_TICKS(3000));
+#endif
     esp_log_level_set("*", prev);
 }
 
@@ -162,24 +158,14 @@ static void do_screenshot(bool jpeg, int quality)
     int h = (int)dsc.header.h;
     size_t raw_len = (size_t)w * h * 2;
 
-    if (jpeg && s_enc && s_jpeg_out) {
-        jpeg_encode_cfg_t ecfg = {
-            .width        = (uint32_t)w,
-            .height       = (uint32_t)h,
-            .src_type     = JPEG_ENCODE_IN_FORMAT_RGB565,
-            .sub_sample   = JPEG_DOWN_SAMPLING_YUV420,
-            .image_quality = (uint32_t)quality,
-        };
-        uint32_t out_len = 0;
-        esp_err_t e = jpeg_encoder_process(s_enc, &ecfg, s_shot_buf,
-                                           (uint32_t)raw_len,
-                                           s_jpeg_out, s_jpeg_cap, &out_len);
-        if (e == ESP_OK && out_len > 0) {
+    if (jpeg && s_jpeg_out) {
+        size_t out_len = 0;
+        if (img_jpeg_encode_rgb565(s_shot_buf, (uint16_t)w, (uint16_t)h,
+                                   quality, s_jpeg_out, s_jpeg_cap, &out_len)) {
             send_frame("jpeg", w, h, s_jpeg_out, out_len);
             return;
         }
-        ESP_LOGW(TAG, "jpeg encode failed (%s) — falling back to raw",
-                 esp_err_to_name(e));
+        ESP_LOGW(TAG, "jpeg encode failed — falling back to raw");
     }
 
     /* raw RGB565 (little-endian uint16, R in high bits — host unpacks 5-6-5). */
@@ -373,6 +359,7 @@ static int cmd_lvtimers(int argc, char **argv)
 }
 
 /* ---- mic: run the AA microphone capture without a phone ---- */
+#if CONFIG_AA_MIC_ENABLE
 
 typedef struct {
     uint64_t sq;        /* sum of squares, current 1 s window */
@@ -431,6 +418,7 @@ static int cmd_mic(int argc, char **argv)
            (unsigned)st.chunks, secs, 1000 / MIC_CAPTURE_CHUNK_MS);
     return 0;
 }
+#endif /* CONFIG_AA_MIC_ENABLE */
 
 static void register_cmds(void)
 {
@@ -439,7 +427,7 @@ static void register_cmds(void)
           .help = "Capture lv_scr_act() and stream it back (base64-framed). "
                   "[--fmt jpeg|rgb565] [--quality N]",
           .hint = NULL, .func = cmd_screenshot },
-        { .command = "tap",   .help = "Tap at <x> <y> (0..799 x 0..479)",
+        { .command = "tap",   .help = "Tap at <x> <y> (screen coords)",
           .hint = NULL, .func = cmd_tap },
         { .command = "swipe", .help = "Swipe <x1> <y1> <x2> <y2> [ms]",
           .hint = NULL, .func = cmd_swipe },
@@ -455,10 +443,12 @@ static void register_cmds(void)
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+#if CONFIG_AA_MIC_ENABLE
         { .command = "mic",
           .help = "Capture the AA microphone for [seconds] (default 5) without a "
                   "phone; prints RMS/peak per second",
           .hint = NULL, .func = cmd_mic },
+#endif
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));
@@ -475,8 +465,18 @@ esp_err_t debug_uart_bridge_init(void)
     repl_cfg.task_stack_size = 8192;   /* room for base64 line + handlers */
     repl_cfg.max_cmdline_length = 256;
 
-    esp_console_dev_uart_config_t uart_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    esp_err_t err = esp_console_new_repl_uart(&uart_cfg, &repl_cfg, &repl);
+    /* Whichever console this board has. The P4 head units talk over UART0
+     * (a bridge chip on the USB port); the S3 board's USB-C is the chip's own
+     * USB peripheral, so its console is USB-Serial-JTAG and scripts/uart_debug.py
+     * opens /dev/cu.usbmodem* instead of a USB-serial adapter. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    esp_console_dev_usb_serial_jtag_config_t dev_cfg =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_err_t err = esp_console_new_repl_usb_serial_jtag(&dev_cfg, &repl_cfg, &repl);
+#else
+    esp_console_dev_uart_config_t dev_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    esp_err_t err = esp_console_new_repl_uart(&dev_cfg, &repl_cfg, &repl);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "repl init failed: %s", esp_err_to_name(err));
         return err;
@@ -495,7 +495,7 @@ esp_err_t debug_uart_bridge_init(void)
     }
 
     s_inited = true;
-    ESP_LOGI(TAG, "UART debug bridge up (screenshot + touch injection)");
+    ESP_LOGI(TAG, "serial debug bridge up (screenshot + touch injection)");
     return ESP_OK;
 }
 

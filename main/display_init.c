@@ -1,6 +1,10 @@
 #include "display_init.h"
 
+#include "sdkconfig.h"
+
+#if !CONFIG_BOARD_S3_TOUCH_LCD_4
 #include "flash_shade.h"
+#endif
 
 #include "bsp/esp-bsp.h"
 #include "dev_settings.h"
@@ -192,12 +196,22 @@ esp_err_t display_init(void)
     s_flip_active = settings_get_display_flip();
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
+#if CONFIG_BOARD_S3_TOUCH_LCD_4
+        /* The S3 board's RGB panel already scans in the orientation the UI is
+         * drawn in, so there is no base rotation to undo — an upside-down
+         * mount is a straight 180. Rotating costs real time here (no PPA on
+         * this chip, the adapter falls back to a software block rotate), which
+         * is the other reason to keep the default at ROTATE_0. */
+        .rotation = s_flip_active ? ESP_LV_ADAPTER_ROTATE_180
+                                  : ESP_LV_ADAPTER_ROTATE_0,
+#else
         .rotation = s_flip_active ? ESP_LV_ADAPTER_ROTATE_270
                                   : ESP_LV_ADAPTER_ROTATE_90,
+#endif
         .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_DIRECT,
     };
     if (s_flip_active) {
-        ESP_LOGI(TAG, "display flip 180 active (ROTATE_270)");
+        ESP_LOGI(TAG, "display flip 180 active");
     }
     /* Pin the LVGL worker to core 0. The H.264 decoder library spawns a
      * helper task at priority 17 pinned to core 1 (CONFIG_ESP_H264_DUAL_TASK*)
@@ -332,9 +346,18 @@ esp_err_t display_init(void)
     vTaskDelay(pdMS_TO_TICKS(200));
     bsp_display_backlight_on();
 
+#if !CONFIG_BOARD_S3_TOUCH_LCD_4
     /* From here on every flash write/erase dims the panel for its duration
-     * instead of tearing it (see flash_shade.h). */
+     * instead of tearing it (see flash_shade.h).
+     *
+     * Not armed on the S3 board: there the fix is upstream of the symptom —
+     * CONFIG_SPIRAM_FETCH_INSTRUCTIONS/RODATA keep code and constants in
+     * PSRAM, so a flash operation no longer has to disable the cache the LCD
+     * DMA is reading its framebuffer through (see sdkconfig.defaults.s3touch4).
+     * Blanking the backlight there would also mean an I2C transaction to the
+     * board's helper controller from inside flash_shade's spinlock. */
     flash_shade_arm();
+#endif
 
     return ESP_OK;
 }

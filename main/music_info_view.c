@@ -25,7 +25,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
-#include "driver/jpeg_decode.h"
+#include "img_jpeg.h"
 
 #include "notif_bridge.h"
 #include "fonts/aabridge_fonts.h"
@@ -40,20 +40,21 @@ static const char *TAG = "music_info_view";
 #define TILE_W            344
 #define TILE_H            136
 
-/* JPEG hardware output is RGB565 = 2 bytes/px. The P4 decoder rounds
- * OUTPUT up to 16 on BOTH axes — any 344×136 input becomes 352×144 in
- * the output buffer (right 8 cols and bottom 8 rows are padding). The
- * buffer is sized to that 16×16-aligned frame; the lv_img widget at
- * TILE_W×TILE_H stays smaller-or-equal and crops the visible area to
- * the real decoded pixels. */
-#define ART_MCU_W         352
-#define ART_MCU_H         144
+/* Decoded art is RGB565 = 2 bytes/px. The buffer is sized for the largest
+ * frame we accept: TILE_W×TILE_H padded up to whole 16×16 blocks, because the
+ * P4's hardware decoder rounds its output up on both axes (any 344×136 input
+ * lands as 352×144, with the right 8 columns and bottom 8 rows as padding).
+ * The lv_img widget stays at TILE_W×TILE_H, smaller-or-equal, and crops the
+ * visible area to the real decoded pixels. img_jpeg_decode_rgb565 reports the
+ * dimensions it actually produced — the software decoder on the S3 does not
+ * pad — and apply_art hands those to LVGL. */
+#define ART_ALIGN16(v)    (((v) + 15) & ~15)
+#define ART_MCU_W         ART_ALIGN16(TILE_W)
+#define ART_MCU_H         ART_ALIGN16(TILE_H)
 #define ART_BUF_SIZE      (ART_MCU_W * ART_MCU_H * 2)
 
-static jpeg_decoder_handle_t s_jpgd_handle;
-static uint8_t *s_art_decoded;          /* RGB565, 350×135 visible inside 352×144 */
-static uint8_t *s_jpeg_scratch;         /* DMA-aligned input copy */
-static size_t   s_jpeg_scratch_cap;
+static uint8_t *s_art_decoded;          /* RGB565, the decoded frame */
+static uint16_t s_art_w, s_art_h;       /* what the last decode produced */
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_art_img;
@@ -96,45 +97,11 @@ static void show_art(void)
     lv_obj_add_flag(s_art_glyph, LV_OBJ_FLAG_HIDDEN);
 }
 
-static bool ensure_jpeg_scratch(size_t need)
-{
-    if (need <= s_jpeg_scratch_cap) return true;
-    if (s_jpeg_scratch) heap_caps_free(s_jpeg_scratch);
-    /* JPEG hardware reads via DMA — input must be cache-aligned. PSRAM
-     * is fine, the engine internally bursts through cache. */
-    size_t alloc = (need + 1023) & ~1023u;
-    s_jpeg_scratch = heap_caps_aligned_calloc(64, 1, alloc,
-                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    if (!s_jpeg_scratch) {
-        s_jpeg_scratch_cap = 0;
-        return false;
-    }
-    s_jpeg_scratch_cap = alloc;
-    return true;
-}
-
 static bool decode_art_jpeg(const uint8_t *src, size_t len)
 {
-    if (!s_jpgd_handle || !s_art_decoded) return false;
-    if (!ensure_jpeg_scratch(len)) return false;
-    memcpy(s_jpeg_scratch, src, len);
-
-    jpeg_decode_cfg_t cfg = {
-        .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
-        /* BGR matches what the ST7701 / LVGL RGB565 pipeline expects on
-         * this board — RGB order would surface as red/blue swap. */
-        .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR,
-    };
-    uint32_t out_size = 0;
-    esp_err_t r = jpeg_decoder_process(s_jpgd_handle, &cfg,
-                                       s_jpeg_scratch, len,
-                                       s_art_decoded, ART_BUF_SIZE,
-                                       &out_size);
-    if (r != ESP_OK) {
-        ESP_LOGW(TAG, "jpeg decode failed: %s", esp_err_to_name(r));
-        return false;
-    }
-    return true;
+    if (!s_art_decoded) return false;
+    return img_jpeg_decode_rgb565(src, len, s_art_decoded, ART_BUF_SIZE,
+                                  &s_art_w, &s_art_h);
 }
 
 static void apply_art(uint32_t hash)
@@ -145,18 +112,19 @@ static void apply_art(uint32_t hash)
     const uint8_t *bytes = hash ? notif_bridge_get_icon(hash, &len) : NULL;
     if (bytes && len > 0 && decode_art_jpeg(bytes, len)) {
         s_art_dsc.header.always_zero = 0;
-        s_art_dsc.header.w = ART_MCU_W;
-        s_art_dsc.header.h = ART_MCU_H;
+        s_art_dsc.header.w = s_art_w;
+        s_art_dsc.header.h = s_art_h;
         s_art_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
         s_art_dsc.data = s_art_decoded;
-        s_art_dsc.data_size = ART_BUF_SIZE;
+        s_art_dsc.data_size = (uint32_t)s_art_w * s_art_h * 2u;
         /* dsc pointer is reused per track — drop any cached decode of
          * the previous bitmap before we hand LVGL the new pixels. */
         lv_img_cache_invalidate_src(&s_art_dsc);
         lv_img_set_src(s_art_img, &s_art_dsc);
         show_art();
-        ESP_LOGI(TAG, "art hash=0x%08X jpeg_len=%u → %dx%d rgb565",
-                 (unsigned)hash, (unsigned)len, ART_MCU_W, ART_MCU_H);
+        ESP_LOGI(TAG, "art hash=0x%08X jpeg_len=%u → %ux%u rgb565",
+                 (unsigned)hash, (unsigned)len,
+                 (unsigned)s_art_w, (unsigned)s_art_h);
     } else if (bytes && len > 0) {
         /* Decode failed — keep whatever was on screen and don't update
          * s_last_art_hash so we retry on the next tick. */
@@ -239,22 +207,12 @@ static void poll_cb(lv_timer_t *t)
 
 static esp_err_t init_jpeg_pipeline(void)
 {
-    if (s_jpgd_handle) return ESP_OK;
-    jpeg_decode_engine_cfg_t cfg = {
-        .intr_priority = 0,
-        .timeout_ms    = 200,
-    };
-    esp_err_t r = jpeg_new_decoder_engine(&cfg, &s_jpgd_handle);
-    if (r != ESP_OK) {
-        ESP_LOGE(TAG, "jpeg engine init failed: %s", esp_err_to_name(r));
-        return r;
-    }
-    s_art_decoded = heap_caps_aligned_calloc(64, 1, ART_BUF_SIZE,
-                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (s_art_decoded) return ESP_OK;
+    esp_err_t r = img_jpeg_init();
+    if (r != ESP_OK) return r;
+    s_art_decoded = img_jpeg_alloc_rgb565(ART_BUF_SIZE);
     if (!s_art_decoded) {
         ESP_LOGE(TAG, "no PSRAM for %u-byte art buffer", (unsigned)ART_BUF_SIZE);
-        jpeg_del_decoder_engine(s_jpgd_handle);
-        s_jpgd_handle = NULL;
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG, "jpeg pipeline ready, %u-byte rgb565 framebuffer",

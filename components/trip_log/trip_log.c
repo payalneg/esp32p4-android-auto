@@ -194,12 +194,22 @@ static void boot_scan(void)
     /* Fine pass: within the newest sector, find the last valid record. The head
      * is the slot after it (or the first slot of the next sector if full). */
     uint32_t last_slot = best_sec * RECS_PER_SECTOR;
-    trip_rec_t last;
+    trip_rec_t last = {0};
     bool got = false;
     for (uint32_t i = 0; i < RECS_PER_SECTOR; i++) {
         uint32_t slot = best_sec * RECS_PER_SECTOR + i;
         if (esp_partition_read(s_part, slot_off(slot), &r, REC_SIZE) != ESP_OK) continue;
         if (rec_valid(&r) && (!got || r.seq >= last.seq)) { last = r; last_slot = slot; got = true; }
+    }
+    if (!got) {
+        /* The coarse pass picked this sector precisely because its first record
+         * was valid, so this can only happen if a read failed the second time
+         * around. Treat it as an empty log rather than seeding the dashboard
+         * totals and the battery tracker from an uninitialised record. */
+        ESP_LOGW(TAG, "sector %d re-read failed — treating log as empty", best_sec);
+        s_head = 0; s_seq = 1; s_trip_id = 1; s_trip_t_s = 0;
+        battery_calc_seed_boot_vin(true, -1.0f);
+        return;
     }
 
     s_seq     = last.seq + 1;

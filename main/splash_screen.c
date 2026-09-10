@@ -10,14 +10,31 @@
 
 #include "bsp/esp-bsp.h"
 #include "display_init.h"
-#include "driver/jpeg_decode.h"
-#include "driver/ppa.h"
-#include "esp_cache.h"
-#include "esp_private/esp_cache_private.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "soc/soc_caps.h"
+
+/* The animated frame splash decodes each JPEG with the hardware JPEG engine
+ * and rotates it straight into the panel framebuffer with the PPA, bypassing
+ * LVGL entirely (the dashboard build holds the LVGL lock for ~5 s, so an
+ * LVGL-drawn animation would freeze). Both blocks are ESP32-P4 peripherals;
+ * on a chip without them only the GIF fallback below is available, and the
+ * companion app uploads a splash.gif instead of a frame folder for such a
+ * board (see flutter-application/lib/ui/splash_setup_screen.dart). */
+#if SOC_JPEG_DECODE_SUPPORTED && SOC_PPA_SUPPORTED
+#define SPLASH_FRAMES_SUPPORTED 1
+#else
+#define SPLASH_FRAMES_SUPPORTED 0
+#endif
+
+#if SPLASH_FRAMES_SUPPORTED
+#include "driver/jpeg_decode.h"
+#include "driver/ppa.h"
+#include "esp_cache.h"
+#include "esp_private/esp_cache_private.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -123,9 +140,15 @@ static bool show_gif(void)
     return true;
 }
 
+/* Splash repeats, from Settings; 0 disables the splash and is handled in
+ * splash_screen_show(). Read by the frame player, ignored by the GIF path
+ * (lv_gif loops on its own). */
+static int s_target_loops = 1;
+
 /* ====================================================================== */
 /* Frame-sequence mode — direct-to-panel JPEG playback                    */
 /* ====================================================================== */
+#if SPLASH_FRAMES_SUPPORTED
 
 typedef struct {
     uint16_t idx;
@@ -153,7 +176,6 @@ static TaskHandle_t      s_frame_task;
 static SemaphoreHandle_t s_frame_done;
 static bool              s_frame_active;
 static bool              s_adapter_paused;
-static int               s_target_loops = 1;   /* splash repeats (settings); 0 handled in show() */
 
 /* "<digits>-<digits>.jpg" (or .jpeg), case-insensitive extension. */
 static bool parse_frame_name(const char *name, int *idx, int *dur)
@@ -466,13 +488,18 @@ fail:
     return false;
 }
 
+#endif /* SPLASH_FRAMES_SUPPORTED */
+
 /* ====================================================================== */
 /* Public API                                                             */
 /* ====================================================================== */
 
 void splash_screen_show(void)
 {
-    if (s_frame_active || s_overlay) return;  /* already showing */
+#if SPLASH_FRAMES_SUPPORTED
+    if (s_frame_active) return;               /* already showing */
+#endif
+    if (s_overlay) return;
 
     app_fs_ensure();
     for (int waited = 0; !app_fs_ready() && waited < FS_WAIT_MS; waited += 50) {
@@ -491,13 +518,16 @@ void splash_screen_show(void)
     }
     s_target_loops = loops;
 
+#if SPLASH_FRAMES_SUPPORTED
     /* New animated frame splash takes precedence; the GIF is the fallback. */
     if (show_frames()) return;
+#endif
     show_gif();
 }
 
 void splash_screen_hide(void)
 {
+#if SPLASH_FRAMES_SUPPORTED
     /* Frame mode: the direct-to-panel task plays the configured number of loops
      * then gives s_frame_done and exits on its own. Wait for it (bounded by the
      * SPLASH_MAX_MS cap inside the task + margin), then free resources and hand
@@ -517,6 +547,7 @@ void splash_screen_hide(void)
         ESP_LOGI(TAG, "frame splash hidden");
         return;
     }
+#endif /* SPLASH_FRAMES_SUPPORTED */
 
     /* GIF mode. */
     if (!s_overlay && !s_safety_timer) return;

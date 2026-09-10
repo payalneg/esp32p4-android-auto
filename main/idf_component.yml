@@ -1,10 +1,18 @@
 dependencies:
   idf:
     version: ">=5.5.0"
+  # WiFi/BT co-processor link. P4 has no radio of its own: esp_hosted drives
+  # the on-board ESP32-C6 over SDIO and esp_wifi_remote re-exports the esp_wifi
+  # API across it. The ESP32-S3 board has its own radio and uses the in-tree
+  # esp_wifi / NimBLE controller instead.
   espressif/esp_hosted:
     version: "^2.0.0"
+    rules:
+      - if: "target == esp32p4"
   espressif/esp_wifi_remote:
     version: "^0.13.0"
+    rules:
+      - if: "target == esp32p4"
   espressif/mdns:
     version: "^1.8.0"
   # SW H.264 decoder for the AA video channel. P4 has no HW decoder; the
@@ -12,11 +20,15 @@ dependencies:
   # advertises 480p (see build_video_av_channel in aa_service.c).
   espressif/esp_h264:
     version: "*"
+    rules:
+      - if: "target == esp32p4"
   # SIMD-accelerated image-format conversion (PIE instructions on P4).
   # Used in display_video.c for I420 → RGB565 — meaningfully faster than the
   # naive C BT.601 loop. PPA handles the 90° rotation on the RGB output.
   espressif/esp_image_effects:
     version: "^1.0.1"
+    rules:
+      - if: "target == esp32p4"
   # ROM-bootloader serial flasher protocol — used by bt_agent_ota to reflash
   # the D1 Mini ESP32 (BT agent) over UART when its firmware version drifts
   # from CONFIG_BT_AGENT_FW_VERSION. Library is dead-stripped by the linker
@@ -25,7 +37,15 @@ dependencies:
     version: "^1.7.0"
     rules:
       - if: "idf_version >=5.0"
+      - if: "target == esp32p4"
   # LittleFS for the trip-history store (real folders /trips/<id>/, power-loss
   # safe, good for many small log files). Mounted on the "storage" partition.
   joltwallet/littlefs:
     version: "^1.14.0"
+  # Software JPEG codec. The P4 has a hardware JPEG engine (driver/jpeg_*);
+  # the S3 does not, so album art (music_info_view.c) and debug-bridge
+  # screenshots go through this instead — see main/img_jpeg.h.
+  espressif/esp_new_jpeg:
+    version: "^1.0.1"
+    rules:
+      - if: "target == esp32s3"
