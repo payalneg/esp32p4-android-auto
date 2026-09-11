@@ -213,11 +213,15 @@ the one recorded in the release commit.
   force-stopped. The code trusted Android's own autoConnect queue to survive
   a remote disconnect; it does not always, and certainly not after we cancel
   it ourselves to avoid a second link.
-- The phone now re-arms the request itself when the link drops, and a
-  watchdog asks again every twenty seconds for as long as a paired head unit
-  is missing. Measured on the bench: `reboot` on the head unit, hands off the
-  phone — connected again eight seconds after it finished booting, with the
-  tile feed running.
+- A watchdog now re-asks for the link once it has been missing for two
+  twenty-second ticks. Two, not one, and not on the disconnect event itself:
+  with autoConnect that event fires as a matter of course, and re-arming on
+  each one tore down a healthy link every few seconds — tiles slowed to one
+  per twenty seconds and flutter_blue_plus began logging its two-second
+  disconnect gap. Measured on the bench: `reboot` on the head unit, hands off
+  the phone, connected again eight seconds after it finished booting with the
+  tile feed running; 60 tiles in the following half minute and no link
+  cycling at all.
 - The tile store is back to 96 tiles (12 MB). Sixty-four looked like enough
   and was not: at zoom 18 a screenful plus its ring covers four times the
   ground, and a 1.6 km ride evicted 890 tiles — every eviction is reported to
