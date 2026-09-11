@@ -58,6 +58,8 @@ class BleTaskHandler extends TaskHandler {
   StreamSubscription<({double lat, double lon})>? _navDestSub;
   StreamSubscription<({int z, int x, int y})>? _navDroppedSub;
   StreamSubscription<int>? _navZoomSub;
+  StreamSubscription<String>? _navSearchSub;
+  StreamSubscription<void>? _navEmptySub;
   Timer? _navIdleTimer;
   bool _navFast = false;
 
@@ -104,6 +106,8 @@ class BleTaskHandler extends TaskHandler {
     await _navDestSub?.cancel();
     await _navDroppedSub?.cancel();
     await _navZoomSub?.cancel();
+    await _navSearchSub?.cancel();
+    await _navEmptySub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
     await _consoleSub?.cancel();
@@ -143,6 +147,10 @@ class BleTaskHandler extends TaskHandler {
     _navDroppedSub = null;
     unawaited(_navZoomSub?.cancel());
     _navZoomSub = null;
+    unawaited(_navSearchSub?.cancel());
+    _navSearchSub = null;
+    unawaited(_navEmptySub?.cancel());
+    _navEmptySub = null;
     if (s != BleConnState.connected) {
       _navIdleTimer?.cancel();
       _navIdleTimer = null;
@@ -171,6 +179,12 @@ class BleTaskHandler extends TaskHandler {
     // a ride outgrew its 64 slots: the head unit dropped tiles, the feed never
     // heard, and it never sends the same tile twice — an hour of riding with
     // the position updating over ground that was no longer there.
+    _navEmptySub = nav.emptied.listen((_) {
+      FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navEmptied});
+    });
+    _navSearchSub = nav.searches.listen((q) {
+      FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navSearch, 'q': q});
+    });
     _navZoomSub = nav.zooms.listen((z) {
       FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navZoom, 'zoom': z});
     });
@@ -388,6 +402,25 @@ class BleTaskHandler extends TaskHandler {
           final rr = await nav.sendRoute(pts);
           _navFrameSent();
           _reply(id, {'ack': rr.ack});
+          break;
+
+        case IpcCmd.navFound:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden});
+            break;
+          }
+          final hits = <({double lat, double lon, String name})>[
+            for (final h in (m['hits'] as List<Object?>))
+              (
+                lat: ((h as Map)['lat'] as num).toDouble(),
+                lon: (h['lon'] as num).toDouble(),
+                name: h['name'] as String,
+              ),
+          ];
+          final fr = await nav.sendFound(hits);
+          _navFrameSent();
+          _reply(id, {'ack': fr.ack});
           break;
 
         case IpcCmd.navGuide:

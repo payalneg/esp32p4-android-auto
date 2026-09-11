@@ -27,6 +27,7 @@ class IpcCmd {
   static const navView = 'navView'; // {lat, lon, zoom, heading} — where we are
   static const navRoute = 'navRoute'; // {pts: [lat,lon,...]} → reply {ack}
   static const navGuide = 'navGuide'; // {turn, dist, remM, remS, off}
+  static const navFound = 'navFound'; // {hits: [{lat, lon, name}]} → {ack}
   static const bleRestart = 'bleRestart'; // force a clean reconnect
 
   // File manager.
@@ -101,6 +102,12 @@ class IpcEvt {
 
   /// {zoom} — the rider changed the zoom on the head unit's own map.
   static const navZoom = 'navZoom';
+
+  /// {q} — the rider typed something on the head unit's keyboard.
+  static const navSearch = 'navSearch';
+
+  /// The head unit's tile store is empty — everything must be sent again.
+  static const navEmptied = 'navEmptied';
 
   // Helper (ESP32-C3), all unsolicited.
   static const helperState = 'helperState'; // {state, fw, busy}

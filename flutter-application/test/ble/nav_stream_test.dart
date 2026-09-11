@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aa_bridge/ble/nav_stream.dart';
@@ -74,6 +75,12 @@ class _FakeChannel implements NavChannel {
     bd.setInt32(1, (lat * 1e7).round(), Endian.little);
     bd.setInt32(5, (lon * 1e7).round(), Endian.little);
     _notify.add(b);
+  }
+
+  /// What the rider typed on the panel's keyboard.
+  void search(String q) {
+    final t = utf8.encode(q);
+    _notify.add(<int>[NavStatus.search, t.length, ...t]);
   }
 
   void state({required bool nav, required bool visible, int maxChunk = 509}) =>
@@ -286,6 +293,57 @@ void main() {
     expect(ch.data, isEmpty);
 
     final seq = ch.ctrl.single[3] | (ch.ctrl.single[4] << 8);
+    ch.ack(NavAck.ok, seq, 0);
+    expect((await f).ok, isTrue);
+  });
+
+  test('search results go as one blob, names cut on a character boundary',
+      () async {
+    // The panel holds six rows and 55 bytes a name; a name cut mid-sequence
+    // would render as a broken glyph, so the cut has to respect UTF-8.
+    final long = 'Ł' * 40;   // 80 bytes of two-byte characters
+    final f = nav.sendFound(<({double lat, double lon, String name})>[
+      (lat: 50.0619, lon: 19.9368, name: 'Rynek'),
+      (lat: 50.05, lon: 19.94, name: long),
+    ]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(ch.ctrl.first[0], NavOp.foundBegin);
+    expect(ch.ctrl.first[1], 2, reason: 'two results');
+    final total = ch.ctrl.first[2] | (ch.ctrl.first[3] << 8);
+    final body = <int>[for (final d in ch.data) ...d];
+    expect(body.length, total, reason: 'BEGIN promised what DATA carried');
+
+    // First entry: eight bytes of position, a length, then the name.
+    expect(body[8], 5);
+    expect(utf8.decode(body.sublist(9, 14)), 'Rynek');
+    // Second: cut short, and still valid UTF-8.
+    final len2 = body[14 + 8];
+    expect(len2, lessThanOrEqualTo(kNavFoundNameMax));
+    expect(len2.isEven, isTrue, reason: 'no half character left behind');
+    expect(() => utf8.decode(body.sublist(23, 23 + len2)), returnsNormally);
+
+    expect(ch.ctrl.last[0], NavOp.foundEnd);
+    final seq = ch.ctrl.first[4] | (ch.ctrl.first[5] << 8);
+    ch.ack(NavAck.ok, seq, 0);
+    expect((await f).ok, isTrue);
+  });
+
+  test('a query typed on the panel comes back as text', () async {
+    final seen = <String>[];
+    final sub = nav.searches.listen(seen.add);
+    ch.search('Rynek 4');
+    await Future<void>.delayed(Duration.zero);
+    expect(seen, <String>['Rynek 4']);
+    await sub.cancel();
+  });
+
+  test('nothing found is a valid answer and carries no body', () async {
+    final f = nav.sendFound(const <({double lat, double lon, String name})>[]);
+    await Future<void>.delayed(Duration.zero);
+    expect(ch.ctrl.single[1], 0);
+    expect(ch.data, isEmpty);
+    final seq = ch.ctrl.single[4] | (ch.ctrl.single[5] << 8);
     ch.ack(NavAck.ok, seq, 0);
     expect((await f).ok, isTrue);
   });

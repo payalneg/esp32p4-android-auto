@@ -46,6 +46,8 @@ static const char *TAG = "ble_nav";
 #define NAV_OP_ROUTE_BEGIN 0x08
 #define NAV_OP_ROUTE_END   0x09
 #define NAV_OP_GUIDE       0x0A
+#define NAV_OP_FOUND_BEGIN 0x0B
+#define NAV_OP_FOUND_END   0x0C
 
 #define NAV_ST_STATE   0x10
 #define NAV_ST_ACK     0x11
@@ -53,6 +55,8 @@ static const char *TAG = "ble_nav";
 #define NAV_ST_DEST     0x13
 #define NAV_ST_DROPPED  0x14
 #define NAV_ST_ZOOM     0x15
+#define NAV_ST_SEARCH   0x16
+#define NAV_ST_EMPTY    0x17
 
 #define NAV_BEGIN_LEN  (1 + 2 + 2 + 4 + 2)
 #define NAV_END_LEN    (1 + 2)
@@ -60,6 +64,7 @@ static const char *TAG = "ble_nav";
 #define NAV_VIEW_LEN       (1 + 4 + 4 + 1 + 2)
 #define NAV_VIEW_LEN_SPEED (NAV_VIEW_LEN + 2)
 #define NAV_ROUTE_BEGIN_LEN (1 + 2 + 2)
+#define NAV_FOUND_BEGIN_LEN (1 + 1 + 2 + 2)
 #define NAV_GUIDE_LEN       (1 + 1 + 2 + 4 + 2 + 1)
 
 /* How often the map is redrawn between the phone's position updates. The
@@ -78,10 +83,10 @@ typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
 
 /* What the open transfer is carrying. One at a time: the app waits for the
  * acknowledgement before it starts the next. */
-typedef enum { RX_FRAME, RX_TILE, RX_ROUTE } rx_kind_t;
+typedef enum { RX_FRAME, RX_TILE, RX_ROUTE, RX_FOUND } rx_kind_t;
 
 typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
-               EV_DEST, EV_ROUTE, EV_ZOOM } ev_kind_t;
+               EV_DEST, EV_ROUTE, EV_ZOOM, EV_SEARCH, EV_FOUND } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
@@ -89,6 +94,7 @@ typedef struct {
     int32_t   lat_e7;   /* EV_DEST */
     int32_t   lon_e7;
     uint8_t   zoom;     /* EV_ZOOM */
+    char      query[NAV_SEARCH_QUERY];   /* EV_SEARCH */
 } nav_evt_t;
 
 static QueueHandle_t s_q;
@@ -162,6 +168,27 @@ static void notify_dest(int32_t lat_e7, int32_t lon_e7)
     ESP_LOGW(TAG, "destination notify gave up");
 }
 
+/* What the rider typed. Longer than the usual six bytes and the only
+ * head-to-phone message that carries text: [status][len][UTF-8]. */
+static void notify_search(const char *q)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0 || !q) return;
+    size_t n = strlen(q);
+    if (n == 0) return;
+    if (n > NAV_SEARCH_QUERY - 1) n = NAV_SEARCH_QUERY - 1;
+    uint8_t f[2 + NAV_SEARCH_QUERY];
+    f[0] = NAV_ST_SEARCH;
+    f[1] = (uint8_t)n;
+    memcpy(&f[2], q, n);
+    for (int attempt = 0; attempt < 100; attempt++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(f, 2 + n);
+        if (om && ble_gatts_notify_custom(s_conn, s_ctrl_handle, om) == 0) return;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGW(TAG, "search notify gave up");
+}
+
 /* A tile we had to drop. Same worker task as everything else here, so the
  * notify can go out directly. */
 static void on_tile_evicted(uint8_t z, uint32_t x, uint32_t y)
@@ -205,10 +232,29 @@ static void on_zoom_picked(uint8_t zoom)
     ESP_LOGI(TAG, "zoom %u chosen on the panel", (unsigned)zoom);
 }
 
+/* From the LVGL task when the rider has typed enough to look for. */
+static void on_search_typed(const char *q)
+{
+    if (!s_q || !q) return;
+    nav_evt_t ev = { .kind = EV_SEARCH };
+    strncpy(ev.query, q, sizeof(ev.query) - 1);
+    xQueueSend(s_q, &ev, 0);
+}
+
 static void notify_state(void)
 {
     const bool live = (ui_mode_get() == UI_MODE_NAV);
     notify(NAV_ST_STATE, live ? 1 : 0, live ? 1 : 0, BLE_NAV_MAX_DATA);
+
+    /* And say so when the store is empty. The phone never sends the same tile
+     * twice, so after a reboot it has to be told that what it sent is gone —
+     * otherwise the panel sits on a bare map while the position keeps
+     * arriving, which is exactly what the bench showed: 248 position updates
+     * and `tiles ok=0`. Eviction notices cover losing tiles one at a time;
+     * this covers losing all of them at once. */
+    nav_tiles_stats_t ts;
+    nav_tiles_get_stats(&ts);
+    if (ts.stored == 0) notify(NAV_ST_EMPTY, 0, 0, 0);
 }
 
 static void set_boost(bool on)
@@ -377,12 +423,19 @@ static void render_view(void)
     const int64_t t0 = esp_timer_get_time();
     int wanted = 0;
     const int have = nav_map_render(dst, NAV_SCREEN_W, NAV_SCREEN_H, &wanted);
+    const int64_t t1 = esp_timer_get_time();
+    /* Push the frame out of the cache before LVGL's DMA reads it. Timed
+     * separately because it is 768 KB of write-back and therefore a fixed
+     * cost per frame, unlike composing, which depends on what is missing. */
     esp_cache_msync(dst, nav_screen_back_buffer_bytes(),
                     ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    const int64_t t2 = esp_timer_get_time();
     nav_screen_commit();
     nav_screen_set_streaming(true);
     s_stats.renders++;
-    s_stats.render_last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    s_stats.render_last_ms = (uint32_t)((t2 - t0) / 1000);
+    s_stats.compose_us = (uint32_t)(t1 - t0);
+    s_stats.msync_us = (uint32_t)(t2 - t1);
     s_stats.last_have = have;
     s_stats.last_wanted = wanted;
     s_last_frame_us = esp_timer_get_time();
@@ -426,6 +479,41 @@ static void handle_route(const nav_evt_t *ev)
     s_state = ST_IDLE;
     if (ack == NAV_ACK_OK) render_view();
     notify(NAV_ST_TILE_ACK, ack, ev->seq, 0);
+}
+
+/* Results for a typed query: count x [i32 lat_e7][i32 lon_e7][u8 len][name].
+ * Parsed here rather than in nav_screen so the UI never sees a wire format. */
+static void handle_found(const nav_evt_t *ev)
+{
+    uint8_t ack = NAV_ACK_OK;
+    nav_search_hit_t hits[NAV_SEARCH_MAX];
+    size_t n = 0;
+    if (s_got != s_expect) {
+        ack = NAV_ACK_TRUNCATED;
+    } else {
+        size_t off = 0;
+        while (off + 9 <= s_got && n < NAV_SEARCH_MAX) {
+            int32_t lat_e7, lon_e7;
+            memcpy(&lat_e7, s_stage + off, 4);
+            memcpy(&lon_e7, s_stage + off + 4, 4);
+            const uint8_t nl = s_stage[off + 8];
+            off += 9;
+            if (off + nl > s_got) { ack = NAV_ACK_BAD_PARAM; break; }
+            size_t copy = nl < NAV_SEARCH_NAME - 1 ? nl : NAV_SEARCH_NAME - 1;
+            memcpy(hits[n].name, s_stage + off, copy);
+            hits[n].name[copy] = '\0';
+            hits[n].lat = lat_e7 / 1e7;
+            hits[n].lon = lon_e7 / 1e7;
+            n++;
+            off += nl;
+        }
+    }
+    s_state = ST_IDLE;
+    if (ack == NAV_ACK_OK) {
+        nav_screen_set_results(hits, n);
+        ESP_LOGI(TAG, "search: %u result(s)", (unsigned)n);
+    }
+    notify(NAV_ST_ACK, ack, ev->seq, 0);
 }
 
 static void worker(void *arg)
@@ -525,6 +613,12 @@ static void worker(void *arg)
                 notify(NAV_ST_ZOOM, ev.zoom, 0, 0);
                 render_view();
                 break;
+            case EV_SEARCH:
+                notify_search(ev.query);
+                break;
+            case EV_FOUND:
+                handle_found(&ev);
+                break;
         }
     }
 }
@@ -544,6 +638,7 @@ void ble_nav_init(void)
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
     nav_screen_set_dest_cb(on_dest_picked);
     nav_screen_set_zoom_cb(on_zoom_picked);
+    nav_screen_set_search_cb(on_search_typed);
     nav_tiles_set_evict_cb(on_tile_evicted);
     /* 8 KiB, like the other two workers on this link. Four was enough when
      * this task only memcpy'd, but it now runs libpng — whose simplified read
@@ -647,11 +742,13 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
         }
         case NAV_OP_END:
         case NAV_OP_TILE_END:
-        case NAV_OP_ROUTE_END: {
+        case NAV_OP_ROUTE_END:
+        case NAV_OP_FOUND_END: {
             if (len < NAV_END_LEN) return;
             const uint16_t seq = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
             const rx_kind_t want = (data[0] == NAV_OP_TILE_END) ? RX_TILE
                                  : (data[0] == NAV_OP_ROUTE_END) ? RX_ROUTE
+                                 : (data[0] == NAV_OP_FOUND_END) ? RX_FOUND
                                                                  : RX_FRAME;
             if (s_state != ST_RECEIVING || seq != s_seq || s_rx_kind != want) {
                 reject(seq, NAV_ACK_TRUNCATED);
@@ -660,6 +757,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_state = ST_DECODING;
             nav_evt_t ev = { .kind = (want == RX_TILE)  ? EV_TILE
                                    : (want == RX_ROUTE) ? EV_ROUTE
+                                   : (want == RX_FOUND) ? EV_FOUND
                                                         : EV_FRAME,
                              .seq = seq };
             xQueueSend(s_q, &ev, 0);
@@ -690,6 +788,33 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_got = 0;
             s_seq = seq;
             s_rx_kind = RX_ROUTE;
+            s_state = ST_RECEIVING;
+            break;
+        }
+
+        case NAV_OP_FOUND_BEGIN: {
+            /* [op][u8 count][u16 seq], then DATA with the entries. A count of
+             * zero is a valid answer — "nothing found" — and carries no
+             * body, so it is acknowledged here and now. */
+            if (len < NAV_FOUND_BEGIN_LEN) { reject(0, NAV_ACK_BAD_PARAM); return; }
+            const uint8_t  cnt = data[1];
+            const uint16_t tot = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+            const uint16_t seq = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+            if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
+            if (cnt == 0) {
+                nav_screen_set_results(NULL, 0);
+                notify(NAV_ST_ACK, NAV_ACK_OK, seq, 0);
+                return;
+            }
+            if (cnt > NAV_SEARCH_MAX ||
+                tot == 0 || tot > cnt * (9 + NAV_SEARCH_NAME)) {
+                reject(seq, NAV_ACK_BAD_PARAM);
+                return;
+            }
+            s_expect = tot;
+            s_got = 0;
+            s_seq = seq;
+            s_rx_kind = RX_FOUND;
             s_state = ST_RECEIVING;
             break;
         }

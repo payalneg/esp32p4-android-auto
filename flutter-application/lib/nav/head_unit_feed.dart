@@ -143,6 +143,9 @@ abstract class HeadUnitLink {
   /// without this the feed would think they were still there and the ground
   /// would never be filled again.
   Stream<({int z, int x, int y})> get dropped;
+
+  /// The head unit holds no tiles at all.
+  Stream<void> get emptied;
 }
 
 /// Pushes tiles and positions to the head unit for as long as it is looking.
@@ -161,14 +164,14 @@ class HeadUnitFeed {
     _stateSub = _link.displayStates.listen((st) {
       // A head unit that went away and came back has an empty tile store —
       // and no route or turn either.
-      if (!st.visible) {
-        _sentThisSession.clear();
-        _attempts.clear();
-        _lastAttempt.clear();
-        _routeSent = false;
-        _guideSent = null;
-      }
+      if (!st.visible) _forgetEverythingSent();
     });
+    // ...and it says so itself when its store is empty, which is the case a
+    // visibility change misses: reconnecting to a head unit that rebooted
+    // while its navigator screen stayed up. Without this the panel sat on a
+    // bare map for ever — position updates arriving, not one tile sent,
+    // because we believed it still had them.
+    _emptySub = _link.emptied.listen((_) => _forgetEverythingSent());
     _droppedSub = _link.dropped.listen((d) {
       final t = TileId(d.z, d.x, d.y);
       _sentThisSession.remove(t);
@@ -183,6 +186,7 @@ class HeadUnitFeed {
   final DateTime Function() _now;
   late final StreamSubscription<NavDisplayState> _stateSub;
   late final StreamSubscription<({int z, int x, int y})> _droppedSub;
+  late final StreamSubscription<void> _emptySub;
 
   final status = ValueNotifier<HeadUnitFeedStatus>(const HeadUnitFeedStatus());
 
@@ -238,6 +242,15 @@ class HeadUnitFeed {
     if (speedMs != null) _speedMs = speedMs;
   }
 
+  /// Everything we think the head unit holds is gone; send it all again.
+  void _forgetEverythingSent() {
+    _sentThisSession.clear();
+    _attempts.clear();
+    _lastAttempt.clear();
+    _routeSent = false;
+    _guideSent = null;
+  }
+
   /// A new route to draw on the head unit. [source] identifies it, so the
   /// same route is never sent twice; null clears the line.
   void setRoute(Object? source, List<({double lat, double lon})>? points) {
@@ -288,6 +301,7 @@ class HeadUnitFeed {
     await stop();
     await _stateSub.cancel();
     await _droppedSub.cancel();
+    await _emptySub.cancel();
     status.dispose();
   }
 

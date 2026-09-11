@@ -142,6 +142,91 @@ static void fill(uint16_t *dst, int w, int x0, int y0, int x1, int y1, uint16_t 
     }
 }
 
+/* Which way the rider is pointing, as an arrow around the same spot the dot
+ * marks. This is what a track-up map would have said, for nothing: turning
+ * the whole map to the heading means warping all 384000 pixels between two
+ * PSRAM buffers every frame, and the panel has no hardware for an arbitrary
+ * angle (the PPA turns in 90-degree steps). Measured with `navwarp` on the
+ * board: 38 ms at 30 degrees and 118 ms at 90, on top of 18-26 ms of
+ * composing — against an LVGL flush that already costs 57 ms on the same
+ * core. So the map stays north-up and the marker carries the heading.
+ *
+ * Filled by three edge tests per pixel over the arrow's own bounding box:
+ * a few hundred pixels, unmeasurable next to the rest of the frame. */
+static void draw_arrow(uint16_t *dst, int w, int h, int cx, int cy,
+                       double heading_deg)
+{
+    const double rad = heading_deg * M_PI / 180.0;
+    /* Screen y grows downwards, so north (heading 0) is -y. */
+    const double dx = sin(rad), dy = -cos(rad);
+    const double px = -dy, py = dx;          /* to the rider's right */
+
+    /* The body, then the same triangle grown about its own centre for the
+     * casing. Growing it rather than nudging tip, tail and width by hand is
+     * what makes the white border even — the first version did the latter and
+     * the border vanished along two edges.
+     *
+     * Vertices in double (three of them, once a frame), the fill in plain
+     * integers. That distinction is the whole cost: the first version ran the
+     * three edge tests per pixel in double, and on a chip with no
+     * double-precision hardware those two thousand pixels added FORTY
+     * milliseconds to a frame that composes in twenty. */
+    const double tipf = 15.0, backf = 7.0, halff = 9.0;
+    int vx[3], vy[3];
+    vx[0] = (int)lround(cx + dx * tipf);
+    vy[0] = (int)lround(cy + dy * tipf);
+    vx[1] = (int)lround(cx - dx * backf + px * halff);
+    vy[1] = (int)lround(cy - dy * backf + py * halff);
+    vx[2] = (int)lround(cx - dx * backf - px * halff);
+    vy[2] = (int)lround(cy - dy * backf - py * halff);
+    const int gx = (vx[0] + vx[1] + vx[2]) / 3;
+    const int gy = (vy[0] + vy[1] + vy[2]) / 3;
+
+    for (int pass = 0; pass < 2; pass++) {
+        /* 3/2 about the centre for the casing, then the body over it. */
+        const int num = pass == 0 ? 3 : 1, den = pass == 0 ? 2 : 1;
+        const uint16_t col = pass == 0 ? COL_RING : COL_RIDER;
+        int ax[3], ay[3];
+        for (int i = 0; i < 3; i++) {
+            ax[i] = gx + (vx[i] - gx) * num / den;
+            ay[i] = gy + (vy[i] - gy) * num / den;
+        }
+
+        int x0 = ax[0], x1 = ax[0], y0 = ay[0], y1 = ay[0];
+        for (int i = 1; i < 3; i++) {
+            if (ax[i] < x0) x0 = ax[i];
+            if (ax[i] > x1) x1 = ax[i];
+            if (ay[i] < y0) y0 = ay[i];
+            if (ay[i] > y1) y1 = ay[i];
+        }
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > w - 1) x1 = w - 1;
+        if (y1 > h - 1) y1 = h - 1;
+
+        /* Edge coefficients, so the per-pixel work is three multiply-adds. */
+        int ex[3], ey[3], ec[3];
+        for (int i = 0; i < 3; i++) {
+            const int j = (i + 1) % 3;
+            ex[i] = ay[i] - ay[j];
+            ey[i] = ax[j] - ax[i];
+            ec[i] = -(ex[i] * ax[i] + ey[i] * ay[i]);
+        }
+        for (int y = y0; y <= y1; y++) {
+            uint16_t *row = dst + (size_t)y * w;
+            for (int x = x0; x <= x1; x++) {
+                const int e0 = ex[0] * x + ey[0] * y + ec[0];
+                const int e1 = ex[1] * x + ey[1] * y + ec[1];
+                const int e2 = ex[2] * x + ey[2] * y + ec[2];
+                if ((e0 >= 0 && e1 >= 0 && e2 >= 0) ||
+                    (e0 <= 0 && e1 <= 0 && e2 <= 0)) {
+                    row[x] = col;
+                }
+            }
+        }
+    }
+}
+
 /* The rider, drawn where the view puts them. A ring so the dot reads against
  * both the pale roads and the dark parks. */
 static void draw_marker(uint16_t *dst, int w, int h, int cx, int cy)
@@ -415,7 +500,13 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
     const int64_t t0 = esp_timer_get_time();
     nav_route_draw(dst, w, h, sl, st, s_view.zoom);
     s_route_us = (uint32_t)(esp_timer_get_time() - t0);
-    draw_marker(dst, w, h, w / 2, h / 2);
+    /* An arrow while there is a heading to show, a plain dot when standing
+     * still — a parked bike pointing somewhere definite is a lie. */
+    if (s_view.heading_deg <= 360 && s_speed_ms > 0.5) {
+        draw_arrow(dst, w, h, w / 2, h / 2, (double)s_view.heading_deg);
+    } else {
+        draw_marker(dst, w, h, w / 2, h / 2);
+    }
     if (out_wanted) *out_wanted = wanted;
     return have;
 }

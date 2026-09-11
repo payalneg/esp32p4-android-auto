@@ -15,6 +15,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 /// Control opcodes we write (see main/ble_nav.h).
@@ -29,6 +30,9 @@ class NavOp {
   static const routeBegin = 0x08;
   static const routeEnd = 0x09;
   static const guide = 0x0A;
+  /// Answers a [NavStatus.search]: count, byte length, seq, then the entries.
+  static const foundBegin = 0x0B;
+  static const foundEnd = 0x0C;
 }
 
 /// Turn kinds, in the order the head unit expects (nav_turn_t in
@@ -68,6 +72,13 @@ class NavStatus {
   /// The rider changed the zoom with the buttons on the panel; the level is
   /// in the second byte. See NAV_ST_ZOOM in main/ble_nav.h.
   static const zoom = 0x15;
+
+  /// What the rider typed on the panel's keyboard: [status][len][UTF-8].
+  static const search = 0x16;
+
+  /// The head unit's tile store holds nothing — start again. See
+  /// NAV_ST_EMPTY in main/ble_nav.h.
+  static const empty = 0x17;
 }
 
 /// FRAME_ACK results.
@@ -94,6 +105,11 @@ const int kNavFallbackChunk = 244;
 /// How long to wait for FRAME_ACK before giving up on a frame. Generous: the
 /// head unit decodes and scales before it answers, and the link may be busy
 /// with a notification burst.
+/// What the panel's result list can hold, and how long a name may be.
+/// Mirrors NAV_SEARCH_MAX / NAV_SEARCH_NAME in main/nav_screen.h.
+const int kNavFoundMax = 6;
+const int kNavFoundNameMax = 55;
+
 const Duration kNavAckTimeout = Duration(seconds: 3);
 
 /// What the head unit says about its own screen.
@@ -179,6 +195,8 @@ class NavStream {
   final _destCtrl = StreamController<({double lat, double lon})>.broadcast();
   final _droppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
   final _zoomCtrl = StreamController<int>.broadcast();
+  final _searchCtrl = StreamController<String>.broadcast();
+  final _emptyCtrl = StreamController<void>.broadcast();
 
   NavDisplayState _state = NavDisplayState.unknown;
   int _seq = 0;
@@ -197,6 +215,13 @@ class NavStream {
 
   /// The zoom level the rider picked on the head unit's own map.
   Stream<int> get zooms => _zoomCtrl.stream;
+
+  /// What the rider typed on the panel's keyboard, to be looked up here.
+  Stream<String> get searches => _searchCtrl.stream;
+
+  /// The head unit is holding no tiles at all (it rebooted, or its store was
+  /// cleared): everything we think it has is gone.
+  Stream<void> get emptied => _emptyCtrl.stream;
 
   /// Whether a frame is on the wire right now.
   bool get busy => _sending;
@@ -217,6 +242,17 @@ class NavStream {
           x: bd.getUint32(2, Endian.little),
           y: bd.getUint32(6, Endian.little),
         ));
+      }
+      return;
+    }
+    if (raw[0] == NavStatus.empty) {
+      if (!_emptyCtrl.isClosed) _emptyCtrl.add(null);
+      return;
+    }
+    if (raw[0] == NavStatus.search && raw.length >= 2) {
+      final n = raw[1];
+      if (raw.length >= 2 + n && !_searchCtrl.isClosed) {
+        _searchCtrl.add(utf8.decode(raw.sublist(2, 2 + n), allowMalformed: true));
       }
       return;
     }
@@ -414,6 +450,85 @@ class NavStream {
     }
   }
 
+  /// Cut UTF-8 to at most [max] bytes without leaving half a character.
+  ///
+  /// Both halves matter: a dangling continuation byte and a lead byte whose
+  /// continuation bytes were cut off are equally broken, and the panel draws
+  /// either as a tofu box.
+  static List<int> _cutUtf8(List<int> bytes, int max) {
+    if (bytes.length <= max) return bytes;
+    var cut = max;
+    while (cut > 0) {
+      var start = cut - 1;
+      while (start > 0 && (bytes[start] & 0xC0) == 0x80) {
+        start--;
+      }
+      final lead = bytes[start];
+      final need = lead < 0x80
+          ? 1
+          : lead < 0xE0
+              ? 2
+              : lead < 0xF0
+                  ? 3
+                  : 4;
+      if (start + need <= cut) break;   // last character is whole
+      cut = start;                      // drop the incomplete one
+    }
+    return bytes.sublist(0, cut);
+  }
+
+  /// Answer a typed query. Names are UTF-8 and cut to what the panel can
+  /// hold; an empty list is a valid answer and says so on the screen.
+  Future<NavFrameResult> sendFound(
+      List<({double lat, double lon, String name})> hits) async {
+    if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
+    _sending = true;
+    final seq = _seq = (_seq + 1) & 0xFFFF;
+    try {
+      final acked = _ackCtrl.stream
+          .firstWhere((r) => r.seq == seq)
+          .timeout(kNavAckTimeout);
+
+      final body = BytesBuilder(copy: false);
+      for (final h in hits.take(kNavFoundMax)) {
+        final name = _cutUtf8(utf8.encode(h.name), kNavFoundNameMax);
+        final e = Uint8List(9 + name.length);
+        final bd = ByteData.sublistView(e);
+        bd.setInt32(0, (h.lat * 1e7).round(), Endian.little);
+        bd.setInt32(4, (h.lon * 1e7).round(), Endian.little);
+        e[8] = name.length;
+        e.setRange(9, 9 + name.length, name);
+        body.add(e);
+      }
+      final bytes = body.takeBytes();
+      final count = hits.length > kNavFoundMax ? kNavFoundMax : hits.length;
+
+      final begin = Uint8List(6);
+      begin[0] = NavOp.foundBegin;
+      begin[1] = count;
+      final bh = ByteData.sublistView(begin);
+      bh.setUint16(2, bytes.length, Endian.little);
+      bh.setUint16(4, seq, Endian.little);
+      await _channel.writeCtrl(begin);
+      if (count == 0) return await acked;   // nothing found carries no body
+
+      final chunk = chunkSize;
+      for (var off = 0; off < bytes.length; off += chunk) {
+        final end = (off + chunk < bytes.length) ? off + chunk : bytes.length;
+        await _writeChunk(Uint8List.sublistView(bytes, off, end));
+      }
+      final end = Uint8List(3);
+      end[0] = NavOp.foundEnd;
+      ByteData.sublistView(end).setUint16(1, seq, Endian.little);
+      await _channel.writeCtrl(end);
+      return await acked;
+    } on TimeoutException {
+      return NavFrameResult(NavAck.timeout, seq, 0);
+    } finally {
+      _sending = false;
+    }
+  }
+
   /// Where the next turn is and what is left of the ride. Eleven bytes,
   /// unacknowledged, sent whenever any of it changes.
   Future<void> sendGuide({
@@ -476,5 +591,7 @@ class NavStream {
     await _destCtrl.close();
     await _droppedCtrl.close();
     await _zoomCtrl.close();
+    await _searchCtrl.close();
+    await _emptyCtrl.close();
   }
 }

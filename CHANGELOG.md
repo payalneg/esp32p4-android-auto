@@ -142,6 +142,55 @@ the one recorded in the release commit.
   tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
   PSRAM is worth more than the extra history.
 
+### Which way the rider is pointing — and why the map stays north-up
+
+- The marker is an arrow along the course now, with a white casing, and falls
+  back to the plain dot when the rider is standing still (a parked bike
+  pointing somewhere definite is a lie).
+- Heading-up was measured before being decided against. The panel has no
+  hardware for an arbitrary-angle rotation — the PPA turns in 90-degree steps
+  — so track-up means warping all 384000 pixels between two PSRAM buffers
+  every frame. A new bench command, `navwarp [degrees] [block]`, does exactly
+  that and times it: **38 ms at 30 degrees and 118 ms at 90**, against a frame
+  that composes in 33-40 ms and an LVGL flush that already costs 57 ms on the
+  same core. So the map stays north-up and the marker carries the heading.
+- The arrow itself cost 28 ms a frame at first, which is the same lesson as
+  the route line: its three edge tests per pixel were in double, and this chip
+  has no double-precision hardware. Vertices in double (three a frame), fill
+  in integers — and `navstat` now splits the frame into composing and the
+  cache flush, which is how the 28 ms was found rather than guessed at.
+
+### Typing an address on the head unit
+
+- A **FIND** button on the navigator screen opens a keyboard on the panel.
+  Type a street, a place or a pair of coordinates; the phone looks it up in
+  the offline index that came with its map — so this works with no signal at
+  all — and sends back up to six answers, nearest to the rider first, each
+  with how far away it is. Tap one and the phone routes there, the same path a
+  tap on the map already took.
+- Two new messages: `0x16 SEARCH` carries the typed text up (the only
+  head-to-phone message with text in it), and `0x0B FOUND_BEGIN` carries the
+  answers down — count, byte length, then one entry per result. A count of
+  zero is a valid answer and the panel says "Nothing found".
+- Names are cut to what the panel can hold without splitting a UTF-8
+  character in half — both halves of that matter, a dangling continuation
+  byte and a lead byte whose tail was cut are equally broken, and either draws
+  as a box.
+- The keyboard gets Montserrat rather than our subsetted font: its backspace,
+  enter and hide keys are FontAwesome glyphs, and without them the bottom row
+  was four empty boxes (the same trap as the zoom buttons).
+
+### A head unit that rebooted got no tiles at all
+
+- Found while testing the search: reboot the head unit with its navigator
+  screen up, and the phone reconnected, sent positions — and not one tile,
+  for ever. Its visibility never changed, and the only signal that a store is
+  gone was a visibility change.
+- The head unit now says so itself: alongside STATE it sends `0x17 EMPTY`
+  whenever its tile store is empty, and the phone forgets everything it
+  thinks it has sent. Verified: `reboot` on the panel, hands off the phone,
+  39 tiles and a full screen within half a minute.
+
 ### Telling the head unit a ride is over
 
 - Alexey, watching the panel: "а куда делась синяя линия". The line had gone

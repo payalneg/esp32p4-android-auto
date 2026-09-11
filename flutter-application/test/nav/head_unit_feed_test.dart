@@ -21,6 +21,7 @@ class _FakeLink implements HeadUnitLink {
       const NavDisplayState(navMode: true, visible: true, maxChunk: 509);
   final _states = StreamController<NavDisplayState>.broadcast();
   final _dropped = StreamController<({int z, int x, int y})>.broadcast();
+  final _emptied = StreamController<void>.broadcast();
 
   final tiles = <TileId>[];
   final views = <({double lat, double lon, int zoom, int heading})>[];
@@ -34,6 +35,12 @@ class _FakeLink implements HeadUnitLink {
 
   @override
   Stream<({int z, int x, int y})> get dropped => _dropped.stream;
+
+  @override
+  Stream<void> get emptied => _emptied.stream;
+
+  /// The head unit says it is holding nothing at all.
+  void empty() => _emptied.add(null);
 
   void drop(TileId t) => _dropped.add((z: t.z, x: t.x, y: t.y));
 
@@ -78,6 +85,7 @@ class _FakeLink implements HeadUnitLink {
   Future<void> close() async {
     await _states.close();
     await _dropped.close();
+    await _emptied.close();
   }
 }
 
@@ -286,6 +294,23 @@ void main() {
 
     // ...until the head unit says it had to let it go.
     link.drop(wide);
+    await Future<void>.delayed(Duration.zero);
+    await feed.tick();
+    expect(link.tiles.where((t) => t == wide).length, 2);
+  });
+
+  test('a head unit whose store emptied is sent everything again', () async {
+    // A reboot while its navigator screen stays up: the visibility never
+    // changes, so this notice is the only signal that the store is gone.
+    final wide = await seedCoarse();
+    final feed = build()..setPosition(_krakow);
+    await feed.tick();
+    expect(link.tiles, <TileId>[wide]);
+
+    await feed.tick();
+    expect(link.tiles.where((t) => t == wide).length, 1, reason: 'sent once');
+
+    link.empty();
     await Future<void>.delayed(Duration.zero);
     await feed.tick();
     expect(link.tiles.where((t) => t == wide).length, 2);
