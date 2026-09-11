@@ -150,21 +150,25 @@ def _classic_status_bar():
     from BAR_DROP_ORDER until it does. Uptime goes first: the Statistics screen
     shows it too, and unlike the mode text (hidden and shown at runtime by the
     updater) it stays hidden once hidden."""
+    # (widget, text on the square panel). A shorter caption is what buys the
+    # room here: "STATISTICS" and "SETTINGS" cost 200 px between them at a
+    # readable size, and the row also has to hold the ride mode, the trip
+    # timer, the BT indicator and the phone clock.
     items = [
         ("status_vesc",       "VESC"),
         ("mode_text",         "MODE "),
         ("uptime_text",       "--:--:--"),
-        ("statistics_button", "STATISTICS"),
-        ("Settings_text",     "SETTINGS"),
+        ("statistics_button", "STAT"),
+        ("Settings_text",     "SET"),
         ("status_bt",         "BT"),
         ("cur_time_label",    "--:--"),
     ]
-    BAR_DROP_ORDER = ["uptime_text"]
+    BAR_DROP_ORDER = []   # everything fits once the captions are short
     # The per-character table is calibrated against rendered screenshots but
     # still runs a few percent low on long all-caps strings; a caption that
     # wraps costs far more than a few spare pixels.
     FUDGE = 1.12
-    FONT, PAD, GAP, MARGIN = 16, 6, 6, 4
+    FONT, PAD, GAP, MARGIN = 12, 6, 8, 4
 
     def pack(chosen):
         widths = [int(text_width_estimate(t, FONT) * FUDGE) + PAD
@@ -181,9 +185,28 @@ def _classic_status_bar():
         dropped.append(name)
         widths, total = pack(items)
 
+    # The two indicators ride at the right edge, the way they do at 800 px;
+    # the rest is spread across what is left so the row does not bunch up in
+    # the left half.
+    RIGHT_GROUP = 2
+    left, right = items[:-RIGHT_GROUP], items[-RIGHT_GROUP:]
+    lw, rw = widths[:-RIGHT_GROUP], widths[-RIGHT_GROUP:]
+
+    right_x = NEW_W - MARGIN - sum(rw) - GAP * (len(right) - 1)
+    span = right_x - MARGIN - sum(lw) - 2 * GAP   # keep the groups apart
+    spread = max(GAP, span // max(1, len(left) - 1)) if len(left) > 1 else GAP
+
     rules, x = {}, MARGIN
-    for (name, _t), w in zip(items, widths):
+    for (name, text), w in zip(left, lw):
         rules[name] = {"x": x, "w": w, "font": FONT}
+        if text.strip() and not text.startswith("-"):
+            rules[name]["text"] = text      # shortened caption
+        x += w + spread
+    x = right_x
+    for (name, text), w in zip(right, rw):
+        rules[name] = {"x": x, "w": w, "font": FONT}
+        if text.strip() and not text.startswith("-"):
+            rules[name]["text"] = text
         x += w + GAP
     for name in dropped:
         rules[name] = {"hidden": True}
@@ -247,7 +270,10 @@ SQUARE_OVERRIDES = {
         # Antonio 22 carries capitals and digits in the subsetted firmware
         # font, so the warning keeps its typeface — it just stops covering
         # the status bar.
-        **{"esc_not_connected_text": {"x": 110, "y": 40, "w": 260, "h": 26}},
+        # The clear band between the bottom of the speed digits (they end
+        # around y=294) and the scale markers at y=332. At y=40 the warning
+        # sat on the "SPEED · KM/H" caption; at y=330 it sat on the "0" marker.
+        **{"esc_not_connected_text": {"x": 112, "y": 300, "w": 256, "h": 26}},
     ),
 
     # The two side columns are 108 px wide on the square panel (the separators
@@ -556,6 +582,8 @@ def apply_overrides(screen, geo_map, boxes):
                 if g:
                     setattr(g, {"x": "x", "y": "y", "w": "w", "h": "h"}[key],
                             rule[key])
+        if "text" in rule:
+            w["text"] = rule["text"]
         if "font" in rule:
             set_widget_font(w, rule["font"])
         if "family" in rule:
@@ -668,6 +696,13 @@ def rewrite_project(out_project):
     for screen in proj["Application"]["screen"]:
         apply_fonts(screen, font_by_name)
 
+    text_by_name = {
+        screen["name"] + "_" + wname: rule["text"]
+        for screen in proj["FrontJson"]
+        for grp in SQUARE_OVERRIDE_SCREENS.get(screen["name"], [])
+        for wname, rule in SQUARE_OVERRIDES.get(grp, {}).items()
+        if "text" in rule}
+
     hidden = tuple(
         screen["name"] + "_" + wname
         for screen in proj["FrontJson"]
@@ -676,13 +711,15 @@ def rewrite_project(out_project):
         if rule.get("hidden"))
 
     return (geo_map, screens, boxes_by_screen, font_by_name, font_changes,
-            hidden)
+            hidden, text_by_name)
 
 
 POS_RE = re.compile(r"(lv_obj_set_pos\(ui->([A-Za-z0-9_]+),\s*)(-?\d+)(,\s*)(-?\d+)(\))")
 SIZE_RE = re.compile(r"(lv_obj_set_size\(ui->([A-Za-z0-9_]+),\s*)(-?\d+)(,\s*)(-?\d+)(\))")
 POINTS_RE = re.compile(r"(static\s+lv_point_t\s+([A-Za-z0-9_]+)\[\]\s*=\s*)\{(.*?)\};",
                        re.S)
+TEXT_RE = re.compile(
+    r'(lv_label_set_text\(ui->([A-Za-z0-9_]+),\s*)"((?:[^"\\\\]|\\\\.)*)"(\))')
 FONT_RE = re.compile(
     r"(lv_obj_set_style_text_font\(ui->([A-Za-z0-9_]+),\s*&lv_font_)"
     r"([A-Za-z_]+?)_(\d+)(,)")
@@ -690,7 +727,7 @@ PAIR_RE = re.compile(r"\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}")
 
 
 def rewrite_c(src, geo_map, screens, ratio, font_by_name=None,
-              hidden=()):
+              hidden=(), text_by_name=None):
     """Rewrite one generated .c so its geometry matches the new project."""
     def fix_pos(m):
         head, name, x, mid, y, tail = m.groups()
@@ -725,7 +762,15 @@ def rewrite_c(src, geo_map, screens, ratio, font_by_name=None,
             return m.group(0)
         return "%s%s_%d%s" % (head, family, new, tail)
 
-    out = POS_RE.sub(fix_pos, src)
+    def fix_text(m):
+        head, name, _old, tail = m.groups()
+        new = (text_by_name or {}).get(name)
+        if new is None:
+            return m.group(0)
+        return '%s"%s"%s' % (head, new.replace('"', '\\"'), tail)
+
+    out = TEXT_RE.sub(fix_text, src)
+    out = POS_RE.sub(fix_pos, out)
     out = SIZE_RE.sub(fix_size, out)
     out = POINTS_RE.sub(fix_points, out)
     out = FONT_RE.sub(fix_font, out)
@@ -796,7 +841,7 @@ def link_shared(out_dir):
 
 
 def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None,
-                   hidden=()):
+                   hidden=(), text_by_name=None):
     src = SRC_GENERATED
     dst = os.path.join(out_dir, "generated")
     if os.path.isdir(dst):
@@ -821,7 +866,7 @@ def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None,
         with open(path, "r", encoding="utf-8", errors="surrogateescape") as fh:
             src_text = fh.read()
         new_text = rewrite_c(src_text, geo_map, screens, ratio, font_by_name,
-                             hidden)
+                             hidden, text_by_name)
         if new_text != src_text:
             with open(path, "w", encoding="utf-8",
                       errors="surrogateescape") as fh:
@@ -947,7 +992,7 @@ def main():
     out_project = os.path.join(args.out_dir,
                                NEW_PROJECT_NAME + ".guiguider")
     if args.report_only:
-        _, _, boxes, _fonts, changes, _hidden = rewrite_project(None)
+        _, _, boxes, _fonts, changes, _hidden, _texts = rewrite_project(None)
         print_report(boxes, changes)
         return
 
@@ -958,10 +1003,11 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     (geo_map, screens, boxes, font_by_name, changes,
-     hidden) = rewrite_project(out_project)
+     hidden, texts) = rewrite_project(out_project)
     with open(SRC_PROJECT, "r", encoding="utf-8") as fh:
         ratio = NEW_W / float(json.load(fh)["projectSettings"]["resolution"]["width"])
-    copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name, hidden)
+    copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name, hidden,
+                   texts)
     link_shared(args.out_dir)
     print_report(boxes, changes)
 
