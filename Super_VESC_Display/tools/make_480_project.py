@@ -718,6 +718,27 @@ MicroPython/
 """
 
 
+# Directories the 480 project shares with the 800 one rather than duplicating.
+# GUI Guider resolves a project's fonts and images relative to the project
+# directory (ImportFonts holds paths like "font\\Montserrat-medium.ttf" under
+# import/), so without import/ it silently falls back to a serif face for every
+# family it cannot find — the canvas then looks nothing like the device.
+# custom/ and lvgl/ are shared because they ARE shared: the firmware compiles
+# one copy of custom/ for both geometries.
+SHARED_DIRS = ("import", "custom", "lvgl")
+
+
+def link_shared(out_dir):
+    """Point the 480 project at the shared asset/code directories."""
+    for name in SHARED_DIRS:
+        dst = os.path.join(out_dir, name)
+        if os.path.lexists(dst):
+            continue
+        os.symlink(os.path.join("..", "Super_VESC_Display", name), dst)
+        print("linked %s -> ../Super_VESC_Display/%s"
+              % (os.path.relpath(dst, REPO_ROOT), name))
+
+
 def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None,
                    hidden=()):
     src = SRC_GENERATED
@@ -885,6 +906,7 @@ def main():
     with open(SRC_PROJECT, "r", encoding="utf-8") as fh:
         ratio = NEW_W / float(json.load(fh)["projectSettings"]["resolution"]["width"])
     copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name, hidden)
+    link_shared(args.out_dir)
     print_report(boxes, changes)
 
 

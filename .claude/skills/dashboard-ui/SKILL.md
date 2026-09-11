@@ -24,6 +24,14 @@ built in C must ask the display how wide it is: `UI_W` / `UI_H` / `UI_SX()`
 from `Super_VESC_Display/custom/ui_geom.h`, never a literal 800. Simulator for
 the square one: `cd Super_VESC_Display/lvgl-simulator && make dash480`.
 
+**If GUI Guider's canvas renders everything in a serif face**, it did not find
+the TTF. It resolves `ImportFonts` paths (like `font\Montserrat-medium.ttf`)
+under the project's own `import/`, and silently falls back per family when a
+file is missing — the canvas then looks nothing like the device, where the
+fonts are compiled in. `montserratMedium` pointed at a name that did not exist
+in `import/font/` until 2026-09-11; the 480 project carries a symlink to the
+same `import/` for the same reason.
+
 **Look at the layout without hardware or a window.** In `lvgl-simulator/`:
 `make shots` (800×480) and `make shots480` (480×480) build the simulator
 headless (SDL dummy driver + `lv_snapshot`), walk every dashboard theme plus
