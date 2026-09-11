@@ -54,6 +54,8 @@ idf_component_register(
         "files_screen.c"
         "splash_screen.c"
         "nav_screen.c"
+        "nav_tiles.c"
+        "nav_map.c"
         "debug_uart_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES
@@ -89,6 +91,7 @@ idf_component_register(
         vesc_can
         vesc_config
         dev_settings
+        espressif__libpng
         log_capture
         trip_log
         joltwallet__littlefs

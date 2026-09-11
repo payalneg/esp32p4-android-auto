@@ -26,7 +26,9 @@
 #include "os/os_mbuf.h"
 
 #include "ble_link_boost.h"
+#include "nav_map.h"
 #include "nav_screen.h"
+#include "nav_tiles.h"
 #include "ui_mode.h"
 
 static const char *TAG = "ble_nav";
@@ -36,12 +38,18 @@ static const char *TAG = "ble_nav";
 #define NAV_OP_END     0x02
 #define NAV_OP_STOP    0x03
 #define NAV_OP_HELLO   0x04
+#define NAV_OP_TILE_BEGIN 0x05
+#define NAV_OP_TILE_END   0x06
+#define NAV_OP_VIEW       0x07
 
 #define NAV_ST_STATE   0x10
 #define NAV_ST_ACK     0x11
+#define NAV_ST_TILE_ACK 0x12
 
 #define NAV_BEGIN_LEN  (1 + 2 + 2 + 4 + 2)
 #define NAV_END_LEN    (1 + 2)
+#define NAV_TILE_BEGIN_LEN (1 + 1 + 1 + 4 + 4 + 4 + 2)
+#define NAV_VIEW_LEN       (1 + 4 + 4 + 1 + 2)
 
 /* With no frame for this long the link goes back to its normal duty cycle.
  * Not a fault and not shown on screen: the app skips frames whose pixels did
@@ -50,7 +58,11 @@ static const char *TAG = "ble_nav";
 
 typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
 
-typedef enum { EV_FRAME, EV_STATE, EV_STOP, EV_REJECT } ev_kind_t;
+/* What the open transfer is carrying. One at a time: the app waits for the
+ * acknowledgement before it starts the next. */
+typedef enum { RX_FRAME, RX_TILE } rx_kind_t;
+
+typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
@@ -72,6 +84,9 @@ static uint32_t  s_expect;
 static uint32_t  s_got;
 static uint16_t  s_w, s_h;
 static uint16_t  s_seq;
+static rx_kind_t s_rx_kind;
+static uint8_t   s_tile_z, s_tile_fmt;
+static uint32_t  s_tile_x, s_tile_y;
 
 /* Decode side, worker task only. */
 static jpeg_decoder_handle_t s_jpgd;
@@ -115,6 +130,12 @@ static void set_boost(bool on)
 }
 
 static size_t align_up(size_t v, size_t a) { return (v + a - 1) & ~(a - 1); }
+
+static uint32_t rd_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
 
 /* RGB565 scratch for a frame that is not already panel-sized. */
 static bool ensure_decode_buffer(uint16_t w, uint16_t h)
@@ -253,6 +274,55 @@ static void handle_frame(const nav_evt_t *ev)
     notify(NAV_ST_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
 }
 
+/* Compose the current view from the tiles we hold and put it on screen.
+ * Cheap — a screenful is 768 KB of memcpy — so it runs on every position
+ * update and again whenever a tile that might be visible arrives. */
+static void render_view(void)
+{
+    uint16_t *dst = nav_screen_back_buffer();
+    if (!dst) return;            /* the last one is still on its way out */
+    if (ui_mode_get() != UI_MODE_NAV) return;
+    const int64_t t0 = esp_timer_get_time();
+    int wanted = 0;
+    const int have = nav_map_render(dst, NAV_SCREEN_W, NAV_SCREEN_H, &wanted);
+    esp_cache_msync(dst, nav_screen_back_buffer_bytes(),
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    nav_screen_commit();
+    nav_screen_set_streaming(true);
+    s_stats.renders++;
+    s_stats.render_last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    s_stats.last_have = have;
+    s_stats.last_wanted = wanted;
+    s_last_frame_us = esp_timer_get_time();
+}
+
+static void handle_tile(const nav_evt_t *ev)
+{
+    const int64_t t0 = esp_timer_get_time();
+    uint8_t ack;
+    if (s_got != s_expect) {
+        ack = NAV_ACK_TRUNCATED;
+    } else if (nav_tiles_put(s_tile_z, s_tile_x, s_tile_y, s_tile_fmt,
+                             s_stage, s_got)) {
+        ack = NAV_ACK_OK;
+    } else {
+        ack = NAV_ACK_DECODE;
+    }
+    const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    s_state = ST_IDLE;
+
+    s_stats.tile_last_bytes = s_got;
+    s_stats.tile_last_ms = ms;
+    if (ack == NAV_ACK_OK) {
+        s_stats.tiles_ok++;
+        /* A tile that just landed may be one the screen is waiting for. */
+        render_view();
+    } else {
+        s_stats.tiles_failed++;
+    }
+    notify(NAV_ST_TILE_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
+}
+
 static void worker(void *arg)
 {
     (void)arg;
@@ -298,9 +368,21 @@ static void worker(void *arg)
                 set_boost(true);
                 handle_frame(&ev);
                 break;
+            case EV_TILE:
+                s_stats.streaming = true;
+                set_boost(true);
+                handle_tile(&ev);
+                break;
+            case EV_VIEW:
+                s_stats.views++;
+                s_stats.streaming = true;
+                nav_screen_set_streaming(true);
+                render_view();
+                break;
             case EV_REJECT:
                 s_state = ST_IDLE;
-                notify(NAV_ST_ACK, ev.reason, ev.seq, 0);
+                notify(s_rx_kind == RX_TILE ? NAV_ST_TILE_ACK : NAV_ST_ACK,
+                       ev.reason, ev.seq, 0);
                 break;
             case EV_STOP:
                 s_state = ST_IDLE;
@@ -326,7 +408,8 @@ void ble_nav_init(void)
         ESP_LOGE(TAG, "no PSRAM for the %d-byte frame buffer", BLE_NAV_MAX_FRAME);
         return;
     }
-    s_q = xQueueCreate(4, sizeof(nav_evt_t));
+    nav_tiles_init();
+    s_q = xQueueCreate(8, sizeof(nav_evt_t));
     xTaskCreatePinnedToCore(worker, "ble_nav", 4096, NULL, 5, &s_task, 0);
     ESP_LOGI(TAG, "ble_nav ready");
 }
@@ -414,18 +497,60 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_expect = tot;
             s_got = 0;
             s_seq = seq;
+            s_rx_kind = RX_FRAME;
             s_state = ST_RECEIVING;
             break;
         }
-        case NAV_OP_END: {
+        case NAV_OP_END:
+        case NAV_OP_TILE_END: {
             if (len < NAV_END_LEN) return;
             const uint16_t seq = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-            if (s_state != ST_RECEIVING || seq != s_seq) {
+            const rx_kind_t want = (data[0] == NAV_OP_TILE_END) ? RX_TILE : RX_FRAME;
+            if (s_state != ST_RECEIVING || seq != s_seq || s_rx_kind != want) {
                 reject(seq, NAV_ACK_TRUNCATED);
                 return;
             }
             s_state = ST_DECODING;
-            nav_evt_t ev = { .kind = EV_FRAME, .seq = seq };
+            nav_evt_t ev = { .kind = (want == RX_TILE) ? EV_TILE : EV_FRAME,
+                             .seq = seq };
+            xQueueSend(s_q, &ev, 0);
+            break;
+        }
+
+        case NAV_OP_TILE_BEGIN: {
+            if (len < NAV_TILE_BEGIN_LEN) { reject(0, NAV_ACK_BAD_PARAM); return; }
+            const uint8_t  fmt = data[1];
+            const uint8_t  z   = data[2];
+            const uint32_t x   = rd_u32(data + 3);
+            const uint32_t y   = rd_u32(data + 7);
+            const uint32_t tot = rd_u32(data + 11);
+            const uint16_t seq = (uint16_t)data[15] | ((uint16_t)data[16] << 8);
+            if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
+            if (tot == 0 || tot > BLE_NAV_MAX_FRAME || z > 22) {
+                reject(seq, NAV_ACK_BAD_PARAM);
+                return;
+            }
+            s_tile_fmt = fmt;
+            s_tile_z = z;
+            s_tile_x = x;
+            s_tile_y = y;
+            s_expect = tot;
+            s_got = 0;
+            s_seq = seq;
+            s_rx_kind = RX_TILE;
+            s_state = ST_RECEIVING;
+            break;
+        }
+
+        case NAV_OP_VIEW: {
+            if (len < NAV_VIEW_LEN) return;
+            const int32_t lat_e7 = (int32_t)rd_u32(data + 1);
+            const int32_t lon_e7 = (int32_t)rd_u32(data + 5);
+            const uint8_t zoom = data[9];
+            const uint16_t heading = (uint16_t)data[10] | ((uint16_t)data[11] << 8);
+            if (zoom > 22) return;
+            nav_map_set_view(lat_e7 / 1e7, lon_e7 / 1e7, zoom, heading);
+            nav_evt_t ev = { .kind = EV_VIEW };
             xQueueSend(s_q, &ev, 0);
             break;
         }

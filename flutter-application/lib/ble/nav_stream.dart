@@ -23,12 +23,22 @@ class NavOp {
   static const frameEnd = 0x02;
   static const stop = 0x03;
   static const hello = 0x04;
+  static const tileBegin = 0x05;
+  static const tileEnd = 0x06;
+  static const view = 0x07;
 }
+
+/// Wire formats a map tile may travel in. PNG is what the tile cache already
+/// holds, so forwarding costs nothing and keeps the labels crisp; JPEG is
+/// smaller but has to be transcoded on the phone and blurs coloured text.
+const int kTileFormatPng = 0;
+const int kTileFormatJpeg = 1;
 
 /// Notification kinds the head unit sends back.
 class NavStatus {
   static const state = 0x10;
   static const frameAck = 0x11;
+  static const tileAck = 0x12;
 }
 
 /// FRAME_ACK results.
@@ -157,7 +167,8 @@ class NavStream {
       if (!_stateCtrl.isClosed) _stateCtrl.add(st);
       return;
     }
-    if (raw[0] == NavStatus.frameAck && raw.length >= 6) {
+    if ((raw[0] == NavStatus.frameAck || raw[0] == NavStatus.tileAck) &&
+        raw.length >= 6) {
       final r = NavFrameResult(
         raw[1],
         raw[2] | (raw[3] << 8),
@@ -223,6 +234,61 @@ class NavStream {
     } finally {
       _sending = false;
     }
+  }
+
+  /// Send one map tile. The head unit keeps it, so a tile goes over the link
+  /// once and is then drawn from its memory for the rest of the ride.
+  Future<NavFrameResult> sendTile(
+      int z, int x, int y, int format, Uint8List bytes) async {
+    if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
+    _sending = true;
+    final seq = _seq = (_seq + 1) & 0xFFFF;
+    try {
+      final acked = _ackCtrl.stream
+          .firstWhere((r) => r.seq == seq)
+          .timeout(kNavAckTimeout);
+
+      final begin = Uint8List(17);
+      final bd = ByteData.sublistView(begin);
+      begin[0] = NavOp.tileBegin;
+      begin[1] = format;
+      begin[2] = z;
+      bd.setUint32(3, x, Endian.little);
+      bd.setUint32(7, y, Endian.little);
+      bd.setUint32(11, bytes.length, Endian.little);
+      bd.setUint16(15, seq, Endian.little);
+      await _channel.writeCtrl(begin);
+
+      final chunk = chunkSize;
+      for (var off = 0; off < bytes.length; off += chunk) {
+        final end = (off + chunk < bytes.length) ? off + chunk : bytes.length;
+        await _writeChunk(Uint8List.sublistView(bytes, off, end));
+      }
+
+      final end = Uint8List(3);
+      end[0] = NavOp.tileEnd;
+      ByteData.sublistView(end).setUint16(1, seq, Endian.little);
+      await _channel.writeCtrl(end);
+
+      return await acked;
+    } on TimeoutException {
+      return NavFrameResult(NavAck.timeout, seq, 0);
+    } finally {
+      _sending = false;
+    }
+  }
+
+  /// Say where the rider is. Twelve bytes, unacknowledged, as often as the map
+  /// should move — this is what replaces sending a picture.
+  Future<void> sendView(double lat, double lon, int zoom, int headingDeg) {
+    final v = Uint8List(12);
+    final bd = ByteData.sublistView(v);
+    v[0] = NavOp.view;
+    bd.setInt32(1, (lat * 1e7).round(), Endian.little);
+    bd.setInt32(5, (lon * 1e7).round(), Endian.little);
+    v[9] = zoom;
+    bd.setUint16(10, headingDeg, Endian.little);
+    return _channel.writeCtrl(v);
   }
 
   /// Largest DATA write to use: what the head unit accepts, capped by what the

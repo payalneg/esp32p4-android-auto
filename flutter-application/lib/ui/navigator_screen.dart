@@ -23,6 +23,7 @@ import '../i18n/strings.dart';
 import '../nav/announcer.dart';
 import '../nav/frame_codec.dart';
 import '../nav/frame_streamer.dart';
+import '../nav/head_unit_feed.dart';
 import '../nav/geo.dart';
 import '../nav/link_resolver.dart';
 import '../nav/location_service.dart';
@@ -90,6 +91,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// algorithm, same input, so the two views agree without sharing state.
   final _huCamera = NavCamera();
   NavFrameStreamer? _streamer;
+  HeadUnitFeed? _feed;
   /// Set once the head-unit map has been laid out, so a camera move before
   /// that does not throw.
   bool _huReady = false;
@@ -154,6 +156,11 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       sink: const _ProxyFrameSink(),
     );
     _streamer!.status.addListener(_onStreamStatus);
+    _feed = HeadUnitFeed(
+      tiles: () => MapData.instance.tiles,
+      link: const _ProxyHeadUnitLink(),
+    );
+    _feed!.status.addListener(_onStreamStatus);
     _syncStreamer();
   }
 
@@ -167,6 +174,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     _streamer?.status.removeListener(_onStreamStatus);
     unawaited(_streamer?.dispose());
     _streamer = null;
+    _feed?.status.removeListener(_onStreamStatus);
+    unawaited(_feed?.dispose());
+    _feed = null;
     _huMap.dispose();
     MapData.instance.removeListener(_onMapDataChanged);
     _linkSub?.cancel();
@@ -204,6 +214,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       // Outside a ride the head unit mirrors the rider's map instead, so it
       // shows what they are looking at rather than a dot on a default view.
       if (_controller.navigating) _followHeadUnit(fix);
+      _feed?.setPosition(fix.position, headingDeg: fix.headingDeg);
       unawaited(_topUpAroundPosition(fix.position));
     }
     if (_controller.navigating != _screenPinned) {
@@ -405,12 +416,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// is there, and whether it is showing its navigator screen, is the
   /// streamer's own business — it polls cheaply and sends nothing until both.
   void _syncStreamer() {
-    final s = _streamer;
-    if (s == null) return;
+    final feed = _feed;
+    if (feed == null) return;
     if (NavSettings.instance.streamToDisplay) {
-      s.start();
+      feed.start();
     } else {
-      unawaited(s.stop());
+      unawaited(feed.stop());
     }
   }
 
@@ -720,6 +731,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         onPositionChanged: (camera, hasGesture) {
           if (hasGesture && _controller.follow) _controller.setFollow(false);
           _mirrorToHeadUnit(camera);
+          // With no fix yet, the head unit follows what the rider is looking
+          // at — otherwise it would have nowhere to point its own map.
+          if (_controller.lastFix == null) {
+            _feed?.setPosition(
+                LatLon(camera.center.latitude, camera.center.longitude));
+          }
           unawaited(NavSettings.instance.saveLastView(
               camera.center.latitude, camera.center.longitude, camera.zoom));
         },
@@ -1524,4 +1541,31 @@ class _PreviewFrame extends StatelessWidget {
       ],
     );
   }
+}
+
+
+/// [HeadUnitLink] over the BLE proxy.
+class _ProxyHeadUnitLink implements HeadUnitLink {
+  const _ProxyHeadUnitLink();
+
+  BleProxy get _ble => BleProxy.instance;
+
+  @override
+  bool get available =>
+      _ble.currentState == BleConnState.connected && _ble.supportsNavStream;
+
+  @override
+  NavDisplayState get displayState => _ble.navState;
+
+  @override
+  Stream<NavDisplayState> get displayStates => _ble.navStates;
+
+  @override
+  Future<NavFrameResult> sendTile(
+          int z, int x, int y, int format, Uint8List bytes) =>
+      _ble.sendNavTile(z, x, y, format, bytes);
+
+  @override
+  Future<void> sendView(double lat, double lon, int zoom, int headingDeg) async =>
+      _ble.sendNavView(lat, lon, zoom, headingDeg);
 }

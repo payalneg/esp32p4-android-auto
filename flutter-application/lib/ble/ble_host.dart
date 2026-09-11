@@ -311,6 +311,33 @@ class BleTaskHandler extends TaskHandler {
           _reply(id, {'ack': r.ack, 'seq': r.seq, 'ms': r.decodeMs});
           break;
 
+        case IpcCmd.navTile:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden, 'ms': 0});
+            break;
+          }
+          final r = await nav.sendTile(
+            m['z'] as int,
+            m['x'] as int,
+            m['y'] as int,
+            m['fmt'] as int,
+            base64Decode(m['b64'] as String),
+          );
+          _navFrameSent();
+          _reply(id, {'ack': r.ack, 'ms': r.decodeMs});
+          break;
+
+        case IpcCmd.navView:
+          // Fire-and-forget: a dozen bytes, and the next one is a moment away.
+          await _ble.navStream?.sendView(
+            (m['lat'] as num).toDouble(),
+            (m['lon'] as num).toDouble(),
+            m['zoom'] as int,
+            m['heading'] as int,
+          );
+          break;
+
         case IpcCmd.navHello:
           await _ble.navStream?.hello();
           break;

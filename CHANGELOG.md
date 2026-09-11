@@ -28,6 +28,28 @@ the one recorded in the release commit.
 - The phone is told when the navigator screen is and is not the live screen,
   and sends nothing while it is not — a parked bike or a rider looking at the
   dashboard costs no air time. Unchanged pictures are not re-sent either.
+### The head unit draws the map itself
+
+- Sending a whole picture for every few pixels of movement was always going
+  to be a slideshow: a frame is 20 KB, the link carries 13-15 KB a second, and
+  it stops entirely when the phone's screen goes dark. The head unit now keeps
+  the map tiles the phone has already downloaded — each one crosses the link
+  once — and the phone says only where the rider is, twelve bytes at a time.
+  The map is redrawn on the head unit from memory, so it moves as often as the
+  position arrives and keeps moving with the phone in a pocket.
+- New messages on the same characteristics: TILE_BEGIN/TILE_END carry one
+  tile (PNG or JPEG, the format travels with it), VIEW carries the rider's
+  position, zoom and heading. The picture path is untouched and still works.
+- Tiles are decoded on arrival and held as RGB565 in PSRAM, up to 96 of them
+  (12 MB of the 25 MB free), least-recently-used first out. PNG is decoded by
+  libpng, which the LVGL image decoder already brings in; JPEG goes through
+  the hardware decoder.
+- Measured on real tiles across three zooms: PNG as OpenStreetMap serves it
+  averages 24 KB, JPEG q80 averages 18 KB. PNG is kept anyway — the phone
+  forwards what it already holds without transcoding, and coloured labels stay
+  crisp. A screenful is 15-20 tiles, so about 30 seconds on first arrival;
+  keeping up at riding speed costs around 1 KB/s.
+
 - Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
   without the 3-finger hold, `navstat` reports the frame stream (mode, frames
   accepted and rejected, last frame size and decode time), and `navtest` puts

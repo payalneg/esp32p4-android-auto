@@ -27,7 +27,9 @@
 #include "ble_nav.h"
 #include "esp_timer.h"
 #include "mic_capture.h"
+#include "nav_map.h"
 #include "nav_screen.h"
+#include "nav_tiles.h"
 #include "touch_input.h"
 #include "ui_mode.h"
 /* LVGL internals: the timer list, for the lvtimers dump below. */
@@ -468,6 +470,18 @@ static int cmd_navstat(int argc, char **argv)
     printf("last frame %ux%u %u B decode=%u ms ack=%u\n",
            st.last_w, st.last_h, (unsigned)st.last_bytes,
            (unsigned)st.last_decode_ms, st.last_ack);
+    nav_tiles_stats_t ts;
+    nav_tiles_get_stats(&ts);
+    nav_map_view_t v;
+    nav_map_get_view(&v);
+    printf("tiles ok=%u failed=%u stored=%u/%u evicted=%u last=%u B in %u ms\n",
+           (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
+           (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
+           (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("view %s %.5f,%.5f z%u hdg=%u | renders=%u last=%u ms tiles %d/%d\n",
+           v.valid ? "set" : "unset", v.lat, v.lon, (unsigned)v.zoom,
+           (unsigned)v.heading_deg, (unsigned)st.renders,
+           (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
     return 0;
 }
 

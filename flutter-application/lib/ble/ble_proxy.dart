@@ -426,6 +426,28 @@ class BleProxy {
     }
   }
 
+  /// Hand the head unit one map tile. Never throws; a dead link comes back as
+  /// a non-ok ack and the feed retries later.
+  Future<NavFrameResult> sendNavTile(
+      int z, int x, int y, int fmt, Uint8List bytes) async {
+    try {
+      final r = await _request(
+        IpcCmd.navTile,
+        {'z': z, 'x': x, 'y': y, 'fmt': fmt, 'b64': base64Encode(bytes)},
+        const Duration(seconds: 15),
+      );
+      return NavFrameResult((r['ack'] as num?)?.toInt() ?? NavAck.timeout, 0,
+          (r['ms'] as num?)?.toInt() ?? 0);
+    } catch (_) {
+      return const NavFrameResult(NavAck.timeout, 0, 0);
+    }
+  }
+
+  /// Tell the head unit where the rider is. This is what moves its map.
+  void sendNavView(double lat, double lon, int zoom, int headingDeg) =>
+      _fireAndForget(IpcCmd.navView,
+          {'lat': lat, 'lon': lon, 'zoom': zoom, 'heading': headingDeg});
+
   /// Ask the head unit to describe its screen; the answer arrives on
   /// [navStates].
   void navHello() => _fireAndForget(IpcCmd.navHello, const {});

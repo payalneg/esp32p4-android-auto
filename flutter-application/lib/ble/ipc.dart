@@ -23,6 +23,8 @@ class IpcCmd {
   static const navFrame = 'navFrame'; // {w, h, b64} → reply {ack, seq, ms}
   static const navHello = 'navHello'; // ask the head unit for its screen state
   static const navStop = 'navStop'; // we stopped rendering
+  static const navTile = 'navTile'; // {z, x, y, fmt, b64} → reply {ack, ms}
+  static const navView = 'navView'; // {lat, lon, zoom, heading} — where we are
   static const bleRestart = 'bleRestart'; // force a clean reconnect
 
   // File manager.

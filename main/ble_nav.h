@@ -17,14 +17,27 @@
  *     0x02 FRAME_END   : [op][u16 seq]                          (3 bytes)
  *     0x03 STOP        : [op]        the app stopped streaming
  *     0x04 HELLO       : [op]        please send STATE
+ *     0x05 TILE_BEGIN  : [op][u8 fmt][u8 z][u32 x][u32 y][u32 len][u16 seq]
+ *     0x06 TILE_END    : [op][u16 seq]
+ *     0x07 VIEW        : [op][i32 lat_e7][i32 lon_e7][u8 zoom][u16 heading]
  *
  *   CTRL notify (P4 -> phone), 6-byte frame [u8 status][u8 a][u16 b][u16 c] LE:
  *     0x10 STATE      a = ui mode (0 other, 1 navigator screen is live)
  *                     b = 1 while the rider is looking at it
  *                     c = largest DATA write we accept
  *     0x11 FRAME_ACK  a = result (NAV_ACK_*), b = seq, c = decode+scale ms
+ *     0x12 TILE_ACK   a = result (NAV_ACK_*), b = seq, c = decode ms
  *
- *   DATA write (phone -> P4): raw JPEG bytes, streamed after FRAME_BEGIN.
+ *   DATA write (phone -> P4): raw bytes of whatever BEGIN opened — a picture
+ *   for FRAME_BEGIN, a map tile for TILE_BEGIN.
+ *
+ * Two ways to put a map on the screen, then. The picture path (FRAME_*) has
+ * the phone render everything and send it; simple, but every change costs a
+ * whole JPEG and it stops the moment the phone's screen goes dark. The tile
+ * path (TILE_*, VIEW) sends the tiles the phone already downloaded, once
+ * each, and then only says where the rider is — a few tens of bytes a second,
+ * with the head unit redrawing from memory as often as it likes. The tile
+ * path is the one that keeps working with the phone in a pocket.
  *
  * Pacing is one frame in flight: the app waits for FRAME_ACK before starting
  * the next frame, so a single staging buffer is enough and a slow decode
@@ -79,6 +92,16 @@ typedef struct {
     uint32_t last_decode_ms;
     uint8_t  last_ack;
     bool     streaming;
+    /* Tile path. */
+    uint32_t tiles_ok;
+    uint32_t tiles_failed;
+    uint32_t tile_last_bytes;
+    uint32_t tile_last_ms;
+    uint32_t views;
+    uint32_t renders;
+    uint32_t render_last_ms;
+    int      last_have;     /* tiles present for the last composed view */
+    int      last_wanted;
 } ble_nav_stats_t;
 void ble_nav_get_stats(ble_nav_stats_t *out);
 

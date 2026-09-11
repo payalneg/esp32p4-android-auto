@@ -34,9 +34,14 @@ class _FakeChannel implements NavChannel {
   @override
   Future<void> writeCtrl(Uint8List value) async {
     ctrl.add(Uint8List.fromList(value));
-    if (value.isNotEmpty && value[0] == NavOp.frameEnd && autoAck != null) {
+    if (value.isNotEmpty &&
+        (value[0] == NavOp.frameEnd || value[0] == NavOp.tileEnd) &&
+        autoAck != null) {
       final seq = value[1] | (value[2] << 8);
-      ack(autoAck!, seq, autoAckMs);
+      ack(autoAck!, seq, autoAckMs,
+          status: value[0] == NavOp.tileEnd
+              ? NavStatus.tileAck
+              : NavStatus.frameAck);
     }
   }
 
@@ -51,8 +56,9 @@ class _FakeChannel implements NavChannel {
     this.withoutResponse.add(withoutResponse);
   }
 
-  void ack(int result, int seq, int ms) => _notify.add(<int>[
-        NavStatus.frameAck,
+  void ack(int result, int seq, int ms, {int status = NavStatus.frameAck}) =>
+      _notify.add(<int>[
+        status,
         result,
         seq & 0xFF,
         seq >> 8,
@@ -185,6 +191,42 @@ void main() {
     expect(second.ack, NavAck.busy);
     ch.ack(NavAck.ok, 1, 5);
     expect((await first).ok, isTrue);
+  });
+
+  test('a tile is BEGIN with its coordinates, the bytes, then END', () async {
+    ch.state(nav: true, visible: true);
+    await Future<void>.delayed(Duration.zero);
+
+    final r = await nav.sendTile(17, 36409, 22228, kTileFormatPng, _jpeg(700));
+
+    expect(r.ok, isTrue);
+    expect(ch.ctrl.length, 2);
+    final begin = ch.ctrl.first;
+    final bd = ByteData.sublistView(begin);
+    expect(begin[0], NavOp.tileBegin);
+    expect(begin.length, 17);
+    expect(begin[1], kTileFormatPng);
+    expect(begin[2], 17);
+    expect(bd.getUint32(3, Endian.little), 36409);
+    expect(bd.getUint32(7, Endian.little), 22228);
+    expect(bd.getUint32(11, Endian.little), 700);
+    expect(ch.ctrl.last[0], NavOp.tileEnd);
+    expect(ch.data.expand((c) => c).length, 700);
+  });
+
+  test('the view is twelve bytes and needs no answer', () async {
+    await nav.sendView(50.0619, 19.9368, 17, 271);
+    expect(ch.ctrl.length, 1);
+    final v = ch.ctrl.first;
+    final bd = ByteData.sublistView(v);
+    expect(v[0], NavOp.view);
+    expect(v.length, 12);
+    expect(bd.getInt32(1, Endian.little), 500619000);
+    expect(bd.getInt32(5, Endian.little), 199368000);
+    expect(v[9], 17);
+    expect(bd.getUint16(10, Endian.little), 271);
+    // Nothing was waited on: the next position is a moment away anyway.
+    expect(ch.data, isEmpty);
   });
 
   test('stop and hello are single-byte controls', () async {
