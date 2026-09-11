@@ -58,7 +58,7 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Classic_status_vesc, "VESC");
     lv_label_set_long_mode(ui->dashboard_Classic_status_vesc, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Classic_status_vesc, 4, 5);
-    lv_obj_set_size(ui->dashboard_Classic_status_vesc, 44, 30);
+    lv_obj_set_size(ui->dashboard_Classic_status_vesc, 42, 30);
     lv_obj_add_flag(ui->dashboard_Classic_status_vesc, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_status_vesc, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -82,7 +82,7 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Classic_mode_text, "MODE ");
     lv_label_set_long_mode(ui->dashboard_Classic_mode_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Classic_mode_text, 90, 5);
-    lv_obj_set_size(ui->dashboard_Classic_mode_text, 51, 30);
+    lv_obj_set_size(ui->dashboard_Classic_mode_text, 50, 30);
 
     //Write style for dashboard_Classic_mode_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -104,8 +104,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_uptime_text = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_uptime_text, "--:--:--");
     lv_label_set_long_mode(ui->dashboard_Classic_uptime_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_uptime_text, 183, 5);
-    lv_obj_set_size(ui->dashboard_Classic_uptime_text, 48, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_uptime_text, 184, 5);
+    lv_obj_set_size(ui->dashboard_Classic_uptime_text, 47, 30);
 
     //Write style for dashboard_Classic_uptime_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -127,8 +127,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_status_bt = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_status_bt, "BT\n");
     lv_label_set_long_mode(ui->dashboard_Classic_status_bt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_status_bt, 411, 5);
-    lv_obj_set_size(ui->dashboard_Classic_status_bt, 25, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_status_bt, 412, 5);
+    lv_obj_set_size(ui->dashboard_Classic_status_bt, 24, 30);
 
     //Write style for dashboard_Classic_status_bt, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -640,7 +640,7 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_speed_label = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_speed_label, "SPEED · KM/H");
     lv_label_set_long_mode(ui->dashboard_Classic_speed_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_speed_label, 108, 42);
+    lv_obj_set_pos(ui->dashboard_Classic_speed_label, 124, 42);
     lv_obj_set_size(ui->dashboard_Classic_speed_label, 264, 14);
 
     //Write style for dashboard_Classic_speed_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -663,8 +663,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_Speed_text = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_Speed_text, "00");
     lv_label_set_long_mode(ui->dashboard_Classic_Speed_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Speed_text, 108, 70);
-    lv_obj_set_size(ui->dashboard_Classic_Speed_text, 264, 224);
+    lv_obj_set_pos(ui->dashboard_Classic_Speed_text, 98, 70);
+    lv_obj_set_size(ui->dashboard_Classic_Speed_text, 285, 224);
 
     //Write style for dashboard_Classic_Speed_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_Speed_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1006,7 +1006,7 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     lv_obj_set_style_border_width(ui->dashboard_Classic_speed_min, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Classic_speed_min, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Classic_speed_min, lv_color_hex(0x4A5358), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Classic_speed_min, &lv_font_montserratMedium_20, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Classic_speed_min, &lv_font_montserratMedium_18, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Classic_speed_min, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Classic_speed_min, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Classic_speed_min, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2142,8 +2142,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_Settings_text = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_Settings_text, "SET");
     lv_label_set_long_mode(ui->dashboard_Classic_Settings_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Settings_text, 359, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Settings_text, 34, 29);
+    lv_obj_set_pos(ui->dashboard_Classic_Settings_text, 361, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Settings_text, 33, 29);
     lv_obj_add_flag(ui->dashboard_Classic_Settings_text, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_Settings_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -2282,8 +2282,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     lv_slider_set_range(ui->dashboard_Classic_brightness_slider, 0, 100);
     lv_slider_set_mode(ui->dashboard_Classic_brightness_slider, LV_SLIDER_MODE_NORMAL);
     lv_slider_set_value(ui->dashboard_Classic_brightness_slider, 50, LV_ANIM_OFF);
-    lv_obj_set_pos(ui->dashboard_Classic_brightness_slider, 310, 40);
-    lv_obj_set_size(ui->dashboard_Classic_brightness_slider, 170, 350);
+    lv_obj_set_pos(ui->dashboard_Classic_brightness_slider, 374, 40);
+    lv_obj_set_size(ui->dashboard_Classic_brightness_slider, 102, 210);
 
     //Write style for dashboard_Classic_brightness_slider, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_bg_opa(ui->dashboard_Classic_brightness_slider, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2323,8 +2323,8 @@ void setup_scr_dashboard_Classic(lv_ui *ui)
     ui->dashboard_Classic_statistics_button = lv_label_create(ui->dashboard_Classic);
     lv_label_set_text(ui->dashboard_Classic_statistics_button, "STAT");
     lv_label_set_long_mode(ui->dashboard_Classic_statistics_button, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_statistics_button, 273, 5);
-    lv_obj_set_size(ui->dashboard_Classic_statistics_button, 44, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_statistics_button, 275, 5);
+    lv_obj_set_size(ui->dashboard_Classic_statistics_button, 42, 30);
     lv_obj_add_flag(ui->dashboard_Classic_statistics_button, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_statistics_button, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

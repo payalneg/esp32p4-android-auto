@@ -73,6 +73,10 @@ NEW_PROJECT_NAME = "Super_VESC_Display_480"
 # Stepping outside this list would not link.
 AVAILABLE_FONTS = {
     "montserratMedium": [11, 12, 16, 18, 20, 22, 24, 25, 26],
+    # Antonio is excluded from the generic stepping (FONT_KEEP_FAMILIES) — its
+    # size is the design — but a readout INSIDE a gauge that shrank has to
+    # shrink with it, and these are the sizes that exist.
+    "Antonio_Regular": [22, 32, 40, 50, 64, 100, 200],
 }
 
 # Families whose size is part of the design rather than a container for text:
@@ -84,6 +88,54 @@ FONT_KEEP_FAMILIES = {"Antonio_Regular", "DSEG7Classic_Regular",
 # How far a caption may shrink before it stops being readable at arm's length
 # on a handlebar. Below this the script widens the box instead.
 FONT_MIN_PX = 14
+
+# Which characters each shipped font size actually contains.
+#
+# The Antonio sizes are hard-subsetted at build time (see
+# tools/regen_cockpit_fonts.py — Antonio at 200 with the full ASCII range is
+# 1.4 MB of flash), so a font step can land on a size that has no glyph for the
+# text. That is how "62°" became "62 [tofu]": 32 carries U+00B0, 22 does not.
+# Keep these ranges in step with the JOBS table in that script.
+ANTONIO_RANGES = {
+    200: "0x2D,0x30-0x39",
+    100: "0x2D,0x30-0x39",
+    50:  "0x2D,0x30-0x39",
+    40:  "0x2D-0x39",
+    22:  "0x20,0x25,0x2D-0x3A,0x41-0x5A",
+    64:  "0x20,0x25,0x2D,0x2E,0x30-0x39,0x56,0x57,0x6B,0xB0",
+    32:  "0x20,0x2D-0x39,0x41-0x5A,0xB0,0xB7",
+}
+
+
+def _parse_ranges(spec):
+    out = set()
+    for part in spec.split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            out.update(range(int(a, 16), int(b, 16) + 1))
+        else:
+            out.add(int(part, 16))
+    return out
+
+
+ANTONIO_GLYPHS = {size: _parse_ranges(spec)
+                  for size, spec in ANTONIO_RANGES.items()}
+
+
+def font_has_text(family, size, text):
+    """Whether this size of this family can draw `text`."""
+    if family == "Antonio_Regular":
+        glyphs = ANTONIO_GLYPHS.get(size)
+        return glyphs is None or all(ord(c) in glyphs for c in text if c != "\n")
+    # GUI Guider exports each Montserrat size with the glyphs the project uses
+    # at that size, which for anything outside plain ASCII is a gamble — the
+    # middot in "M·TEMP" is the one that bit. Only step plain ASCII.
+    return all(ord(c) < 0x7F for c in text)
+
+
+# Round widgets at or below this size are icons/LEDs and keep their pixel size;
+# anything bigger is a gauge and scales down with the screen.
+ROUND_SCALE_MIN = 60
 
 
 # Per-widget decisions the arithmetic cannot make.
@@ -129,7 +181,11 @@ def text_width_estimate(text, font_size, letter_space=0):
         w = sum(CHAR_EM.get(c, CHAR_EM_DEFAULT) * font_size + letter_space
                 for c in line)
         widest = max(widest, w)
-    return int(widest + 0.5)
+    # A few percent of headroom on top: the table is calibrated against
+    # rendered screenshots but still lands a hair under on short strings, and
+    # "km" wrapping to "k/m" in a box the estimate called big enough costs far
+    # more than two spare pixels.
+    return int(widest * 1.08 + 0.5)
 
 
 def _classic_status_bar():
@@ -164,10 +220,7 @@ def _classic_status_bar():
         ("cur_time_label",    "--:--"),
     ]
     BAR_DROP_ORDER = []   # everything fits once the captions are short
-    # The per-character table is calibrated against rendered screenshots but
-    # still runs a few percent low on long all-caps strings; a caption that
-    # wraps costs far more than a few spare pixels.
-    FUDGE = 1.12
+    FUDGE = 1.0   # text_width_estimate already carries the headroom
     FONT, PAD, GAP, MARGIN = 12, 6, 8, 4
 
     def pack(chosen):
@@ -310,30 +363,18 @@ SQUARE_OVERRIDES = {
     # readout strip. At 800 it is caption + value laid out sideways three
     # times; in the 264 px the square screen leaves between the separators
     # they stack instead, two lines each.
-    # Lamborghini/Supermoto survive the squeeze almost intact; these are the
-    # spots where a unit label ends up on top of its value or off its panel.
-    "lambo_units": {
-        "range_unit": {"x": 458, "y": 266, "w": 20, "font": 11},
-        "AMPS_text":  {"x": 8,   "w": 92,  "font": 24},
-        # Three LED + caption pairs share the bottom-left corner. Keeping each
-        # LED's own size (they are round) and scaling only their centres puts
-        # the captions under the next LED along, so the pairs are spaced out
-        # by hand here.
+    # Lamborghini's bottom-left corner: three LED + caption pairs. Keeping
+    # each LED round and scaling only its centre puts the captions under the
+    # next LED along, so the pairs are spaced out by hand. Everything else on
+    # these two screens (units next to values, labels inside their cards) is
+    # handled by fit_inside_panels.
+    "lambo_leds": {
         "led_tt_cruise_lbl": {"x": 4,   "w": 14},
         "tt_cruise_lbl":     {"x": 20,  "w": 30, "font": 11},
         "led_tt_fault_lbl":  {"x": 54,  "w": 14},
         "tt_fault_lbl":      {"x": 70,  "w": 30, "font": 11},
         "led_status_bt":     {"x": 104, "w": 14},
         "status_bt":         {"x": 120, "w": 26, "font": 11},
-        "TRIP_text": {"x": 222, "w": 30, "font": 12},
-        "trip_unit": {"x": 254, "w": 24, "font": 11},
-        "odo_text":  {"x": 282, "w": 42, "font": 12},
-        "odo_unit":  {"x": 326, "w": 24, "font": 11},
-    },
-    "supermoto_units": {
-        "trip_unit": {"x": 258, "w": 24, "font": 11},
-        "odo_unit":  {"x": 352, "w": 24, "font": 11},
-        "power_unit": {"x": 447, "w": 26, "font": 11},
     },
 
     "classic_max_row": {
@@ -350,8 +391,7 @@ SQUARE_OVERRIDE_SCREENS = {
     "dashboard_Classic":     ["status_bar", "side_columns", "bottom_strip"],
     "dashboard_Classic_Max": ["status_bar", "side_columns", "bottom_strip",
                               "classic_max_row"],
-    "dashboard_Lamborghini": ["lambo_units"],
-    "dashboard_Supermoto":   ["supermoto_units"],
+    "dashboard_Lamborghini": ["lambo_leds"],
 }
 
 
@@ -376,12 +416,41 @@ class Geometry:
         self.x, self.y, self.w, self.h = x, y, w, h
         self.child_ratio = child_ratio
         self.hidden = False
+        # Where this widget sat in the 800-wide layout. The passes that
+        # reconstruct relationships between widgets (which card contained a
+        # label, which unit followed which value) need the original geometry:
+        # walk_front overwrites the designer tree as it goes, so reading it
+        # back afterwards yields the new numbers, not the old ones.
+        self.old = (x, y, w, h)
 
 
-def transform(kind, x, y, w, h, ratio, parent_w):
+def is_round_container(kind, w, h, radius):
+    """A container that reads as a circle: the gauge faces behind the speed
+    meters are plain `cont` widgets with a radius of half their size. Squeezed
+    on one axis they turn into ovals with the meter still round inside, which
+    is exactly what a 0.6 scale did to the Supermoto speedometer."""
+    if kind not in ("cont", "btn", "obj"):
+        return False
+    if not w or not h or abs(w - h) > 0.12 * max(w, h):
+        return False
+    return isinstance(radius, int) and radius >= 0.4 * min(w, h)
+
+
+def transform(kind, x, y, w, h, ratio, parent_w, radius=None):
     """Map one widget's box from the 800-wide layout into the narrow one."""
     vertical_gauge = kind in ("bar", "slider") and h > w * 1.5
-    if kind in KEEP_ASPECT or vertical_gauge:
+    round_ish = (kind in KEEP_ASPECT or vertical_gauge
+                 or is_round_container(kind, w, h, radius))
+    if round_ish and min(w, h) > ROUND_SCALE_MIN:
+        # A big round thing — a speedometer, a gauge face — scales on both axes
+        # so it stays circular AND still fits: keeping a 308 px gauge on a
+        # 480 px screen next to a 252 px card leaves it hanging off the edge.
+        new_w = max(1, int(round(w * ratio)))
+        new_h = max(1, int(round(h * ratio)))
+        new_x = int(round((x + w / 2.0) * ratio - new_w / 2.0))
+    elif round_ish:
+        # Small round things are icons and LEDs; scaling them down makes them
+        # illegible, so they keep their size and only their centre moves.
         new_w, new_h = w, h
         new_x = int(round((x + w / 2.0) * ratio - w / 2.0))
     else:
@@ -430,6 +499,14 @@ def font_family_of(widget):
     return None
 
 
+def radius_of(widget):
+    for st in widget.get("style") or []:
+        r = st.get("radius")
+        if isinstance(r, int):
+            return r
+    return None
+
+
 def letter_space_of(widget):
     for st in widget.get("style") or []:
         v = st.get("letter_space")
@@ -453,6 +530,8 @@ def step_font_down(widget, family, size, text, letter_space, avail_w):
     candidates = sorted((s for s in sizes if s <= size and s >= FONT_MIN_PX),
                         reverse=True)
     for cand in candidates:
+        if not font_has_text(family, cand, text):
+            continue
         if text_width_estimate(text, cand, letter_space) <= avail_w:
             return cand
     # Nothing fits the box. Step down anyway, but only so far: a caption that
@@ -461,7 +540,7 @@ def step_font_down(widget, family, size, text, letter_space, avail_w):
     # afterwards to cover the rest.
     floor = max(FONT_MIN_PX, int(round(size * 0.7)))
     for cand in candidates:
-        if cand <= floor:
+        if cand <= floor and font_has_text(family, cand, text):
             return cand
     return size
 
@@ -512,8 +591,9 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes, fonts):
         kind = w.get("type")
         if kind is None or "left" not in w:
             continue
-        g = transform(kind, w["left"], w["top"], w["width"], w["height"],
-                      ratio, parent_w)
+        ox, oy, ow, oh = w["left"], w["top"], w["width"], w["height"]
+        g = transform(kind, ox, oy, ow, oh, ratio, parent_w, radius_of(w))
+        g.old = (ox, oy, ow, oh)
         full_name = prefix + w["name"]
         geo_map[full_name] = g
 
@@ -547,6 +627,149 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes, fonts):
         w["width"], w["height"] = g.w, g.h
         scale_line_points(w, g.child_ratio)
         walk_front(w, g.child_ratio, g.w, geo_map, prefix, boxes, fonts)
+
+
+def fit_inside_panels(screen, geo_map, font_changes=None):
+    """Keep every label inside the panel it sat in, and units next to values.
+
+    The screens are flat — GUI Guider lays every widget out in screen
+    coordinates, so a value label is not a child of the card it visually sits
+    on. Scaling each box on its own therefore breaks two relationships the eye
+    reads instantly:
+
+      * a label that grew to fit its text now hangs over the edge of its card
+        ("31.4 A" out of the AMPS panel, "SETTINGS" out of its button);
+      * a unit that sat just right of its value now sits on top of it
+        ("62°", "00312 KM", "34.0 km").
+
+    Both are recovered from the original layout: which card contained the
+    label, and which label was immediately to the right of which."""
+    widgets = [w for w in (screen.get("list") or []) if "left" in w]
+    prefix = screen["name"] + "_"
+
+    def geo(w):
+        return geo_map.get(prefix + w.get("name", ""))
+
+    def old(w):
+        g = geo(w)
+        return g.old if g else (w["left"], w["top"], w["width"], w["height"])
+
+    # A meter counts as a panel: in Lamborghini the speed digits sit straight
+    # on the dial with no card behind them, and they have to shrink with it.
+    panels = [w for w in widgets
+              if w.get("type") in ("cont", "btn", "obj", "meter")
+              and geo(w) and geo(w).old[2] > 24]
+
+    # --- units follow their values ---
+    labels = [w for w in widgets
+              if w.get("type") == "label" and (w.get("text") or "").strip()]
+    for unit in labels:
+        ux, uy, uw, uh = old(unit)
+        best, best_gap = None, None
+        for val in labels:
+            if val is unit:
+                continue
+            vx, vy, vw, vh = old(val)
+            gap = ux - (vx + vw)
+            # To the right of the value and on the same line. The window
+            # reaches back INTO the value's box on purpose: a right-aligned
+            # readout is a wide box whose digits end at its right edge, and the
+            # unit is placed over that box's tail — "62" and its degree sign
+            # already overlapped at 800 px. Anchoring the unit to the box's
+            # right edge is what keeps them apart on a narrower screen.
+            inside_tail = ux > vx + 0.5 * vw
+            if (-0.5 * vw <= gap <= 14 and inside_tail
+                    and min(uy + uh, vy + vh) - max(uy, vy) > 0.4 * uh):
+                if best_gap is None or gap < best_gap:
+                    best, best_gap = val, gap
+        if not best:
+            continue
+        gu, gv = geo(unit), geo(best)
+        if not gu or not gv:
+            continue
+        want = gv.x + gv.w + max(1, int(round(max(best_gap, 2) * 0.6)))
+        if want != gu.x and want + gu.w <= NEW_W:
+            gu.x = want
+
+    # --- labels stay inside their card ---
+    for lbl in labels:
+        g = geo(lbl)
+        if not g:
+            continue
+        lx, ly, lw, lh = old(lbl)
+        host, host_area = None, None
+        for pan in panels:
+            px, py, pw, ph = old(pan)
+            if px <= lx and py <= ly and px + pw >= lx + lw and py + ph >= ly + lh:
+                area = pw * ph
+                if host_area is None or area < host_area:
+                    host, host_area = pan, area
+        if not host:
+            continue
+        gp = geo(host)
+        if not gp:
+            continue
+
+        # A readout inside a gauge that scaled down scales with it, or the
+        # speed digits burst out of their own dial.
+        host_scale = gp.w / float(gp.old[2]) if gp.old[2] else 1.0
+        if host_scale < 0.95:
+            fam, size = font_family_of(lbl), font_size_of(lbl)
+            sizes = AVAILABLE_FONTS.get(fam)
+            if sizes and size in sizes:
+                target = size * host_scale
+                text = lbl.get("text") or ""
+                fits = [c for c in sizes
+                        if c <= target and font_has_text(fam, c, text)]
+                usable = [c for c in sizes if font_has_text(fam, c, text)]
+                new = max(fits) if fits else (min(usable) if usable else size)
+                if new != size:
+                    set_widget_font(lbl, new)
+                    if font_changes is not None:
+                        font_changes.append((prefix + lbl["name"], fam, size,
+                                             new, lbl.get("text") or ""))
+
+        left, right = gp.x + 2, gp.x + gp.w - 2
+        if g.w > right - left:
+            g.w = max(8, right - left)
+        if g.x < left:
+            g.x = left
+        if g.x + g.w > right:
+            g.x = max(left, right - g.w)
+
+        # Clamping can leave the box narrower than its own text, which wraps —
+        # the unit under a value, "km" as "k/m". Step the font down to fit.
+        text = lbl.get("text") or ""
+        fam, size = font_family_of(lbl), font_size_of(lbl)
+        if text and size and text_width_estimate(text, size,
+                                                 letter_space_of(lbl)) > g.w:
+            new = step_font_down(lbl, fam, size, text, letter_space_of(lbl), g.w)
+            if new != size:
+                set_widget_font(lbl, new)
+                if font_changes is not None:
+                    font_changes.append((prefix + lbl["name"], fam, size, new,
+                                         text))
+
+
+def sync_json(screen, geo_map, boxes):
+    """Write the final geometry back into the designer tree.
+
+    walk_front writes each box as it computes it, but the passes after it
+    (fit_inside_panels, apply_overrides) work on the geometry map — which is
+    what the generated C is rewritten from. Without this the .guiguider and the
+    C would disagree, and GUI Guider would show a layout the device does not
+    draw."""
+    prefix = screen["name"] + "_"
+    by_name = {b["name"]: b for b in boxes}
+    for w in screen.get("list") or []:
+        g = geo_map.get(prefix + w.get("name", ""))
+        if not g or "left" not in w:
+            continue
+        w["left"], w["top"] = g.x, g.y
+        w["width"], w["height"] = g.w, g.h
+        b = by_name.get(prefix + w["name"])
+        if b:
+            b["new"] = (g.x, g.y, g.w, g.h)
 
 
 def apply_overrides(screen, geo_map, boxes):
@@ -657,6 +880,8 @@ def rewrite_project(out_project):
         boxes = []
         walk_front(screen, ratio, NEW_W, geo_map, screen["name"] + "_", boxes,
                    font_changes)
+        fit_inside_panels(screen, geo_map, font_changes)
+        sync_json(screen, geo_map, boxes)
         apply_overrides(screen, geo_map, boxes)
         boxes_by_screen[screen["name"]] = boxes
 
