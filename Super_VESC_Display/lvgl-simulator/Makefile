@@ -53,7 +53,11 @@ NULL_OUT := /dev/null
 MKDIR_P = @if [ ! -d "$(1)" ]; then mkdir -p "$(1)"; fi
 endif
 
-CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 $(EXTRA_CFLAGS)
+# Mirror the firmware's compile definitions (components/vesc_ui/CMakeLists.txt)
+# so the simulator shows what the device shows. Without ENABLE_WALL_CLOCK the
+# dashboard draws a clock the firmware hides, and every screenshot lies about
+# how crowded the status bar is.
+CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 -DENABLE_WALL_CLOCK=0 $(EXTRA_CFLAGS)
 
 #Collect the files to compile
 -include $(LVGL_DIR)/$(LVGL_DIR_NAME)/lvgl.mk

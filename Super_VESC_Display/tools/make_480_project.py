@@ -31,14 +31,19 @@ Rules, and why:
   * Everything else (labels, containers, tileviews, buttons, horizontal bars)
     scales its width.
   * Line point arrays scale their x coordinates.
-  * Fonts are NOT touched — the speed readout in Antonio 200 needs about
-    270 px for three digits and still fits. What does not survive a 0.6 squeeze
-    is text: "ESC NOT CONNECTED" at font 22 needs ~205 px and its box would
-    become 144. So a label keeps whatever width its text actually needs (up to
-    the screen edge), growing away from its alignment anchor: a right-aligned
-    label grows leftwards, a centred one grows both ways. Labels that end up
-    overlapping after that are listed at the end — an overlap is a design
-    decision (shorter text, smaller font, a different spot) rather than
+  * Text is where a 0.6 squeeze actually hurts: "ESC NOT CONNECTED" at font 22
+    needs ~205 px and its box would become 144. Two levers, in this order:
+      1. Step the caption font down. Montserrat captions at 22-24 px were sized
+         for a 800-wide screen; on a 480 one they are simply too big, and the
+         project already ships every intermediate size (11…26) so a step costs
+         no new font and no flash. Only Montserrat is stepped — Antonio is the
+         big readouts, whose digits still fit and whose size IS the design.
+      2. If it still does not fit, the label keeps whatever width its text
+         needs, growing away from its alignment anchor (a right-aligned label
+         grows leftwards, a centred one both ways) and sliding inward when the
+         screen edge is what is in the way.
+    Labels that end up overlapping after that are listed at the end — an
+    overlap is a design decision (shorter text, a different spot) rather than
     arithmetic.
 
 Usage:
@@ -64,6 +69,23 @@ SRC_GENERATED = os.path.join(SRC_ROOT, "generated")
 NEW_W, NEW_H = 480, 480
 NEW_PROJECT_NAME = "Super_VESC_Display_480"
 
+# Font sizes the project actually ships as generated C (generated/guider_fonts).
+# Stepping outside this list would not link.
+AVAILABLE_FONTS = {
+    "montserratMedium": [11, 12, 16, 18, 20, 22, 24, 25, 26],
+}
+
+# Families whose size is part of the design rather than a container for text:
+# the speedometer's Antonio digits are the one thing on the screen that should
+# stay as large as they are.
+FONT_KEEP_FAMILIES = {"Antonio_Regular", "DSEG7Classic_Regular",
+                      "DSEG14Classic_Regular"}
+
+# How far a caption may shrink before it stops being readable at arm's length
+# on a handlebar. Below this the script widens the box instead.
+FONT_MIN_PX = 14
+
+
 # Widgets that must not be squeezed on one axis: their size is kept and their
 # centre is moved instead.
 KEEP_ASPECT = {
@@ -85,8 +107,15 @@ DROP_SCREENS = {"reference"}
 # as broken. Letter spacing from the style is added on top.
 CHAR_EM_DEFAULT = 0.62
 CHAR_EM = {
-    **{c: 0.72 for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+    # Capitals, which is what the captions and the unit suffixes are made of.
+    # M and W are nearly twice the width of I — averaging them is what made
+    # "KM" and "kW" wrap in boxes the estimate said were big enough.
+    **{c: 0.95 for c in "MW"},
+    **{c: 0.74 for c in "ABCDGHKNOPQRSUVXYZ"},
+    **{c: 0.66 for c in "CEFLT"},
+    **{c: 0.35 for c in "IJ"},
     **{c: 0.60 for c in "abcdefghijklmnopqrstuvwxyz0123456789"},
+    **{c: 0.85 for c in "mw"},
     **{c: 0.32 for c in " .,:;'`|!"},
     **{c: 0.42 for c in "-()[]/"},
     "%": 0.95,
@@ -146,6 +175,14 @@ def text_align_of(widget):
     return "LEFT"
 
 
+def font_family_of(widget):
+    for st in widget.get("style") or []:
+        f = st.get("font_family")
+        if isinstance(f, str) and f:
+            return f
+    return None
+
+
 def letter_space_of(widget):
     for st in widget.get("style") or []:
         v = st.get("letter_space")
@@ -164,6 +201,39 @@ def text_width_estimate(text, font_size, letter_space=0):
                 for c in line)
         widest = max(widest, w)
     return int(widest + 0.5)
+
+
+def step_font_down(widget, family, size, text, letter_space, avail_w):
+    """Pick the largest shipped size of `family` whose text fits `avail_w`.
+
+    Returns the size to use (unchanged when nothing smaller helps or the family
+    is one we keep). Only ever steps down, never up."""
+    if not family or family in FONT_KEEP_FAMILIES:
+        return size
+    sizes = AVAILABLE_FONTS.get(family)
+    if not sizes or size not in sizes:
+        return size
+    candidates = sorted((s for s in sizes if s <= size and s >= FONT_MIN_PX),
+                        reverse=True)
+    for cand in candidates:
+        if text_width_estimate(text, cand, letter_space) <= avail_w:
+            return cand
+    # Nothing fits the box. Step down anyway, but only so far: a caption that
+    # has to overflow should overflow by as little as possible without turning
+    # into a different size class than its neighbours. The box is widened
+    # afterwards to cover the rest.
+    floor = max(FONT_MIN_PX, int(round(size * 0.7)))
+    for cand in candidates:
+        if cand <= floor:
+            return cand
+    return size
+
+
+def set_widget_font(widget, new_size):
+    """Rewrite the font size in every style part of a widget."""
+    for st in widget.get("style") or []:
+        if isinstance(st.get("font"), int):
+            st["font"] = new_size
 
 
 def widen_for_text(g, need, align, screen_w):
@@ -199,7 +269,7 @@ def font_size_of(widget):
     return best
 
 
-def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes):
+def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes, fonts):
     """Transform FrontJson-style widgets (left/top/width/height, bare names)."""
     for w in screen.get("list") or []:
         kind = w.get("type")
@@ -211,8 +281,19 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes):
         geo_map[full_name] = g
 
         if kind == "label":
-            need = text_width_estimate(w.get("text"), font_size_of(w),
-                                       letter_space_of(w))
+            text = w.get("text") or ""
+            size = font_size_of(w)
+            ls = letter_space_of(w)
+            family = font_family_of(w)
+
+            if text and size and text_width_estimate(text, size, ls) > g.w:
+                stepped = step_font_down(w, family, size, text, ls, g.w)
+                if stepped != size:
+                    set_widget_font(w, stepped)
+                    fonts.append((full_name, family, size, stepped, text))
+                    size = stepped
+
+            need = text_width_estimate(text, size, ls)
             clipped = False
             if need > g.w:
                 clipped = widen_for_text(g, need, text_align_of(w), NEW_W)
@@ -228,7 +309,15 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes):
         w["left"], w["top"] = g.x, g.y
         w["width"], w["height"] = g.w, g.h
         scale_line_points(w, g.child_ratio)
-        walk_front(w, g.child_ratio, g.w, geo_map, prefix, boxes)
+        walk_front(w, g.child_ratio, g.w, geo_map, prefix, boxes, fonts)
+
+
+def apply_fonts(node, font_by_name):
+    for w in node.get("widgets") or []:
+        new = font_by_name.get(w.get("name"))
+        if new:
+            set_widget_font(w, new)
+        apply_fonts(w, font_by_name)
 
 
 def walk_app(node, ratio, parent_w, geo_map):
@@ -276,13 +365,15 @@ def rewrite_project(out_project):
 
     geo_map = {}
     boxes_by_screen = {}
+    font_changes = []
 
     proj["FrontJson"] = [s for s in proj["FrontJson"]
                          if s.get("name") not in DROP_SCREENS]
     for screen in proj["FrontJson"]:
         screen["width"], screen["height"] = NEW_W, NEW_H
         boxes = []
-        walk_front(screen, ratio, NEW_W, geo_map, screen["name"] + "_", boxes)
+        walk_front(screen, ratio, NEW_W, geo_map, screen["name"] + "_", boxes,
+                   font_changes)
         boxes_by_screen[screen["name"]] = boxes
 
     proj["Application"]["screen"] = [s for s in proj["Application"]["screen"]
@@ -307,17 +398,28 @@ def rewrite_project(out_project):
                  len(proj["FrontJson"]), len(geo_map)))
 
     screens = [s["name"] for s in proj["FrontJson"]]
-    return geo_map, screens, boxes_by_screen
+
+    # The second (code-generator) tree carries its own copy of every style, so
+    # the stepped sizes have to land there too or GUI Guider would regenerate
+    # the original ones.
+    font_by_name = {name: new for name, _f, _old, new, _t in font_changes}
+    for screen in proj["Application"]["screen"]:
+        apply_fonts(screen, font_by_name)
+
+    return geo_map, screens, boxes_by_screen, font_by_name, font_changes
 
 
 POS_RE = re.compile(r"(lv_obj_set_pos\(ui->([A-Za-z0-9_]+),\s*)(-?\d+)(,\s*)(-?\d+)(\))")
 SIZE_RE = re.compile(r"(lv_obj_set_size\(ui->([A-Za-z0-9_]+),\s*)(-?\d+)(,\s*)(-?\d+)(\))")
 POINTS_RE = re.compile(r"(static\s+lv_point_t\s+([A-Za-z0-9_]+)\[\]\s*=\s*)\{(.*?)\};",
                        re.S)
+FONT_RE = re.compile(
+    r"(lv_obj_set_style_text_font\(ui->([A-Za-z0-9_]+),\s*&lv_font_)"
+    r"([A-Za-z_]+?)_(\d+)(,)")
 PAIR_RE = re.compile(r"\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}")
 
 
-def rewrite_c(src, geo_map, screens, ratio):
+def rewrite_c(src, geo_map, screens, ratio, font_by_name=None):
     """Rewrite one generated .c so its geometry matches the new project."""
     def fix_pos(m):
         head, name, x, mid, y, tail = m.groups()
@@ -345,9 +447,17 @@ def rewrite_c(src, geo_map, screens, ratio):
             body)
         return "%s{%s};" % (head, new_body)
 
+    def fix_font(m):
+        head, name, family, size, tail = m.groups()
+        new = (font_by_name or {}).get(name)
+        if not new:
+            return m.group(0)
+        return "%s%s_%d%s" % (head, family, new, tail)
+
     out = POS_RE.sub(fix_pos, src)
     out = SIZE_RE.sub(fix_size, out)
     out = POINTS_RE.sub(fix_points, out)
+    out = FONT_RE.sub(fix_font, out)
     return out
 
 
@@ -376,7 +486,7 @@ MicroPython/
 """
 
 
-def copy_generated(out_dir, geo_map, screens, ratio):
+def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None):
     src = SRC_GENERATED
     dst = os.path.join(out_dir, "generated")
     if os.path.isdir(dst):
@@ -400,7 +510,7 @@ def copy_generated(out_dir, geo_map, screens, ratio):
         path = os.path.join(dst, fname)
         with open(path, "r", encoding="utf-8", errors="surrogateescape") as fh:
             src_text = fh.read()
-        new_text = rewrite_c(src_text, geo_map, screens, ratio)
+        new_text = rewrite_c(src_text, geo_map, screens, ratio, font_by_name)
         if new_text != src_text:
             with open(path, "w", encoding="utf-8",
                       errors="surrogateescape") as fh:
@@ -460,7 +570,18 @@ def find_overlaps(boxes, min_fraction=0.25, min_worse=0.10):
     return hits
 
 
-def print_report(boxes_by_screen):
+def print_report(boxes_by_screen, font_changes=()):
+    if font_changes:
+        print("\n%d caption(s) stepped down a font size to fit:"
+              % len(font_changes))
+        by_step = {}
+        for name, family, old, new, text in font_changes:
+            by_step.setdefault((family, old, new), []).append(text)
+        for (family, old, new), texts in sorted(by_step.items()):
+            sample = ", ".join(sorted(set(t[:14] for t in texts))[:4])
+            print("  %-18s %2d -> %2d  x%-3d  %s"
+                  % (family, old, new, len(texts), sample))
+
     # Labels whose text does not fit the screen at all — these will wrap or be
     # cut, which reads as broken, so they come first.
     clipped = [(s, b) for s in sorted(boxes_by_screen)
@@ -515,8 +636,8 @@ def main():
     out_project = os.path.join(args.out_dir,
                                NEW_PROJECT_NAME + ".guiguider")
     if args.report_only:
-        _, _, boxes = rewrite_project(None)
-        print_report(boxes)
+        _, _, boxes, _fonts, changes = rewrite_project(None)
+        print_report(boxes, changes)
         return
 
     if os.path.exists(out_project) and not args.force:
@@ -525,11 +646,11 @@ def main():
                  % os.path.relpath(out_project, REPO_ROOT))
 
     os.makedirs(args.out_dir, exist_ok=True)
-    geo_map, screens, boxes = rewrite_project(out_project)
+    geo_map, screens, boxes, font_by_name, changes = rewrite_project(out_project)
     with open(SRC_PROJECT, "r", encoding="utf-8") as fh:
         ratio = NEW_W / float(json.load(fh)["projectSettings"]["resolution"]["width"])
-    copy_generated(args.out_dir, geo_map, screens, ratio)
-    print_report(boxes)
+    copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name)
+    print_report(boxes, changes)
 
 
 if __name__ == "__main__":

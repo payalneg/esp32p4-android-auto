@@ -500,7 +500,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_Current_text, "31.4 A");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_Current_text, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_Current_text, 14, 262);
-    lv_obj_set_size(ui->dashboard_Lamborghini_Current_text, 101, 36);
+    lv_obj_set_size(ui->dashboard_Lamborghini_Current_text, 102, 36);
 
     //Write style for dashboard_Lamborghini_Current_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_Current_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -770,7 +770,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_range_unit, "km");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_range_unit, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_range_unit, 452, 266);
-    lv_obj_set_size(ui->dashboard_Lamborghini_range_unit, 16, 16);
+    lv_obj_set_size(ui->dashboard_Lamborghini_range_unit, 17, 16);
 
     //Write style for dashboard_Lamborghini_range_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_range_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -858,8 +858,8 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_Settings_text = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_Settings_text, "SETTINGS");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_Settings_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_Settings_text, 388, 331);
-    lv_obj_set_size(ui->dashboard_Lamborghini_Settings_text, 92, 22);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_Settings_text, 395, 331);
+    lv_obj_set_size(ui->dashboard_Lamborghini_Settings_text, 85, 22);
     lv_obj_add_flag(ui->dashboard_Lamborghini_Settings_text, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Lamborghini_Settings_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -1162,7 +1162,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_tt_fault_lbl, "FLT");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_tt_fault_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_tt_fault_lbl, 61, 452);
-    lv_obj_set_size(ui->dashboard_Lamborghini_tt_fault_lbl, 27, 13);
+    lv_obj_set_size(ui->dashboard_Lamborghini_tt_fault_lbl, 25, 13);
 
     //Write style for dashboard_Lamborghini_tt_fault_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_tt_fault_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1215,7 +1215,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_trip_lbl, "TRIP");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_trip_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_trip_lbl, 228, 444);
-    lv_obj_set_size(ui->dashboard_Lamborghini_trip_lbl, 40, 13);
+    lv_obj_set_size(ui->dashboard_Lamborghini_trip_lbl, 36, 13);
 
     //Write style for dashboard_Lamborghini_trip_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_trip_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1261,7 +1261,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_trip_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_trip_unit, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_trip_unit, 250, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_trip_unit, 18, 18);
+    lv_obj_set_size(ui->dashboard_Lamborghini_trip_unit, 20, 18);
 
     //Write style for dashboard_Lamborghini_trip_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1330,7 +1330,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     lv_label_set_text(ui->dashboard_Lamborghini_odo_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_odo_unit, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(ui->dashboard_Lamborghini_odo_unit, 316, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_odo_unit, 18, 18);
+    lv_obj_set_size(ui->dashboard_Lamborghini_odo_unit, 20, 18);
 
     //Write style for dashboard_Lamborghini_odo_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
