@@ -32,12 +32,19 @@ extern "C" {
 
 /* How many decoded tiles to keep.
  *
- * 48 x 128 KB = 6 MB. A screenful is twelve, the ring around it another
- * eighteen, and the two blurred fallback layers a dozen more — so this holds
- * everything in view with room to spare while leaving most of the ~25 MB of
- * free PSRAM to Wi-Fi, the video decoder and everything else. It was 96 for a
- * while, which claimed half the PSRAM for tiles nobody was looking at. */
-#define NAV_TILE_SLOTS 48
+ * 64 x 128 KB = 8 MB. A view wants about forty-five — twelve on screen,
+ * eighteen in the ring, the rest across the two blurred layers — and a ride
+ * in progress wants a few more ahead of it. Forty-eight thrashed within a
+ * minute of riding; ninety-six claimed half the PSRAM for ground nobody was
+ * looking at. This leaves most of the ~25 MB free for Wi-Fi, the video
+ * decoder and everything else. */
+#define NAV_TILE_SLOTS 64
+
+/* Told when a tile is dropped to make room. The phone keeps its own list of
+ * what it has sent and will never send a tile twice, so it has to hear about
+ * this or the hole would never be filled again. Worker task. */
+typedef void (*nav_tiles_evict_cb_t)(uint8_t z, uint32_t x, uint32_t y);
+void nav_tiles_set_evict_cb(nav_tiles_evict_cb_t cb);
 
 void nav_tiles_init(void);
 

@@ -20,6 +20,12 @@
  *     0x05 TILE_BEGIN  : [op][u8 fmt][u8 z][u32 x][u32 y][u32 len][u16 seq]
  *     0x06 TILE_END    : [op][u16 seq]
  *     0x07 VIEW        : [op][i32 lat_e7][i32 lon_e7][u8 zoom][u16 heading]
+ *                        [u16 speed_cm_s]
+ *     0x08 ROUTE_BEGIN : [op][u16 points][u16 seq]   then DATA carries
+ *                        points x [i32 lat_e7][i32 lon_e7]
+ *     0x09 ROUTE_END   : [op][u16 seq]
+ *     0x0A GUIDE       : [op][u8 turn][u16 dist_m][u32 remaining_m]
+ *                        [u16 remaining_s][u8 flags]  (bit0 = off route)
  *
  *   CTRL notify (P4 -> phone), 6-byte frame [u8 status][u8 a][u16 b][u16 c] LE:
  *     0x10 STATE      a = ui mode (0 other, 1 navigator screen is live)
@@ -31,6 +37,13 @@
  *                     the usual six: the rider picked somewhere to go by
  *                     tapping the head unit's own map. The phone routes to it
  *                     and starts guiding.
+ *     0x14 DROPPED    [u8 status][u8 z][i32 x][i32 y] — ten bytes; a tile was
+ *                     evicted to make room. The phone forgets it has sent it,
+ *                     so the ground can be filled again.
+ *     0x15 ZOOM       a = the zoom level the rider chose with the buttons on
+ *                     the panel. The phone sends tiles (and VIEW) at that
+ *                     level from then on; the head unit has already changed
+ *                     what it draws.
  *
  *   DATA write (phone -> P4): raw bytes of whatever BEGIN opened — a picture
  *   for FRAME_BEGIN, a map tile for TILE_BEGIN.

@@ -32,6 +32,7 @@ static uint8_t *s_scratch;          /* DMA-aligned copy for the JPEG engine */
 static size_t   s_scratch_cap;
 
 static nav_tiles_stats_t s_stats;
+static nav_tiles_evict_cb_t s_evict_cb;
 
 static slot_t *find(uint8_t z, uint32_t x, uint32_t y)
 {
@@ -57,7 +58,14 @@ static slot_t *claim(void)
         if (!s->used) return s;
         if (!oldest || s->age < oldest->age) oldest = s;
     }
-    if (oldest) s_stats.evicted++;
+    if (oldest) {
+        s_stats.evicted++;
+        /* Say so before the pixels are overwritten: the phone's idea of what
+         * we hold is the only thing that decides whether this tile is ever
+         * sent again. */
+        if (s_evict_cb) s_evict_cb(oldest->z, oldest->x, oldest->y);
+        oldest->used = false;
+    }
     return oldest;
 }
 
@@ -142,6 +150,8 @@ static bool decode_jpeg(const uint8_t *data, size_t len, uint16_t *out)
 }
 
 /* ---- public ---- */
+
+void nav_tiles_set_evict_cb(nav_tiles_evict_cb_t cb) { s_evict_cb = cb; }
 
 void nav_tiles_init(void)
 {

@@ -26,7 +26,24 @@ class NavOp {
   static const tileBegin = 0x05;
   static const tileEnd = 0x06;
   static const view = 0x07;
+  static const routeBegin = 0x08;
+  static const routeEnd = 0x09;
+  static const guide = 0x0A;
 }
+
+/// Turn kinds, in the order the head unit expects (nav_turn_t in
+/// main/nav_route.h). Mirrors ManeuverType.
+const List<String> kNavTurnOrder = <String>[
+  'straight',
+  'slightLeft',
+  'slightRight',
+  'turnLeft',
+  'turnRight',
+  'sharpLeft',
+  'sharpRight',
+  'uturn',
+  'arrive',
+];
 
 /// Wire formats a map tile may travel in. PNG is what the tile cache already
 /// holds, so forwarding costs nothing and keeps the labels crisp; JPEG is
@@ -43,6 +60,14 @@ class NavStatus {
   /// Nine bytes, not six: somewhere the rider picked on the head unit's own
   /// map. See NAV_ST_DEST in main/ble_nav.h.
   static const destination = 0x13;
+
+  /// Ten bytes: a tile the head unit had to drop to make room. See
+  /// NAV_ST_DROPPED in main/ble_nav.h.
+  static const dropped = 0x14;
+
+  /// The rider changed the zoom with the buttons on the panel; the level is
+  /// in the second byte. See NAV_ST_ZOOM in main/ble_nav.h.
+  static const zoom = 0x15;
 }
 
 /// FRAME_ACK results.
@@ -152,6 +177,8 @@ class NavStream {
   final _stateCtrl = StreamController<NavDisplayState>.broadcast();
   final _ackCtrl = StreamController<NavFrameResult>.broadcast();
   final _destCtrl = StreamController<({double lat, double lon})>.broadcast();
+  final _droppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
+  final _zoomCtrl = StreamController<int>.broadcast();
 
   NavDisplayState _state = NavDisplayState.unknown;
   int _seq = 0;
@@ -164,6 +191,13 @@ class NavStream {
   /// Destinations the rider chose on the head unit itself.
   Stream<({double lat, double lon})> get destinations => _destCtrl.stream;
 
+  /// Tiles the head unit dropped to make room. It keeps them in RAM, so a
+  /// sender that never repeats itself has to hear about this.
+  Stream<({int z, int x, int y})> get dropped => _droppedCtrl.stream;
+
+  /// The zoom level the rider picked on the head unit's own map.
+  Stream<int> get zooms => _zoomCtrl.stream;
+
   /// Whether a frame is on the wire right now.
   bool get busy => _sending;
 
@@ -173,6 +207,21 @@ class NavStream {
     if (st != null) {
       _state = st;
       if (!_stateCtrl.isClosed) _stateCtrl.add(st);
+      return;
+    }
+    if (raw[0] == NavStatus.dropped && raw.length >= 10) {
+      final bd = ByteData.sublistView(Uint8List.fromList(raw));
+      if (!_droppedCtrl.isClosed) {
+        _droppedCtrl.add((
+          z: raw[1],
+          x: bd.getUint32(2, Endian.little),
+          y: bd.getUint32(6, Endian.little),
+        ));
+      }
+      return;
+    }
+    if (raw[0] == NavStatus.zoom && raw.length >= 2) {
+      if (!_zoomCtrl.isClosed) _zoomCtrl.add(raw[1]);
       return;
     }
     if (raw[0] == NavStatus.destination && raw.length >= 9) {
@@ -316,6 +365,70 @@ class NavStream {
     return _channel.writeCtrl(v);
   }
 
+  /// Send the route line. Points are whatever the phone routed, simplified
+  /// for drawing before they get here; the head unit keeps them and draws the
+  /// line over its own map, so this goes once per route rather than per frame.
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) async {
+    if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
+    if (pts.length < 2) return const NavFrameResult(NavAck.badParam, 0, 0);
+    _sending = true;
+    final seq = _seq = (_seq + 1) & 0xFFFF;
+    try {
+      final acked = _ackCtrl.stream
+          .firstWhere((r) => r.seq == seq)
+          .timeout(kNavAckTimeout);
+
+      final begin = Uint8List(5);
+      begin[0] = NavOp.routeBegin;
+      final bh = ByteData.sublistView(begin);
+      bh.setUint16(1, pts.length, Endian.little);
+      bh.setUint16(3, seq, Endian.little);
+      await _channel.writeCtrl(begin);
+
+      final body = Uint8List(pts.length * 8);
+      final bd = ByteData.sublistView(body);
+      for (var i = 0; i < pts.length; i++) {
+        bd.setInt32(i * 8, (pts[i].lat * 1e7).round(), Endian.little);
+        bd.setInt32(i * 8 + 4, (pts[i].lon * 1e7).round(), Endian.little);
+      }
+      final chunk = chunkSize;
+      for (var off = 0; off < body.length; off += chunk) {
+        final end = (off + chunk < body.length) ? off + chunk : body.length;
+        await _writeChunk(Uint8List.sublistView(body, off, end));
+      }
+
+      final end = Uint8List(3);
+      end[0] = NavOp.routeEnd;
+      ByteData.sublistView(end).setUint16(1, seq, Endian.little);
+      await _channel.writeCtrl(end);
+      return await acked;
+    } on TimeoutException {
+      return NavFrameResult(NavAck.timeout, seq, 0);
+    } finally {
+      _sending = false;
+    }
+  }
+
+  /// Where the next turn is and what is left of the ride. Eleven bytes,
+  /// unacknowledged, sent whenever any of it changes.
+  Future<void> sendGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  }) {
+    final g = Uint8List(11);
+    final bd = ByteData.sublistView(g);
+    g[0] = NavOp.guide;
+    g[1] = turn;
+    bd.setUint16(2, distM.clamp(0, 0xFFFF), Endian.little);
+    bd.setUint32(4, remainingM.clamp(0, 0xFFFFFFFF), Endian.little);
+    bd.setUint16(8, remainingS.clamp(0, 0xFFFF), Endian.little);
+    g[10] = offRoute ? 1 : 0;
+    return _channel.writeCtrl(g);
+  }
+
   /// Largest DATA write to use: what the head unit accepts, capped by what the
   /// link can carry in one packet.
   int get chunkSize {
@@ -356,5 +469,7 @@ class NavStream {
     await _stateCtrl.close();
     await _ackCtrl.close();
     await _destCtrl.close();
+    await _droppedCtrl.close();
+    await _zoomCtrl.close();
   }
 }

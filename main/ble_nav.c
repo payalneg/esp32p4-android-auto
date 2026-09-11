@@ -28,6 +28,7 @@
 
 #include "ble_link_boost.h"
 #include "nav_map.h"
+#include "nav_route.h"
 #include "nav_screen.h"
 #include "nav_tiles.h"
 #include "ui_mode.h"
@@ -42,17 +43,24 @@ static const char *TAG = "ble_nav";
 #define NAV_OP_TILE_BEGIN 0x05
 #define NAV_OP_TILE_END   0x06
 #define NAV_OP_VIEW       0x07
+#define NAV_OP_ROUTE_BEGIN 0x08
+#define NAV_OP_ROUTE_END   0x09
+#define NAV_OP_GUIDE       0x0A
 
 #define NAV_ST_STATE   0x10
 #define NAV_ST_ACK     0x11
 #define NAV_ST_TILE_ACK 0x12
 #define NAV_ST_DEST     0x13
+#define NAV_ST_DROPPED  0x14
+#define NAV_ST_ZOOM     0x15
 
 #define NAV_BEGIN_LEN  (1 + 2 + 2 + 4 + 2)
 #define NAV_END_LEN    (1 + 2)
 #define NAV_TILE_BEGIN_LEN (1 + 1 + 1 + 4 + 4 + 4 + 2)
 #define NAV_VIEW_LEN       (1 + 4 + 4 + 1 + 2)
 #define NAV_VIEW_LEN_SPEED (NAV_VIEW_LEN + 2)
+#define NAV_ROUTE_BEGIN_LEN (1 + 2 + 2)
+#define NAV_GUIDE_LEN       (1 + 1 + 2 + 4 + 2 + 1)
 
 /* How often the map is redrawn between the phone's position updates. The
  * phone speaks twice a second, which as a step is plainly visible; the head
@@ -70,16 +78,17 @@ typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
 
 /* What the open transfer is carrying. One at a time: the app waits for the
  * acknowledgement before it starts the next. */
-typedef enum { RX_FRAME, RX_TILE } rx_kind_t;
+typedef enum { RX_FRAME, RX_TILE, RX_ROUTE } rx_kind_t;
 
 typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
-               EV_DEST } ev_kind_t;
+               EV_DEST, EV_ROUTE, EV_ZOOM } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
     uint8_t   reason;   /* EV_REJECT */
     int32_t   lat_e7;   /* EV_DEST */
     int32_t   lon_e7;
+    uint8_t   zoom;     /* EV_ZOOM */
 } nav_evt_t;
 
 static QueueHandle_t s_q;
@@ -153,6 +162,22 @@ static void notify_dest(int32_t lat_e7, int32_t lon_e7)
     ESP_LOGW(TAG, "destination notify gave up");
 }
 
+/* A tile we had to drop. Same worker task as everything else here, so the
+ * notify can go out directly. */
+static void on_tile_evicted(uint8_t z, uint32_t x, uint32_t y)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) return;
+    uint8_t f[10] = { NAV_ST_DROPPED, z };
+    memcpy(&f[2], &x, 4);
+    memcpy(&f[6], &y, 4);
+    for (int attempt = 0; attempt < 100; attempt++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
+        if (om && ble_gatts_notify_custom(s_conn, s_ctrl_handle, om) == 0) return;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 /* From the LVGL task, so it only enqueues — the notify happens on the worker
  * like every other one. */
 static void on_dest_picked(double lat, double lon)
@@ -165,6 +190,19 @@ static void on_dest_picked(double lat, double lon)
     };
     xQueueSend(s_q, &ev, 0);
     ESP_LOGI(TAG, "destination picked on the panel: %.5f, %.5f", lat, lon);
+}
+
+/* The rider pressed a zoom button. The map changes level at once — it has
+ * layers either side to fall back on — and the phone is asked for tiles at
+ * the new level, since only it can fetch them. From the LVGL task, so the
+ * notify goes through the worker like every other one. */
+static void on_zoom_picked(uint8_t zoom)
+{
+    nav_map_set_zoom(zoom);
+    if (!s_q) return;
+    nav_evt_t ev = { .kind = EV_ZOOM, .zoom = zoom };
+    xQueueSend(s_q, &ev, 0);
+    ESP_LOGI(TAG, "zoom %u chosen on the panel", (unsigned)zoom);
 }
 
 static void notify_state(void)
@@ -377,6 +415,19 @@ static void handle_tile(const nav_evt_t *ev)
     notify(NAV_ST_TILE_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
 }
 
+static void handle_route(const nav_evt_t *ev)
+{
+    uint8_t ack;
+    if (s_got != s_expect) {
+        ack = NAV_ACK_TRUNCATED;
+    } else {
+        ack = nav_route_set(s_stage, s_got) ? NAV_ACK_OK : NAV_ACK_BAD_PARAM;
+    }
+    s_state = ST_IDLE;
+    if (ack == NAV_ACK_OK) render_view();
+    notify(NAV_ST_TILE_ACK, ack, ev->seq, 0);
+}
+
 static void worker(void *arg)
 {
     (void)arg;
@@ -438,14 +489,20 @@ static void worker(void *arg)
                 set_boost(true);
                 handle_tile(&ev);
                 break;
+            case EV_ROUTE:
+                handle_route(&ev);
+                break;
             case EV_VIEW:
                 s_stats.views++;
                 s_stats.streaming = true;
                 s_last_view_us = esp_timer_get_time();
-                s_last_step_us = s_last_view_us;
                 nav_screen_set_streaming(true);
                 set_boost(true);
-                render_view();
+                /* No render here on purpose. Drawing both on arrival and on
+                 * the frame timer made the gaps between frames uneven, and
+                 * uneven gaps with a steady dead-reckoning step is exactly
+                 * what a stuttering map looks like. The timer draws; this
+                 * only moves the target it is chasing. */
                 break;
             case EV_REJECT:
                 s_state = ST_IDLE;
@@ -463,6 +520,10 @@ static void worker(void *arg)
                 break;
             case EV_DEST:
                 notify_dest(ev.lat_e7, ev.lon_e7);
+                break;
+            case EV_ZOOM:
+                notify(NAV_ST_ZOOM, ev.zoom, 0, 0);
+                render_view();
                 break;
         }
     }
@@ -482,6 +543,8 @@ void ble_nav_init(void)
     nav_tiles_init();
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
     nav_screen_set_dest_cb(on_dest_picked);
+    nav_screen_set_zoom_cb(on_zoom_picked);
+    nav_tiles_set_evict_cb(on_tile_evicted);
     /* 8 KiB, like the other two workers on this link. Four was enough when
      * this task only memcpy'd, but it now runs libpng — whose simplified read
      * API is generous with the stack — and composes the view on top. A task
@@ -583,18 +646,56 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             break;
         }
         case NAV_OP_END:
-        case NAV_OP_TILE_END: {
+        case NAV_OP_TILE_END:
+        case NAV_OP_ROUTE_END: {
             if (len < NAV_END_LEN) return;
             const uint16_t seq = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-            const rx_kind_t want = (data[0] == NAV_OP_TILE_END) ? RX_TILE : RX_FRAME;
+            const rx_kind_t want = (data[0] == NAV_OP_TILE_END) ? RX_TILE
+                                 : (data[0] == NAV_OP_ROUTE_END) ? RX_ROUTE
+                                                                 : RX_FRAME;
             if (s_state != ST_RECEIVING || seq != s_seq || s_rx_kind != want) {
                 reject(seq, NAV_ACK_TRUNCATED);
                 return;
             }
             s_state = ST_DECODING;
-            nav_evt_t ev = { .kind = (want == RX_TILE) ? EV_TILE : EV_FRAME,
+            nav_evt_t ev = { .kind = (want == RX_TILE)  ? EV_TILE
+                                   : (want == RX_ROUTE) ? EV_ROUTE
+                                                        : EV_FRAME,
                              .seq = seq };
             xQueueSend(s_q, &ev, 0);
+            break;
+        }
+
+        case NAV_OP_ROUTE_BEGIN: {
+            if (len < NAV_ROUTE_BEGIN_LEN) { reject(0, NAV_ACK_BAD_PARAM); return; }
+            const uint16_t n   = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
+            const uint16_t seq = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
+            if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
+            const uint32_t tot = (uint32_t)n * 8u;
+            if (n == 0 || n > NAV_ROUTE_MAX_POINTS || tot > BLE_NAV_MAX_FRAME) {
+                reject(seq, NAV_ACK_BAD_PARAM);
+                return;
+            }
+            s_expect = tot;
+            s_got = 0;
+            s_seq = seq;
+            s_rx_kind = RX_ROUTE;
+            s_state = ST_RECEIVING;
+            break;
+        }
+
+        case NAV_OP_GUIDE: {
+            if (len < NAV_GUIDE_LEN) return;
+            nav_guide_t g = {
+                .turn = (nav_turn_t)(data[1] < NAV_TURN_COUNT ? data[1]
+                                                              : NAV_TURN_STRAIGHT),
+                .dist_m = (uint16_t)data[2] | ((uint16_t)data[3] << 8),
+                .remaining_m = rd_u32(data + 4),
+                .remaining_s = (uint16_t)data[8] | ((uint16_t)data[9] << 8),
+                .off_route = (data[10] & 1) != 0,
+                .valid = true,
+            };
+            nav_route_set_guide(&g);
             break;
         }
 

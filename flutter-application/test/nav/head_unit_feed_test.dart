@@ -20,6 +20,7 @@ class _FakeLink implements HeadUnitLink {
   NavDisplayState _state =
       const NavDisplayState(navMode: true, visible: true, maxChunk: 509);
   final _states = StreamController<NavDisplayState>.broadcast();
+  final _dropped = StreamController<({int z, int x, int y})>.broadcast();
 
   final tiles = <TileId>[];
   final views = <({double lat, double lon, int zoom, int heading})>[];
@@ -30,6 +31,11 @@ class _FakeLink implements HeadUnitLink {
 
   @override
   Stream<NavDisplayState> get displayStates => _states.stream;
+
+  @override
+  Stream<({int z, int x, int y})> get dropped => _dropped.stream;
+
+  void drop(TileId t) => _dropped.add((z: t.z, x: t.x, y: t.y));
 
   void setVisible(bool v) {
     _state = NavDisplayState(navMode: v, visible: v, maxChunk: 509);
@@ -49,7 +55,30 @@ class _FakeLink implements HeadUnitLink {
     views.add((lat: lat, lon: lon, zoom: zoom, heading: heading));
   }
 
-  Future<void> close() => _states.close();
+  final routes = <int>[];      // point counts
+  final guides = <int>[];      // turn kinds
+
+  @override
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) async {
+    routes.add(pts.length);
+    return NavFrameResult(ack, 0, 1);
+  }
+
+  @override
+  Future<void> sendGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  }) async {
+    guides.add(turn);
+  }
+
+  Future<void> close() async {
+    await _states.close();
+    await _dropped.close();
+  }
 }
 
 /// A tile cache with no network: whatever was seeded is all there is.
@@ -241,6 +270,50 @@ void main() {
     await seed(TileId(fine.z, fine.x + 1, fine.y));
     await feed.tick();
     expect(link.views.length, 2);
+  });
+
+  test('a tile the head unit dropped is sent again', () async {
+    // Its store is in RAM and finite. The feed never repeats itself, so an
+    // eviction it does not hear about is ground that stays blurred for ever.
+    final wide = await seedCoarse();
+    final feed = build()..setPosition(_krakow);
+    await feed.tick();
+    expect(link.tiles, <TileId>[wide]);
+
+    // Sent once and not again...
+    await feed.tick();
+    expect(link.tiles.where((t) => t == wide).length, 1);
+
+    // ...until the head unit says it had to let it go.
+    link.drop(wide);
+    await Future<void>.delayed(Duration.zero);
+    await feed.tick();
+    expect(link.tiles.where((t) => t == wide).length, 2);
+  });
+
+  test('the line and the turn go before any tile', () async {
+    // A rider needs to know where to go more than they need sharp ground.
+    await seedCoarse();
+    final feed = build()..setPosition(_krakow);
+    feed.setRoute('route-1', <({double lat, double lon})>[
+      (lat: 50.06, lon: 19.93),
+      (lat: 50.07, lon: 19.94),
+    ]);
+    feed.setGuide(
+        turn: 3, distM: 80, remainingM: 700, remainingS: 120, offRoute: false);
+
+    await feed.tick();
+    expect(link.routes, <int>[2]);
+    expect(link.tiles, isEmpty, reason: 'the line came first');
+
+    await feed.tick();
+    expect(link.guides, <int>[3]);
+
+    // Neither repeats itself.
+    await feed.tick();
+    expect(link.routes.length, 1);
+    expect(link.guides.length, 1);
+    expect(link.tiles.length, 1);
   });
 
   test('stopping ends the loop', () async {

@@ -28,18 +28,32 @@ const int kHeadUnitH = 480;
 /// anything worth measuring (13 bytes a time).
 const Duration kViewPeriod = Duration(milliseconds: 500);
 
-/// A tile the head unit refused this many times is not tried again.
+/// A tile that failed this many times in a row waits [kTileRetryAfter] before
+/// being asked for again.
 const int kTileMaxAttempts = 2;
+
+/// ...and that is a pause, not a verdict. A tile can fail because the head
+/// unit refused it, but far more often because it is neither cached nor
+/// reachable right now — a tunnel, a dead hotspot, a phone that just woke up.
+/// Giving up on it for the whole session left the map permanently bare over
+/// that patch of ground.
+const Duration kTileRetryAfter = Duration(seconds: 30);
 
 /// How many queued tiles one pass may skip past before giving the position
 /// its turn again. Keeps a run of uncached tiles from stalling the feed
 /// without letting a pass run long.
 const int kSkipBudget = 8;
 
-/// Zoom the head unit composes at. 17 puts about 600 m across the panel at
-/// Kraków's latitude, which is a town-scale view at riding speed; the phone
-/// already prefetches 18 and 19 along a route, and 17 sits one step out.
+/// Zoom the head unit composes at, until the rider says otherwise with the
+/// buttons on the panel. 17 puts about 600 m across the panel at Kraków's
+/// latitude, which is a town-scale view at riding speed; the phone already
+/// prefetches 18 and 19 along a route, and 17 sits one step out.
 const int kHeadUnitZoom = 17;
+
+/// What the panel's zoom buttons may reach. Mirrors NAV_ZOOM_MIN/MAX in
+/// main/nav_map.h.
+const int kHeadUnitZoomMin = 14;
+const int kHeadUnitZoomMax = 18;
 
 /// The fallback layers, in levels below the detail zoom. Must match
 /// NAV_COARSE_DZ and NAV_WIDE_DZ in the firmware.
@@ -112,6 +126,23 @@ abstract class HeadUnitLink {
 
   Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
       {double speedMs});
+
+  /// The route line, once per route.
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts);
+
+  /// Where the next turn is and what is left of the ride.
+  Future<void> sendGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  });
+
+  /// Tiles the head unit had to drop to make room. It holds them in RAM, so
+  /// without this the feed would think they were still there and the ground
+  /// would never be filled again.
+  Stream<({int z, int x, int y})> get dropped;
 }
 
 /// Pushes tiles and positions to the head unit for as long as it is looking.
@@ -128,8 +159,21 @@ class HeadUnitFeed {
         _now = now ?? DateTime.now,
         _sleep = sleep ?? _realSleep {
     _stateSub = _link.displayStates.listen((st) {
-      // A head unit that went away and came back has an empty tile store.
-      if (!st.visible) _sentThisSession.clear();
+      // A head unit that went away and came back has an empty tile store —
+      // and no route or turn either.
+      if (!st.visible) {
+        _sentThisSession.clear();
+        _attempts.clear();
+        _lastAttempt.clear();
+        _routeSent = false;
+        _guideSent = null;
+      }
+    });
+    _droppedSub = _link.dropped.listen((d) {
+      final t = TileId(d.z, d.x, d.y);
+      _sentThisSession.remove(t);
+      _attempts.remove(t);
+      _lastAttempt.remove(t);
     });
   }
 
@@ -138,17 +182,43 @@ class HeadUnitFeed {
   final Future<void> Function(Duration) _sleep;
   final DateTime Function() _now;
   late final StreamSubscription<NavDisplayState> _stateSub;
+  late final StreamSubscription<({int z, int x, int y})> _droppedSub;
 
   final status = ValueNotifier<HeadUnitFeedStatus>(const HeadUnitFeedStatus());
 
   /// Tiles this connection has already accepted — the head unit keeps them, so
   /// they must never be sent twice.
+  /// What the head unit is composing at. It owns this — the rider's buttons
+  /// are on the panel — and tells us so we send tiles for the right level.
+  int _zoom = kHeadUnitZoom;
+  int get zoom => _zoom;
+
+  /// The head unit asked for a different level. Everything queued for the old
+  /// one is forgotten: those tiles are no longer what the panel is drawing,
+  /// and the ones it already has stay in its store for the fallback layers.
+  void setZoom(int z) {
+    final want = z.clamp(kHeadUnitZoomMin, kHeadUnitZoomMax);
+    if (want == _zoom) return;
+    _zoom = want;
+    _attempts.clear();
+    _lastAttempt.clear();
+  }
+
   final _sentThisSession = <TileId>{};
   final _attempts = <TileId, int>{};
+  final _lastAttempt = <TileId, DateTime>{};
 
   LatLon? _where;
   double? _headingDeg;
   double _speedMs = 0;
+
+  /// The route to draw and the turn to announce. Held rather than pushed
+  /// straight through, so the loop can send them in its own order.
+  List<({double lat, double lon})>? _route;
+  Object? _routeSource;
+  bool _routeSent = false;
+  ({int turn, int distM, int remainingM, int remainingS, bool offRoute})? _guide;
+  Object? _guideSent;
   DateTime? _lastViewAt;
   bool _running = false;
   int _tilesSent = 0;
@@ -167,6 +237,33 @@ class HeadUnitFeed {
     if (speedMs != null) _speedMs = speedMs;
   }
 
+  /// A new route to draw on the head unit. [source] identifies it, so the
+  /// same route is never sent twice; null clears the line.
+  void setRoute(Object? source, List<({double lat, double lon})>? points) {
+    if (identical(source, _routeSource)) return;
+    _routeSource = source;
+    _route = points;
+    _routeSent = false;
+  }
+
+  /// Where the next turn is. Cheap to call on every fix; only a change goes
+  /// over the link.
+  void setGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  }) {
+    _guide = (
+      turn: turn,
+      distM: distM,
+      remainingM: remainingM,
+      remainingS: remainingS,
+      offRoute: offRoute,
+    );
+  }
+
   void start() {
     if (_running) return;
     _running = true;
@@ -183,6 +280,7 @@ class HeadUnitFeed {
   Future<void> dispose() async {
     await stop();
     await _stateSub.cancel();
+    await _droppedSub.cancel();
     status.dispose();
   }
 
@@ -219,11 +317,31 @@ class HeadUnitFeed {
     }
 
     if (_untilNextView() == Duration.zero) {
-      await _link.sendView(at.lat, at.lon, kHeadUnitZoom,
+      await _link.sendView(at.lat, at.lon, _zoom,
           (_headingDeg ?? 0).round() % 360,
           speedMs: _speedMs);
       _lastViewAt = _now();
       _viewsSent++;
+    }
+
+    // The line and the turn before any tile: a rider needs to know where to
+    // go more than they need the ground sharp.
+    final route = _route;
+    if (route != null && !_routeSent && route.length >= 2) {
+      final r = await _link.sendRoute(route);
+      if (r.ok) _routeSent = true;
+      return true;
+    }
+    final guide = _guide;
+    if (guide != null && guide != _guideSent) {
+      await _link.sendGuide(
+        turn: guide.turn,
+        distM: guide.distM,
+        remainingM: guide.remainingM,
+        remainingS: guide.remainingS,
+        offRoute: guide.offRoute,
+      );
+      _guideSent = guide;
     }
 
     final missing = _missingTiles(at);
@@ -248,8 +366,8 @@ class HeadUnitFeed {
   /// off-screen corners before the tiles either side of the rider, and the map
   /// stayed half empty while the link was busy with ground nobody could see.
   List<TileId> viewportTiles(LatLon at) {
-    final n = 1 << kHeadUnitZoom;
-    final centre = deg2tileF(at.lat, at.lon, kHeadUnitZoom);
+    final n = 1 << _zoom;
+    final centre = deg2tileF(at.lat, at.lon, _zoom);
     final halfW = kHeadUnitW / 2 / kTilePx;
     final halfH = kHeadUnitH / 2 / kTilePx;
     final x0 = (centre.x - halfW).floor() - kTileMargin;
@@ -277,7 +395,7 @@ class HeadUnitFeed {
         // above it.
         final visible = x >= sx0 && x <= sx1 && y >= sy0 && y <= sy1;
         out.add((
-          tile: TileId(kHeadUnitZoom, wx, y),
+          tile: TileId(_zoom, wx, y),
           ring: visible ? 0 : 1,
           d: dx * dx + dy * dy,
         ));
@@ -293,8 +411,8 @@ class HeadUnitFeed {
   /// unit draws under everything, so they go before anything sharp — a
   /// blurred map beats a bare one.
   List<TileId> fallbackTiles(LatLon at) => <TileId>[
-        ..._layerTiles(at, kWideZoom, 0),
-        ..._layerTiles(at, kCoarseZoom, 0),
+        ..._layerTiles(at, _zoom - kWideDz, 0),
+        ..._layerTiles(at, _zoom - kCoarseDz, 0),
       ];
 
   /// The ring of wide tiles around the panel. A safety net for movement —
@@ -302,9 +420,9 @@ class HeadUnitFeed {
   /// when the rider covers ground faster than detail tiles arrive. Sent last,
   /// because none of it is on screen yet.
   List<TileId> wideRingTiles(LatLon at) {
-    final centre = _layerTiles(at, kWideZoom, 0).toSet();
+    final centre = _layerTiles(at, _zoom - kWideDz, 0).toSet();
     return <TileId>[
-      for (final t in _layerTiles(at, kWideZoom, 1))
+      for (final t in _layerTiles(at, _zoom - kWideDz, 1))
         if (!centre.contains(t)) t,
     ];
   }
@@ -314,7 +432,7 @@ class HeadUnitFeed {
   List<TileId> _layerTiles(LatLon at, int zoom, int ring) {
     final n = 1 << zoom;
     final centre = deg2tileF(at.lat, at.lon, zoom);
-    final scale = 1 << (kHeadUnitZoom - zoom);
+    final scale = 1 << (_zoom - zoom);
     final halfW = kHeadUnitW / 2 / kTilePx / scale;
     final halfH = kHeadUnitH / 2 / kTilePx / scale;
     final ranked = <({TileId tile, double d})>[];
@@ -337,9 +455,18 @@ class HeadUnitFeed {
   }
 
   List<TileId> _missingTiles(LatLon at) {
-    bool needed(TileId t) =>
-        !_sentThisSession.contains(t) &&
-        (_attempts[t] ?? 0) < kTileMaxAttempts;
+    bool needed(TileId t) {
+      if (_sentThisSession.contains(t)) return false;
+      if ((_attempts[t] ?? 0) < kTileMaxAttempts) return true;
+      // Out of attempts, but only until the cooldown is up.
+      final last = _lastAttempt[t];
+      if (last == null || _now().difference(last) < kTileRetryAfter) {
+        return false;
+      }
+      _attempts.remove(t);
+      _lastAttempt.remove(t);
+      return true;
+    }
     return <TileId>[
       for (final t in fallbackTiles(at))
         if (needed(t)) t,
@@ -364,6 +491,7 @@ class HeadUnitFeed {
       // No tile and no network. Count the attempt so one that never arrives
       // stops being asked for on every pass.
       _attempts[t] = (_attempts[t] ?? 0) + 1;
+      _lastAttempt[t] = _now();
       return false;
     }
     final r = await _link.sendTile(t.z, t.x, t.y, kTileFormatPng, bytes);
@@ -374,6 +502,7 @@ class HeadUnitFeed {
     } else {
       _tilesFailed++;
       _attempts[t] = (_attempts[t] ?? 0) + 1;
+      _lastAttempt[t] = _now();
     }
     _publish();
     return r.ok;

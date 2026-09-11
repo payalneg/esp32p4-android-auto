@@ -29,7 +29,9 @@
 #include "mic_capture.h"
 #include "nav_map.h"
 #include "nav_screen.h"
+#include "nav_route.h"
 #include "nav_tiles.h"
+#include "notif_bridge.h"
 #include "touch_input.h"
 #include "ui_mode.h"
 /* LVGL internals: the timer list, for the lvtimers dump below. */
@@ -474,11 +476,15 @@ static int cmd_navstat(int argc, char **argv)
     nav_tiles_get_stats(&ts);
     nav_map_view_t v;
     nav_map_get_view(&v);
-    printf("worker stack free=%u B\n", (unsigned)st.stack_free);
+    printf("worker stack free=%u B | nimble_host free=%u words\n",
+           (unsigned)st.stack_free,
+           (unsigned)notif_bridge_host_stack_free());
     printf("tiles ok=%u failed=%u stored=%u/%u evicted=%u last=%u B in %u ms\n",
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
            (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("route %u points, last draw %u us\n",
+           (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
     printf("view %s %.5f,%.5f z%u hdg=%u | views=%u renders=%u last=%u ms tiles %d/%d\n",
            v.valid ? "set" : "unset", v.lat, v.lon, (unsigned)v.zoom,
            (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,

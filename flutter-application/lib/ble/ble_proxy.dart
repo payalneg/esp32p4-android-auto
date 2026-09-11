@@ -86,6 +86,8 @@ class BleProxy {
   final _vescTargetCtrl = StreamController<VescTargetInfo>.broadcast();
   final _navStateCtrl = StreamController<NavDisplayState>.broadcast();
   final _navDestCtrl = StreamController<LatLon>.broadcast();
+  final _navDroppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
+  final _navZoomCtrl = StreamController<int>.broadcast();
   BleConnState _state = BleConnState.idle;
   String? _savedRemoteId;
   bool _supportsFm = false;
@@ -130,6 +132,12 @@ class BleProxy {
 
   /// Destinations the rider picked on the head unit's own map.
   Stream<LatLon> get navDestinations => _navDestCtrl.stream;
+
+  /// Tiles the head unit dropped to make room.
+  Stream<({int z, int x, int y})> get navDropped => _navDroppedCtrl.stream;
+
+  /// The zoom the rider chose on the head unit's own map.
+  Stream<int> get navZoom => _navZoomCtrl.stream;
   int get negotiatedMtu => _mtu;
 
   /// Wire up the port callback and prime the saved-device id from prefs. Call
@@ -242,6 +250,16 @@ class BleProxy {
         break;
       case IpcEvt.navState:
         _applyNavState(m);
+        break;
+      case IpcEvt.navDropped:
+        _navDroppedCtrl.add((
+          z: (m['z'] as num).toInt(),
+          x: (m['x'] as num).toInt(),
+          y: (m['y'] as num).toInt(),
+        ));
+        break;
+      case IpcEvt.navZoom:
+        _navZoomCtrl.add((m['zoom'] as num).toInt());
         break;
       case IpcEvt.navDest:
         _navDestCtrl.add(LatLon(
@@ -452,6 +470,38 @@ class BleProxy {
       return const NavFrameResult(NavAck.timeout, 0, 0);
     }
   }
+
+  /// Hand the head unit the route line to draw. Never throws.
+  Future<NavFrameResult> sendNavRoute(
+      List<({double lat, double lon})> pts) async {
+    try {
+      final flat = <double>[
+        for (final p in pts) ...<double>[p.lat, p.lon],
+      ];
+      final r = await _request(
+          IpcCmd.navRoute, {'pts': flat}, const Duration(seconds: 15));
+      return NavFrameResult(
+          (r['ack'] as num?)?.toInt() ?? NavAck.timeout, 0, 0);
+    } catch (_) {
+      return const NavFrameResult(NavAck.timeout, 0, 0);
+    }
+  }
+
+  /// Where the next turn is and what is left of the ride.
+  void sendNavGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  }) =>
+      _fireAndForget(IpcCmd.navGuide, {
+        'turn': turn,
+        'dist': distM,
+        'remM': remainingM,
+        'remS': remainingS,
+        'off': offRoute,
+      });
 
   /// Tell the head unit where the rider is. This is what moves its map.
   void sendNavView(double lat, double lon, int zoom, int headingDeg,

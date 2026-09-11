@@ -57,6 +57,11 @@ bool nav_screen_active(void);
 typedef void (*nav_screen_dest_cb_t)(double lat, double lon);
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
 
+/* The rider's zoom buttons. Called with the level they asked for, already
+ * clamped to what the composer can draw. */
+typedef void (*nav_screen_zoom_cb_t)(uint8_t zoom);
+void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb);
+
 /* Link/stream state, for the placeholder text. */
 void nav_screen_set_phone(bool connected);
 void nav_screen_set_streaming(bool streaming);

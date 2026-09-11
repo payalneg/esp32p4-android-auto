@@ -56,6 +56,8 @@ class BleTaskHandler extends TaskHandler {
   bool _consolePushOn = false;
   StreamSubscription<NavDisplayState>? _navSub;
   StreamSubscription<({double lat, double lon})>? _navDestSub;
+  StreamSubscription<({int z, int x, int y})>? _navDroppedSub;
+  StreamSubscription<int>? _navZoomSub;
   Timer? _navIdleTimer;
   bool _navFast = false;
 
@@ -100,6 +102,8 @@ class BleTaskHandler extends TaskHandler {
     _navIdleTimer?.cancel();
     await _navSub?.cancel();
     await _navDestSub?.cancel();
+    await _navDroppedSub?.cancel();
+    await _navZoomSub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
     await _consoleSub?.cancel();
@@ -135,6 +139,10 @@ class BleTaskHandler extends TaskHandler {
     _navSub = null;
     unawaited(_navDestSub?.cancel());
     _navDestSub = null;
+    unawaited(_navDroppedSub?.cancel());
+    _navDroppedSub = null;
+    unawaited(_navZoomSub?.cancel());
+    _navZoomSub = null;
     if (s != BleConnState.connected) {
       _navIdleTimer?.cancel();
       _navIdleTimer = null;
@@ -149,6 +157,29 @@ class BleTaskHandler extends TaskHandler {
         'navMode': st.navMode,
         'visible': st.visible,
         'maxChunk': st.maxChunk,
+      });
+    });
+    // Somewhere to go, picked by tapping the head unit's own map.
+    _navDestSub = nav.destinations.listen((d) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navDest,
+        'lat': d.lat,
+        'lon': d.lon,
+      });
+    });
+    // A tile the head unit had to evict. Without this the map went blank once
+    // a ride outgrew its 64 slots: the head unit dropped tiles, the feed never
+    // heard, and it never sends the same tile twice — an hour of riding with
+    // the position updating over ground that was no longer there.
+    _navZoomSub = nav.zooms.listen((z) {
+      FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navZoom, 'zoom': z});
+    });
+    _navDroppedSub = nav.dropped.listen((t) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navDropped,
+        'z': t.z,
+        'x': t.x,
+        'y': t.y,
       });
     });
   }
@@ -340,6 +371,32 @@ class BleTaskHandler extends TaskHandler {
             m['zoom'] as int,
             m['heading'] as int,
             speedMs: (m['speed'] as num?)?.toDouble() ?? 0,
+          );
+          break;
+
+        case IpcCmd.navRoute:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden});
+            break;
+          }
+          final flat = (m['pts'] as List).cast<num>();
+          final pts = <({double lat, double lon})>[
+            for (var i = 0; i + 1 < flat.length; i += 2)
+              (lat: flat[i].toDouble(), lon: flat[i + 1].toDouble()),
+          ];
+          final rr = await nav.sendRoute(pts);
+          _navFrameSent();
+          _reply(id, {'ack': rr.ack});
+          break;
+
+        case IpcCmd.navGuide:
+          await _ble.navStream?.sendGuide(
+            turn: m['turn'] as int,
+            distM: (m['dist'] as num).round(),
+            remainingM: (m['remM'] as num).round(),
+            remainingS: (m['remS'] as num).round(),
+            offRoute: m['off'] as bool? ?? false,
           );
           break;
 

@@ -1,6 +1,7 @@
 #include "nav_screen.h"
 
 #include "nav_map.h"
+#include "nav_route.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -42,9 +43,17 @@ static lv_obj_t *s_speed_lbl;
 static lv_obj_t *s_speed_unit;
 static lv_obj_t *s_batt_lbl;
 static lv_obj_t *s_cc_img;
+static lv_obj_t *s_turn_box;
+static lv_obj_t *s_turn_arrow;
+static lv_obj_t *s_turn_dist;
+static lv_obj_t *s_turn_unit;
+static lv_obj_t *s_remain_lbl;
 static lv_obj_t *s_pick_box;
 static lv_obj_t *s_pick_lbl;
+static lv_timer_t *s_pick_timer;
 static nav_screen_dest_cb_t s_dest_cb;
+static nav_screen_zoom_cb_t s_zoom_cb;
+static lv_obj_t *s_zoom_lbl;
 static double s_pick_lat, s_pick_lon;
 static lv_timer_t *s_tick;
 
@@ -81,6 +90,8 @@ extern const lv_font_t lv_font_Antonio_Regular_22;
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 
 #define HUD_PLATE   0x101418
+/* How long the "go here?" prompt waits for an answer. */
+#define PICK_TIMEOUT_MS 12000
 #define CC_COLOUR   0x33FF66
 
 /* A transparent row that lays its children out left to right, so a readout is
@@ -98,7 +109,10 @@ static lv_obj_t *hud_row_create(lv_obj_t *parent, lv_align_t align, int x, int y
     lv_obj_set_style_bg_opa(row, LV_OPA_60, 0);
     lv_obj_set_style_radius(row, 10, 0);
     lv_obj_set_style_pad_hor(row, 10, 0);
-    lv_obj_set_style_pad_ver(row, 2, 0);
+    /* The grey has to clear the glyphs, not sit on them: Antonio's digits
+     * reach the top of their line box, so a two-pixel pad looked like the
+     * plate had been cut off. */
+    lv_obj_set_style_pad_ver(row, 8, 0);
     lv_obj_set_style_pad_column(row, 6, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     return row;
@@ -165,12 +179,56 @@ static void refresh_hud(void)
     }
 }
 
+/* Turn arrows as line segments rather than glyphs: no font here carries them,
+ * and a canvas per frame would be wasteful when the shape only changes at a
+ * turn. Coordinates sit in a 60x60 box with up meaning straight on.
+ *
+ * The head is traced — out to the tip, back, out again — because lv_line
+ * draws a single polyline. Retraced segments land on themselves in the same
+ * colour, so they cost nothing to look at. */
+typedef struct { uint8_t n; lv_point_t p[7]; } arrow_t;
+
+static const arrow_t k_arrows[NAV_TURN_COUNT] = {
+    [NAV_TURN_STRAIGHT]    = { 5, { {30,58}, {30,8},  {18,22}, {30,8},  {42,22} } },
+    [NAV_TURN_SLIGHT_LEFT] = { 6, { {38,58}, {38,32}, {14,10}, {14,26}, {14,10}, {30,10} } },
+    [NAV_TURN_SLIGHT_RIGHT]= { 6, { {22,58}, {22,32}, {46,10}, {46,26}, {46,10}, {30,10} } },
+    [NAV_TURN_LEFT]        = { 6, { {36,58}, {36,28}, {8,28},  {22,14}, {8,28},  {22,42} } },
+    [NAV_TURN_RIGHT]       = { 6, { {24,58}, {24,28}, {52,28}, {38,14}, {52,28}, {38,42} } },
+    [NAV_TURN_SHARP_LEFT]  = { 6, { {38,58}, {38,24}, {14,40}, {12,24}, {14,40}, {30,46} } },
+    [NAV_TURN_SHARP_RIGHT] = { 6, { {22,58}, {22,24}, {46,40}, {48,24}, {46,40}, {30,46} } },
+    [NAV_TURN_UTURN]       = { 7, { {42,58}, {42,26}, {30,14}, {18,26}, {18,46}, {8,34}, {28,34} } },
+    /* Arrival: a flag, not an arrow. */
+    [NAV_TURN_ARRIVE]      = { 5, { {20,58}, {20,10}, {46,18}, {20,26}, {20,10} } },
+};
+
+static void set_arrow(nav_turn_t t)
+{
+    static nav_turn_t shown = NAV_TURN_COUNT;
+    if (t >= NAV_TURN_COUNT || t == shown) return;
+    shown = t;
+    lv_line_set_points(s_turn_arrow, k_arrows[t].p, k_arrows[t].n);
+}
+
 /* Picking a destination on the panel itself: tap the map, confirm, and the
  * phone is told where to route. The head unit knows exactly which patch of
  * ground each pixel is (it composed the view), so the tap needs nothing from
  * the phone to become a coordinate. */
 static void pick_hide(void)
 {
+    if (s_pick_box) lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_pick_timer) {
+        lv_timer_del(s_pick_timer);
+        s_pick_timer = NULL;
+    }
+}
+
+/* A prompt nobody answers goes away on its own. A pocket or a bump can tap
+ * the map, and the plate used to stay up over the map until someone pressed
+ * one of its buttons. */
+static void pick_timeout_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_pick_timer = NULL;   /* one-shot: LVGL deletes it after this */
     if (s_pick_box) lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -187,6 +245,27 @@ static void pick_cancel_cb(lv_event_t *e)
     pick_hide();
 }
 
+/* Zoom, on the panel itself. The rider is the one looking at the map, so the
+ * buttons change what is drawn immediately and the phone is told afterwards —
+ * it is the only one that can fetch tiles for the new level. */
+static void zoom_step(int delta)
+{
+    nav_map_view_t v;
+    nav_map_get_view(&v);
+    int z = (v.valid ? v.zoom : NAV_ZOOM_MAX - 1) + delta;
+    if (z < NAV_ZOOM_MIN) z = NAV_ZOOM_MIN;
+    if (z > NAV_ZOOM_MAX) z = NAV_ZOOM_MAX;
+    if (s_zoom_lbl) {
+        char buf[8];
+        snprintf(buf, sizeof buf, "z%d", z);
+        lv_label_set_text(s_zoom_lbl, buf);
+    }
+    if (s_zoom_cb) s_zoom_cb((uint8_t)z);
+}
+
+static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
+static void zoom_out_cb(lv_event_t *e) { (void)e; zoom_step(-1); }
+
 static void map_pressed_cb(lv_event_t *e)
 {
     (void)e;
@@ -201,6 +280,55 @@ static void map_pressed_cb(lv_event_t *e)
     snprintf(buf, sizeof buf, "Go to %.5f, %.5f?", s_pick_lat, s_pick_lon);
     lv_label_set_text(s_pick_lbl, buf);
     lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_pick_timer) lv_timer_del(s_pick_timer);
+    s_pick_timer = lv_timer_create(pick_timeout_cb, PICK_TIMEOUT_MS, NULL);
+    lv_timer_set_repeat_count(s_pick_timer, 1);
+}
+
+/* The turn plate and the remaining-distance line, from whatever the phone
+ * last said. Hidden when there is no route — the map alone is the whole
+ * screen then. */
+static void refresh_guide(void)
+{
+    if (!s_turn_box) return;
+    nav_guide_t g;
+    nav_route_get_guide(&g);
+    if (!g.valid || nav_route_count() < 2) {
+        lv_obj_add_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    /* Off the route is the one state worth shouting about. */
+    lv_obj_set_style_bg_color(s_turn_box,
+                              lv_color_hex(g.off_route ? 0xB3261E : HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(s_turn_box, g.off_route ? LV_OPA_90 : LV_OPA_70, 0);
+
+    char buf[32];
+    set_arrow(g.turn);
+    const char *unit;
+    if (g.dist_m < 1000) {
+        snprintf(buf, sizeof buf, "%u", (unsigned)g.dist_m);
+        unit = "M";
+    } else {
+        snprintf(buf, sizeof buf, "%.1f", g.dist_m / 1000.0);
+        unit = "KM";
+    }
+    if (strcmp(buf, lv_label_get_text(s_turn_dist)) != 0) {
+        lv_label_set_text(s_turn_dist, buf);
+    }
+    if (strcmp(unit, lv_label_get_text(s_turn_unit)) != 0) {
+        lv_label_set_text(s_turn_unit, unit);
+    }
+
+    const unsigned mins = (g.remaining_s + 30) / 60;
+    snprintf(buf, sizeof buf, "%.1f km  |  %u min",
+             g.remaining_m / 1000.0, mins);
+    if (strcmp(buf, lv_label_get_text(s_remain_lbl)) != 0) {
+        lv_label_set_text(s_remain_lbl, buf);
+    }
 }
 
 static void set_status(const char *text)
@@ -255,6 +383,7 @@ static void tick_cb(lv_timer_t *t)
      * pixels did not change, so a parked bike sends nothing for minutes and
      * the last picture is still the right one. */
     refresh_hud();
+    refresh_guide();
 
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
@@ -341,7 +470,9 @@ esp_err_t nav_screen_init(void)
 
     s_pick_box = lv_obj_create(s_screen);
     lv_obj_set_size(s_pick_box, 560, 74);
-    lv_obj_align(s_pick_box, LV_ALIGN_TOP_MID, 0, 10);
+    /* Low and centred: at the top it sat across the turn plate, which is the
+     * one thing on this screen that must never be covered. */
+    lv_obj_align(s_pick_box, LV_ALIGN_BOTTOM_MID, 0, -96);
     lv_obj_set_style_bg_color(s_pick_box, lv_color_hex(0x1c2530), 0);
     lv_obj_set_style_bg_opa(s_pick_box, LV_OPA_90, 0);
     lv_obj_set_style_border_width(s_pick_box, 0, 0);
@@ -373,6 +504,68 @@ esp_err_t nav_screen_init(void)
     lv_label_set_text(no_lbl, LV_SYMBOL_CLOSE);
     lv_obj_center(no_lbl);
 
+    /* Zoom buttons down the right edge, above the charge readout, with the
+     * level between them so a press shows what it did. */
+    /* Plain ASCII, not LV_SYMBOL_PLUS: the symbols are FontAwesome glyphs and
+     * our subsetted font has none of them — on the panel they came out as
+     * empty boxes (the same trap as U+2026 in a Montserrat label). */
+    struct { const char *text; lv_event_cb_t cb; int dy; } zbtns[] = {
+        { "+", zoom_in_cb,  -104 },
+        { "-", zoom_out_cb,   14 },
+    };
+    for (unsigned i = 0; i < sizeof zbtns / sizeof zbtns[0]; i++) {
+        lv_obj_t *b = lv_btn_create(s_screen);
+        lv_obj_set_size(b, 62, 62);
+        lv_obj_align(b, LV_ALIGN_RIGHT_MID, -12, zbtns[i].dy);
+        lv_obj_set_style_bg_color(b, lv_color_hex(HUD_PLATE), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
+        lv_obj_set_style_radius(b, 14, 0);
+        lv_obj_add_event_cb(b, zbtns[i].cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, zbtns[i].text);
+        lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
+        lv_obj_center(l);
+    }
+    s_zoom_lbl = lv_label_create(s_screen);
+    lv_obj_align(s_zoom_lbl, LV_ALIGN_RIGHT_MID, -30, -42);
+    lv_obj_set_style_text_color(s_zoom_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_zoom_lbl, &aabridge_font_24, 0);
+    lv_obj_set_style_bg_color(s_zoom_lbl, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(s_zoom_lbl, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(s_zoom_lbl, 4, 0);
+    lv_obj_set_style_radius(s_zoom_lbl, 8, 0);
+    lv_label_set_text(s_zoom_lbl, "");
+
+    /* The turn plate: where to go next, and how far. Top left, clear of the
+     * destination prompt in the middle. */
+    s_turn_box = hud_row_create(s_screen, LV_ALIGN_TOP_LEFT, 10, 10);
+    lv_obj_set_style_pad_column(s_turn_box, 10, 0);
+    lv_obj_add_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
+
+    s_turn_arrow = lv_line_create(s_turn_box);
+    lv_obj_set_size(s_turn_arrow, 60, 66);
+    lv_obj_set_style_line_color(s_turn_arrow, lv_color_white(), 0);
+    lv_obj_set_style_line_width(s_turn_arrow, 8, 0);
+    lv_obj_set_style_line_rounded(s_turn_arrow, true, 0);
+    lv_line_set_points(s_turn_arrow, k_arrows[NAV_TURN_STRAIGHT].p,
+                       k_arrows[NAV_TURN_STRAIGHT].n);
+
+    s_turn_dist = hud_text(s_turn_box, &lv_font_Antonio_Regular_64, 0xFFFFFF);
+    s_turn_unit = hud_text(s_turn_box, &lv_font_Antonio_Regular_22, 0xC8D0D8);
+
+    /* What is left of the ride, under the turn plate. */
+    s_remain_lbl = lv_label_create(s_screen);
+    lv_obj_align(s_remain_lbl, LV_ALIGN_TOP_LEFT, 14, 92);
+    lv_obj_set_style_text_color(s_remain_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_remain_lbl, &aabridge_font_24, 0);
+    lv_obj_set_style_bg_color(s_remain_lbl, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(s_remain_lbl, LV_OPA_70, 0);
+    lv_obj_set_style_pad_hor(s_remain_lbl, 8, 0);
+    lv_obj_set_style_pad_ver(s_remain_lbl, 3, 0);
+    lv_obj_set_style_radius(s_remain_lbl, 8, 0);
+    lv_label_set_text(s_remain_lbl, "");
+    lv_obj_add_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+
     s_tick = lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
     bsp_display_unlock();
@@ -399,6 +592,7 @@ void nav_screen_set_active(bool active) { atomic_store(&s_active, active); }
 bool nav_screen_active(void) { return atomic_load(&s_active); }
 
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }
+void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb) { s_zoom_cb = cb; }
 
 void nav_screen_set_phone(bool connected)
 {

@@ -33,15 +33,40 @@ typedef struct {
 #define NAV_COARSE_DZ  3
 #define NAV_WIDE_DZ    6
 
+/* What the rider's zoom buttons may reach. Below 14 a town is a smudge at
+ * this tile size, above 18 the tiles arrive slower than the ground moves. */
+#define NAV_ZOOM_MIN 14
+#define NAV_ZOOM_MAX 18
+
+/* Where the phone says the rider is. The view does not jump there: it eases
+ * towards it over the following frames, so a position that disagrees with
+ * where dead reckoning had got to does not yank the map. */
 void nav_map_set_view(double lat, double lon, uint8_t zoom, uint16_t heading_deg);
 
 /* Rider speed, in centimetres per second, for the dead-reckoning between
  * position updates. */
 void nav_map_set_speed(uint16_t cm_per_s);
 
-/* Advance the view by `dt_ms` of travel at the last known speed and heading.
- * Called between the phone's updates — twice a second is a visible step, and
- * the head unit can redraw far more often than that from what it holds. */
+/* The rider's own zoom, from the buttons on the panel. Once set it wins over
+ * the zoom the phone sends: the rider is looking at this screen, and the
+ * phone is told to send tiles for the level they chose.
+ *
+ * The picture does not go bare in the meantime. Until tiles for the new level
+ * arrive the composer falls back to what it already holds — a level out gets
+ * doubled, a level in gets halved — so a zoom is a coarser or softer map for a
+ * second or two rather than an empty one. */
+void nav_map_set_zoom(uint8_t zoom);
+
+/* What drawing the route cost in the last frame, microseconds. */
+uint32_t nav_map_last_route_us(void);
+
+/* Carry the view forward by `dt_ms` of travel at the last known speed and
+ * heading, then ease it towards the last position the phone reported.
+ *
+ * Both halves matter. Dead reckoning alone drifts and then snaps back on
+ * every update — which is exactly what a jumping marker looks like. Easing
+ * alone lags a whole update behind. Together the map glides and the error
+ * bleeds away without a visible step. */
 void nav_map_dead_reckon(uint32_t dt_ms);
 void nav_map_get_view(nav_map_view_t *out);
 

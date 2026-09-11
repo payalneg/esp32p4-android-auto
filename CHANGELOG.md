@@ -105,6 +105,97 @@ the one recorded in the release commit.
   connection interval. The phone's stack sends one and waits, so the round
   trip is the limit and air time never was.
 
+### The line, the turn, and a dot that stays put
+
+- The route now travels to the head unit as a polyline (up to 2000 points,
+  a tenth of a micro-degree each) and is drawn there under the rider — a blue
+  line inside a white casing, the way a map draws a road, so it reads over
+  both the sharp tiles and the blurred fallback.
+- The manoeuvre is drawn as well: a plate in the top-left corner with the
+  arrow for the turn ahead (eleven kinds, from a slight bend to a U-turn and
+  the finish flag), how far it is in metres or kilometres, and underneath it
+  what is left of the whole route as "3.2 km | 11 min". Off route, the plate
+  turns red and says so. The arrows are drawn as a single polyline with the
+  head retraced, because LVGL draws one line at a time and a separate
+  arrowhead came out detached.
+- The rider's dot no longer jumps. Dead reckoning between updates always
+  drifts from where the phone says the rider is, and snapping back on every
+  arrival was visible twice a second; the view now eases a quarter of the way
+  towards the reported position on each redraw and only jumps when the two
+  disagree by more than a couple of hundred metres. Frames are also spaced by
+  the timer alone — a position arriving mid-frame used to trigger an extra
+  redraw and the motion came in pairs.
+- Drawing the line cost 40 ms of the frame at first: a Mercator projection is
+  a logarithm and a tangent in double precision, this chip has no
+  double-precision hardware, and every point was being projected twice.
+  Points outside a screen-and-a-margin box are now discarded on latitude and
+  longitude alone, the rest are projected once, and a segment that runs off
+  the panel is clipped before it is walked pixel by pixel. `navstat` times the
+  line on its own, which is how the numbers below are known rather than
+  guessed: **composing the map is 18-26 ms and the line adds 5-15 ms** of
+  scattered writes on top, a little more with a long route on screen. It is
+  cache misses, not arithmetic — the same line drawn as bars, as squares or
+  swept along rows costs much the same.
+- When the head unit has to drop a tile to make room it now tells the phone,
+  which sends that tile again next time it is needed. Without it an eviction
+  left ground that stayed blurred for the rest of the ride. The store holds 64
+  tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
+  PSRAM is worth more than the extra history.
+
+### Zoom, on both screens
+
+- Two buttons on the head unit's map, `+` and `-`, from z14 to z18, with the
+  level shown between them. The rider is the one looking at that screen, so
+  the panel changes level immediately and the phone is told afterwards — it is
+  the only end that can fetch tiles. A new notice on the same characteristic
+  (`0x15 ZOOM`) carries the level; the phone switches everything it sends,
+  detail tiles, fallback layers and position, to it.
+- Nothing goes bare in between. The composer now also tries the level either
+  side of the one it is drawing — one out gets doubled, one in gets halved —
+  so the two seconds before new tiles arrive show a coarser or softer map
+  instead of an empty slate. Verified on hardware: z17 to z18 drew from the
+  tiles already held, and z16 filled the whole panel from 3 real tiles plus
+  halved z17 ground.
+- The phone's own map gets the same pair of buttons, above the follow control.
+  Pinch still works; two thumb-sized buttons are what works one-handed.
+- The translucent plates behind the readouts sit a little taller: Antonio's
+  digits reach the top of their line box, and a two-pixel pad made the grey
+  look cut off.
+
+### Two wires that were never connected
+
+- The head unit's eviction notices and its destination taps both stopped at
+  the phone's background isolate: the subscriptions were declared, cancelled
+  on disconnect — and never actually made. The eviction one is what made a
+  long ride go blank. The head unit holds 64 tiles, a ride outgrows that in a
+  few kilometres, and the feed never sends the same tile twice; with the
+  notices lost, the panel dropped ground it still needed and the phone
+  believed it had already been sent. The symptom was a map that stopped
+  filling while the position kept updating — `tiles 0/12` in `navstat` with 64
+  tiles in the store. Both are wired now, and a 3 km simulated ride holds
+  12/12 with 154 evictions behind it.
+- A tile the phone cannot get is no longer written off for the session. Two
+  failures used to retire it permanently, which is fine for a tile the head
+  unit refuses and wrong for the far more common case — not cached, no signal
+  yet. It now waits thirty seconds and is asked for again.
+
+### Reboots under a phone: the Bluetooth host ran out of stack
+
+- The head unit restarted every few minutes with the navigator up. The panic
+  text — captured by leaving a logger on the console rather than guessing —
+  named the `nimble_host` task and a stack-protection fault, which is the
+  hardware stack guard rather than a corrupted heap.
+- Cause: every GATT write on the NotifBridge service is parsed on that task,
+  and each branch of the callback declared its own flatten buffer — a
+  notification chunk, an OTA chunk, a file chunk, a tile chunk. The compiler
+  laid them out side by side, so about 1.5 KB of the task's 4 KB stack went on
+  buffers that are never live at the same time. Adding the tile channel was
+  what pushed a notification arriving mid-stream over the edge.
+  All four branches now share one static buffer (the task is single and each
+  callee copies what it keeps), and the task itself gets 6 KB. `navstat`
+  reports its worst-case margin so the next squeeze is visible before it is a
+  reboot.
+
 - Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
   without the 3-finger hold, `navstat` reports the frame and tile streams (mode, tiles
   accepted and rejected, decode and compose times, and which tiles the view

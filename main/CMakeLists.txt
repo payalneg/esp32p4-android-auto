@@ -56,6 +56,7 @@ idf_component_register(
         "nav_screen.c"
         "nav_tiles.c"
         "nav_map.c"
+        "nav_route.c"
         "debug_uart_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES

@@ -102,6 +102,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   StreamSubscription<Announcement>? _announceSub;
   StreamSubscription<String>? _linkSub;
   StreamSubscription<LatLon>? _huDestSub;
+  StreamSubscription<int>? _huZoomSub;
 
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
@@ -165,6 +166,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     // The rider can pick somewhere to go on the head unit's own map; the
     // phone is what routes and guides, so the tap comes back here.
     _huDestSub = BleProxy.instance.navDestinations.listen(_onHeadUnitDest);
+    // ...and change the zoom there too. The head unit has already redrawn at
+    // the new level from what it holds; we are the only one who can fetch the
+    // tiles for it.
+    _huZoomSub = BleProxy.instance.navZoom.listen((z) => _feed?.setZoom(z));
     _syncStreamer();
   }
 
@@ -179,6 +184,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     unawaited(_streamer?.dispose());
     _streamer = null;
     unawaited(_huDestSub?.cancel());
+    unawaited(_huZoomSub?.cancel());
     _feed?.status.removeListener(_onStreamStatus);
     unawaited(_feed?.dispose());
     _feed = null;
@@ -212,6 +218,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         _fitRoute(_routeLine);
       }
       if (route != null) unawaited(_prefetchRoute(route));
+      // The head unit draws the line itself, so it gets the shape once.
+      _feed?.setRoute(
+          route,
+          route == null
+              ? null
+              : <({double lat, double lon})>[
+                  for (final p in route.points) (lat: p.lat, lon: p.lon),
+                ]);
     }
     final fix = _controller.lastFix;
     if (fix != null) {
@@ -221,6 +235,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       if (_controller.navigating) _followHeadUnit(fix);
       _feed?.setPosition(fix.position,
           headingDeg: fix.headingDeg, speedMs: fix.speedMs);
+      final g = _controller.guidance;
+      if (g != null) {
+        _feed?.setGuide(
+          turn: kNavTurnOrder.indexOf(g.next.type.name).clamp(0, 8),
+          distM: g.nextDistM.round(),
+          remainingM: g.remainingM.round(),
+          remainingS: g.remainingS.round(),
+          offRoute: g.offRoute,
+        );
+      }
       unawaited(_topUpAroundPosition(fix.position));
     }
     if (_controller.navigating != _screenPinned) {
@@ -987,6 +1011,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               LatLon(_map.camera.center.latitude, _map.camera.center.longitude),
           NavSettings.instance.areaRadiusKm * 1000.0);
 
+  /// One zoom step on our own map. Clamped to what the tile source has, and
+  /// around the camera's centre so it behaves the same whether the map is
+  /// following the rider or has been dragged away.
+  void _zoomBy(double delta) {
+    final cam = _map.camera;
+    final z = (cam.zoom + delta).clamp(3.0, 19.0);
+    if (z == cam.zoom) return;
+    _map.move(cam.center, z);
+  }
+
   Widget _controls(BuildContext context) {
     final hasRoute = _controller.hasRoute;
     final navigating = _controller.navigating;
@@ -995,6 +1029,22 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: <Widget>[
+        // Zoom, for a rider in gloves: the pinch gesture is there, but two
+        // thumb-sized buttons are what works one-handed on a bike.
+        FloatingActionButton.small(
+          heroTag: 'nav-zoom-in',
+          tooltip: t(context, 'nav.zoomIn'),
+          onPressed: () => _zoomBy(1),
+          child: const Icon(Icons.add),
+        ),
+        const SizedBox(height: 8),
+        FloatingActionButton.small(
+          heroTag: 'nav-zoom-out',
+          tooltip: t(context, 'nav.zoomOut'),
+          onPressed: () => _zoomBy(-1),
+          child: const Icon(Icons.remove),
+        ),
+        const SizedBox(height: 8),
         FloatingActionButton.small(
           heroTag: 'nav-follow',
           tooltip: t(context, 'nav.follow'),
@@ -1600,9 +1650,32 @@ class _ProxyHeadUnitLink implements HeadUnitLink {
   Stream<NavDisplayState> get displayStates => _ble.navStates;
 
   @override
+  Stream<({int z, int x, int y})> get dropped => _ble.navDropped;
+
+  @override
   Future<NavFrameResult> sendTile(
           int z, int x, int y, int format, Uint8List bytes) =>
       _ble.sendNavTile(z, x, y, format, bytes);
+
+  @override
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) =>
+      _ble.sendNavRoute(pts);
+
+  @override
+  Future<void> sendGuide({
+    required int turn,
+    required int distM,
+    required int remainingM,
+    required int remainingS,
+    required bool offRoute,
+  }) async =>
+      _ble.sendNavGuide(
+        turn: turn,
+        distM: distM,
+        remainingM: remainingM,
+        remainingS: remainingS,
+        offRoute: offRoute,
+      );
 
   @override
   Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
