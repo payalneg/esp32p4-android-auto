@@ -149,6 +149,14 @@ static int step_btn_steps(lv_event_t *e) {
  * were measured in (see ui_geom.h) so the same code lays out on the square
  * 480x480 panel. The value field and its +/- buttons keep their pixel size —
  * they hold a number in a fixed font — while their x positions move in. */
+/* Wide controls (dropdowns, full-width buttons) hang off the right margin,
+ * so they follow the screen width instead of the 800 they were measured in. */
+#define SETTINGS_MARGIN       20
+#define SETTINGS_WIDE_X       UI_SX(400)
+#define SETTINGS_WIDE_W       (UI_W - SETTINGS_WIDE_X - 10)
+#define SETTINGS_FULL_W       (UI_W - 2 * SETTINGS_MARGIN)
+#define SETTINGS_SWITCH_X     (UI_W - 60 - 10)
+
 #define SETTINGS_ROW_H        60
 #define SETTINGS_BTN_W        60
 #define SETTINGS_VAL_W        100
@@ -2419,7 +2427,7 @@ void settings_ui_init(lv_ui *ui) {
     // so the user must enable "Send status over CAN" (1-5 @ 50 Hz) on it.
     settings_second_head_label = settings_heading_create(ui->settings, y_pos, "Second head:");
     settings_second_head_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_second_head_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_second_head_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_second_head_switch, 60, 30);
     if (settings_wrapper_get_second_head_enabled()) {
         lv_obj_add_state(settings_second_head_switch, LV_STATE_CHECKED);
@@ -2463,8 +2471,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_can_speed_dropdown = lv_dropdown_create(ui->settings);
     lv_dropdown_set_options(settings_can_speed_dropdown, "125 kbps\n250 kbps\n500 kbps\n1000 kbps");
     lv_dropdown_set_selected(settings_can_speed_dropdown, can_speed_idx);
-    lv_obj_set_pos(settings_can_speed_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_can_speed_dropdown, 390, 50);
+    lv_obj_set_pos(settings_can_speed_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_can_speed_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_can_speed_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_can_speed_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_can_speed_dropdown, &lv_font_montserrat_24, 0);
@@ -2493,8 +2501,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_dropdown_set_options(settings_theme_dropdown, theme_opts);
     int active_theme = dashboard_theme_active_index();
     lv_dropdown_set_selected(settings_theme_dropdown, active_theme < 0 ? 0 : active_theme);
-    lv_obj_set_pos(settings_theme_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_theme_dropdown, 390, 50);
+    lv_obj_set_pos(settings_theme_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_theme_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_theme_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_theme_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_theme_dropdown, &lv_font_montserrat_24, 0);
@@ -2511,8 +2519,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_dropdown_set_options(settings_splash_loops_dropdown, "Off\n1\n2\n3\n5");
     lv_dropdown_set_selected(settings_splash_loops_dropdown,
                              splash_loops_to_index(settings_wrapper_get_splash_loops()));
-    lv_obj_set_pos(settings_splash_loops_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_splash_loops_dropdown, 390, 50);
+    lv_obj_set_pos(settings_splash_loops_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_splash_loops_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_splash_loops_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_splash_loops_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_splash_loops_dropdown, &lv_font_montserrat_24, 0);
@@ -2525,7 +2533,7 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Flip screen 180 (upside-down mounting) ==========
     settings_display_flip_label = settings_heading_create(ui->settings, y_pos, "Flip screen 180 (reboot):");
     settings_display_flip_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_display_flip_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_display_flip_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_display_flip_switch, 60, 30);
     if (settings_wrapper_get_display_flip()) {
         lv_obj_add_state(settings_display_flip_switch, LV_STATE_CHECKED);
@@ -2557,8 +2565,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_battery_calc_mode_dropdown = lv_dropdown_create(ui->settings);
     lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
     lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
-    lv_obj_set_pos(settings_battery_calc_mode_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_battery_calc_mode_dropdown, 390, 50);
+    lv_obj_set_pos(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, &lv_font_montserrat_24, 0);
@@ -2652,7 +2660,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(read_limits_label, "Read Limits from VESC");
     lv_obj_align(read_limits_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_read_limits_btn, 20, y_pos);
-    lv_obj_set_size(settings_read_limits_btn, 770, 50);
+    lv_obj_set_size(settings_read_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_read_limits_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_read_limits_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_read_limits_btn, &lv_font_montserrat_24, 0);
@@ -2824,7 +2832,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(apply_limits_label, "Apply Limits to VESC");
     lv_obj_align(apply_limits_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_apply_limits_btn, 20, y_pos);
-    lv_obj_set_size(settings_apply_limits_btn, 770, 50);
+    lv_obj_set_size(settings_apply_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_apply_limits_btn, lv_color_hex(0xff6600), 0);
     lv_obj_set_style_text_color(settings_apply_limits_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_apply_limits_btn, &lv_font_montserrat_24, 0);
@@ -2899,7 +2907,7 @@ void settings_ui_init(lv_ui *ui) {
         settings_heading_create(ui->settings, y_pos, "Brightness gesture");
 
     settings_brightness_gesture_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_brightness_gesture_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_brightness_gesture_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_brightness_gesture_switch, 60, 30);
     if (settings_wrapper_get_brightness_gesture_enabled()) {
         lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
@@ -2914,7 +2922,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
 
     settings_demo_mode_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_demo_mode_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_demo_mode_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_demo_mode_switch, 60, 30);
     if (dashboard_demo_is_active()) {
         lv_obj_add_state(settings_demo_mode_switch, LV_STATE_CHECKED);
@@ -2929,7 +2937,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_vesc_emulator_label = settings_heading_create(ui->settings, y_pos, "VESC Emulator");
 
     settings_vesc_emulator_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_vesc_emulator_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_vesc_emulator_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_vesc_emulator_switch, 60, 30);
     if (settings_wrapper_get_vesc_emulator()) {
         lv_obj_add_state(settings_vesc_emulator_switch, LV_STATE_CHECKED);
@@ -2956,7 +2964,7 @@ void settings_ui_init(lv_ui *ui) {
         settings_heading_create(ui->settings, y_pos, "AA Auto-Connect");
 
     settings_aa_autoconnect_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_aa_autoconnect_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_aa_autoconnect_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_aa_autoconnect_switch, 60, 30);
     if (settings_wrapper_get_aa_autoconnect()) {
         lv_obj_add_state(settings_aa_autoconnect_switch, LV_STATE_CHECKED);
@@ -2981,7 +2989,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_units_label = settings_heading_create(ui->settings, y_pos, "Units (miles)");
 
     settings_units_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_units_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_units_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_units_switch, 60, 30);
     if (settings_wrapper_get_use_imperial()) {
         lv_obj_add_state(settings_units_switch, LV_STATE_CHECKED);
@@ -3006,7 +3014,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_temp_unit_label = settings_heading_create(ui->settings, y_pos, "Temperature (F)");
 
     settings_temp_unit_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_temp_unit_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_temp_unit_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_temp_unit_switch, 60, 30);
     if (settings_wrapper_get_use_fahrenheit()) {
         lv_obj_add_state(settings_temp_unit_switch, LV_STATE_CHECKED);

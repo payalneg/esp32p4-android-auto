@@ -113,7 +113,7 @@ OBJS = $(AOBJS) $(COBJS)
 GEN_SRCS = $(GEN_ASRCS) $(GEN_CSRCS)
 GEN_OBJS = $(GEN_AOBJS) $(GEN_COBJS)
 
-.PHONY: all env clean default cp_lib clean_gen run regen_fonts dash480
+.PHONY: all env clean default cp_lib clean_gen run regen_fonts dash480 shots shots480
 ifeq ($(OS),Windows_NT)
 all: env regen_fonts default cp_lib
 else
@@ -143,6 +143,35 @@ $(THEMES_AUTO): $(SCREENS_DIR)/generated/gui_guider.h $(GENTHEME_TOOL)
 # not identify with the absolute path above — without this the registrar would
 # be generated once and then never refreshed when a screen is added or removed.
 $(OBJ_DIR)dashboard_themes_auto.o: $(THEMES_AUTO)
+
+# Headless screenshots — one BMP per dashboard theme plus Settings, with no
+# window and no display (SDL's dummy video driver). Useful over ssh, in CI, and
+# for reviewing a layout change without a board.
+#   make shots      -> build/shots/*.bmp     (800x480, the P4 head units)
+#   make shots480   -> build480/shots/*.bmp  (480x480, the ESP32-S3 board)
+# Set SHOT=<theme name>[,<name>...] to grab specific screens instead of all.
+SHOT ?= all
+# LVGL heap for the screenshot build: the UI plus one full-screen snapshot.
+# On desktop this is just a static array, so be generous — LVGL's
+# out-of-memory handler is an infinite loop, not an error return. Plain digits:
+# the value goes through a shell, where parentheses would need quoting.
+SHOT_LV_MEM ?= 8388608
+
+shots:
+	@$(MAKE) -f $(makefile_name) BUILD_DIR=buildshot/ \
+	    EXTRA_CFLAGS='-DLV_USE_SNAPSHOT=1 -DLV_MEM_SIZE=$(SHOT_LV_MEM)'
+	@mkdir -p $(BUILD_DIR)shots
+	@SDL_VIDEODRIVER=dummy SVD_SHOT='$(SHOT)' \
+	    SVD_SHOT_DIR=$(BUILD_DIR)shots ./buildshot/bin/$(SIMULATOR_EXE)
+
+shots480:
+	@$(MAKE) -f $(makefile_name) \
+	    SCREENS_DIR=$(PRJ_DIR)/../Super_VESC_Display_480 \
+	    BUILD_DIR=buildshot480/ \
+	    EXTRA_CFLAGS='-DLV_HOR_RES_MAX=480 -DLV_VER_RES_MAX=480 -DLV_USE_SNAPSHOT=1 -DLV_MEM_SIZE=$(SHOT_LV_MEM)'
+	@mkdir -p buildshot480/shots
+	@SDL_VIDEODRIVER=dummy SVD_SHOT='$(SHOT)' \
+	    SVD_SHOT_DIR=buildshot480/shots ./buildshot480/bin/$(SIMULATOR_EXE)
 
 # Build the square 480x480 dashboard instead of the 800x480 one: the ESP32-S3
 # board's screens, in a window the same shape as its panel. Separate build dir

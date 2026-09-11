@@ -76,10 +76,22 @@ KEEP_ASPECT = {
 # it), so the 480 project drops it rather than carrying a broken copy.
 DROP_SCREENS = {"reference"}
 
-# Rough advance width of one character as a fraction of the font size. Used
-# only to flag labels whose text probably no longer fits; Montserrat/Antonio
-# digits and capitals land around 0.5-0.6 em.
-CHAR_EM = 0.55
+# Advance width per character as a fraction of the font size, used to decide how
+# much width a label needs. One constant does not do: the captions are all-caps
+# Montserrat (~0.72 em per glyph) while the readouts are digits (~0.60), and
+# sizing a caption by the digit figure is exactly what makes "RANGE" wrap to
+# "RANG/E". Calibrated against the rendered screenshots, erring high — a
+# transparent box a few pixels too wide costs nothing, a wrapped caption reads
+# as broken. Letter spacing from the style is added on top.
+CHAR_EM_DEFAULT = 0.62
+CHAR_EM = {
+    **{c: 0.72 for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+    **{c: 0.60 for c in "abcdefghijklmnopqrstuvwxyz0123456789"},
+    **{c: 0.32 for c in " .,:;'`|!"},
+    **{c: 0.42 for c in "-()[]/"},
+    "%": 0.95,
+    "°": 0.45,
+}
 
 
 class Geometry:
@@ -134,30 +146,47 @@ def text_align_of(widget):
     return "LEFT"
 
 
-def text_width_estimate(text, font_size):
+def letter_space_of(widget):
+    for st in widget.get("style") or []:
+        v = st.get("letter_space")
+        if isinstance(v, int):
+            return v
+    return 0
+
+
+def text_width_estimate(text, font_size, letter_space=0):
     """Widest line of `text`, in pixels, roughly."""
     if not text or not font_size:
         return 0
-    longest = max((len(line) for line in text.split("\n")), default=0)
-    return int(longest * font_size * CHAR_EM)
+    widest = 0
+    for line in text.split("\n"):
+        w = sum(CHAR_EM.get(c, CHAR_EM_DEFAULT) * font_size + letter_space
+                for c in line)
+        widest = max(widest, w)
+    return int(widest + 0.5)
 
 
 def widen_for_text(g, need, align, screen_w):
+    # (returns True when the screen is simply too narrow for the text)
     """Give a label back the width its text needs, growing away from whichever
-    edge its alignment pins the text to."""
+    edge its alignment pins the text to — and sliding the whole box left when
+    the screen edge is in the way, because a caption pushed a few pixels off
+    its column still reads, while a wrapped one does not."""
     if need <= g.w:
         return
     want = min(need, screen_w)
     if align == "RIGHT":
         right = g.x + g.w
-        g.x = max(0, right - want)
-        g.w = min(want, screen_w - g.x)
+        g.x = right - want
     elif align == "CENTER":
         centre = g.x + g.w / 2.0
-        g.x = max(0, int(round(centre - want / 2.0)))
-        g.w = min(want, screen_w - g.x)
-    else:
-        g.w = min(want, screen_w - g.x)
+        g.x = int(round(centre - want / 2.0))
+    if g.x + want > screen_w:
+        g.x = screen_w - want
+    if g.x < 0:
+        g.x = 0
+    g.w = min(want, screen_w - g.x)
+    return g.w < need
 
 
 def font_size_of(widget):
@@ -182,10 +211,14 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes):
         geo_map[full_name] = g
 
         if kind == "label":
-            need = text_width_estimate(w.get("text"), font_size_of(w))
+            need = text_width_estimate(w.get("text"), font_size_of(w),
+                                       letter_space_of(w))
+            clipped = False
             if need > g.w:
-                widen_for_text(g, need, text_align_of(w), NEW_W)
+                clipped = widen_for_text(g, need, text_align_of(w), NEW_W)
             boxes.append({
+                "clipped": clipped,
+                "need": need,
                 "name": full_name,
                 "text": w.get("text") or "",
                 "old": (w["left"], w["top"], w["width"], w["height"]),
@@ -428,6 +461,20 @@ def find_overlaps(boxes, min_fraction=0.25, min_worse=0.10):
 
 
 def print_report(boxes_by_screen):
+    # Labels whose text does not fit the screen at all — these will wrap or be
+    # cut, which reads as broken, so they come first.
+    clipped = [(s, b) for s in sorted(boxes_by_screen)
+               for b in boxes_by_screen[s] if b.get("clipped")]
+    if clipped:
+        print("\n%d label(s) whose text does not fit 480 px — they will wrap:"
+              % len(clipped))
+        for screen, b in clipped:
+            short = b["name"][len(screen) + 1:] \
+                if b["name"].startswith(screen) else b["name"]
+            print("  %-20s %-26s %3d px of ~%d needed  %r"
+                  % (screen, short, b["new"][2], b["need"], b["text"][:20]))
+        print("  -> shorten the caption or drop a font size in GUI Guider.")
+
     total = 0
     for screen in sorted(boxes_by_screen):
         hits = find_overlaps(boxes_by_screen[screen])

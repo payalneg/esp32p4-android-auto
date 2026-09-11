@@ -55,7 +55,12 @@
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
 /*Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB)*/
+/* Overridable: the headless screenshot build needs room for a full-screen
+ * snapshot (800x480x2 = 768 kB) on top of the UI itself, and running out here
+ * is not a soft failure — LVGL's out-of-memory assert spins forever. */
+#ifndef LV_MEM_SIZE
 #define LV_MEM_SIZE (320U * 1024U)
+#endif
 #else     /* LV_MEM_CUSTOM */
 /*Header for the dynamic memory function*/
 #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
@@ -689,7 +694,11 @@
  *----------*/
 
 /*1: Enable API to take snapshot for object*/
+/* Overridable: the headless screenshot build (`make shots` in
+ * lvgl-simulator/) turns this on to grab a screen without a window. */
+#ifndef LV_USE_SNAPSHOT
 #define LV_USE_SNAPSHOT 0
+#endif
 
 /*1: Enable Monkey test*/
 #define LV_USE_MONKEY 0
