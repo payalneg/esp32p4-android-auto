@@ -672,7 +672,17 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             const uint16_t seq = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
             if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
             const uint32_t tot = (uint32_t)n * 8u;
-            if (n == 0 || n > NAV_ROUTE_MAX_POINTS || tot > BLE_NAV_MAX_FRAME) {
+            if (n == 0) {
+                /* No points means the ride is over — the phone has no route
+                 * to draw any more. Without this the head unit kept the last
+                 * line and the last manoeuvre plate for the rest of the day:
+                 * "0.0 km | 0 min" in arrival red over a map with no line on
+                 * it, because the remaining stub had gone off screen. */
+                nav_route_clear();
+                notify(NAV_ST_ACK, NAV_ACK_OK, seq, 0);
+                return;
+            }
+            if (n > NAV_ROUTE_MAX_POINTS || tot > BLE_NAV_MAX_FRAME) {
                 reject(seq, NAV_ACK_BAD_PARAM);
                 return;
             }

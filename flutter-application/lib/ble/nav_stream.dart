@@ -368,9 +368,13 @@ class NavStream {
   /// Send the route line. Points are whatever the phone routed, simplified
   /// for drawing before they get here; the head unit keeps them and draws the
   /// line over its own map, so this goes once per route rather than per frame.
+  ///
+  /// An EMPTY list clears it — the head unit drops the line and the manoeuvre
+  /// plate. It has no other way of learning that a ride has ended, and
+  /// without it kept drawing the last one.
   Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) async {
     if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
-    if (pts.length < 2) return const NavFrameResult(NavAck.badParam, 0, 0);
+    if (pts.length == 1) return const NavFrameResult(NavAck.badParam, 0, 0);
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
     try {
@@ -384,6 +388,7 @@ class NavStream {
       bh.setUint16(1, pts.length, Endian.little);
       bh.setUint16(3, seq, Endian.little);
       await _channel.writeCtrl(begin);
+      if (pts.isEmpty) return await acked;   // a clear carries no points
 
       final body = Uint8List(pts.length * 8);
       final bd = ByteData.sublistView(body);

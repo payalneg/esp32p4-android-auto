@@ -142,6 +142,18 @@ the one recorded in the release commit.
   tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
   PSRAM is worth more than the extra history.
 
+### Telling the head unit a ride is over
+
+- Alexey, watching the panel: "а куда делась синяя линия". The line had gone
+  off screen and the plate above it read "0.0 km | 0 min" in arrival red —
+  because the phone had no way to say that the ride was finished. It sends
+  a route when there is one and nothing when there is not, so the head unit
+  kept drawing the last one.
+- A route of zero points now means "forget it": the line and the manoeuvre
+  plate come off, and the panel is a plain map again. The phone sends it
+  whenever the route it was drawing goes away — arrival, a cleared route, a
+  cancelled ride.
+
 ### Zoom, on both screens
 
 - Two buttons on the head unit's map, `+` and `-`, from z14 to z18, with the

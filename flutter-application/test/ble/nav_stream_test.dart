@@ -273,4 +273,20 @@ void main() {
     expect(ch.ctrl.map((c) => c.first).toList(),
         <int>[NavOp.hello, NavOp.stop]);
   });
+
+  test('an empty route clears the line, and carries no points', () async {
+    // The head unit has no other way of learning that a ride ended; without
+    // this it kept drawing the last route for ever.
+    final f = nav.sendRoute(const <({double lat, double lon})>[]);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(ch.ctrl.length, 1, reason: 'BEGIN only — no body, no END');
+    expect(ch.ctrl.single[0], NavOp.routeBegin);
+    expect(ch.ctrl.single[1] | (ch.ctrl.single[2] << 8), 0);
+    expect(ch.data, isEmpty);
+
+    final seq = ch.ctrl.single[3] | (ch.ctrl.single[4] << 8);
+    ch.ack(NavAck.ok, seq, 0);
+    expect((await f).ok, isTrue);
+  });
 }
