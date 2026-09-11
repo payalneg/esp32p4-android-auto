@@ -188,10 +188,19 @@ the one recorded in the release commit.
   its place is a one-line badge, and only when something is actually wrong —
   a firmware too old to speak the tile protocol, or a display showing another
   screen.
-- That also takes out a flicker. The screen repainted on every feed status
-  change — which is once per tile sent — and each repaint rebuilt the whole
-  map widget tree, the thumbnail's own map included. Nothing subscribes to
-  the feed's counters any more.
+- That also takes out one cause of repainting: the screen rebuilt its whole
+  widget tree on every feed status change — once per tile sent — the
+  thumbnail's own map included. Nothing subscribes to the feed's counters any
+  more.
+- And the blink itself, which turned out to be something else: while a region
+  downloaded, the map asked its tile layer to reload every hundred tiles. A
+  reload drops and re-creates *every* tile on screen, so for one frame the map
+  was bare — caught on a screen recording as a single frame at luminance 16
+  against 160 either side, several times per download. Nothing resets the
+  layer now; instead a tile that fails retries itself three times over
+  twenty seconds, re-reading the cache each time in case the bulk download has
+  landed it. Same recording after the change: 250 tiles downloaded, no frame
+  below 145.
 - The head unit still accepts pictures (`FRAME_*` and `navtest` are
   untouched), so the path is retired on the phone rather than removed from
   the protocol.

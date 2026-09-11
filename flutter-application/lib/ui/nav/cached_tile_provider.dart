@@ -110,14 +110,30 @@ class _CachedTileImage extends ImageProvider<_CachedTileImage> {
     );
   }
 
+  /// How long to keep trying before the tile is left to the error image.
+  ///
+  /// The layer asks for a tile once. Before this ladder existed, a tile that
+  /// failed was blank until the camera moved, and the screen was kept honest
+  /// by asking the whole layer to reload every hundred downloaded tiles —
+  /// which drops and re-creates *every* tile on screen and showed up on a
+  /// screen recording as a single black frame, several times per region
+  /// download. Retrying the one tile that failed costs nothing and nobody
+  /// sees it. The cache is re-read each time round because a bulk download
+  /// may have landed the tile meanwhile.
+  static const List<Duration> _retries = <Duration>[
+    Duration(milliseconds: 1200),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+  ];
+
   Future<ui.Codec> _load(ImageDecoderCallback decode) async {
     var bytes = await cache.read(tile) ??
         await cache.fetchAndStore(tile, urls, generation: generation);
-    if (bytes == null) {
-      // One retry: riding through a dead second of signal should not blank a
-      // tile until the next time the camera happens to move.
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
-      bytes = await cache.fetchAndStore(tile, urls, generation: generation);
+    for (final wait in _retries) {
+      if (bytes != null) break;
+      await Future<void>.delayed(wait);
+      bytes = await cache.read(tile) ??
+          await cache.fetchAndStore(tile, urls, generation: generation);
     }
     if (bytes == null) {
       throw StateError('tile $tile unavailable'); // TileLayer draws errorImage
