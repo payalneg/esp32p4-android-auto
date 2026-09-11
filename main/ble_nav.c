@@ -213,9 +213,13 @@ static void on_dest_picked(int32_t lat_e7, int32_t lon_e7)
     if (!s_q) return;
     nav_evt_t ev = { .kind = EV_DEST, .lat_e7 = lat_e7, .lon_e7 = lon_e7 };
     xQueueSend(s_q, &ev, 0);
-    ESP_LOGI(TAG, "destination picked on the panel: %ld.%07ld, %ld.%07ld",
-             (long)(lat_e7 / 10000000), (long)labs(lat_e7 % 10000000),
-             (long)(lon_e7 / 10000000), (long)labs(lon_e7 % 10000000));
+    /* Sign printed on its own: "-0.5" has an integer part of zero, and
+     * printing that part as a number loses the minus entirely. */
+    ESP_LOGI(TAG, "destination picked on the panel: %s%ld.%07ld, %s%ld.%07ld",
+             lat_e7 < 0 ? "-" : "", (long)labs(lat_e7) / 10000000,
+             (long)labs(lat_e7) % 10000000,
+             lon_e7 < 0 ? "-" : "", (long)labs(lon_e7) / 10000000,
+             (long)labs(lon_e7) % 10000000);
 }
 
 /* The rider pressed a zoom button. The map changes level at once — it has
@@ -240,10 +244,37 @@ static void on_search_typed(const char *q)
     xQueueSend(s_q, &ev, 0);
 }
 
+/* Tell every subscribed link, not only the one that owns the bridge.
+ *
+ * Acknowledgements belong to whoever sent the thing being acknowledged, but
+ * whether this screen is live is a fact about the panel and everybody's
+ * business. Sending it only to the bridge owner deadlocked the bench: a
+ * second phone took the binding while the navigator phone was quiet over a
+ * mode switch, so the navigator never heard that the screen was live again —
+ * and since it only writes when it believes the screen is live, it never
+ * wrote again, and never took the binding back. */
+static void notify_all(uint8_t status, uint8_t a, uint16_t b, uint16_t c)
+{
+    if (s_ctrl_handle == 0) return;
+    const uint8_t f[6] = { status, a, (uint8_t)b, (uint8_t)(b >> 8),
+                           (uint8_t)c, (uint8_t)(c >> 8) };
+    for (uint16_t h = 0; h < 8; h++) {
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(h, &d) != 0) continue;
+        if (d.role != BLE_GAP_ROLE_SLAVE) continue;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
+            /* A link that never subscribed simply refuses; that is fine. */
+            if (om && ble_gatts_notify_custom(h, s_ctrl_handle, om) == 0) break;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+}
+
 static void notify_state(void)
 {
     const bool live = (ui_mode_get() == UI_MODE_NAV);
-    notify(NAV_ST_STATE, live ? 1 : 0, live ? 1 : 0, BLE_NAV_MAX_DATA);
+    notify_all(NAV_ST_STATE, live ? 1 : 0, live ? 1 : 0, BLE_NAV_MAX_DATA);
 
     /* And say so when the store is empty. The phone never sends the same tile
      * twice, so after a reboot it has to be told that what it sent is gone —
@@ -253,7 +284,7 @@ static void notify_state(void)
      * this covers losing all of them at once. */
     nav_tiles_stats_t ts;
     nav_tiles_get_stats(&ts);
-    if (ts.stored == 0) notify(NAV_ST_EMPTY, 0, 0, 0);
+    if (ts.stored == 0) notify_all(NAV_ST_EMPTY, 0, 0, 0);
 }
 
 static void set_boost(bool on)

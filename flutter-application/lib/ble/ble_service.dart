@@ -730,6 +730,12 @@ class BleService {
     }
     final nav = NavStream(_FbpNavChannel(ctrl, data, () => _device));
     _nav = nav;
+    // Greet on every fresh link, and keep greeting while the answer says the
+    // navigator screen is not the live one. Being told "not live" once is not
+    // the end of the story: a second phone can take the head unit's bridge
+    // binding while we are quiet, and then the head unit's next state change
+    // never reaches us at all. Asking costs three bytes.
+    _armHelloRetry();
     try {
       await nav.hello();
     } catch (_) {
@@ -747,6 +753,7 @@ class BleService {
   /// Greet the head unit again every few seconds until it answers with its
   /// screen state, which is what tells the app the channel really works.
   void _armHelloRetry() {
+    if (_helloRetry?.isActive ?? false) return;
     _helloRetry?.cancel();
     _helloRetry = Timer.periodic(const Duration(seconds: 5), (t) {
       final nav = _nav;
@@ -755,8 +762,8 @@ class BleService {
         _helloRetry = null;
         return;
       }
-      if (nav.state.navMode || nav.state.visible) {
-        t.cancel();          // it has spoken; nothing left to ask for
+      if (nav.state.visible) {
+        t.cancel();          // the panel is ours; it will tell us if it stops
         _helloRetry = null;
         return;
       }

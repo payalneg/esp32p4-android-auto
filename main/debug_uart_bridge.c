@@ -540,11 +540,13 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.compose_us, (unsigned)st.msync_us);
     printf("route %u points, last draw %u us\n",
            (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
-    printf("view %s %ld.%07ld,%ld.%07ld z%u hdg=%u | views=%u renders=%u "
+    printf("view %s %s%ld.%07ld,%s%ld.%07ld z%u hdg=%u | views=%u renders=%u "
            "last=%u ms tiles %d/%d\n",
            v.valid ? "set" : "unset",
-           (long)(v.lat_e7 / 10000000), (long)labs(v.lat_e7 % 10000000),
-           (long)(v.lon_e7 / 10000000), (long)labs(v.lon_e7 % 10000000),
+           v.lat_e7 < 0 ? "-" : "", (long)labs(v.lat_e7) / 10000000,
+           (long)labs(v.lat_e7) % 10000000,
+           v.lon_e7 < 0 ? "-" : "", (long)labs(v.lon_e7) / 10000000,
+           (long)labs(v.lon_e7) % 10000000,
            (unsigned)v.zoom,
            (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,
            (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
