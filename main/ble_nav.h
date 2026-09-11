@@ -28,6 +28,12 @@
  *     0x09 ROUTE_END   : [op][u16 seq]
  *     0x0A GUIDE       : [op][u8 turn][u16 dist_m][u32 remaining_m]
  *                        [u16 remaining_s][u8 flags]  (bit0 = off route)
+ *     0x0B FOUND_BEGIN : [op][u8 count][u16 bytes][u16 seq] — answers a
+ *                        SEARCH. Then DATA carries `count` entries, each
+ *                        [i32 lat_e7][i32 lon_e7][u8 name_len][name…] in
+ *                        UTF-8. count = 0 means "nothing found" and carries
+ *                        no body.
+ *     0x0C FOUND_END   : [op][u16 seq]
  *
  *   CTRL notify (P4 -> phone), 6-byte frame [u8 status][u8 a][u16 b][u16 c] LE:
  *     0x10 STATE      a = ui mode (0 other, 1 navigator screen is live)
@@ -46,6 +52,15 @@
  *                     the panel. The phone sends tiles (and VIEW) at that
  *                     level from then on; the head unit has already changed
  *                     what it draws.
+ *     0x17 EMPTY      the tile store holds nothing — sent alongside STATE, so
+ *                     a phone reconnecting to a rebooted head unit knows that
+ *                     everything it sent before is gone and starts again.
+ *                     (DROPPED covers losing tiles one at a time.)
+ *     0x16 SEARCH     [u8 status][u8 len][len bytes UTF-8] — what the rider
+ *                     typed on the panel's keyboard. The phone looks it up
+ *                     in the offline index that came with its map (so this
+ *                     works with no signal) and answers with FOUND_BEGIN.
+ *                     Picking a result comes back as an ordinary DEST.
  *
  *   DATA write (phone -> P4): raw bytes of whatever BEGIN opened — a picture
  *   for FRAME_BEGIN, a map tile for TILE_BEGIN.
@@ -83,6 +98,10 @@ extern "C" {
 /* Largest DATA write the receive path accepts (MTU 512 - 3 ATT header) —
  * notif_bridge's flatten buffer is sized from this, and STATE advertises it. */
 #define BLE_NAV_MAX_DATA 509
+
+/* Longest query the panel's keyboard sends. A street name plus a number fits
+ * comfortably; the notify that carries it is [status][len][text]. */
+#define NAV_SEARCH_QUERY 64
 
 /* Biggest JPEG we will stage. A 800x480 q80 photo-ish frame is well under
  * 100 KB; anything larger is a bug or a hostile peer. */

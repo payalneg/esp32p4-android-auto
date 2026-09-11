@@ -88,6 +88,8 @@ class BleProxy {
   final _navDestCtrl = StreamController<LatLon>.broadcast();
   final _navDroppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
   final _navZoomCtrl = StreamController<int>.broadcast();
+  final _navSearchCtrl = StreamController<String>.broadcast();
+  final _navEmptyCtrl = StreamController<void>.broadcast();
   BleConnState _state = BleConnState.idle;
   String? _savedRemoteId;
   bool _supportsFm = false;
@@ -138,6 +140,12 @@ class BleProxy {
 
   /// The zoom the rider chose on the head unit's own map.
   Stream<int> get navZoom => _navZoomCtrl.stream;
+
+  /// What the rider typed on the head unit's keyboard.
+  Stream<String> get navSearches => _navSearchCtrl.stream;
+
+  /// The head unit is holding no tiles at all.
+  Stream<void> get navEmptied => _navEmptyCtrl.stream;
   int get negotiatedMtu => _mtu;
 
   /// Wire up the port callback and prime the saved-device id from prefs. Call
@@ -257,6 +265,12 @@ class BleProxy {
           x: (m['x'] as num).toInt(),
           y: (m['y'] as num).toInt(),
         ));
+        break;
+      case IpcEvt.navEmptied:
+        _navEmptyCtrl.add(null);
+        break;
+      case IpcEvt.navSearch:
+        _navSearchCtrl.add(m['q'] as String);
         break;
       case IpcEvt.navZoom:
         _navZoomCtrl.add((m['zoom'] as num).toInt());
@@ -480,6 +494,27 @@ class BleProxy {
       ];
       final r = await _request(
           IpcCmd.navRoute, {'pts': flat}, const Duration(seconds: 15));
+      return NavFrameResult(
+          (r['ack'] as num?)?.toInt() ?? NavAck.timeout, 0, 0);
+    } catch (_) {
+      return const NavFrameResult(NavAck.timeout, 0, 0);
+    }
+  }
+
+  /// Answer what the rider typed on the panel. Never throws.
+  Future<NavFrameResult> sendNavFound(
+      List<({double lat, double lon, String name})> hits) async {
+    try {
+      final r = await _request(
+        IpcCmd.navFound,
+        {
+          'hits': <Map<String, Object?>>[
+            for (final h in hits)
+              <String, Object?>{'lat': h.lat, 'lon': h.lon, 'name': h.name},
+          ],
+        },
+        const Duration(seconds: 15),
+      );
       return NavFrameResult(
           (r['ack'] as num?)?.toInt() ?? NavAck.timeout, 0, 0);
     } catch (_) {

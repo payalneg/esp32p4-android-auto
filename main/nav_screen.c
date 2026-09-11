@@ -53,6 +53,23 @@ static lv_obj_t *s_pick_lbl;
 static lv_timer_t *s_pick_timer;
 static nav_screen_dest_cb_t s_dest_cb;
 static nav_screen_zoom_cb_t s_zoom_cb;
+static nav_screen_search_cb_t s_search_cb;
+
+/* Typing on the panel. The keyboard and the results live in one overlay that
+ * covers the map; the map keeps composing underneath, which costs nothing and
+ * means closing the overlay never shows a stale frame. */
+static lv_obj_t *s_find_box;
+static lv_obj_t *s_find_ta;
+static lv_obj_t *s_find_kb;
+static lv_obj_t *s_find_list;
+static lv_obj_t *s_find_hint;
+static lv_timer_t *s_query_timer;
+
+/* What the phone last found. Written by the BLE worker, drained on the LVGL
+ * tick — nothing here may touch LVGL from another task. */
+static nav_search_hit_t s_hits[NAV_SEARCH_MAX];
+static atomic_int  s_nhits;
+static atomic_bool s_hits_fresh;
 static lv_obj_t *s_zoom_lbl;
 static double s_pick_lat, s_pick_lon;
 static lv_timer_t *s_tick;
@@ -245,6 +262,111 @@ static void pick_cancel_cb(lv_event_t *e)
     pick_hide();
 }
 
+/* ---- typing an address on the panel ---- */
+
+#define FIND_DEBOUNCE_MS 600
+#define FIND_MIN_CHARS   3
+
+static void find_close(void)
+{
+    if (s_query_timer) {
+        lv_timer_del(s_query_timer);
+        s_query_timer = NULL;
+    }
+    if (s_find_box) lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Ask the phone. It owns the offline search index that came with its map, so
+ * this works with no signal — which is most of the point of typing here
+ * rather than on the phone. */
+static void send_query(lv_timer_t *t)
+{
+    (void)t;
+    s_query_timer = NULL;    /* one-shot */
+    if (!s_find_ta || !s_search_cb) return;
+    const char *q = lv_textarea_get_text(s_find_ta);
+    if (!q || strlen(q) < FIND_MIN_CHARS) return;
+    if (s_find_hint) {
+        lv_label_set_text(s_find_hint, "Looking...");
+        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_search_cb(q);
+}
+
+static void query_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_query_timer) lv_timer_del(s_query_timer);
+    s_query_timer = lv_timer_create(send_query, FIND_DEBOUNCE_MS, NULL);
+    lv_timer_set_repeat_count(s_query_timer, 1);
+}
+
+/* Enter on the keyboard: do not wait out the debounce. */
+static void query_ready_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_query_timer) {
+        lv_timer_del(s_query_timer);
+        s_query_timer = NULL;
+    }
+    send_query(NULL);
+}
+
+static void find_open_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_find_box) return;
+    pick_hide();
+    lv_textarea_set_text(s_find_ta, "");
+    lv_obj_clean(s_find_list);
+    lv_label_set_text(s_find_hint, "Type a street or a place");
+    lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_find_box);   /* over the zoom buttons */
+    lv_keyboard_set_textarea(s_find_kb, s_find_ta);
+}
+
+static void find_close_cb(lv_event_t *e) { (void)e; find_close(); }
+
+/* One of the results. Straight down the same path as a tap on the map: the
+ * phone is told where to go and does the routing. */
+static void hit_pressed_cb(lv_event_t *e)
+{
+    const int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= atomic_load(&s_nhits)) return;
+    const double lat = s_hits[idx].lat, lon = s_hits[idx].lon;
+    find_close();
+    if (s_dest_cb) s_dest_cb(lat, lon);
+}
+
+/* Rebuild the list from what the worker left us. LVGL task only. */
+static void refresh_results(void)
+{
+    if (!s_find_list || !atomic_exchange(&s_hits_fresh, false)) return;
+    lv_obj_clean(s_find_list);
+    const int n = atomic_load(&s_nhits);
+    if (n <= 0) {
+        lv_label_set_text(s_find_hint, "Nothing found");
+        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_add_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *b = lv_btn_create(s_find_list);
+        lv_obj_set_size(b, lv_pct(100), 46);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x1c2530), 0);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_add_event_cb(b, hit_pressed_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(l, lv_pct(100));
+        lv_obj_set_style_text_font(l, &aabridge_font_24, 0);
+        lv_label_set_text(l, s_hits[i].name);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+    }
+}
+
 /* Zoom, on the panel itself. The rider is the one looking at the map, so the
  * buttons change what is drawn immediately and the phone is told afterwards —
  * it is the only one that can fetch tiles for the new level. */
@@ -402,6 +524,7 @@ static void tick_cb(lv_timer_t *t)
     refresh_hud();
     refresh_guide();
     refresh_zoom();
+    refresh_results();
 
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
@@ -522,6 +645,77 @@ esp_err_t nav_screen_init(void)
     lv_label_set_text(no_lbl, LV_SYMBOL_CLOSE);
     lv_obj_center(no_lbl);
 
+    /* "FIND" opens the keyboard. Top right, above the zoom buttons — plain
+     * ASCII on purpose, like the zoom glyphs. */
+    lv_obj_t *find = lv_btn_create(s_screen);
+    lv_obj_set_size(find, 96, 54);
+    lv_obj_align(find, LV_ALIGN_TOP_RIGHT, -12, 10);
+    lv_obj_set_style_bg_color(find, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(find, LV_OPA_70, 0);
+    lv_obj_set_style_radius(find, 12, 0);
+    lv_obj_add_event_cb(find, find_open_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *find_lbl = lv_label_create(find);
+    lv_label_set_text(find_lbl, "FIND");
+    lv_obj_set_style_text_font(find_lbl, &aabridge_font_24, 0);
+    lv_obj_center(find_lbl);
+
+    /* The overlay: a line to type in, what came back, and a keyboard. */
+    s_find_box = lv_obj_create(s_screen);
+    lv_obj_set_size(s_find_box, NAV_SCREEN_W, NAV_SCREEN_H);
+    lv_obj_align(s_find_box, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(s_find_box, lv_color_hex(0x0c1116), 0);
+    lv_obj_set_style_bg_opa(s_find_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_find_box, 0, 0);
+    lv_obj_set_style_radius(s_find_box, 0, 0);
+    lv_obj_set_style_pad_all(s_find_box, 0, 0);
+    lv_obj_clear_flag(s_find_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+
+    s_find_ta = lv_textarea_create(s_find_box);
+    lv_obj_set_size(s_find_ta, 560, 56);
+    lv_obj_align(s_find_ta, LV_ALIGN_TOP_LEFT, 12, 10);
+    lv_textarea_set_one_line(s_find_ta, true);
+    lv_textarea_set_placeholder_text(s_find_ta, "street, cafe, address");
+    lv_obj_set_style_text_font(s_find_ta, &aabridge_font_24, 0);
+    lv_obj_add_event_cb(s_find_ta, query_changed_cb, LV_EVENT_VALUE_CHANGED,
+                        NULL);
+
+    lv_obj_t *find_x = lv_btn_create(s_find_box);
+    lv_obj_set_size(find_x, 90, 56);
+    lv_obj_align(find_x, LV_ALIGN_TOP_RIGHT, -12, 10);
+    lv_obj_set_style_bg_color(find_x, lv_color_hex(0x3A4450), 0);
+    lv_obj_add_event_cb(find_x, find_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *find_x_lbl = lv_label_create(find_x);
+    lv_label_set_text(find_x_lbl, "BACK");
+    lv_obj_set_style_text_font(find_x_lbl, &aabridge_font_24, 0);
+    lv_obj_center(find_x_lbl);
+
+    s_find_list = lv_obj_create(s_find_box);
+    lv_obj_set_size(s_find_list, NAV_SCREEN_W - 24, 150);
+    lv_obj_align(s_find_list, LV_ALIGN_TOP_LEFT, 12, 74);
+    lv_obj_set_style_bg_opa(s_find_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_find_list, 0, 0);
+    lv_obj_set_style_pad_all(s_find_list, 0, 0);
+    lv_obj_set_style_pad_row(s_find_list, 6, 0);
+    lv_obj_set_flex_flow(s_find_list, LV_FLEX_FLOW_COLUMN);
+
+    s_find_hint = lv_label_create(s_find_box);
+    lv_obj_align(s_find_hint, LV_ALIGN_TOP_LEFT, 14, 80);
+    lv_obj_set_style_text_color(s_find_hint, lv_color_hex(0x9AA7B4), 0);
+    lv_obj_set_style_text_font(s_find_hint, &aabridge_font_24, 0);
+    lv_label_set_text(s_find_hint, "");
+
+    s_find_kb = lv_keyboard_create(s_find_box);
+    lv_obj_set_size(s_find_kb, NAV_SCREEN_W, 240);
+    lv_obj_align(s_find_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    /* Montserrat 24, not our subsetted font: the keyboard's backspace,
+     * enter and hide keys are LV_SYMBOL glyphs from the FontAwesome range,
+     * and a font without them draws four empty boxes along the bottom row
+     * (the same trap as the zoom buttons, found the same way). */
+    lv_obj_set_style_text_font(s_find_kb, &lv_font_montserrat_24, 0);
+    lv_keyboard_set_textarea(s_find_kb, s_find_ta);
+    lv_obj_add_event_cb(s_find_kb, query_ready_cb, LV_EVENT_READY, NULL);
+
     /* Zoom buttons down the right edge, above the charge readout, with the
      * level between them so a press shows what it did. */
     /* Plain ASCII, not LV_SYMBOL_PLUS: the symbols are FontAwesome glyphs and
@@ -612,6 +806,15 @@ bool nav_screen_active(void) { return atomic_load(&s_active); }
 
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }
 void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb) { s_zoom_cb = cb; }
+void nav_screen_set_search_cb(nav_screen_search_cb_t cb) { s_search_cb = cb; }
+
+void nav_screen_set_results(const nav_search_hit_t *hits, size_t n)
+{
+    if (n > NAV_SEARCH_MAX) n = NAV_SEARCH_MAX;
+    if (hits && n) memcpy(s_hits, hits, n * sizeof(s_hits[0]));
+    atomic_store(&s_nhits, (int)n);
+    atomic_store(&s_hits_fresh, true);
+}
 
 void nav_screen_set_phone(bool connected)
 {

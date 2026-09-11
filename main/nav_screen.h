@@ -57,6 +57,24 @@ bool nav_screen_active(void);
 typedef void (*nav_screen_dest_cb_t)(double lat, double lon);
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
 
+/* Somewhere the phone found for a typed query. Names come from the offline
+ * search index the phone downloaded with its map, so this works with no
+ * signal — which is the point of having it on the panel at all. */
+#define NAV_SEARCH_MAX   6
+#define NAV_SEARCH_NAME  56
+typedef struct {
+    double lat, lon;
+    char   name[NAV_SEARCH_NAME];   /* UTF-8, NUL-terminated */
+} nav_search_hit_t;
+
+/* Show what the phone found (n == 0 means "nothing"), or clear the list. */
+void nav_screen_set_results(const nav_search_hit_t *hits, size_t n);
+
+/* The rider typed something to look for. Runs on the LVGL task, so the
+ * handler must only enqueue. */
+typedef void (*nav_screen_search_cb_t)(const char *query);
+void nav_screen_set_search_cb(nav_screen_search_cb_t cb);
+
 /* The rider's zoom buttons. Called with the level they asked for, already
  * clamped to what the composer can draw. */
 typedef void (*nav_screen_zoom_cb_t)(uint8_t zoom);

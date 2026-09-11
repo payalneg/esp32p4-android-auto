@@ -93,6 +93,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   StreamSubscription<String>? _linkSub;
   StreamSubscription<LatLon>? _huDestSub;
   StreamSubscription<int>? _huZoomSub;
+  StreamSubscription<String>? _huSearchSub;
 
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
@@ -153,6 +154,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     // the new level from what it holds; we are the only one who can fetch the
     // tiles for it.
     _huZoomSub = BleProxy.instance.navZoom.listen((z) => _feed?.setZoom(z));
+    // ...and look up what they typed there. The index is the one that came
+    // with the offline map, so this answers with no signal at all.
+    _huSearchSub = BleProxy.instance.navSearches.listen(_onHeadUnitSearch);
     _syncStreamer();
   }
 
@@ -163,6 +167,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     MapData.instance.removeListener(_onMapDataChanged);
     unawaited(_huDestSub?.cancel());
     unawaited(_huZoomSub?.cancel());
+    unawaited(_huSearchSub?.cancel());
     _linkSub?.cancel();
     _announceSub?.cancel();
     unawaited(_voice.stop());
@@ -229,6 +234,38 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
 
   /// Somewhere the rider tapped on the head unit. Treated exactly like a
   /// "navigate" link from another app: route there and start guiding.
+  /// Look up a query typed on the panel and send back what the index has.
+  ///
+  /// Coordinates typed as text are answered too — the same as the phone's own
+  /// search bar accepts them — so "50.06, 19.93" works on the panel.
+  Future<void> _onHeadUnitSearch(String q) async {
+    final hits = <({double lat, double lon, String name})>[];
+    final coord = parseCoordinates(q);
+    if (coord != null) {
+      hits.add((lat: coord.lat, lon: coord.lon, name: formatCoordinates(coord)));
+    }
+    final index = MapData.instance.index;
+    if (index != null) {
+      final from = _controller.lastFix?.position ??
+          LatLon(_map.camera.center.latitude, _map.camera.center.longitude);
+      final found = index.search(q, limit: kNavFoundMax * 3);
+      // Nearest first: on a panel with six rows, the right answer is almost
+      // always the one closest to the rider, not the first in the index.
+      found.sort((a, b) => haversineM(from, a.position)
+          .compareTo(haversineM(from, b.position)));
+      for (final h in found) {
+        if (hits.length >= kNavFoundMax) break;
+        final km = haversineM(from, h.position) / 1000.0;
+        hits.add((
+          lat: h.position.lat,
+          lon: h.position.lon,
+          name: '${h.display}  ${km < 10 ? km.toStringAsFixed(1) : km.round()} km',
+        ));
+      }
+    }
+    await BleProxy.instance.sendNavFound(hits);
+  }
+
   Future<void> _onHeadUnitDest(LatLon at) async {
     if (!mounted) return;
     if (!MapData.instance.isReady) {
@@ -1412,6 +1449,9 @@ class _ProxyHeadUnitLink implements HeadUnitLink {
 
   @override
   Stream<({int z, int x, int y})> get dropped => _ble.navDropped;
+
+  @override
+  Stream<void> get emptied => _ble.navEmptied;
 
   @override
   Future<NavFrameResult> sendTile(
