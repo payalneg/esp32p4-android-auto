@@ -39,6 +39,10 @@ class NavStatus {
   static const state = 0x10;
   static const frameAck = 0x11;
   static const tileAck = 0x12;
+
+  /// Nine bytes, not six: somewhere the rider picked on the head unit's own
+  /// map. See NAV_ST_DEST in main/ble_nav.h.
+  static const destination = 0x13;
 }
 
 /// FRAME_ACK results.
@@ -147,6 +151,7 @@ class NavStream {
 
   final _stateCtrl = StreamController<NavDisplayState>.broadcast();
   final _ackCtrl = StreamController<NavFrameResult>.broadcast();
+  final _destCtrl = StreamController<({double lat, double lon})>.broadcast();
 
   NavDisplayState _state = NavDisplayState.unknown;
   int _seq = 0;
@@ -155,6 +160,9 @@ class NavStream {
   /// What the head unit last told us about its screen.
   NavDisplayState get state => _state;
   Stream<NavDisplayState> get states => _stateCtrl.stream;
+
+  /// Destinations the rider chose on the head unit itself.
+  Stream<({double lat, double lon})> get destinations => _destCtrl.stream;
 
   /// Whether a frame is on the wire right now.
   bool get busy => _sending;
@@ -165,6 +173,16 @@ class NavStream {
     if (st != null) {
       _state = st;
       if (!_stateCtrl.isClosed) _stateCtrl.add(st);
+      return;
+    }
+    if (raw[0] == NavStatus.destination && raw.length >= 9) {
+      final bd = ByteData.sublistView(Uint8List.fromList(raw));
+      if (!_destCtrl.isClosed) {
+        _destCtrl.add((
+          lat: bd.getInt32(1, Endian.little) / 1e7,
+          lon: bd.getInt32(5, Endian.little) / 1e7,
+        ));
+      }
       return;
     }
     if ((raw[0] == NavStatus.frameAck || raw[0] == NavStatus.tileAck) &&
@@ -337,5 +355,6 @@ class NavStream {
     await _sub.cancel();
     await _stateCtrl.close();
     await _ackCtrl.close();
+    await _destCtrl.close();
   }
 }

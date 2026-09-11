@@ -56,6 +56,10 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted);
 bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
                         int64_t *y0, int64_t *y1);
 
+/* Where a point on the panel is on the ground — the inverse of what
+ * nav_map_render does, for picking a destination by tapping the map. */
+void nav_map_unproject(int x, int y, int w, int h, double *lat, double *lon);
+
 /* Slippy helpers, exposed for the debug command and the tests. */
 double nav_map_world_x(double lon, uint8_t zoom);
 double nav_map_world_y(double lat, uint8_t zoom);

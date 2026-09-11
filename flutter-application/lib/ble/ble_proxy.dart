@@ -14,6 +14,8 @@ import 'dart:typed_data';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../nav/geo.dart';
+
 import '../firmware/ota_info.dart';
 import 'ble_service.dart' show BleConnState;
 import 'file_ops.dart';
@@ -83,6 +85,7 @@ class BleProxy {
   Stream<Map<String, dynamic>> get helperEvents => _helperCtrl.stream;
   final _vescTargetCtrl = StreamController<VescTargetInfo>.broadcast();
   final _navStateCtrl = StreamController<NavDisplayState>.broadcast();
+  final _navDestCtrl = StreamController<LatLon>.broadcast();
   BleConnState _state = BleConnState.idle;
   String? _savedRemoteId;
   bool _supportsFm = false;
@@ -124,6 +127,9 @@ class BleProxy {
   /// What the head unit last said about its navigator screen.
   NavDisplayState get navState => _navState;
   Stream<NavDisplayState> get navStates => _navStateCtrl.stream;
+
+  /// Destinations the rider picked on the head unit's own map.
+  Stream<LatLon> get navDestinations => _navDestCtrl.stream;
   int get negotiatedMtu => _mtu;
 
   /// Wire up the port callback and prime the saved-device id from prefs. Call
@@ -236,6 +242,10 @@ class BleProxy {
         break;
       case IpcEvt.navState:
         _applyNavState(m);
+        break;
+      case IpcEvt.navDest:
+        _navDestCtrl.add(LatLon(
+            (m['lat'] as num).toDouble(), (m['lon'] as num).toDouble()));
         break;
       case IpcEvt.helperState:
       case IpcEvt.helperStatusFrame:

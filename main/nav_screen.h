@@ -52,6 +52,11 @@ void nav_screen_commit(void);
 void nav_screen_set_active(bool active);
 bool nav_screen_active(void);
 
+/* Called when the rider has picked somewhere to go by tapping the map and
+ * confirming it. Runs on the LVGL task, so the handler must only enqueue. */
+typedef void (*nav_screen_dest_cb_t)(double lat, double lon);
+void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
+
 /* Link/stream state, for the placeholder text. */
 void nav_screen_set_phone(bool connected);
 void nav_screen_set_streaming(bool streaming);

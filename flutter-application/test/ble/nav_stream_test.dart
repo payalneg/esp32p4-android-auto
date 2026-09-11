@@ -66,6 +66,16 @@ class _FakeChannel implements NavChannel {
         ms >> 8,
       ]);
 
+  /// Somewhere the rider tapped on the head unit's own map.
+  void destination(double lat, double lon) {
+    final b = Uint8List(9);
+    final bd = ByteData.sublistView(b);
+    b[0] = NavStatus.destination;
+    bd.setInt32(1, (lat * 1e7).round(), Endian.little);
+    bd.setInt32(5, (lon * 1e7).round(), Endian.little);
+    _notify.add(b);
+  }
+
   void state({required bool nav, required bool visible, int maxChunk = 509}) =>
       _notify.add(<int>[
         NavStatus.state,
@@ -230,6 +240,31 @@ void main() {
     expect(bd.getUint16(12, Endian.little), 550);
     // Nothing was waited on: the next position is a moment away anyway.
     expect(ch.data, isEmpty);
+  });
+
+  test('a destination picked on the head unit comes back', () async {
+    final seen = <({double lat, double lon})>[];
+    nav.destinations.listen(seen.add);
+
+    ch.destination(50.0619, 19.9368);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(seen.length, 1);
+    expect(seen.first.lat, closeTo(50.0619, 1e-6));
+    expect(seen.first.lon, closeTo(19.9368, 1e-6));
+  });
+
+  test('a nine-byte destination is not mistaken for an acknowledgement',
+      () async {
+    // Both ride the same characteristic and are told apart by the status
+    // byte; a destination must not resolve a frame that is in flight.
+    ch.autoAck = null;
+    final pending = nav.sendFrame(400, 240, _jpeg(100));
+    await Future<void>.delayed(Duration.zero);
+    ch.destination(50.0, 20.0);
+    await Future<void>.delayed(Duration.zero);
+    ch.ack(NavAck.ok, 1, 4);
+    expect((await pending).ok, isTrue);
   });
 
   test('stop and hello are single-byte controls', () async {

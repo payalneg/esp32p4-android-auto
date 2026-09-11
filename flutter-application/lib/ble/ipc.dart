@@ -91,6 +91,9 @@ class IpcEvt {
   /// or went away. Unsolicited; also sent in reply to [IpcCmd.navHello].
   static const navState = 'navState';
 
+  /// {lat, lon} — the rider picked somewhere to go on the head unit's map.
+  static const navDest = 'navDest';
+
   // Helper (ESP32-C3), all unsolicited.
   static const helperState = 'helperState'; // {state, fw, busy}
   static const helperStatusFrame = 'helperStatusFrame'; // {status}

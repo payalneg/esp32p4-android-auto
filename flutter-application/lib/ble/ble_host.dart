@@ -55,6 +55,7 @@ class BleTaskHandler extends TaskHandler {
   Timer? _consoleTimer;
   bool _consolePushOn = false;
   StreamSubscription<NavDisplayState>? _navSub;
+  StreamSubscription<({double lat, double lon})>? _navDestSub;
   Timer? _navIdleTimer;
   bool _navFast = false;
 
@@ -98,6 +99,7 @@ class BleTaskHandler extends TaskHandler {
     _consoleTimer?.cancel();
     _navIdleTimer?.cancel();
     await _navSub?.cancel();
+    await _navDestSub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
     await _consoleSub?.cancel();
@@ -131,6 +133,8 @@ class BleTaskHandler extends TaskHandler {
   void _rewireNav(BleConnState s) {
     unawaited(_navSub?.cancel());
     _navSub = null;
+    unawaited(_navDestSub?.cancel());
+    _navDestSub = null;
     if (s != BleConnState.connected) {
       _navIdleTimer?.cancel();
       _navIdleTimer = null;

@@ -43,6 +43,23 @@ void nav_map_set_view(double lat, double lon, uint8_t zoom, uint16_t heading_deg
     s_view.valid = true;
 }
 
+void nav_map_unproject(int x, int y, int w, int h, double *lat, double *lon)
+{
+    if (!s_view.valid) {
+        if (lat) *lat = 0;
+        if (lon) *lon = 0;
+        return;
+    }
+    const double n = (double)NAV_TILE_PX * (double)(1u << s_view.zoom);
+    const double wx = nav_map_world_x(s_view.lon, s_view.zoom) - w / 2.0 + x;
+    const double wy = nav_map_world_y(s_view.lat, s_view.zoom) - h / 2.0 + y;
+    if (lon) *lon = wx / n * 360.0 - 180.0;
+    if (lat) {
+        const double m = M_PI * (1.0 - 2.0 * wy / n);
+        *lat = atan(sinh(m)) * 180.0 / M_PI;
+    }
+}
+
 void nav_map_set_speed(uint16_t cm_per_s)
 {
     s_speed_ms = cm_per_s / 100.0;

@@ -101,6 +101,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   final Voice _voice = TtsVoice();
   StreamSubscription<Announcement>? _announceSub;
   StreamSubscription<String>? _linkSub;
+  StreamSubscription<LatLon>? _huDestSub;
 
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
@@ -161,6 +162,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       link: const _ProxyHeadUnitLink(),
     );
     _feed!.status.addListener(_onStreamStatus);
+    // The rider can pick somewhere to go on the head unit's own map; the
+    // phone is what routes and guides, so the tap comes back here.
+    _huDestSub = BleProxy.instance.navDestinations.listen(_onHeadUnitDest);
     _syncStreamer();
   }
 
@@ -174,6 +178,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     _streamer?.status.removeListener(_onStreamStatus);
     unawaited(_streamer?.dispose());
     _streamer = null;
+    unawaited(_huDestSub?.cancel());
     _feed?.status.removeListener(_onStreamStatus);
     unawaited(_feed?.dispose());
     _feed = null;
@@ -227,6 +232,21 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       }
     }
     setState(() {});
+  }
+
+  /// Somewhere the rider tapped on the head unit. Treated exactly like a
+  /// "navigate" link from another app: route there and start guiding.
+  Future<void> _onHeadUnitDest(LatLon at) async {
+    if (!mounted) return;
+    if (!MapData.instance.isReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t(context, 'nav.data.missing'))));
+      return;
+    }
+    if (await _ensureGps()) await _awaitFix(const Duration(seconds: 3));
+    if (!mounted) return;
+    await _controller.routeTo(at);
+    if (_controller.hasRoute) await _startNavigation();
   }
 
   /// A link held back for want of a graph is acted on once there is one.

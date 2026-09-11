@@ -1,5 +1,7 @@
 #include "nav_screen.h"
 
+#include "nav_map.h"
+
 #include <stdatomic.h>
 #include <string.h>
 
@@ -40,6 +42,10 @@ static lv_obj_t *s_speed_lbl;
 static lv_obj_t *s_speed_unit;
 static lv_obj_t *s_batt_lbl;
 static lv_obj_t *s_cc_img;
+static lv_obj_t *s_pick_box;
+static lv_obj_t *s_pick_lbl;
+static nav_screen_dest_cb_t s_dest_cb;
+static double s_pick_lat, s_pick_lon;
 static lv_timer_t *s_tick;
 
 static uint16_t *s_fb[2];
@@ -157,6 +163,44 @@ static void refresh_hud(void)
         if (cc) lv_obj_clear_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
         else    lv_obj_add_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+/* Picking a destination on the panel itself: tap the map, confirm, and the
+ * phone is told where to route. The head unit knows exactly which patch of
+ * ground each pixel is (it composed the view), so the tap needs nothing from
+ * the phone to become a coordinate. */
+static void pick_hide(void)
+{
+    if (s_pick_box) lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void pick_go_cb(lv_event_t *e)
+{
+    (void)e;
+    pick_hide();
+    if (s_dest_cb) s_dest_cb(s_pick_lat, s_pick_lon);
+}
+
+static void pick_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    pick_hide();
+}
+
+static void map_pressed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_pick_box) return;
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    nav_map_unproject(p.x, p.y, NAV_SCREEN_W, NAV_SCREEN_H,
+                      &s_pick_lat, &s_pick_lon);
+    char buf[64];
+    snprintf(buf, sizeof buf, "Go to %.5f, %.5f?", s_pick_lat, s_pick_lon);
+    lv_label_set_text(s_pick_lbl, buf);
+    lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void set_status(const char *text)
@@ -291,6 +335,44 @@ esp_err_t nav_screen_init(void)
     s_batt_lbl = hud_text(right, &lv_font_Antonio_Regular_64, 0xFFFFFF);
     lv_label_set_text(hud_text(right, &lv_font_Antonio_Regular_22, 0xC8D0D8), "%");
 
+    /* Tap anywhere on the map to offer it as a destination. */
+    lv_obj_add_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_img, map_pressed_cb, LV_EVENT_CLICKED, NULL);
+
+    s_pick_box = lv_obj_create(s_screen);
+    lv_obj_set_size(s_pick_box, 560, 74);
+    lv_obj_align(s_pick_box, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_bg_color(s_pick_box, lv_color_hex(0x1c2530), 0);
+    lv_obj_set_style_bg_opa(s_pick_box, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(s_pick_box, 0, 0);
+    lv_obj_set_style_radius(s_pick_box, 12, 0);
+    lv_obj_set_style_pad_all(s_pick_box, 8, 0);
+    lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
+
+    s_pick_lbl = lv_label_create(s_pick_box);
+    lv_obj_align(s_pick_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_text_color(s_pick_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_pick_lbl, &aabridge_font_24, 0);
+
+    lv_obj_t *go = lv_btn_create(s_pick_box);
+    lv_obj_set_size(go, 96, 56);
+    lv_obj_align(go, LV_ALIGN_RIGHT_MID, -66, 0);
+    lv_obj_set_style_bg_color(go, lv_color_hex(0x1E64DC), 0);
+    lv_obj_add_event_cb(go, pick_go_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *go_lbl = lv_label_create(go);
+    lv_label_set_text(go_lbl, "GO");
+    lv_obj_center(go_lbl);
+
+    lv_obj_t *no = lv_btn_create(s_pick_box);
+    lv_obj_set_size(no, 56, 56);
+    lv_obj_align(no, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(no, lv_color_hex(0x3A4450), 0);
+    lv_obj_add_event_cb(no, pick_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *no_lbl = lv_label_create(no);
+    lv_label_set_text(no_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_center(no_lbl);
+
     s_tick = lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
     bsp_display_unlock();
@@ -315,6 +397,8 @@ void nav_screen_commit(void) { atomic_store(&s_pending, true); }
 
 void nav_screen_set_active(bool active) { atomic_store(&s_active, active); }
 bool nav_screen_active(void) { return atomic_load(&s_active); }
+
+void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }
 
 void nav_screen_set_phone(bool connected)
 {

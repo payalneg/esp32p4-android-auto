@@ -65,6 +65,17 @@ the one recorded in the release commit.
   seconds, and the app cancels a queued connection before asking for another
   so the second link stops happening in the first place.
 
+### Picking where to go on the head unit
+
+- Tap the navigator map on the head unit and it offers that spot as a
+  destination; confirm and the phone routes there and starts guiding. The
+  head unit composed the view, so it already knows which patch of ground
+  every pixel is — the tap becomes a coordinate without asking the phone
+  anything. It travels back as a nine-byte notification on the same
+  characteristic the tiles use.
+- Groundwork for entering an address there too: this is the reverse channel
+  that was missing, and the search will use it.
+
 ### A map that never goes bare, and moves
 
 - The rider's speed and battery charge now sit over the navigator map, in the

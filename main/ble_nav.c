@@ -7,6 +7,7 @@
 
 #include "ble_nav.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "driver/jpeg_decode.h"
@@ -45,6 +46,7 @@ static const char *TAG = "ble_nav";
 #define NAV_ST_STATE   0x10
 #define NAV_ST_ACK     0x11
 #define NAV_ST_TILE_ACK 0x12
+#define NAV_ST_DEST     0x13
 
 #define NAV_BEGIN_LEN  (1 + 2 + 2 + 4 + 2)
 #define NAV_END_LEN    (1 + 2)
@@ -70,11 +72,14 @@ typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
  * acknowledgement before it starts the next. */
 typedef enum { RX_FRAME, RX_TILE } rx_kind_t;
 
-typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT } ev_kind_t;
+typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
+               EV_DEST } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
     uint8_t   reason;   /* EV_REJECT */
+    int32_t   lat_e7;   /* EV_DEST */
+    int32_t   lon_e7;
 } nav_evt_t;
 
 static QueueHandle_t s_q;
@@ -129,6 +134,37 @@ static void notify(uint8_t status, uint8_t a, uint16_t b, uint16_t c)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     ESP_LOGW(TAG, "notify status=0x%02x gave up", status);
+}
+
+/* Somewhere to go, picked on the panel. Nine bytes rather than the usual six
+ * — the phone tells the two apart by the status byte. */
+static void notify_dest(int32_t lat_e7, int32_t lon_e7)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) return;
+    uint8_t f[9] = { NAV_ST_DEST };
+    memcpy(&f[1], &lat_e7, 4);
+    memcpy(&f[5], &lon_e7, 4);
+    for (int attempt = 0; attempt < 200; attempt++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
+        if (om && ble_gatts_notify_custom(s_conn, s_ctrl_handle, om) == 0) return;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGW(TAG, "destination notify gave up");
+}
+
+/* From the LVGL task, so it only enqueues — the notify happens on the worker
+ * like every other one. */
+static void on_dest_picked(double lat, double lon)
+{
+    if (!s_q) return;
+    nav_evt_t ev = {
+        .kind = EV_DEST,
+        .lat_e7 = (int32_t)lround(lat * 1e7),
+        .lon_e7 = (int32_t)lround(lon * 1e7),
+    };
+    xQueueSend(s_q, &ev, 0);
+    ESP_LOGI(TAG, "destination picked on the panel: %.5f, %.5f", lat, lon);
 }
 
 static void notify_state(void)
@@ -425,6 +461,9 @@ static void worker(void *arg)
             case EV_STATE:
                 notify_state();
                 break;
+            case EV_DEST:
+                notify_dest(ev.lat_e7, ev.lon_e7);
+                break;
         }
     }
 }
@@ -442,6 +481,7 @@ void ble_nav_init(void)
     }
     nav_tiles_init();
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
+    nav_screen_set_dest_cb(on_dest_picked);
     /* 8 KiB, like the other two workers on this link. Four was enough when
      * this task only memcpy'd, but it now runs libpng — whose simplified read
      * API is generous with the stack — and composes the view on top. A task

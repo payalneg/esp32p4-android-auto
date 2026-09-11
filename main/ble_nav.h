@@ -27,6 +27,10 @@
  *                     c = largest DATA write we accept
  *     0x11 FRAME_ACK  a = result (NAV_ACK_*), b = seq, c = decode+scale ms
  *     0x12 TILE_ACK   a = result (NAV_ACK_*), b = seq, c = decode ms
+ *     0x13 DEST       [u8 status][i32 lat_e7][i32 lon_e7] — nine bytes, not
+ *                     the usual six: the rider picked somewhere to go by
+ *                     tapping the head unit's own map. The phone routes to it
+ *                     and starts guiding.
  *
  *   DATA write (phone -> P4): raw bytes of whatever BEGIN opened — a picture
  *   for FRAME_BEGIN, a map tile for TILE_BEGIN.
