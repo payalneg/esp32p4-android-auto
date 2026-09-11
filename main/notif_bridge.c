@@ -502,26 +502,53 @@ static bool bridge_bind(uint16_t conn)
     return true;
 }
 
+/* One flatten buffer for every write that lands on this service, and static
+ * on purpose. Each branch below used to declare its own — 260 + 512 + 512 +
+ * 260 bytes — and the compiler laid them out side by side, so ~1.5 KB of the
+ * nimble_host task's 4 KB stack went on buffers that are never live together.
+ * A notification arriving while the navigator streamed tiles was then enough
+ * to trip the stack guard: "Core 0 panic'ed (Stack protection fault),
+ * detected in task nimble_host". Every write here is delivered on the
+ * nimble_host task and consumed before the callback returns (all four callees
+ * copy what they keep), so one buffer serves them all.
+ *
+ * Big enough for a full MTU-512 write; the notification and file branches cap
+ * themselves lower, as they always did. */
+static uint8_t s_wbuf[BLE_OTA_MAX_DATA + 3];
+#define NB_SMALL_WRITE 260      /* notification chunks and file-manager writes */
+_Static_assert(sizeof(s_wbuf) >= BLE_NAV_MAX_DATA + 3, "nav write must fit");
+_Static_assert(sizeof(s_wbuf) >= NB_SMALL_WRITE, "small writes must fit");
+
+/* The nimble_host task, remembered the first time it calls in here: it is the
+ * one that overflowed, so its margin is worth watching (navstat prints it). */
+static TaskHandle_t s_host_task;
+
+size_t notif_bridge_host_stack_free(void)
+{
+    if (!s_host_task) return 0;
+    return (size_t)uxTaskGetStackHighWaterMark(s_host_task);
+}
+
 static int access_cb(uint16_t conn, uint16_t attr,
                      struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     (void)arg;
+    if (!s_host_task) s_host_task = xTaskGetCurrentTaskHandle();
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && !bridge_bind(conn)) {
         /* Another link owns the bridge right now. Say so rather than let two
          * clients interleave into one transfer. */
         return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_in_handle) {
-        uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) {
+        if (pkt_len > NB_SMALL_WRITE) {
             ESP_LOGW(TAG, "write %u > buf", (unsigned)pkt_len);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, NB_SMALL_WRITE, &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        reasm_feed(buf, out_len);
+        reasm_feed(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_time_handle) {
@@ -547,14 +574,13 @@ static int access_cb(uint16_t conn, uint16_t attr,
          * for a full MTU-512 write (payload ≤ BLE_OTA_MAX_DATA = 509): the
          * app learns that cap from READY and sends the biggest chunk the
          * negotiated MTU allows — half the ATT round trips of the old 244. */
-        uint8_t  buf[BLE_OTA_MAX_DATA + 3];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (pkt_len > sizeof(s_wbuf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, sizeof(s_wbuf), &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (attr == s_ota_ctrl_handle) ble_ota_ctrl_write(buf, out_len);
-        else                           ble_ota_data_write(buf, out_len);
+        if (attr == s_ota_ctrl_handle) ble_ota_ctrl_write(s_wbuf, out_len);
+        else                           ble_ota_data_write(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
@@ -562,28 +588,27 @@ static int access_cb(uint16_t conn, uint16_t attr,
         /* Navigator frame control / JPEG bytes. Same flatten-and-forward
          * shape as OTA and sized the same way (payload <= BLE_NAV_MAX_DATA):
          * a frame is ~40 writes, so the chunk size is most of the frame rate. */
-        uint8_t  buf[BLE_NAV_MAX_DATA + 3];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (pkt_len > BLE_NAV_MAX_DATA + 3) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, BLE_NAV_MAX_DATA + 3,
+                                     &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (attr == s_nav_ctrl_handle) ble_nav_ctrl_write(buf, out_len);
-        else                           ble_nav_data_write(buf, out_len);
+        if (attr == s_nav_ctrl_handle) ble_nav_ctrl_write(s_wbuf, out_len);
+        else                           ble_nav_data_write(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
         (attr == s_file_ctrl_handle || attr == s_file_data_handle)) {
         /* File manager control / upload-data channel. Same flatten-and-forward
          * shape as OTA; FS work + notifies happen on ble_files' worker task. */
-        uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (pkt_len > NB_SMALL_WRITE) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, NB_SMALL_WRITE, &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (attr == s_file_ctrl_handle) ble_files_ctrl_write(buf, out_len);
-        else                            ble_files_data_write(buf, out_len);
+        if (attr == s_file_ctrl_handle) ble_files_ctrl_write(s_wbuf, out_len);
+        else                            ble_files_data_write(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_ota_handle) {

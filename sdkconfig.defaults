@@ -208,6 +208,13 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # PSRAM here (MEM_ALLOC_MODE_EXTERNAL), so the extra 3 KiB is free.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+# Every GATT write on the NotifBridge service — notifications, icons, OTA
+# chunks, file uploads, navigator tiles — is parsed on the nimble_host task,
+# and with a 512 B MTU those parses are deep. The stock 4 KiB overflowed on
+# hardware (stack-protection panic on core 0 while a notification arrived
+# mid-tile-stream). The flatten buffers moved off that stack, and this gives
+# the rest of the path room to spare.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 
 # ===== H.264 SW decoder =====
 # IRAM-resident hot path (~22 KiB) leaves too little internal SRAM heap
