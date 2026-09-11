@@ -786,14 +786,14 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_power_unit = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_power_unit, "kW");
     lv_label_set_long_mode(ui->dashboard_Supermoto_power_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_power_unit, 443, 134);
-    lv_obj_set_size(ui->dashboard_Supermoto_power_unit, 19, 16);
+    lv_obj_set_pos(ui->dashboard_Supermoto_power_unit, 447, 134);
+    lv_obj_set_size(ui->dashboard_Supermoto_power_unit, 26, 16);
 
     //Write style for dashboard_Supermoto_power_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_power_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Supermoto_power_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Supermoto_power_unit, lv_color_hex(0x8B909A), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Supermoto_power_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Supermoto_power_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Supermoto_power_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Supermoto_power_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Supermoto_power_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1316,14 +1316,14 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_trip_unit = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_trip_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Supermoto_trip_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_trip_unit, 256, 402);
-    lv_obj_set_size(ui->dashboard_Supermoto_trip_unit, 20, 18);
+    lv_obj_set_pos(ui->dashboard_Supermoto_trip_unit, 258, 402);
+    lv_obj_set_size(ui->dashboard_Supermoto_trip_unit, 24, 18);
 
     //Write style for dashboard_Supermoto_trip_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Supermoto_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Supermoto_trip_unit, lv_color_hex(0x6A6F78), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Supermoto_trip_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Supermoto_trip_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Supermoto_trip_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Supermoto_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Supermoto_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1406,14 +1406,14 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_odo_unit = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_odo_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Supermoto_odo_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_odo_unit, 349, 402);
-    lv_obj_set_size(ui->dashboard_Supermoto_odo_unit, 20, 18);
+    lv_obj_set_pos(ui->dashboard_Supermoto_odo_unit, 352, 402);
+    lv_obj_set_size(ui->dashboard_Supermoto_odo_unit, 24, 18);
 
     //Write style for dashboard_Supermoto_odo_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Supermoto_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Supermoto_odo_unit, lv_color_hex(0x6A6F78), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Supermoto_odo_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Supermoto_odo_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Supermoto_odo_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Supermoto_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Supermoto_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);

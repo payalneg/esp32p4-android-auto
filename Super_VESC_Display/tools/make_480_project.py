@@ -86,6 +86,160 @@ FONT_KEEP_FAMILIES = {"Antonio_Regular", "DSEG7Classic_Regular",
 FONT_MIN_PX = 14
 
 
+# Per-widget decisions the arithmetic cannot make.
+#
+# Some things do not survive a 480-wide screen no matter how the boxes are
+# scaled — a six-item status bar, or a full-width warning banner sitting on top
+# of it. Those are laid out here explicitly, in the same 480-space the rest of
+# the script produces. This is the place to record a design call; everything
+# here is overridable by hand in GUI Guider afterwards.
+#
+# Keys: x, y, w, h, font (size), family, hidden.
+def _classic_bottom_strip():
+    """The five-column readout strip along the bottom of the Classic screens.
+
+    At 800 px each column is 160 wide and holds a caption, an Antonio-40 value
+    and a unit label to the right of it. Scaled to 96 px the value alone needs
+    the whole column, which is why the units ended up underneath the digits.
+    Laid out here for the narrow screen instead: a smaller value font, and
+    fixed slots for value and unit."""
+    cols = [
+        ("col_voltage_label", "Voltage_text",  "col_v_label"),
+        ("col_trip_label",    "TRIP_text",     "col_trip_unit"),
+        ("col_odo_label",     "odo_text",      "col_odo_unit"),
+        ("col_mtmp_label",    "temp_mot_text", "col_mtmp_unit"),
+        ("col_ctmp_label",    "temp_esc_text", "col_ctmp_unit"),
+    ]
+    rules = {}
+    W = 96
+    for i, (cap, val, unit) in enumerate(cols):
+        x = i * W
+        # "M·TEMP" and "C·TEMP" keep font 18: the middot (U+00B7) is only in
+        # the sizes the 800 project already used it at, and a caption stepped
+        # to 16 renders it as a tofu box. GUI Guider exports a font with
+        # exactly the glyphs the project asks for at that size.
+        cap_font = 18 if "·" in cap or cap.endswith("tmp_label") else 16
+        rules[cap]  = {"x": x,      "w": W,  "font": cap_font}
+        rules[val]  = {"x": x + 2,  "w": 62, "font": 32}   # Antonio
+        rules[unit] = {"x": x + 66, "w": 28, "font": 16}
+    # The average-speed readout shares the last column with C-TEMP; only one of
+    # the two is visible at a time.
+    x = 4 * W
+    rules["col_avg_label"] = {"x": x,      "w": W,  "font": 11}
+    rules["col_avg_value"] = {"x": x + 2,  "w": 62, "font": 32}
+    rules["col_avg_unit"]  = {"x": x + 66, "w": 28, "font": 11}
+    return rules
+
+
+# Per-widget decisions the arithmetic cannot make.
+#
+# Some things do not survive a 480-wide screen no matter how the boxes are
+# scaled: a six-item status bar, a full-width warning banner sitting on top of
+# it, or a column that has to hold a value and its unit side by side in 108 px.
+# Those are laid out here explicitly, in the same 480-space the rest of the
+# script produces. This is the place to record a design call; everything here
+# can still be moved by hand in GUI Guider afterwards.
+#
+# Keys: x, y, w, h, font (size), hidden.
+SQUARE_OVERRIDES = {
+    # Status bar. At 800 it holds VESC | MODE | uptime | STATISTICS | clock |
+    # SETTINGS | BT. Six of those fit across 480 at font 16; the clock does
+    # not, and the firmware hides it anyway (ENABLE_WALL_CLOCK=0), so it is
+    # hidden rather than left to overlap. The red "ESC NOT CONNECTED" banner
+    # moves out of the bar and onto the speed column, where there is room.
+    "status_bar": {
+        "status_vesc":       {"x": 6,   "w": 52,  "font": 16},
+        "mode_text":         {"x": 62,  "w": 74,  "font": 16},
+        "uptime_text":       {"x": 140, "w": 84,  "font": 16},
+        "statistics_button": {"x": 228, "w": 116, "font": 16},
+        "Settings_text":     {"x": 350, "w": 100, "font": 16},
+        "status_bt":         {"x": 452, "w": 26,  "font": 16},
+        "cur_time_label":    {"hidden": True},
+        # Antonio 22 carries capitals and digits in the subsetted firmware
+        # font, so the warning keeps its typeface — it just stops covering
+        # the status bar.
+        "esc_not_connected_text": {"x": 110, "y": 40, "w": 260, "h": 26},
+    },
+
+    # The two side columns are 108 px wide on the square panel (the separators
+    # land at 108 and 372). A value and its unit cannot sit side by side in
+    # that, so the RANGE and MAX readouts stack caption over value instead.
+    "side_columns": {
+        "battery_label":       {"x": 6,   "w": 100, "font": 16},
+        "Battery_proc_text":   {"x": 6,   "w": 70,  "font": 50},   # Antonio
+        "battery_pct":         {"x": 78,  "y": 96,  "w": 28, "font": 16},
+        "Ah_text":             {"x": 6,   "w": 100, "font": 16},
+        "battery_range_label": {"x": 4,   "y": 362, "w": 100, "h": 14,
+                                "font": 12},
+        "Range_text":          {"x": 4,   "y": 376, "w": 100, "h": 26,
+                                "font": 18},
+
+        "power_label":         {"x": 374, "w": 102, "font": 16},
+        "power_value":         {"x": 374, "w": 70,  "font": 50},   # Antonio
+        "power_unit":          {"x": 448, "y": 96,  "w": 28, "font": 16},
+        "Current_text":        {"x": 374, "w": 102, "font": 16},
+        "power_max_label":     {"x": 376, "y": 362, "w": 100, "h": 14,
+                                "font": 12},
+        "power_max_val":       {"x": 376, "y": 376, "w": 100, "h": 26,
+                                "font": 18},
+
+        # The cruise-control readout and the max-speed caption ride with the
+        # speed column in the middle.
+        "Speed_cc_text":       {"x": 300, "w": 60,  "font": 40},   # Antonio
+        "speed_max":           {"x": 190, "w": 84,  "font": 16},
+    },
+
+    "bottom_strip": _classic_bottom_strip(),
+
+    # Classic Max adds a row of session maxima between the gauges and the
+    # readout strip. At 800 it is caption + value laid out sideways three
+    # times; in the 264 px the square screen leaves between the separators
+    # they stack instead, two lines each.
+    # Lamborghini/Supermoto survive the squeeze almost intact; these are the
+    # spots where a unit label ends up on top of its value or off its panel.
+    "lambo_units": {
+        "range_unit": {"x": 458, "y": 266, "w": 20, "font": 11},
+        "AMPS_text":  {"x": 8,   "w": 92,  "font": 24},
+        # Three LED + caption pairs share the bottom-left corner. Keeping each
+        # LED's own size (they are round) and scaling only their centres puts
+        # the captions under the next LED along, so the pairs are spaced out
+        # by hand here.
+        "led_tt_cruise_lbl": {"x": 4,   "w": 14},
+        "tt_cruise_lbl":     {"x": 20,  "w": 30, "font": 11},
+        "led_tt_fault_lbl":  {"x": 54,  "w": 14},
+        "tt_fault_lbl":      {"x": 70,  "w": 30, "font": 11},
+        "led_status_bt":     {"x": 104, "w": 14},
+        "status_bt":         {"x": 120, "w": 26, "font": 11},
+        "TRIP_text": {"x": 222, "w": 30, "font": 12},
+        "trip_unit": {"x": 254, "w": 24, "font": 11},
+        "odo_text":  {"x": 282, "w": 42, "font": 12},
+        "odo_unit":  {"x": 326, "w": 24, "font": 11},
+    },
+    "supermoto_units": {
+        "trip_unit": {"x": 258, "w": 24, "font": 11},
+        "odo_unit":  {"x": 352, "w": 24, "font": 11},
+        "power_unit": {"x": 447, "w": 26, "font": 11},
+    },
+
+    "classic_max_row": {
+        "max_power_label": {"x": 114, "y": 360, "w": 84, "h": 14, "font": 12},
+        "max_power_text":  {"x": 114, "y": 374, "w": 84, "h": 26, "font": 18},
+        "max_speed_label": {"x": 202, "y": 360, "w": 84, "h": 14, "font": 12},
+        "max_speed_text":  {"x": 202, "y": 374, "w": 84, "h": 26, "font": 18},
+        "max_reset_btn":   {"x": 292, "y": 366, "w": 76, "h": 28, "font": 16},
+    },
+}
+
+# Which screens get which override group.
+SQUARE_OVERRIDE_SCREENS = {
+    "dashboard_Classic":     ["status_bar", "side_columns", "bottom_strip"],
+    "dashboard_Classic_Max": ["status_bar", "side_columns", "bottom_strip",
+                              "classic_max_row"],
+    "dashboard_Lamborghini": ["lambo_units"],
+    "dashboard_Supermoto":   ["supermoto_units"],
+}
+
+
 # Widgets that must not be squeezed on one axis: their size is kept and their
 # centre is moved instead.
 KEEP_ASPECT = {
@@ -129,6 +283,7 @@ class Geometry:
     def __init__(self, x, y, w, h, child_ratio):
         self.x, self.y, self.w, self.h = x, y, w, h
         self.child_ratio = child_ratio
+        self.hidden = False
 
 
 def transform(kind, x, y, w, h, ratio, parent_w):
@@ -312,6 +467,50 @@ def walk_front(screen, ratio, parent_w, geo_map, prefix, boxes, fonts):
         walk_front(w, g.child_ratio, g.w, geo_map, prefix, boxes, fonts)
 
 
+def apply_overrides(screen, geo_map, boxes):
+    """Apply the hand-written SQUARE_OVERRIDES for this screen, after the
+    arithmetic has run, so a design call always wins."""
+    groups = SQUARE_OVERRIDE_SCREENS.get(screen["name"], [])
+    if not groups:
+        return
+    rules = {}
+    for g in groups:
+        rules.update(SQUARE_OVERRIDES.get(g, {}))
+
+    by_name = {b["name"]: b for b in boxes}
+    for w in screen.get("list") or []:
+        rule = rules.get(w.get("name"))
+        if not rule:
+            continue
+        full = screen["name"] + "_" + w["name"]
+        g = geo_map.get(full)
+
+        if rule.get("hidden"):
+            w["visible"] = False
+            if g:
+                g.hidden = True
+            by_name.pop(full, None)
+            boxes[:] = [b for b in boxes if b["name"] != full]
+            continue
+
+        for key, field in (("x", "left"), ("y", "top"),
+                           ("w", "width"), ("h", "height")):
+            if key in rule:
+                w[field] = rule[key]
+                if g:
+                    setattr(g, {"x": "x", "y": "y", "w": "w", "h": "h"}[key],
+                            rule[key])
+        if "font" in rule:
+            set_widget_font(w, rule["font"])
+        if "family" in rule:
+            for st in w.get("style") or []:
+                if "font_family" in st:
+                    st["font_family"] = rule["family"]
+        if full in by_name:
+            b = by_name[full]
+            b["new"] = (w["left"], w["top"], w["width"], w["height"])
+
+
 def apply_fonts(node, font_by_name):
     for w in node.get("widgets") or []:
         new = font_by_name.get(w.get("name"))
@@ -374,6 +573,7 @@ def rewrite_project(out_project):
         boxes = []
         walk_front(screen, ratio, NEW_W, geo_map, screen["name"] + "_", boxes,
                    font_changes)
+        apply_overrides(screen, geo_map, boxes)
         boxes_by_screen[screen["name"]] = boxes
 
     proj["Application"]["screen"] = [s for s in proj["Application"]["screen"]
@@ -403,10 +603,24 @@ def rewrite_project(out_project):
     # the stepped sizes have to land there too or GUI Guider would regenerate
     # the original ones.
     font_by_name = {name: new for name, _f, _old, new, _t in font_changes}
+    # Overrides win over the stepping above.
+    for screen in proj["FrontJson"]:
+        for grp in SQUARE_OVERRIDE_SCREENS.get(screen["name"], []):
+            for wname, rule in SQUARE_OVERRIDES.get(grp, {}).items():
+                if "font" in rule:
+                    font_by_name[screen["name"] + "_" + wname] = rule["font"]
     for screen in proj["Application"]["screen"]:
         apply_fonts(screen, font_by_name)
 
-    return geo_map, screens, boxes_by_screen, font_by_name, font_changes
+    hidden = tuple(
+        screen["name"] + "_" + wname
+        for screen in proj["FrontJson"]
+        for grp in SQUARE_OVERRIDE_SCREENS.get(screen["name"], [])
+        for wname, rule in SQUARE_OVERRIDES.get(grp, {}).items()
+        if rule.get("hidden"))
+
+    return (geo_map, screens, boxes_by_screen, font_by_name, font_changes,
+            hidden)
 
 
 POS_RE = re.compile(r"(lv_obj_set_pos\(ui->([A-Za-z0-9_]+),\s*)(-?\d+)(,\s*)(-?\d+)(\))")
@@ -419,7 +633,8 @@ FONT_RE = re.compile(
 PAIR_RE = re.compile(r"\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}")
 
 
-def rewrite_c(src, geo_map, screens, ratio, font_by_name=None):
+def rewrite_c(src, geo_map, screens, ratio, font_by_name=None,
+              hidden=()):
     """Rewrite one generated .c so its geometry matches the new project."""
     def fix_pos(m):
         head, name, x, mid, y, tail = m.groups()
@@ -458,6 +673,23 @@ def rewrite_c(src, geo_map, screens, ratio, font_by_name=None):
     out = SIZE_RE.sub(fix_size, out)
     out = POINTS_RE.sub(fix_points, out)
     out = FONT_RE.sub(fix_font, out)
+
+    # Widgets an override hides: GUI Guider emits the flag itself for
+    # visible:false, but this file was generated from the 800 project, so add
+    # it next to the widget's own set_size call.
+    for name in hidden:
+        marker = "lv_obj_set_size(ui->%s," % name
+        i = out.find(marker)
+        if i < 0:
+            continue
+        eol = out.find("\n", i)
+        if eol < 0:
+            continue
+        if "lv_obj_add_flag(ui->%s, LV_OBJ_FLAG_HIDDEN)" % name in out:
+            continue
+        out = (out[:eol + 1]
+               + "    lv_obj_add_flag(ui->%s, LV_OBJ_FLAG_HIDDEN);\n" % name
+               + out[eol + 1:])
     return out
 
 
@@ -486,7 +718,8 @@ MicroPython/
 """
 
 
-def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None):
+def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None,
+                   hidden=()):
     src = SRC_GENERATED
     dst = os.path.join(out_dir, "generated")
     if os.path.isdir(dst):
@@ -510,7 +743,8 @@ def copy_generated(out_dir, geo_map, screens, ratio, font_by_name=None):
         path = os.path.join(dst, fname)
         with open(path, "r", encoding="utf-8", errors="surrogateescape") as fh:
             src_text = fh.read()
-        new_text = rewrite_c(src_text, geo_map, screens, ratio, font_by_name)
+        new_text = rewrite_c(src_text, geo_map, screens, ratio, font_by_name,
+                             hidden)
         if new_text != src_text:
             with open(path, "w", encoding="utf-8",
                       errors="surrogateescape") as fh:
@@ -636,7 +870,7 @@ def main():
     out_project = os.path.join(args.out_dir,
                                NEW_PROJECT_NAME + ".guiguider")
     if args.report_only:
-        _, _, boxes, _fonts, changes = rewrite_project(None)
+        _, _, boxes, _fonts, changes, _hidden = rewrite_project(None)
         print_report(boxes, changes)
         return
 
@@ -646,10 +880,11 @@ def main():
                  % os.path.relpath(out_project, REPO_ROOT))
 
     os.makedirs(args.out_dir, exist_ok=True)
-    geo_map, screens, boxes, font_by_name, changes = rewrite_project(out_project)
+    (geo_map, screens, boxes, font_by_name, changes,
+     hidden) = rewrite_project(out_project)
     with open(SRC_PROJECT, "r", encoding="utf-8") as fh:
         ratio = NEW_W / float(json.load(fh)["projectSettings"]["resolution"]["width"])
-    copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name)
+    copy_generated(args.out_dir, geo_map, screens, ratio, font_by_name, hidden)
     print_report(boxes, changes)
 
 

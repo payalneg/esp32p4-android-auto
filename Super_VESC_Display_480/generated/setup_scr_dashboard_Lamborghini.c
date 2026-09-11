@@ -769,14 +769,14 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_range_unit = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_range_unit, "km");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_range_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_range_unit, 452, 266);
-    lv_obj_set_size(ui->dashboard_Lamborghini_range_unit, 17, 16);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_range_unit, 458, 266);
+    lv_obj_set_size(ui->dashboard_Lamborghini_range_unit, 20, 16);
 
     //Write style for dashboard_Lamborghini_range_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_range_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Lamborghini_range_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Lamborghini_range_unit, lv_color_hex(0x6A6F78), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_range_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_range_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Lamborghini_range_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Lamborghini_range_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Lamborghini_range_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1124,15 +1124,15 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_led_tt_cruise_lbl = lv_led_create(ui->dashboard_Lamborghini);
     lv_led_set_brightness(ui->dashboard_Lamborghini_led_tt_cruise_lbl, 255);
     lv_led_set_color(ui->dashboard_Lamborghini_led_tt_cruise_lbl, lv_color_hex(0x4ADE80));
-    lv_obj_set_pos(ui->dashboard_Lamborghini_led_tt_cruise_lbl, 10, 451);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_led_tt_cruise_lbl, 4, 451);
     lv_obj_set_size(ui->dashboard_Lamborghini_led_tt_cruise_lbl, 14, 14);
 
     //Write codes dashboard_Lamborghini_tt_cruise_lbl
     ui->dashboard_Lamborghini_tt_cruise_lbl = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_tt_cruise_lbl, "CRZ");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_tt_cruise_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_tt_cruise_lbl, 24, 452);
-    lv_obj_set_size(ui->dashboard_Lamborghini_tt_cruise_lbl, 27, 13);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_tt_cruise_lbl, 20, 452);
+    lv_obj_set_size(ui->dashboard_Lamborghini_tt_cruise_lbl, 30, 13);
 
     //Write style for dashboard_Lamborghini_tt_cruise_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_tt_cruise_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1154,15 +1154,15 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_led_tt_fault_lbl = lv_led_create(ui->dashboard_Lamborghini);
     lv_led_set_brightness(ui->dashboard_Lamborghini_led_tt_fault_lbl, 40);
     lv_led_set_color(ui->dashboard_Lamborghini_led_tt_fault_lbl, lv_color_hex(0xF5A623));
-    lv_obj_set_pos(ui->dashboard_Lamborghini_led_tt_fault_lbl, 48, 451);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_led_tt_fault_lbl, 54, 451);
     lv_obj_set_size(ui->dashboard_Lamborghini_led_tt_fault_lbl, 14, 14);
 
     //Write codes dashboard_Lamborghini_tt_fault_lbl
     ui->dashboard_Lamborghini_tt_fault_lbl = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_tt_fault_lbl, "FLT");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_tt_fault_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_tt_fault_lbl, 61, 452);
-    lv_obj_set_size(ui->dashboard_Lamborghini_tt_fault_lbl, 25, 13);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_tt_fault_lbl, 70, 452);
+    lv_obj_set_size(ui->dashboard_Lamborghini_tt_fault_lbl, 30, 13);
 
     //Write style for dashboard_Lamborghini_tt_fault_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_tt_fault_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1184,15 +1184,15 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_led_status_bt = lv_led_create(ui->dashboard_Lamborghini);
     lv_led_set_brightness(ui->dashboard_Lamborghini_led_status_bt, 255);
     lv_led_set_color(ui->dashboard_Lamborghini_led_status_bt, lv_color_hex(0x60A5FA));
-    lv_obj_set_pos(ui->dashboard_Lamborghini_led_status_bt, 85, 451);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_led_status_bt, 104, 451);
     lv_obj_set_size(ui->dashboard_Lamborghini_led_status_bt, 14, 14);
 
     //Write codes dashboard_Lamborghini_status_bt
     ui->dashboard_Lamborghini_status_bt = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_status_bt, "BT");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_status_bt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_status_bt, 98, 452);
-    lv_obj_set_size(ui->dashboard_Lamborghini_status_bt, 22, 13);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_status_bt, 120, 452);
+    lv_obj_set_size(ui->dashboard_Lamborghini_status_bt, 26, 13);
 
     //Write style for dashboard_Lamborghini_status_bt, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1237,8 +1237,8 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_TRIP_text = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_TRIP_text, "4.2");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_TRIP_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_TRIP_text, 228, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_TRIP_text, 20, 18);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_TRIP_text, 222, 457);
+    lv_obj_set_size(ui->dashboard_Lamborghini_TRIP_text, 30, 18);
 
     //Write style for dashboard_Lamborghini_TRIP_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_TRIP_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1260,14 +1260,14 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_trip_unit = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_trip_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_trip_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_trip_unit, 250, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_trip_unit, 20, 18);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_trip_unit, 254, 457);
+    lv_obj_set_size(ui->dashboard_Lamborghini_trip_unit, 24, 18);
 
     //Write style for dashboard_Lamborghini_trip_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Lamborghini_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Lamborghini_trip_unit, lv_color_hex(0x6A6F78), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_trip_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_trip_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Lamborghini_trip_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Lamborghini_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Lamborghini_trip_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1306,8 +1306,8 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_odo_text = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_odo_text, "00312");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_odo_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_odo_text, 286, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_odo_text, 36, 18);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_odo_text, 282, 457);
+    lv_obj_set_size(ui->dashboard_Lamborghini_odo_text, 42, 18);
 
     //Write style for dashboard_Lamborghini_odo_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_odo_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -1329,14 +1329,14 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_odo_unit = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_odo_unit, "KM");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_odo_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_odo_unit, 316, 457);
-    lv_obj_set_size(ui->dashboard_Lamborghini_odo_unit, 20, 18);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_odo_unit, 326, 457);
+    lv_obj_set_size(ui->dashboard_Lamborghini_odo_unit, 24, 18);
 
     //Write style for dashboard_Lamborghini_odo_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Lamborghini_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Lamborghini_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Lamborghini_odo_unit, lv_color_hex(0x6A6F78), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_odo_unit, &lv_font_montserratMedium_12, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Lamborghini_odo_unit, &lv_font_montserratMedium_11, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Lamborghini_odo_unit, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Lamborghini_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Lamborghini_odo_unit, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
