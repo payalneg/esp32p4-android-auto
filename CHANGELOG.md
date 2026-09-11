@@ -9,6 +9,309 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### Navigator picture from the phone
+
+- The head unit can now show the companion app's navigator: the phone renders
+  the map — it has the route, the graph and the tiles — and streams what to
+  show as small JPEG frames over the existing Bluetooth link. Two new
+  characteristics on the NotifBridge service (`...000B` control, `...000C`
+  data) carry one frame at a time; the P4 decodes with its hardware JPEG
+  engine, scales to 800x480 with the PPA and shows the picture through a
+  single `lv_img`. The head unit draws no map of its own.
+- New on-device setting, **Settings -> Phone screen**: what the 3-finger hold
+  brings up from the dashboard, Android Auto (default) or Navigator. Only one
+  of them can own the panel, so it is one choice rather than two switches. An
+  Android Auto session is untouched in Navigator mode — its video is dropped
+  the same way it already is while the dashboard is up.
+- The phone is told when the navigator screen is and is not the live screen,
+  and sends nothing while it is not — a parked bike or a rider looking at the
+  dashboard costs no air time. Unchanged pictures are not re-sent either.
+### The head unit draws the map itself
+
+- Sending a whole picture for every few pixels of movement was always going
+  to be a slideshow: a frame is 20 KB, the link carries 13-15 KB a second, and
+  it stops entirely when the phone's screen goes dark. The head unit now keeps
+  the map tiles the phone has already downloaded — each one crosses the link
+  once — and the phone says only where the rider is, twelve bytes at a time.
+  The map is redrawn on the head unit from memory, so it moves as often as the
+  position arrives and keeps moving with the phone in a pocket.
+- New messages on the same characteristics: TILE_BEGIN/TILE_END carry one
+  tile (PNG or JPEG, the format travels with it), VIEW carries the rider's
+  position, zoom and heading. The picture path is untouched and still works.
+- Tiles are decoded on arrival and held as RGB565 in PSRAM, up to 96 of them
+  (12 MB of the 25 MB free), least-recently-used first out. PNG is decoded by
+  libpng, which the LVGL image decoder already brings in; JPEG goes through
+  the hardware decoder.
+- Measured on real tiles across three zooms: PNG as OpenStreetMap serves it
+  averages 24 KB, JPEG q80 averages 18 KB. PNG is kept anyway — the phone
+  forwards what it already holds without transcoding, and coloured labels stay
+  crisp. A screenful is 15-20 tiles, so about 30 seconds on first arrival;
+  keeping up at riding speed costs around 1 KB/s.
+- Verified on a Guition JC4880 with a phone: a screenful of 30 tiles (the
+  panel plus a ring) lands in about a minute at 13 KB/s, a PNG decodes in
+  30-35 ms, and composing the whole 800x480 view from what is held takes
+  17-19 ms — so the map redraws on every position update with room to spare.
+- Four things the bench turned up, all fixed: the head unit's screen state
+  could be announced before the app had subscribed, leaving it convinced the
+  display was showing something else; tiles were chosen in square rings while
+  the panel is a wide rectangle, so off-screen corners went over before the
+  ground either side of the rider; an acknowledgement sent right after sixty
+  chunk writes could be dropped by a congested host, and the phone then sent
+  the whole tile again; and the bridge re-bound to whichever connection wrote
+  last, which with two links from one phone flipped the owner several times a
+  second. The binding is now sticky until its owner goes quiet for five
+  seconds, and the app cancels a queued connection before asking for another
+  so the second link stops happening in the first place.
+
+### Picking where to go on the head unit
+
+- Tap the navigator map on the head unit and it offers that spot as a
+  destination; confirm and the phone routes there and starts guiding. The
+  head unit composed the view, so it already knows which patch of ground
+  every pixel is — the tap becomes a coordinate without asking the phone
+  anything. It travels back as a nine-byte notification on the same
+  characteristic the tiles use.
+- Groundwork for entering an address there too: this is the reverse channel
+  that was missing, and the search will use it.
+
+### A map that never goes bare, and moves
+
+- The rider's speed and battery charge now sit over the navigator map, in the
+  same typeface Android Auto gets (Antonio), read from the same place, with
+  the cruise indicator lighting up beside the speed when cruise is engaged.
+- Two blurred fallback layers under the detail tiles, three and six zoom
+  levels out. One tile of the widest is twenty kilometres across, so a couple
+  of them blanket a whole region: move faster than 25 KB tiles can arrive —
+  or jump somewhere nothing was cached — and the map goes chunky rather than
+  empty. The phone sends them before anything sharp, and the ring around the
+  panel last of all.
+- The map now moves between position updates instead of stepping twice a
+  second: the phone includes its speed, and the head unit carries the view
+  forward at the last heading and redraws about seven times a second.
+- Composing a frame costs 26 ms, down from 155 ms when the layers were first
+  added. Three things got it there: blitting per tile rather than per screen
+  pixel, writing one row of a scaled band and copying it down the rest, and
+  drawing the blurred layers only in the gaps the detail tiles leave — with
+  the map caught up, the coarse passes cost nothing at all.
+- Tiles no longer wait on position updates while the map is filling: a
+  screenful lands in about 8 seconds rather than 15, and the whole ring in 21
+  rather than 41. A tile that is neither cached nor reachable is skipped
+  within the pass instead of costing one.
+- Both ends now ask the radio for the fastest link they can (a 251-byte
+  link-layer packet and the 2M PHY). Both are accepted, and neither changed
+  anything: 25 KB takes 49 writes and 780 ms, which is one ATT write per
+  connection interval. The phone's stack sends one and waits, so the round
+  trip is the limit and air time never was.
+
+### The line, the turn, and a dot that stays put
+
+- The route now travels to the head unit as a polyline (up to 2000 points,
+  a tenth of a micro-degree each) and is drawn there under the rider — a blue
+  line inside a white casing, the way a map draws a road, so it reads over
+  both the sharp tiles and the blurred fallback.
+- The manoeuvre is drawn as well: a plate in the top-left corner with the
+  arrow for the turn ahead (eleven kinds, from a slight bend to a U-turn and
+  the finish flag), how far it is in metres or kilometres, and underneath it
+  what is left of the whole route as "3.2 km | 11 min". Off route, the plate
+  turns red and says so. The arrows are drawn as a single polyline with the
+  head retraced, because LVGL draws one line at a time and a separate
+  arrowhead came out detached.
+- The rider's dot no longer jumps. Dead reckoning between updates always
+  drifts from where the phone says the rider is, and snapping back on every
+  arrival was visible twice a second; the view now eases a quarter of the way
+  towards the reported position on each redraw and only jumps when the two
+  disagree by more than a couple of hundred metres. Frames are also spaced by
+  the timer alone — a position arriving mid-frame used to trigger an extra
+  redraw and the motion came in pairs.
+- Drawing the line cost 40 ms of the frame at first: a Mercator projection is
+  a logarithm and a tangent in double precision, this chip has no
+  double-precision hardware, and every point was being projected twice.
+  Points outside a screen-and-a-margin box are now discarded on latitude and
+  longitude alone, the rest are projected once, and a segment that runs off
+  the panel is clipped before it is walked pixel by pixel. `navstat` times the
+  line on its own, which is how the numbers below are known rather than
+  guessed: **composing the map is 18-26 ms and the line adds 5-15 ms** of
+  scattered writes on top, a little more with a long route on screen. It is
+  cache misses, not arithmetic — the same line drawn as bars, as squares or
+  swept along rows costs much the same.
+- When the head unit has to drop a tile to make room it now tells the phone,
+  which sends that tile again next time it is needed. Without it an eviction
+  left ground that stayed blurred for the rest of the ride. The store holds 64
+  tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
+  PSRAM is worth more than the extra history.
+
+### Zoom, on both screens
+
+- Two buttons on the head unit's map, `+` and `-`, from z14 to z18, with the
+  level shown between them. The rider is the one looking at that screen, so
+  the panel changes level immediately and the phone is told afterwards — it is
+  the only end that can fetch tiles. A new notice on the same characteristic
+  (`0x15 ZOOM`) carries the level; the phone switches everything it sends,
+  detail tiles, fallback layers and position, to it.
+- Nothing goes bare in between. The composer now also tries the level either
+  side of the one it is drawing — one out gets doubled, one in gets halved —
+  so the two seconds before new tiles arrive show a coarser or softer map
+  instead of an empty slate. Verified on hardware: z17 to z18 drew from the
+  tiles already held, and z16 filled the whole panel from 3 real tiles plus
+  halved z17 ground.
+- The phone's own map gets the same pair of buttons, above the follow control.
+  Pinch still works; two thumb-sized buttons are what works one-handed.
+- The translucent plates behind the readouts sit a little taller: Antonio's
+  digits reach the top of their line box, and a two-pixel pad made the grey
+  look cut off.
+
+### Two wires that were never connected
+
+- The head unit's eviction notices and its destination taps both stopped at
+  the phone's background isolate: the subscriptions were declared, cancelled
+  on disconnect — and never actually made. The eviction one is what made a
+  long ride go blank. The head unit holds 64 tiles, a ride outgrows that in a
+  few kilometres, and the feed never sends the same tile twice; with the
+  notices lost, the panel dropped ground it still needed and the phone
+  believed it had already been sent. The symptom was a map that stopped
+  filling while the position kept updating — `tiles 0/12` in `navstat` with 64
+  tiles in the store. Both are wired now, and a 3 km simulated ride holds
+  12/12 with 154 evictions behind it.
+- A tile the phone cannot get is no longer written off for the session. Two
+  failures used to retire it permanently, which is fine for a tile the head
+  unit refuses and wrong for the far more common case — not cached, no signal
+  yet. It now waits thirty seconds and is asked for again.
+
+### The mirror in the app is gone
+
+- The navigator screen no longer carries a thumbnail of a second, smaller map
+  rendered for the head unit. The head unit draws its own map from the tiles,
+  so the picture path had nothing left to do: the frame streamer, the JPEG
+  encoder and that second map are all deleted from the phone. What is left in
+  its place is a one-line badge, and only when something is actually wrong —
+  a firmware too old to speak the tile protocol, or a display showing another
+  screen.
+- That also takes out a flicker. The screen repainted on every feed status
+  change — which is once per tile sent — and each repaint rebuilt the whole
+  map widget tree, the thumbnail's own map included. Nothing subscribes to
+  the feed's counters any more.
+- The head unit still accepts pictures (`FRAME_*` and `navtest` are
+  untouched), so the path is retired on the phone rather than removed from
+  the protocol.
+
+### Reboots under a phone: the Bluetooth host ran out of stack
+
+- The head unit restarted every few minutes with the navigator up. The panic
+  text — captured by leaving a logger on the console rather than guessing —
+  named the `nimble_host` task and a stack-protection fault, which is the
+  hardware stack guard rather than a corrupted heap.
+- Cause: every GATT write on the NotifBridge service is parsed on that task,
+  and each branch of the callback declared its own flatten buffer — a
+  notification chunk, an OTA chunk, a file chunk, a tile chunk. The compiler
+  laid them out side by side, so about 1.5 KB of the task's 4 KB stack went on
+  buffers that are never live at the same time. Adding the tile channel was
+  what pushed a notification arriving mid-stream over the edge.
+  All four branches now share one static buffer (the task is single and each
+  callee copies what it keeps), and the task itself gets 6 KB. `navstat`
+  reports its worst-case margin so the next squeeze is visible before it is a
+  reboot.
+
+- Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
+  without the 3-finger hold, `navstat` reports the frame and tile streams (mode, tiles
+  accepted and rejected, decode and compose times, and which tiles the view
+  is still missing), and `navtest` puts
+  a locally-made frame through the decode-and-scale path so the picture chain
+  can be checked without a phone. The bridge's console now follows the board:
+  on one whose console is the USB-Serial-JTAG port (the Guition JC4880 brings
+  out no UART0 header) the REPL binds there instead of UART0.
+- Verified end to end on a Guition JC4880 and a phone: frames arrive within
+  a second of the navigator screen coming up, decode and scale to the full
+  panel in 7-9 ms, and land at 10-26 KB each. Panning the map continuously
+  moves about 0.6 frames a second; a map that is not moving sends nothing at
+  all. Switching the head unit to the dashboard stops the phone (it captions
+  the preview "Display is on another screen"), switching back resumes within
+  a second, and a head-unit reboot reconnects on its own.
+
+## v1.3.17 / app 0.3.17 — 2026-09-09
+
+### Waveshare microphone actually works
+
+- 1.3.16 shipped the Android Auto microphone dead on the Waveshare 4.3: the
+  two MEMS mics sit on ES7210 inputs MIC1 and MIC3 (MIC2 is the echo-cancel
+  reference fed from the speaker output, MIC4 is unconnected), while the code
+  read MIC1/MIC2 as a plain I2S stereo pair — a mode in which MIC3 never
+  reaches the ESP32-P4 at all. Found by tapping the mics with all four inputs
+  captured at once; only ADC1 and ADC3 moved. The ADC is now driven the way
+  Waveshare's own demo does it (three inputs selected, which puts the chip in
+  TDM so all four channels arrive on one line), the two mics are averaged
+  into the mono stream, and the input gain went from 24 to 30 dB. Guition
+  JC4880 (ES8311 ADC) is unchanged and worked already.
+
+### Touch
+
+- Android Auto ignores contacts shorter than 250 ms: a press is reported to
+  the phone only once the finger has stayed down that long (at the touch-down
+  point, then caught up to where the finger is), and a shorter contact sends
+  nothing. Stops vibration, knuckles and raindrops from tapping things;
+  fast flicks under the threshold are lost — deliberate.
+- Groundwork for a smaller Android Auto viewport inside the 800×480 frame
+  (video margins): touch is reported relative to the phone's content area and
+  the touch-screen descriptor advertises that area. Margins ship at 0×0, so
+  nothing changes on screen.
+
+## v1.3.16 / app 0.3.16 — 2026-09-07
+
+### Microphone to Android Auto
+
+- The head unit's own microphone now feeds the Android Auto voice input. The
+  phone has been asking for it all along (AVInputOpenRequest on the mic
+  channel, previously logged as "not handled") — the request is now answered
+  and, while a voice session is open, the on-board mic is streamed as
+  16 kHz / 16-bit / mono PCM in 40 ms chunks. Gives Google Assistant voice
+  input through the unit; the spoken reply still plays on the phone because
+  the Speech audio channel is not advertised. Phone calls are unaffected
+  (they ride Bluetooth HFP, which the BT agent does not do).
+- Waveshare 4.3: MIC1 of the two on-board MEMS mics via the ES7210 ADC.
+  Guition JC4880: mic on the ES8311's own ADC, compile-only. Kconfig
+  `AA_MIC_ENABLE` (default on) removes the whole path — the phone then gets
+  an "open failed" answer instead of silence.
+
+## v1.3.15 / app 0.3.15 — 2026-09-06
+
+Curated Android Auto branch: only the fixes and the changes that showed a
+clear effect, without the experimental in-tree decoder. Not the 1.3.12-1.3.14
+line (that stays on the video-perf branch).
+
+### Android Auto reconnect and the Connect button
+
+- A dropped session no longer strands the head unit. The socket gained TCP
+  keepalive and receive/send timeouts, so a phone that leaves the AP silently
+  (out of range, pocket) is noticed within ~15 s instead of hanging the session
+  forever. A clean goodbye (ByeBye) is told apart from a lost link, and the
+  phone is given a 3 s grace to restart projection on its own before the head
+  unit kicks it off the AP.
+- The BT agent leaves the air for the whole session (agent 0.6.4 -> 0.6.6),
+  the way the reference dongles power their radio off, so a stray Bluetooth
+  event can no longer make the phone restart projection mid-ride.
+- **Connect now works.** Two dead paths fixed in agent 0.6.7: the phone it
+  pages is the one that last ran Android Auto (not whichever paired last), and
+  a Connect tap with the link half-up but no session tears it down so the phone
+  re-runs the wireless setup instead of doing nothing.
+- Agent updates no longer wipe the agent's own pairing. The OTA used to erase
+  the agent's NVS on every write, so after each update the phone had to be
+  re-paired; it now skips the NVS region.
+
+### Screen
+
+- The Android Auto idle screen shows the link state — Disconnected /
+  Connecting... / Connected — in colour, with the step in progress as the
+  subtitle and the IP / port on a dim third line.
+- The backlight goes dark during flash erases and bulk writes instead of
+  letting them tear the panel blue, and comes back a moment after the last one.
+- The LVGL worker no longer busy-spins on core 0; it was starving Bluetooth and
+  the idle task badly enough to trip the watchdog.
+- A touch is ignored for 1 s after a dashboard <-> Android Auto switch so a
+  stray finger doesn't land on the wrong screen.
+- Boot-time "battery charged — reset trip?" prompt: the dashboard asks before
+  resetting the trip instead of doing it silently.
+
 ## v1.3.11 / app 0.3.11 — 2026-09-02
 
 ### Faster firmware updates over Bluetooth

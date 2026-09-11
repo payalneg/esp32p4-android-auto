@@ -18,6 +18,9 @@
 
 static const char *TAG = "bt_link";
 
+/* Subscriber for BT:<event> lines (aa_link_status). */
+static bt_link_event_cb_t s_event_cb;
+
 /* Both RST and IO0 are push-pull: this board has no external pull-ups on
  * either line, so an open-drain release would leave the ESP32 reading
  * floating values — often low, which means stuck in download mode (IO0)
@@ -89,6 +92,7 @@ void bt_agent_enter_bootloader(void)
 /* Forward declarations of state shared between rx_task (consumes acks) and
  * wifi_resend_task (stops once acked). Definitions are further down. */
 static volatile bool s_wifi_acked;
+static void agent_resync(void);
 
 /* When true, rx_task drops all forwarding (printf/ESP_LOG) but keeps
  * parsing for BT-VER:. Toggled by bt_link_set_quiet() during OTA flow
@@ -168,6 +172,10 @@ static void rx_task(void *arg)
                             s_wifi_acked = true;  /* stop resend loop */
                         }
                         if (!s_quiet) ESP_LOGI(TAG, "agent event %s", evt);
+                        if (strcmp(evt, "BOOT") == 0) {
+                            agent_resync();
+                        }
+                        if (s_event_cb) s_event_cb(evt);
                     } else if (strncmp(line, "BT-VER:", 7) == 0) {
                         /* Always parse — wait_version() depends on this even
                          * when forwarding is muted. */
@@ -268,6 +276,15 @@ void bt_link_resume_after_flash(void)
 static char            s_wifi_line[256];
 static size_t          s_wifi_len;
 static char            s_wifi_log_summary[160];
+static TaskHandle_t    s_wifi_resend_task;
+
+/* Last values pushed to the agent — replayed by agent_resync() when the
+ * agent reboots underneath us (brownout, crash, watchdog): its RAM state is
+ * gone and, without this, it sat in "waiting for WiFi info from P4" until
+ * the next P4 reboot because the resend loop had long since stopped. */
+static bool            s_auto_reconnect_known;
+static bool            s_auto_reconnect;
+static bool            s_aa_session_live;
 
 static void wifi_resend_task(void *arg)
 {
@@ -280,10 +297,32 @@ static void wifi_resend_task(void *arg)
         uart_write_bytes(UART_PORT, s_wifi_line, s_wifi_len);
         if (delay_ms < 5000) delay_ms *= 2;  /* 0.5 → 1 → 2 → 4 → 5 s */
     }
+    s_wifi_resend_task = NULL;
     vTaskDelete(NULL);
 }
 
-void bt_link_set_auto_reconnect(bool on)
+/* Send the WIFI line now and keep resending until the agent acks. */
+static void wifi_send_armed(void)
+{
+    s_wifi_acked = false;
+    uart_write_bytes(UART_PORT, s_wifi_line, s_wifi_len);
+    ESP_LOGI(TAG, "→ BT agent: %s", s_wifi_log_summary);
+    if (!s_wifi_resend_task) {
+        xTaskCreatePinnedToCore(wifi_resend_task, "bt_wifi_resend", 2048, NULL, 4,
+                                &s_wifi_resend_task, 0);
+    }
+}
+
+static void send_aa_session(bool live, bool peer_closed)
+{
+    const char *line = live        ? "AA_SESSION|1\n"
+                     : peer_closed ? "AA_SESSION|0|closed\n"
+                                   : "AA_SESSION|0|lost\n";
+    uart_write_bytes(UART_PORT, line, strlen(line));
+    ESP_LOGI(TAG, "→ BT agent: %.*s", (int)(strlen(line) - 1), line);
+}
+
+static void send_auto_reconnect(bool on)
 {
     char line[32];
     int  n = snprintf(line, sizeof(line), "AUTO_RECONNECT|%d\n", on ? 1 : 0);
@@ -292,11 +331,47 @@ void bt_link_set_auto_reconnect(bool on)
     ESP_LOGI(TAG, "→ BT agent: AUTO_RECONNECT=%d", on ? 1 : 0);
 }
 
+/* The agent just printed BT:BOOT. Runs on rx_task. A fresh agent knows
+ * nothing: give it the AP credentials again (it stays non-discoverable until
+ * it has them), the auto-reconnect toggle, and — if an AA session is running
+ * right now — tell it to stay off air instead of paging into the session. */
+static void agent_resync(void)
+{
+    if (s_wifi_len == 0) return;    /* P4 boot: nothing published yet */
+    ESP_LOGW(TAG, "agent rebooted — re-syncing WiFi creds / auto-reconnect / session state");
+    wifi_send_armed();
+    if (s_auto_reconnect_known) send_auto_reconnect(s_auto_reconnect);
+    if (s_aa_session_live) send_aa_session(true, false);
+}
+
+void bt_link_set_auto_reconnect(bool on)
+{
+    s_auto_reconnect       = on;
+    s_auto_reconnect_known = true;
+    send_auto_reconnect(on);
+}
+
+void bt_link_set_aa_session(bool live, bool peer_closed)
+{
+    s_aa_session_live = live;
+    send_aa_session(live, peer_closed);
+}
+
+bool bt_link_aa_session_live(void)
+{
+    return s_aa_session_live;
+}
+
 void bt_link_request_aa_reconnect(void)
 {
     static const char line[] = "AA_RECONNECT\n";
     uart_write_bytes(UART_PORT, line, sizeof(line) - 1);
     ESP_LOGI(TAG, "→ BT agent: AA_RECONNECT");
+}
+
+void bt_link_set_event_cb(bt_link_event_cb_t cb)
+{
+    s_event_cb = cb;
 }
 
 void bt_link_request_connect_now(void)
@@ -320,16 +395,9 @@ void bt_link_publish_wifi(const char *ssid, const char *password,
     snprintf(s_wifi_log_summary, sizeof(s_wifi_log_summary),
              "WIFI|%s|***|%s|%s|%d", ssid, bssid, ip, port);
 
-    /* First send right now (covers the case where D1 Mini was already up). */
-    uart_write_bytes(UART_PORT, s_wifi_line, s_wifi_len);
-    ESP_LOGI(TAG, "→ BT agent: %s", s_wifi_log_summary);
-
-    /* Background resender for cases where D1 Mini boots later, missed the
-     * first packet, or had a flaky wire. Cheap — just one task slot. */
-    static bool task_started;
-    if (!task_started) {
-        task_started = true;
-        xTaskCreatePinnedToCore(wifi_resend_task, "bt_wifi_resend", 2048, NULL, 4, NULL, 0);
-    }
+    /* First send right now (covers the case where D1 Mini was already up),
+     * plus the background resender for when it boots later, missed the
+     * first packet, or had a flaky wire. */
+    wifi_send_armed();
 }
 

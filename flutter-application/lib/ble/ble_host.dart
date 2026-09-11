@@ -31,6 +31,7 @@ import 'file_manager.dart';
 import 'file_ops.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
+import 'nav_stream.dart';
 import 'uuids.dart';
 import 'vesc/vesc_link.dart';
 import 'vesc/vesc_target.dart';
@@ -53,6 +54,12 @@ class BleTaskHandler extends TaskHandler {
   final _consoleBatch = <LispConsoleLine>[];
   Timer? _consoleTimer;
   bool _consolePushOn = false;
+  StreamSubscription<NavDisplayState>? _navSub;
+  StreamSubscription<({double lat, double lon})>? _navDestSub;
+  StreamSubscription<({int z, int x, int y})>? _navDroppedSub;
+  StreamSubscription<int>? _navZoomSub;
+  Timer? _navIdleTimer;
+  bool _navFast = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -92,6 +99,11 @@ class BleTaskHandler extends TaskHandler {
   Future<void> onDestroy(DateTime timestamp) async {
     _statsTimer?.cancel();
     _consoleTimer?.cancel();
+    _navIdleTimer?.cancel();
+    await _navSub?.cancel();
+    await _navDestSub?.cancel();
+    await _navDroppedSub?.cancel();
+    await _navZoomSub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
     await _consoleSub?.cancel();
@@ -111,11 +123,81 @@ class BleTaskHandler extends TaskHandler {
         'supportsOta': _ble.supportsOta,
         'supportsBleOta': _ble.supportsBleOta,
         'mtu': _ble.negotiatedMtu,
+        'supportsNav': _ble.supportsNavStream,
+        'navMode': _ble.navStream?.state.navMode ?? false,
+        'navVisible': _ble.navStream?.state.visible ?? false,
         // Whether the head unit exposes the NUS bridge is part of the VESC
         // target info now (`headUnitAvailable`) — one source of truth for the
         // LISP editor, which may instead be riding a direct adapter.
         'vescTarget': VescTarget.instance.info.toMap(),
       };
+
+  /// Follow the head unit's navigator screen across reconnects: the frame
+  /// channel is rebuilt on every handshake, so the subscription has to be too.
+  void _rewireNav(BleConnState s) {
+    unawaited(_navSub?.cancel());
+    _navSub = null;
+    unawaited(_navDestSub?.cancel());
+    _navDestSub = null;
+    unawaited(_navDroppedSub?.cancel());
+    _navDroppedSub = null;
+    unawaited(_navZoomSub?.cancel());
+    _navZoomSub = null;
+    if (s != BleConnState.connected) {
+      _navIdleTimer?.cancel();
+      _navIdleTimer = null;
+      _navFast = false;
+      return;
+    }
+    final nav = _ble.navStream;
+    if (nav == null) return;
+    _navSub = nav.states.listen((st) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navState,
+        'navMode': st.navMode,
+        'visible': st.visible,
+        'maxChunk': st.maxChunk,
+      });
+    });
+    // Somewhere to go, picked by tapping the head unit's own map.
+    _navDestSub = nav.destinations.listen((d) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navDest,
+        'lat': d.lat,
+        'lon': d.lon,
+      });
+    });
+    // A tile the head unit had to evict. Without this the map went blank once
+    // a ride outgrew its 64 slots: the head unit dropped tiles, the feed never
+    // heard, and it never sends the same tile twice — an hour of riding with
+    // the position updating over ground that was no longer there.
+    _navZoomSub = nav.zooms.listen((z) {
+      FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navZoom, 'zoom': z});
+    });
+    _navDroppedSub = nav.dropped.listen((t) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navDropped,
+        'z': t.z,
+        'x': t.x,
+        'y': t.y,
+      });
+    });
+  }
+
+  /// Frames want the fast connection interval, but only while they are
+  /// actually moving — the rider may leave the navigator open and parked for
+  /// an hour. Ten seconds of quiet hands the radio back.
+  void _navFrameSent() {
+    if (!_navFast) {
+      _navFast = true;
+      unawaited(_ble.setLinkSpeed(fast: true));
+    }
+    _navIdleTimer?.cancel();
+    _navIdleTimer = Timer(const Duration(seconds: 10), () {
+      _navFast = false;
+      unawaited(_ble.setLinkSpeed(fast: false));
+    });
+  }
 
   void _pushState(BleConnState s) {
     // Head-unit link changed: if that's what the LISP editor is riding on,
@@ -124,6 +206,7 @@ class BleTaskHandler extends TaskHandler {
         VescTarget.instance.kind == VescTargetKind.headUnit) {
       _stopStatsPolling();
     }
+    _rewireNav(s);
     FlutterForegroundTask.sendDataToMain({'t': IpcEvt.state, ..._statusMap()});
     // The head unit going up/down also changes whether it's a usable target.
     _pushTarget(VescTarget.instance.info);
@@ -244,6 +327,91 @@ class BleTaskHandler extends TaskHandler {
         case IpcCmd.bleRestart:
           await _ble.restart();
           _reply(id, {});
+          break;
+
+        case IpcCmd.navFrame:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden, 'seq': 0, 'ms': 0});
+            break;
+          }
+          final r = await nav.sendFrame(
+            m['w'] as int,
+            m['h'] as int,
+            base64Decode(m['b64'] as String),
+          );
+          // The link only needs the fast interval while frames are moving;
+          // an idle sweep hands it back (see _navIdleTimer).
+          _navFrameSent();
+          _reply(id, {'ack': r.ack, 'seq': r.seq, 'ms': r.decodeMs});
+          break;
+
+        case IpcCmd.navTile:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden, 'ms': 0});
+            break;
+          }
+          final r = await nav.sendTile(
+            m['z'] as int,
+            m['x'] as int,
+            m['y'] as int,
+            m['fmt'] as int,
+            base64Decode(m['b64'] as String),
+          );
+          _navFrameSent();
+          _reply(id, {'ack': r.ack, 'ms': r.decodeMs});
+          break;
+
+        case IpcCmd.navView:
+          // Fire-and-forget: a dozen bytes, and the next one is a moment away.
+          await _ble.navStream?.sendView(
+            (m['lat'] as num).toDouble(),
+            (m['lon'] as num).toDouble(),
+            m['zoom'] as int,
+            m['heading'] as int,
+            speedMs: (m['speed'] as num?)?.toDouble() ?? 0,
+          );
+          break;
+
+        case IpcCmd.navRoute:
+          final nav = _ble.navStream;
+          if (nav == null) {
+            _reply(id, {'ack': NavAck.hidden});
+            break;
+          }
+          final flat = (m['pts'] as List).cast<num>();
+          final pts = <({double lat, double lon})>[
+            for (var i = 0; i + 1 < flat.length; i += 2)
+              (lat: flat[i].toDouble(), lon: flat[i + 1].toDouble()),
+          ];
+          final rr = await nav.sendRoute(pts);
+          _navFrameSent();
+          _reply(id, {'ack': rr.ack});
+          break;
+
+        case IpcCmd.navGuide:
+          await _ble.navStream?.sendGuide(
+            turn: m['turn'] as int,
+            distM: (m['dist'] as num).round(),
+            remainingM: (m['remM'] as num).round(),
+            remainingS: (m['remS'] as num).round(),
+            offRoute: m['off'] as bool? ?? false,
+          );
+          break;
+
+        case IpcCmd.navHello:
+          await _ble.navStream?.hello();
+          break;
+
+        case IpcCmd.navStop:
+          _navIdleTimer?.cancel();
+          _navIdleTimer = null;
+          if (_navFast) {
+            _navFast = false;
+            await _ble.setLinkSpeed(fast: false);
+          }
+          await _ble.navStream?.stop();
           break;
 
         case IpcCmd.send:

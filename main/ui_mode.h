@@ -10,11 +10,15 @@ extern "C" {
 typedef enum {
     UI_MODE_AA = 0,    /* Android Auto (waiting screen + later, video output) */
     UI_MODE_VESC,      /* Super VESC dashboard */
+    UI_MODE_NAV,       /* Navigator picture streamed from the phone over BLE */
 } ui_mode_t;
 
 esp_err_t ui_mode_init(void);   /* must be called after display_init() */
 
 ui_mode_t ui_mode_get(void);
+
+/* Human-readable name, for logs and the debug bridge. */
+const char *ui_mode_name(ui_mode_t mode);
 void      ui_mode_set(ui_mode_t mode);
 void      ui_mode_toggle(void);
 

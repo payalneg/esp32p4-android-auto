@@ -62,6 +62,13 @@ uint8_t              settings_get_splash_loops(void);
  * rotation cannot change at runtime. */
 bool                 settings_get_display_flip(void);
 
+/* Which full-screen source the 3-finger gesture brings up from the dashboard:
+ * 0 = Android Auto (the phone projecting over Wi-Fi), 1 = Navigator (the map
+ * picture the companion app streams over BLE, see main/nav_screen.c). Default
+ * 0. Only one of them can own the panel, so this is a plain choice, not a
+ * pair of switches. */
+uint8_t              settings_get_phone_screen(void);
+
 /* Wall-clock API. RTC-only — relies on the vbat_experiment poke in
  * main.c to keep LP domain alive on USB-unplug via the CR2032 on H8.
  * If that experiment doesn't pan out on this silicon, time(NULL)
@@ -89,6 +96,7 @@ void settings_set_brightness_gesture_enabled(bool on);
 void settings_set_dashboard_theme(uint8_t theme);
 void settings_set_splash_loops(uint8_t loops);
 void settings_set_display_flip(bool on);
+void settings_set_phone_screen(uint8_t which);
 
 /* Debounced setters — update the RAM cache and fire any hot-apply callback
  * immediately, but DO NOT touch NVS. The UI pairs them with the matching

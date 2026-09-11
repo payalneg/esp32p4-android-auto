@@ -19,6 +19,7 @@
 #include "notif_bridge.h"
 #include "ble_ota.h"
 #include "ble_files.h"
+#include "ble_nav.h"
 #include "board.h"
 
 #include <string.h>
@@ -104,6 +105,18 @@ static const ble_uuid128_t NB_FILE_CTRL_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t NB_FILE_DATA_UUID = BLE_UUID128_INIT(
     0x0A, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+/* NAV-CTRL / NAV-DATA chars — the navigator picture the companion app renders
+ * on the phone and streams here as small JPEGs, one frame at a time. CTRL
+ * carries BEGIN/END/STOP/HELLO and notifies STATE + FRAME_ACK; DATA carries
+ * the raw JPEG bytes. See ble_nav.c for the protocol. Optional/probed by the
+ * app — older firmware simply doesn't expose ...000B/...000C and the app hides
+ * the feature. */
+static const ble_uuid128_t NB_NAV_CTRL_UUID = BLE_UUID128_INIT(
+    0x0B, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+static const ble_uuid128_t NB_NAV_DATA_UUID = BLE_UUID128_INIT(
+    0x0C, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 
 /* ---------- PDU layer ---------- */
 
@@ -132,6 +145,7 @@ static const ble_uuid128_t NB_FILE_DATA_UUID = BLE_UUID128_INIT(
 static uint16_t s_in_handle, s_out_handle, s_st_handle, s_time_handle, s_ota_handle;
 static uint16_t s_ota_ctrl_handle, s_ota_data_handle;
 static uint16_t s_file_ctrl_handle, s_file_data_handle;
+static uint16_t s_nav_ctrl_handle, s_nav_data_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 
 /* Phone-pushed wall clock. The app writes [hour, minute] every 15 s; we
@@ -449,35 +463,92 @@ static void reasm_feed(const uint8_t *chunk, uint16_t chunk_len)
 /* Bind the bridge (and the OTA / file-manager links riding on it) to the
  * phone's connection. With two peers connected at once (phone + VESC Tool)
  * the GAP connect order says nothing about which one is the phone — but a
- * write to any bridge characteristic does: only the app touches them. */
-static void bridge_bind(uint16_t conn)
+ * write to any bridge characteristic does: only the app touches them.
+ *
+ * Sticky, though. A phone can hold two links at once — a stale one the
+ * peripheral has not timed out yet alongside the fresh one — and both write.
+ * Re-binding on every write then flipped the owner back and forth several
+ * times a second, so acknowledgements went to the wrong link and half the map
+ * tiles were never confirmed (seen on the bench). The binding therefore only
+ * moves to a different connection once the current owner has gone quiet;
+ * writes from anyone else are ignored until then. VESC Tool never touches
+ * these characteristics, so the phone still takes the bridge from it at once.
+ *
+ * Returns false when the write belongs to somebody else and should be dropped. */
+#define BRIDGE_STEAL_AFTER_US (5 * 1000 * 1000)
+
+static int64_t s_last_bridge_write_us;
+
+static bool bridge_bind(uint16_t conn)
 {
-    if (s_conn_handle == conn) return;
+    const int64_t now = esp_timer_get_time();
+    if (s_conn_handle == conn) {
+        s_last_bridge_write_us = now;
+        return true;
+    }
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+        now - s_last_bridge_write_us < BRIDGE_STEAL_AFTER_US) {
+        return false;          /* the owner is mid-conversation */
+    }
     if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
         ESP_LOGI(TAG, "bridge re-bound, conn=%u", (unsigned)conn);
         reasm_reset();
     }
     s_conn_handle = conn;
+    s_last_bridge_write_us = now;
     ble_ota_set_link(conn, s_ota_ctrl_handle);
     ble_files_set_link(conn, s_file_ctrl_handle);
+    ble_nav_set_link(conn, s_nav_ctrl_handle);
+    return true;
+}
+
+/* One flatten buffer for every write that lands on this service, and static
+ * on purpose. Each branch below used to declare its own — 260 + 512 + 512 +
+ * 260 bytes — and the compiler laid them out side by side, so ~1.5 KB of the
+ * nimble_host task's 4 KB stack went on buffers that are never live together.
+ * A notification arriving while the navigator streamed tiles was then enough
+ * to trip the stack guard: "Core 0 panic'ed (Stack protection fault),
+ * detected in task nimble_host". Every write here is delivered on the
+ * nimble_host task and consumed before the callback returns (all four callees
+ * copy what they keep), so one buffer serves them all.
+ *
+ * Big enough for a full MTU-512 write; the notification and file branches cap
+ * themselves lower, as they always did. */
+static uint8_t s_wbuf[BLE_OTA_MAX_DATA + 3];
+#define NB_SMALL_WRITE 260      /* notification chunks and file-manager writes */
+_Static_assert(sizeof(s_wbuf) >= BLE_NAV_MAX_DATA + 3, "nav write must fit");
+_Static_assert(sizeof(s_wbuf) >= NB_SMALL_WRITE, "small writes must fit");
+
+/* The nimble_host task, remembered the first time it calls in here: it is the
+ * one that overflowed, so its margin is worth watching (navstat prints it). */
+static TaskHandle_t s_host_task;
+
+size_t notif_bridge_host_stack_free(void)
+{
+    if (!s_host_task) return 0;
+    return (size_t)uxTaskGetStackHighWaterMark(s_host_task);
 }
 
 static int access_cb(uint16_t conn, uint16_t attr,
                      struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) bridge_bind(conn);
+    if (!s_host_task) s_host_task = xTaskGetCurrentTaskHandle();
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && !bridge_bind(conn)) {
+        /* Another link owns the bridge right now. Say so rather than let two
+         * clients interleave into one transfer. */
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_in_handle) {
-        uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) {
+        if (pkt_len > NB_SMALL_WRITE) {
             ESP_LOGW(TAG, "write %u > buf", (unsigned)pkt_len);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, NB_SMALL_WRITE, &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        reasm_feed(buf, out_len);
+        reasm_feed(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_time_handle) {
@@ -503,28 +574,41 @@ static int access_cb(uint16_t conn, uint16_t attr,
          * for a full MTU-512 write (payload ≤ BLE_OTA_MAX_DATA = 509): the
          * app learns that cap from READY and sends the biggest chunk the
          * negotiated MTU allows — half the ATT round trips of the old 244. */
-        uint8_t  buf[BLE_OTA_MAX_DATA + 3];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (pkt_len > sizeof(s_wbuf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, sizeof(s_wbuf), &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (attr == s_ota_ctrl_handle) ble_ota_ctrl_write(buf, out_len);
-        else                           ble_ota_data_write(buf, out_len);
+        if (attr == s_ota_ctrl_handle) ble_ota_ctrl_write(s_wbuf, out_len);
+        else                           ble_ota_data_write(s_wbuf, out_len);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
+        (attr == s_nav_ctrl_handle || attr == s_nav_data_handle)) {
+        /* Navigator frame control / JPEG bytes. Same flatten-and-forward
+         * shape as OTA and sized the same way (payload <= BLE_NAV_MAX_DATA):
+         * a frame is ~40 writes, so the chunk size is most of the frame rate. */
+        uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (pkt_len > BLE_NAV_MAX_DATA + 3) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        uint16_t out_len = 0;
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, BLE_NAV_MAX_DATA + 3,
+                                     &out_len);
+        if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
+        if (attr == s_nav_ctrl_handle) ble_nav_ctrl_write(s_wbuf, out_len);
+        else                           ble_nav_data_write(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
         (attr == s_file_ctrl_handle || attr == s_file_data_handle)) {
         /* File manager control / upload-data channel. Same flatten-and-forward
          * shape as OTA; FS work + notifies happen on ble_files' worker task. */
-        uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (pkt_len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (pkt_len > NB_SMALL_WRITE) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint16_t out_len = 0;
-        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &out_len);
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, NB_SMALL_WRITE, &out_len);
         if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (attr == s_file_ctrl_handle) ble_files_ctrl_write(buf, out_len);
-        else                            ble_files_data_write(buf, out_len);
+        if (attr == s_file_ctrl_handle) ble_files_ctrl_write(s_wbuf, out_len);
+        else                            ble_files_data_write(s_wbuf, out_len);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_ota_handle) {
@@ -621,6 +705,18 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
                 .val_handle = &s_file_data_handle,
             },
+            {
+                .uuid       = &NB_NAV_CTRL_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_nav_ctrl_handle,
+            },
+            {
+                .uuid       = &NB_NAV_DATA_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                .val_handle = &s_nav_data_handle,
+            },
             { 0 },
         },
     },
@@ -649,8 +745,10 @@ void notif_bridge_on_connect(uint16_t conn) {
 void notif_bridge_on_disconnect(uint16_t conn) {
     if (conn != s_conn_handle) return;       /* an idle peer left */
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    s_last_bridge_write_us = 0;
     ble_ota_on_disconnect();
     ble_files_on_disconnect();
+    ble_nav_on_disconnect();
     reasm_reset();
 }
 
@@ -751,5 +849,6 @@ void notif_bridge_init(void)
     xTaskCreatePinnedToCore(out_task, "notif_out", 4096, NULL, 5, &s_out_task, 0);
     ble_ota_init();
     ble_files_init();
+    ble_nav_init();
     ESP_LOGI(TAG, "notif_bridge ready");
 }

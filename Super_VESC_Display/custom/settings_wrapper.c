@@ -45,6 +45,7 @@ static struct {
     uint8_t dashboard_theme;
     uint8_t splash_loops;
     bool display_flip;
+    uint8_t phone_screen;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -66,6 +67,7 @@ static struct {
     .dashboard_theme = 0,
     .splash_loops = 1,
     .display_flip = false,
+    .phone_screen = 0,
 };
 #endif
 
@@ -506,6 +508,22 @@ void settings_wrapper_set_display_flip(bool on) {
     sim_settings.display_flip = on;
 #else
     settings_set_display_flip(on);
+#endif
+}
+
+uint8_t settings_wrapper_get_phone_screen(void) {
+#if SIMULATOR_MODE
+    return sim_settings.phone_screen;
+#else
+    return settings_get_phone_screen();
+#endif
+}
+
+void settings_wrapper_set_phone_screen(uint8_t which) {
+#if SIMULATOR_MODE
+    sim_settings.phone_screen = which;
+#else
+    settings_set_phone_screen(which);
 #endif
 }
 

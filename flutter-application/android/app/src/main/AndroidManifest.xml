@@ -5,6 +5,12 @@
         xmlns:tools="http://schemas.android.com/tools" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- Android 12+ lets the user grant "approximate" instead of precise;
+         without this the navigator gets no fix at all in that case.
+         Guidance is foreground-only: adding background navigation would
+         need ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE_LOCATION and
+         foregroundServiceType="connectedDevice|location" below. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- HTTP OTA upload to the head unit (release builds; Flutter only adds
          INTERNET to the debug/profile manifests by default) -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -29,7 +35,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -42,6 +48,25 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- "Navigate" in a browser, "open in maps" in a chat: Android's
+                 geo: URIs and Google's navigation scheme. Handled by the
+                 navigator (lib/nav/nav_link.dart). singleTask above, so a
+                 link finds the running app instead of opening a second copy
+                 inside the browser's task. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="geo"/>
+                <data android:scheme="google.navigation"/>
+            </intent-filter>
+            <!-- "Share" from Google Maps, Yandex Maps, OSM or a chat: the text
+                 carries the place as a link, which the navigator reads. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
 

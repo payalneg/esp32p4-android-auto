@@ -18,6 +18,15 @@ class IpcCmd {
   static const readOtaInfo = 'readOtaInfo';
   static const bleOta = 'bleOta'; // {model}
   static const reloadFilter = 'reloadFilter';
+
+  // Navigator picture streamed to the head unit's screen.
+  static const navFrame = 'navFrame'; // {w, h, b64} → reply {ack, seq, ms}
+  static const navHello = 'navHello'; // ask the head unit for its screen state
+  static const navStop = 'navStop'; // we stopped rendering
+  static const navTile = 'navTile'; // {z, x, y, fmt, b64} → reply {ack, ms}
+  static const navView = 'navView'; // {lat, lon, zoom, heading} — where we are
+  static const navRoute = 'navRoute'; // {pts: [lat,lon,...]} → reply {ack}
+  static const navGuide = 'navGuide'; // {turn, dist, remM, remS, off}
   static const bleRestart = 'bleRestart'; // force a clean reconnect
 
   // File manager.
@@ -79,6 +88,19 @@ class IpcEvt {
   static const lispStats = 'lispStats'; // {stats} — unsolicited, while polling
   static const lispConsole = 'lispConsole'; // {chunk} — batched print output
   static const vescTarget = 'vescTarget'; // {target} — VESC link target changed
+
+  /// {navMode, visible, maxChunk} — the head unit's navigator screen came up
+  /// or went away. Unsolicited; also sent in reply to [IpcCmd.navHello].
+  static const navState = 'navState';
+
+  /// {lat, lon} — the rider picked somewhere to go on the head unit's map.
+  static const navDest = 'navDest';
+
+  /// {z, x, y} — the head unit dropped a tile to make room.
+  static const navDropped = 'navDropped';
+
+  /// {zoom} — the rider changed the zoom on the head unit's own map.
+  static const navZoom = 'navZoom';
 
   // Helper (ESP32-C3), all unsolicited.
   static const helperState = 'helperState'; // {state, fw, busy}

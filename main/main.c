@@ -58,7 +58,10 @@ void port_start_app_hook(void)
 #include "display_video.h"
 #include "h264_pipe.h"
 #include "idle_screen.h"
+#include "nav_screen.h"
+#include "aa_link_status.h"
 #include "splash_screen.h"
+#include "charge_prompt.h"
 #include "log_capture.h"
 #include "mdns_advertise.h"
 #include "ota_http.h"
@@ -390,6 +393,18 @@ void app_main(void)
     /* Dashboard (or idle, on failure) is now the live screen underneath —
      * drop the boot splash overlay. No-op if no splash was shown. */
     splash_screen_hide();
+
+    /* Navigator screen — shows the map picture the companion app streams over
+     * BLE (ble_nav.c). Built here rather than on first use: its two 800x480
+     * framebuffers should be claimed while PSRAM is still unfragmented, and
+     * ui_mode falls back to Android Auto if this fails. */
+    if (nav_screen_init() != ESP_OK) {
+        ESP_LOGW(TAG, "navigator screen unavailable — the gesture will show AA");
+    }
+    /* "Battery charged — reset trip?" prompt: arm battery_calc's callback
+     * now that LVGL is up, before the CAN poller can deliver the first ESC
+     * reading (the check runs once per boot on that reading). */
+    charge_prompt_init();
     if (ui_err == ESP_OK) {
         /* 3-finger gesture toggles between VESC dashboard and AA projection.
          * Only meaningful once the AA stack is up. The GT911 polling task
@@ -631,7 +646,10 @@ void app_main(void)
                  "%d.%d.%d.%d | port %d",
                  IP2STR(&ip_info.ip), AA_TCP_PORT);
     }
-    idle_screen_show("Waiting for phone", status_line);
+    idle_screen_set_info(status_line);
+    aa_link_status_init();
+    aa_link_status_set(AA_LINK_DISCONNECTED, "Tap Connect or start Android Auto on the phone");
+    idle_screen_refresh();
     /* Now that we're actually listening, give the user a manual "Connect"
      * shortcut — pages the last paired phone over BT regardless of the
      * auto-reconnect toggle. Hidden during the earlier boot states. */

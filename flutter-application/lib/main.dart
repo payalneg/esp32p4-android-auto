@@ -9,7 +9,9 @@ import 'app.dart';
 import 'ble/ble_proxy.dart';
 import 'bridge/foreground_bridge.dart';
 import 'i18n/strings.dart';
+import 'nav/map_data.dart';
 import 'settings/agent_settings.dart';
+import 'settings/nav_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +44,11 @@ Future<void> main() async {
   // Reads the API key from the system keystore; the editor hides the Assistant
   // tab until this says a key is configured.
   await AgentSettings.instance.load();
+  // The navigator is the first screen, so its profile has to be known before
+  // the first frame. The map data itself can arrive late — the screen listens
+  // and swaps the "not downloaded" banner for the map when it lands.
+  await NavSettings.instance.load();
+  unawaited(MapData.instance.init());
   final locale = LocaleNotifier();
   await locale.load();
   // Start the foreground service — this launches the background isolate

@@ -4,6 +4,7 @@
 
 #if CONFIG_DEBUG_UART_BRIDGE
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_cache.h"
 #include "esp_rom_crc.h"
 #include "linenoise/linenoise.h"
 #include "mbedtls/base64.h"
@@ -22,7 +24,19 @@
 
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
+#include "ble_nav.h"
+#include "esp_timer.h"
+#include "mic_capture.h"
+#include "nav_map.h"
+#include "nav_screen.h"
+#include "nav_route.h"
+#include "nav_tiles.h"
+#include "notif_bridge.h"
 #include "touch_input.h"
+#include "ui_mode.h"
+/* LVGL internals: the timer list, for the lvtimers dump below. */
+#include "misc/lv_gc.h"
+#include "misc/lv_ll.h"
 
 static const char *TAG = "dbg_uart";
 
@@ -334,6 +348,221 @@ static int cmd_tasks(int argc, char **argv)
 #endif
 }
 
+/* Dump every LVGL timer with its period and how overdue it is. The LVGL
+ * worker calls lv_timer_handler() in a loop and sleeps for whatever it
+ * returns — the time until the next timer is due — so a timer that is always
+ * due keeps the task spinning. At CONFIG_FREERTOS_HZ=100 anything under 10 ms
+ * rounds to vTaskDelay(0), which does not block at all, and every task on
+ * core 0 below the worker's priority 6 stops running. This says which timer
+ * it is; addr2line the callback against the elf for a name. */
+static int cmd_lvtimers(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (!bsp_display_lock(1000)) { printf("lvtimers: display busy\n"); return 1; }
+    uint32_t now = lv_tick_get();
+    lv_timer_t *t = _lv_ll_get_head(&LV_GC_ROOT(_lv_timer_ll));
+    int n = 0;
+    uint32_t soonest = UINT32_MAX;
+    while (t) {
+        uint32_t elapsed = now - t->last_run;
+        int32_t  left    = (int32_t)t->period - (int32_t)elapsed;
+        if (!t->paused && left < (int32_t)soonest) soonest = left < 0 ? 0 : (uint32_t)left;
+        printf("  cb=%p period=%4u ms  elapsed=%6u  due in %6d ms%s%s\n",
+               (void *)t->timer_cb, (unsigned)t->period, (unsigned)elapsed,
+               (int)left, t->paused ? "  [paused]" : "",
+               t->repeat_count == 0 ? "  [spent]" : "");
+        t = _lv_ll_get_next(&LV_GC_ROOT(_lv_timer_ll), t);
+        n++;
+    }
+    bsp_display_unlock();
+    printf("%d timers; soonest due in %u ms -> worker sleeps pdMS_TO_TICKS(%u) = %u tick(s)\n",
+           n, (unsigned)soonest, (unsigned)soonest,
+           (unsigned)pdMS_TO_TICKS(soonest > 15 ? 15 : (soonest < 1 ? 1 : soonest)));
+    return 0;
+}
+
+/* ---- mic: run the AA microphone capture without a phone ---- */
+
+typedef struct {
+    uint64_t sq;        /* sum of squares, current 1 s window */
+    int32_t  peak;      /* |max| sample, current window */
+    uint32_t samples;   /* samples in the window */
+    uint32_t chunks;    /* total chunks delivered */
+} mic_stat_t;
+
+static void mic_stat_cb(const int16_t *pcm, size_t n, uint64_t ts, void *ctx)
+{
+    (void)ts;
+    mic_stat_t *st = (mic_stat_t *)ctx;
+    uint64_t sq = 0;
+    int32_t  peak = 0;
+    for (size_t i = 0; i < n; i++) {
+        int32_t v = pcm[i];
+        sq += (uint64_t)(v * v);
+        if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    /* Single producer (capture task) / single consumer (REPL task) — the
+     * numbers are diagnostic, a torn read costs one slightly-off line. */
+    st->sq += sq;
+    if (peak > st->peak) st->peak = peak;
+    st->samples += (uint32_t)n;
+    st->chunks++;
+}
+
+static int cmd_mic(int argc, char **argv)
+{
+    int secs = argc > 1 ? clampi(atoi(argv[1]), 1, 60) : 5;
+    if (mic_capture_is_running()) {
+        printf("ERR: mic busy (an AA session has it open)\n");
+        return 1;
+    }
+    static mic_stat_t st;
+    memset(&st, 0, sizeof(st));
+    esp_err_t err = mic_capture_start(mic_stat_cb, &st);
+    if (err != ESP_OK) {
+        printf("ERR: mic_capture_start: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("capturing %d s\n", secs);
+    for (int s = 1; s <= secs; s++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        uint64_t sq = st.sq;
+        uint32_t n = st.samples;
+        int32_t  peak = st.peak;
+        st.sq = 0; st.samples = 0; st.peak = 0;
+        unsigned rms = n ? (unsigned)sqrt((double)sq / n) : 0;
+        printf("t=%2ds chunks=%u rms=%u peak=%d%s\n", s, (unsigned)st.chunks, rms, (int)peak,
+               n == 0 ? "  <-- no data from the codec" : "");
+    }
+    mic_capture_stop();
+    printf("done: %u chunks in %d s (expect %d/s)\n",
+           (unsigned)st.chunks, secs, 1000 / MIC_CAPTURE_CHUNK_MS);
+    return 0;
+}
+
+/* The 3-finger hold can't be injected through the touch override (it needs
+ * three simultaneous contacts the GT911 shim doesn't fake), so the bridge gets
+ * its own way into every full-screen mode. */
+static int cmd_uimode(int argc, char **argv)
+{
+    if (argc > 1) {
+        if      (strcmp(argv[1], "vesc") == 0)   ui_mode_set(UI_MODE_VESC);
+        else if (strcmp(argv[1], "aa") == 0)     ui_mode_set(UI_MODE_AA);
+        else if (strcmp(argv[1], "nav") == 0)    ui_mode_set(UI_MODE_NAV);
+        else if (strcmp(argv[1], "toggle") == 0) ui_mode_toggle();
+        else { printf("ERR: expected vesc|aa|nav|toggle\n"); return 1; }
+    }
+    printf("mode=%s\n", ui_mode_name(ui_mode_get()));
+    return 0;
+}
+
+static int cmd_navstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    ble_nav_stats_t st;
+    ble_nav_get_stats(&st);
+    const int64_t last = nav_screen_last_frame_us();
+    const int64_t age_ms = last ? (esp_timer_get_time() - last) / 1000 : -1;
+    printf("mode=%s live=%d streaming=%d\n", ui_mode_name(ui_mode_get()),
+           nav_screen_active() ? 1 : 0, st.streaming ? 1 : 0);
+    printf("frames ok=%u failed=%u shown=%u last_shown=%lld ms ago\n",
+           (unsigned)st.frames_ok, (unsigned)st.frames_failed,
+           (unsigned)nav_screen_frames_shown(), (long long)age_ms);
+    printf("last frame %ux%u %u B decode=%u ms ack=%u\n",
+           st.last_w, st.last_h, (unsigned)st.last_bytes,
+           (unsigned)st.last_decode_ms, st.last_ack);
+    nav_tiles_stats_t ts;
+    nav_tiles_get_stats(&ts);
+    nav_map_view_t v;
+    nav_map_get_view(&v);
+    printf("worker stack free=%u B | nimble_host free=%u words\n",
+           (unsigned)st.stack_free,
+           (unsigned)notif_bridge_host_stack_free());
+    printf("tiles ok=%u failed=%u stored=%u/%u evicted=%u last=%u B in %u ms\n",
+           (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
+           (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
+           (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("route %u points, last draw %u us\n",
+           (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
+    printf("view %s %.5f,%.5f z%u hdg=%u | views=%u renders=%u last=%u ms tiles %d/%d\n",
+           v.valid ? "set" : "unset", v.lat, v.lon, (unsigned)v.zoom,
+           (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,
+           (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
+    return 0;
+}
+
+/* Draw a test picture, encode it exactly the way the phone app does, and push
+ * it through the navigator's decode + scale + display path. Verifies the whole
+ * picture chain — colour order, the 2x upscale, the framebuffer swap — without
+ * a phone in the room. */
+static int cmd_navtest(int argc, char **argv)
+{
+    const int w = (argc > 1) ? clampi(atoi(argv[1]), 16, 800) : 400;
+    const int h = w * 480 / 800;
+    if ((w % 16) != 0 || (h % 16) != 0) {
+        printf("ERR: width must be a multiple of 16 and keep 5:3\n");
+        return 1;
+    }
+    const size_t raw_len = (size_t)w * h * 2;
+    uint16_t *raw = heap_caps_aligned_calloc(64, 1, raw_len,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    uint8_t *jpg = heap_caps_aligned_calloc(64, 1, 96 * 1024,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!raw || !jpg) {
+        printf("ERR: no PSRAM\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    /* Colour bars with a white diagonal: bars catch a red/blue swap, the
+     * diagonal catches a wrong stride or a bad scale factor. */
+    static const uint16_t bars[8] = {
+        0xFFFF, 0xFFE0, 0x07FF, 0x07E0, 0xF81F, 0xF800, 0x001F, 0x0000,
+    };
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint16_t px = bars[(x * 8) / w];
+            if (abs(y - (x * h) / w) < 3) px = 0xFFFF;
+            raw[y * w + x] = px;
+        }
+    }
+    esp_cache_msync(raw, raw_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    if (!ensure_resources(true) || !s_enc) {
+        printf("ERR: jpeg encoder unavailable\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    jpeg_encode_cfg_t ecfg = {
+        .width = w,
+        .height = h,
+        .src_type = JPEG_ENCODE_IN_FORMAT_RGB565,
+        /* The head unit's decoder only understands 4:2:0 — same rule the
+         * phone app follows. */
+        .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
+        .image_quality = 80,
+    };
+    uint32_t jlen = 0;
+    esp_err_t e = jpeg_encoder_process(s_enc, &ecfg, (uint8_t *)raw, raw_len,
+                                       jpg, 96 * 1024, &jlen);
+    if (e != ESP_OK) {
+        printf("ERR: encode: %s\n", esp_err_to_name(e));
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const uint8_t ack = ble_nav_debug_present(jpg, jlen, (uint16_t)w, (uint16_t)h);
+    const int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    printf("navtest %dx%d jpeg=%u B ack=%u in %lld ms\n", w, h,
+           (unsigned)jlen, ack, (long long)ms);
+    heap_caps_free(raw);
+    heap_caps_free(jpg);
+    return ack == 0 ? 0 : 1;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -351,9 +580,26 @@ static void register_cmds(void)
           .hint = NULL, .func = cmd_touchmove },
         { .command = "touchup",   .help = "Release the held press",
           .hint = NULL, .func = cmd_touchup },
+        { .command = "lvtimers",
+          .help = "List LVGL timers with period and time until due",
+          .hint = NULL, .func = cmd_lvtimers },
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+        { .command = "uimode",
+          .help = "Show or set the full-screen mode: vesc|aa|nav|toggle",
+          .hint = NULL, .func = cmd_uimode },
+        { .command = "navtest",
+          .help = "Show a locally-made test frame on the navigator screen "
+                  "[width, default 400]",
+          .hint = NULL, .func = cmd_navtest },
+        { .command = "navstat",
+          .help = "Navigator frame stream: mode, frames, last frame size/time",
+          .hint = NULL, .func = cmd_navstat },
+        { .command = "mic",
+          .help = "Capture the AA microphone for [seconds] (default 5) without a "
+                  "phone; prints RMS/peak per second",
+          .hint = NULL, .func = cmd_mic },
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));
@@ -370,8 +616,18 @@ esp_err_t debug_uart_bridge_init(void)
     repl_cfg.task_stack_size = 8192;   /* room for base64 line + handlers */
     repl_cfg.max_cmdline_length = 256;
 
+    /* The Guition JC4880 brings out no UART0 header — its console is the
+     * USB-Serial-JTAG port, which is also the only way a host script can
+     * reach it. Bind the REPL there when that port is the console; the
+     * Waveshare keeps its UART0 REPL. */
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    esp_console_dev_usb_serial_jtag_config_t usb_cfg =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_err_t err = esp_console_new_repl_usb_serial_jtag(&usb_cfg, &repl_cfg, &repl);
+#else
     esp_console_dev_uart_config_t uart_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     esp_err_t err = esp_console_new_repl_uart(&uart_cfg, &repl_cfg, &repl);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "repl init failed: %s", esp_err_to_name(err));
         return err;

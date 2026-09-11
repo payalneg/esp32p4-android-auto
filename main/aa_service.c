@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "h264_pipe.h"
+#include "mic_capture.h"
 #include "touch_input.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -26,6 +27,8 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_PING_RESPONSE       0x000c
 #define AA_MSG_NAV_FOCUS_REQ       0x000d
 #define AA_MSG_NAV_FOCUS_RESP      0x000e
+#define AA_MSG_SHUTDOWN_REQ        0x000f   /* ByeByeRequest: phone is leaving on purpose */
+#define AA_MSG_SHUTDOWN_RESP       0x0010   /* ByeByeResponse (empty) */
 #define AA_MSG_AUDIO_FOCUS_REQ     0x0012
 #define AA_MSG_AUDIO_FOCUS_RESP    0x0013
 
@@ -38,6 +41,8 @@ static const char *TAG = "aa_svc";
 #define AA_MSG_AV_MEDIA_START_REQ   0x8001   /* AVChannelStartIndication */
 #define AA_MSG_AV_MEDIA_SETUP_RESP  0x8003
 #define AA_MSG_AV_MEDIA_ACK         0x8004   /* AVMediaAckIndication */
+#define AA_MSG_AV_INPUT_OPEN_REQ    0x8005   /* AVInputOpenRequest (mic) */
+#define AA_MSG_AV_INPUT_OPEN_RESP   0x8006   /* AVInputOpenResponse (mic) */
 #define AA_MSG_AV_VIDEO_FOCUS_REQ   0x8007
 #define AA_MSG_AV_VIDEO_FOCUS_IND   0x8008
 #define AA_MSG_SENSOR_START_REQ     0x8001
@@ -67,29 +72,50 @@ static const char *TAG = "aa_svc";
 
 /* ---------- Service Discovery response builder ---------- */
 
+/* Codec frame is 800×480; the phone lays its UI out in
+ * (800 - MARGIN_W) × (480 - MARGIN_H) and leaves the rest blank. 0×0 = full frame. */
+#define AA_VIDEO_MARGIN_W   0
+#define AA_VIDEO_MARGIN_H   0
+
+/* gearhead CENTRES the content inside the codec frame (observed on hardware
+ * 2026-09-08 with 200×80 margins, 600×400 area) and expects touch coordinates relative to
+ * that content area, not to the frame. We display the full frame, so panel
+ * (x, y) → content (x - CONTENT_X, y - CONTENT_Y). */
+#define AA_VIDEO_CONTENT_W  (800 - AA_VIDEO_MARGIN_W)
+#define AA_VIDEO_CONTENT_H  (480 - AA_VIDEO_MARGIN_H)
+#define AA_VIDEO_CONTENT_X  (AA_VIDEO_MARGIN_W / 2)
+#define AA_VIDEO_CONTENT_Y  (AA_VIDEO_MARGIN_H / 2)
+
 /* AVChannel{stream_type=VIDEO, available_while_in_call=true,
- *           video_configs=[{resolution=720p, fps=30, dpi=160}]}
+ *           video_configs=[{resolution=_480p, fps=_30, margin=0×0, dpi=140}]}
  * → bytes.
  *
- * Trying enum=2 (1280x720) on the off chance modern gearhead refuses to
- * project to 480p heads — most certified wireless car units advertise
- * 720p+, so this might be the "I'll talk to you" tier. We'll downscale
- * the decoded frames to the 800x480 panel via the ESP32-P4 PPA. */
+ * This is what we ask the phone for: _480p, which gearhead renders as
+ * 800×480 — a 1:1 match for the panel, so decoded frames go straight to
+ * the display with no PPA rescale. (720p was tried once as an "accept me"
+ * tier for picky gearhead builds; unnecessary, and it only added a
+ * downscale.) The touch channel advertises the same 800×480 so input
+ * coordinates line up with the video. */
 static size_t build_video_av_channel(uint8_t *out, size_t cap)
 {
     /* Inner VideoConfig submessage. VideoResolutionEnum.proto:
      *   NONE=0, _480p=1, _720p=2, _1080p=3
      * gearhead resolves _480p to 800×480 (and NONE/unknown to the same
      * default; see openauto ServiceFactory.cpp). So _480p is effectively
-     * the smallest AA video size — esp_h264 SW on P4 caps out ~20 fps at
-     * 800×480 and the phone shoots 30. With max_unacked=1 the synchronous
-     * decode-then-ack path naturally throttles the phone to our rate. */
+     * the smallest AA video size. The phone streams at 30 fps regardless of
+     * our decode rate — gearhead ignores max_unacked (see h264_pipe.c), so
+     * pacing comes from the short h264_pipe queue + TCP back-pressure, not
+     * from anything advertised here. */
     uint8_t vcfg[32];
     size_t  vp = 0;
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 1, 1);   /* resolution = _480p (800×480) */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 2, 1);   /* fps = _30 (NONE/0 didn't help — phone ignored) */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, 0);   /* margin_width */
-    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, 0);   /* margin_height */
+    /* Margins (tested 2026-09-08 with 200×80 and 0×160): the stream stays
+     * 800×480, gearhead centres the smaller UI in the frame and leaves the
+     * rest blank; touch must then be reported relative to that content area
+     * (see touch_send_event). Back to 0×0 = full frame. */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 3, AA_VIDEO_MARGIN_W);   /* margin_width */
+    pb_w_uint32(vcfg, sizeof(vcfg), &vp, 4, AA_VIDEO_MARGIN_H);   /* margin_height */
     pb_w_uint32(vcfg, sizeof(vcfg), &vp, 5, 140); /* dpi — typical 480p car */
 
     size_t pos = 0;
@@ -191,11 +217,12 @@ static size_t build_input_channel(uint8_t *out, size_t cap)
      * dims. The enum has no value below _480p which gearhead resolves to
      * 800×480 (see openauto ServiceFactory.cpp). So setting smaller numbers
      * here only confuses touch — the video will still arrive at 800×480.
-     * Match the AA video size so touch coords stay consistent. */
+     * Advertise the CONTENT area (frame minus margins): that is the space
+     * gearhead lays the UI out in and the space touch_send_event reports in. */
     uint8_t ts[16];
     size_t  tp = 0;
-    pb_w_uint32(ts, sizeof(ts), &tp, 1, 800);
-    pb_w_uint32(ts, sizeof(ts), &tp, 2, 480);
+    pb_w_uint32(ts, sizeof(ts), &tp, 1, AA_VIDEO_CONTENT_W);
+    pb_w_uint32(ts, sizeof(ts), &tp, 2, AA_VIDEO_CONTENT_H);
     pb_w_submsg(out, cap, &pos, 2, ts, tp);    /* touch_screen_config */
     return pos;
 }
@@ -450,12 +477,17 @@ static esp_err_t build_sd_response(uint8_t *out, size_t cap, size_t *out_len)
  * Without this, decrypt was reading garbage plaintext (manifest as
  * "decrypt: out_buf full" once the 32 KiB plain_buf filled with junk) the
  * moment the touch task issued its first encrypt while main was inside
- * mbedtls_ssl_read. */
+ * mbedtls_ssl_read.
+ *
+ * Recursive so the AV ack path can hold it across "is the session still
+ * alive?" + send_encrypted (which takes it again): the ack fires from the
+ * display task up to a few frames after the recv loop has exited, and the
+ * TLS context is freed right after aa_service_run returns. */
 static SemaphoreHandle_t s_ssl_mutex;
 
 static void ensure_ssl_mutex(void)
 {
-    if (!s_ssl_mutex) s_ssl_mutex = xSemaphoreCreateMutex();
+    if (!s_ssl_mutex) s_ssl_mutex = xSemaphoreCreateRecursiveMutex();
 }
 
 static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
@@ -468,12 +500,12 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     /* Hold the ssl mutex across encrypt + frame_send so we don't interleave
      * AA frame bytes on the wire AND so we don't race the recv-loop's
      * ssl_read inside mbedtls. */
-    if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
     /* plaintext = [msg_id BE16][body] */
     uint8_t *plain = malloc(2 + body_len);
     if (!plain) {
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         return ESP_ERR_NO_MEM;
     }
     plain[0] = (uint8_t)(msg_id >> 8);
@@ -485,7 +517,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                                    cipher_buf, cipher_cap, &cipher_len);
     free(plain);
     if (err != ESP_OK) {
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         return err;
     }
 
@@ -510,6 +542,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
      * control channel. Everything else (setup, focus, open) is rare enough
      * to keep visible. */
     bool noisy = (msg_id == AA_MSG_AV_MEDIA_ACK) ||
+                 (msg_id == AA_MSG_AV_MEDIA_DATA_TS) ||   /* mic PCM, 25/s */
                  (msg_id == AA_MSG_INPUT_EVENT_IND) ||
                  (channel == AA_CHANNEL_CONTROL && msg_id == AA_MSG_PING_RESPONSE);
     if (!noisy) {
@@ -519,7 +552,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
                  channel, msg_id, (unsigned)body_len, (unsigned)cipher_len);
     }
     esp_err_t send_err = aa_frame_send_raw(sock, channel, flags, cipher_buf, cipher_len);
-    xSemaphoreGive(s_ssl_mutex);
+    xSemaphoreGiveRecursive(s_ssl_mutex);
     return send_err;
 }
 
@@ -665,14 +698,14 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
          * (above) is intentionally outside the mutex so the touch sender
          * can keep firing while we block waiting for the next frame. */
         ensure_ssl_mutex();
-        if (xSemaphoreTake(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+        if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
         if (is_bulk) {
             int64_t t_dec0 = esp_timer_get_time();
             err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                                  plain_buf, plain_cap, out_len);
             s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             if (err != ESP_OK) return err;
             *out_msg = plain_buf;
             *out_ch = ch;
@@ -686,7 +719,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
             p->len = 0;
             p->active = true;
         } else if (!p->active) {
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             ESP_LOGE(TAG, "ch %d MIDDLE/LAST without prior FIRST", (int)ch);
             return ESP_ERR_INVALID_STATE;
         }
@@ -694,7 +727,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
          * short — aa_tls_decrypt's "out_buf full" is unreachable from here. */
         err = partial_reserve(p, cipher_len, ch);
         if (err != ESP_OK) {
-            xSemaphoreGive(s_ssl_mutex);
+            xSemaphoreGiveRecursive(s_ssl_mutex);
             p->active = false;
             p->len = 0;
             return err;
@@ -705,7 +738,7 @@ static esp_err_t recv_decrypted(int sock, aa_tls_t *tls,
         err = aa_tls_decrypt(tls, cipher_buf, cipher_len,
                              p->buf + p->len, p->cap - p->len, &got);
         s_recv_stats.decrypt_us += (uint64_t)(esp_timer_get_time() - t_dec0);
-        xSemaphoreGive(s_ssl_mutex);
+        xSemaphoreGiveRecursive(s_ssl_mutex);
         if (err != ESP_OK) return err;
         p->len += got;
 
@@ -814,6 +847,43 @@ static esp_err_t handle_channel_open(int sock, aa_tls_t *tls,
                              evt, ep, cipher_buf, cipher_cap);
     }
     return err;
+}
+
+/* ShutdownRequest (aasdk name; "ByeByeRequest" in gearhead's own logs) is
+ * the phone saying it is ending the session ON PURPOSE — the user tapped
+ * Exit in Android Auto, or the phone is switching to another car. Everything
+ * else that ends a session (a FIN with no ShutdownRequest before it, an RST,
+ * a dead link) is a loss the phone did not choose, and the reconnect logic
+ * in tcp_server / aa_reconnect pages the phone back for those. Before this
+ * was handled, every clean FIN counted as "the user exited", so a session
+ * that died with the Wi-Fi link still up (gearhead's own read timeout,
+ * gearhead killed by the OS) left the head unit waiting for a Connect tap.
+ * Reset at the start of every aa_service_run. */
+static volatile int  s_peer_shutdown_reason = -1;
+
+bool aa_service_peer_requested_shutdown(void)
+{
+    return s_peer_shutdown_reason >= 0;
+}
+
+static esp_err_t handle_shutdown_request(int sock, aa_tls_t *tls,
+                                         const uint8_t *body, size_t body_len,
+                                         uint8_t *cipher_buf, size_t cipher_cap)
+{
+    /* ShutdownRequest{ reason (enum, field 1) } — aasdk knows NONE=0 /
+     * QUIT=1; gearhead has a few more (device switch, ...). Logged only. */
+    size_t pos = 0;
+    pb_field_t f;
+    uint64_t reason = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.wire == 0 && f.field == 1) reason = f.varint;
+    }
+    s_peer_shutdown_reason = (int)reason;
+    ESP_LOGI(TAG, "phone sent ShutdownRequest (reason %d) — ending the session, "
+                  "not paging it back", (int)reason);
+    /* Same as openauto: answer ShutdownResponse, then close from our side. */
+    return send_encrypted(sock, tls, AA_CHANNEL_CONTROL, AA_MSG_SHUTDOWN_RESP,
+                          NULL, 0, cipher_buf, cipher_cap);
 }
 
 static esp_err_t handle_ping(int sock, aa_tls_t *tls,
@@ -941,12 +1011,26 @@ typedef struct {
 static av_ack_ctx_t s_av_ack_ctx;
 static uint8_t      s_av_ack_cipher[AV_ACK_CIPHER_SIZE];
 
+/* Runs on the display task (h264_pipe's deferred-ack fence) — possibly after
+ * the session is gone: on a disconnect the frames still queued in h264_pipe
+ * and the display stage keep flowing for ~100-200 ms, and the TLS context is
+ * freed by tcp_server right after aa_service_run returns. The liveness check
+ * and the send are one critical section on s_ssl_mutex, and the exit path
+ * clears ctx->tls under the same mutex, so a late ack is a clean no-op
+ * instead of mbedtls_ssl_write on freed memory. */
 static esp_err_t av_ack_callback(void *ctx_v)
 {
     av_ack_ctx_t *ctx = (av_ack_ctx_t *)ctx_v;
-    if (!ctx || !ctx->tls) return ESP_ERR_INVALID_STATE;
-    return send_av_media_ack(ctx->sock, ctx->tls, ctx->ch,
-                             s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
+    if (!ctx) return ESP_ERR_INVALID_STATE;
+    ensure_ssl_mutex();
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (ctx->tls) {
+        err = send_av_media_ack(ctx->sock, ctx->tls, ctx->ch,
+                                s_av_ack_cipher, AV_ACK_CIPHER_SIZE);
+    }
+    xSemaphoreGiveRecursive(s_ssl_mutex);
+    return err;
 }
 
 /* Per-second video-rate counter — tracks AV media bytes/frames coming from
@@ -1210,6 +1294,22 @@ static esp_err_t touch_send_event(uint64_t timestamp_us,
     touch_send_ctx_t *ctx = (touch_send_ctx_t *)ctx_v;
     if (!ctx || !ctx->tls || !ctx->cipher) return ESP_ERR_INVALID_STATE;
 
+    /* Frame (800×480) → content-area coordinates. A press that starts on the
+     * blank margin is swallowed together with the rest of that gesture; a
+     * drag that started inside and wanders out is clamped to the edge so the
+     * phone still sees the RELEASE and never gets a stuck pointer. */
+    static bool s_gesture_ignored = false;
+    int cx = (int)x - AA_VIDEO_CONTENT_X;
+    int cy = (int)y - AA_VIDEO_CONTENT_Y;
+    bool inside = cx >= 0 && cy >= 0 &&
+                  cx < AA_VIDEO_CONTENT_W && cy < AA_VIDEO_CONTENT_H;
+    if (action == TOUCH_ACTION_PRESS) s_gesture_ignored = !inside;
+    if (s_gesture_ignored) return ESP_OK;
+    if (cx < 0) cx = 0; else if (cx >= AA_VIDEO_CONTENT_W) cx = AA_VIDEO_CONTENT_W - 1;
+    if (cy < 0) cy = 0; else if (cy >= AA_VIDEO_CONTENT_H) cy = AA_VIDEO_CONTENT_H - 1;
+    x = (uint16_t)cx;
+    y = (uint16_t)cy;
+
     /* TouchEvent { repeated TouchLocation touch_location = 1;
      *              uint32 action_index = 2;
      *              TouchAction touch_action = 3; }
@@ -1239,6 +1339,145 @@ static esp_err_t touch_send_event(uint64_t timestamp_us,
     return send_encrypted(ctx->sock, ctx->tls, (aa_channel_id_t)1,
                           AA_MSG_INPUT_EVENT_IND,
                           body, bp, ctx->cipher, TOUCH_CIPHER_SIZE);
+}
+
+/* ---------- Microphone bridge (AV input channel 7) ---------- */
+
+/* gearhead opens the mic with AVInputOpenRequest{open=true} when a voice
+ * session starts (mic button / Assistant on the phone) and closes it with
+ * open=false. While open we stream 16 kHz mono PCM as
+ * AVMediaWithTimestampIndication on the same channel — the message the
+ * phone uses for video towards us, mirrored: 8-byte big-endian µs
+ * timestamp, then the raw payload. The phone acks every chunk with
+ * AVMediaAckIndication. openauto ignores those acks and streams at
+ * capture rate, so they only serve as a liveness signal here: once the
+ * phone has acked at least once, more than ~1 s of unacked audio means it
+ * stopped listening and we drop chunks instead of piling into the TCP
+ * send buffer (a blocked send() here would stall the recv loop behind
+ * s_ssl_mutex). A phone that never acks at all is streamed to regardless. */
+#define MIC_CIPHER_SIZE      2048
+#define MIC_MAX_OUTSTANDING  25   /* chunks of 40 ms ≈ 1 s */
+
+typedef struct {
+    int             sock;
+    aa_tls_t       *tls;
+    aa_channel_id_t ch;
+    bool            open;
+    uint32_t        sent;
+    uint32_t        acked;      /* bumped from the recv loop — atomics */
+    uint32_t        dropped;
+    uint32_t        send_fail;
+} mic_ctx_t;
+
+static mic_ctx_t s_mic_ctx;
+static uint8_t   s_mic_cipher[MIC_CIPHER_SIZE];
+static uint8_t   s_mic_body[8 + MIC_CAPTURE_CHUNK_SAMPLES * sizeof(int16_t)];
+
+/* Runs on the mic capture task. Same discipline as av_ack_callback: the
+ * liveness check and the send are one critical section on s_ssl_mutex, and
+ * the session exit path clears ctx->tls under the same mutex, so a chunk
+ * that races the teardown is a clean no-op. */
+static void mic_pcm_cb(const int16_t *pcm, size_t samples,
+                       uint64_t timestamp_us, void *ctx_v)
+{
+    mic_ctx_t *ctx = (mic_ctx_t *)ctx_v;
+    if (!ctx) return;
+    ensure_ssl_mutex();
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (!ctx->open || !ctx->tls) {
+        xSemaphoreGiveRecursive(s_ssl_mutex);
+        return;
+    }
+    uint32_t acked = __atomic_load_n(&ctx->acked, __ATOMIC_RELAXED);
+    if (acked > 0 && ctx->sent - acked > MIC_MAX_OUTSTANDING) {
+        if (ctx->dropped++ == 0) {
+            ESP_LOGW(TAG, "mic: phone stopped acking (%u sent / %u acked) — dropping",
+                     (unsigned)ctx->sent, (unsigned)acked);
+        }
+        xSemaphoreGiveRecursive(s_ssl_mutex);
+        return;
+    }
+
+    size_t pcm_bytes = samples * sizeof(int16_t);
+    if (pcm_bytes > sizeof(s_mic_body) - 8) pcm_bytes = sizeof(s_mic_body) - 8;
+    for (int i = 0; i < 8; i++) {
+        s_mic_body[i] = (uint8_t)(timestamp_us >> (56 - 8 * i));
+    }
+    memcpy(s_mic_body + 8, pcm, pcm_bytes);
+    esp_err_t err = send_encrypted(ctx->sock, ctx->tls, ctx->ch,
+                                   AA_MSG_AV_MEDIA_DATA_TS,
+                                   s_mic_body, 8 + pcm_bytes,
+                                   s_mic_cipher, MIC_CIPHER_SIZE);
+    if (err == ESP_OK) {
+        ctx->sent++;
+    } else if (ctx->send_fail++ < 3) {
+        ESP_LOGW(TAG, "mic: send failed: %s", esp_err_to_name(err));
+    }
+    xSemaphoreGiveRecursive(s_ssl_mutex);
+}
+
+/* AVInputOpenRequest{ open=1, anc=2, ec=3, max_unacked=4 }
+ *   → AVInputOpenResponse{ session=1, value=2 }.
+ * `value` follows openauto: 0 = OK (opened, or closed), 1 = open failed.
+ * session is always 0 — the phone never sends AVChannelStart on this
+ * channel, and openauto answers with a constant 0 as well. */
+static esp_err_t handle_av_input_open(int sock, aa_tls_t *tls,
+                                      aa_channel_id_t ch,
+                                      const uint8_t *body, size_t body_len,
+                                      uint8_t *cipher_buf, size_t cipher_cap)
+{
+    size_t pos = 0;
+    pb_field_t f;
+    bool open = false, anc = false, ec = false;
+    uint32_t max_unacked = 0;
+    while (pb_read_field(body, body_len, &pos, &f)) {
+        if (f.wire != 0) continue;
+        switch (f.field) {
+        case 1: open = f.varint != 0; break;
+        case 2: anc  = f.varint != 0; break;
+        case 3: ec   = f.varint != 0; break;
+        case 4: max_unacked = (uint32_t)f.varint; break;
+        default: break;
+        }
+    }
+    ESP_LOGI(TAG, "AVInputOpenRequest ch=%d open=%d anc=%d ec=%d max_unacked=%u",
+             ch, (int)open, (int)anc, (int)ec, (unsigned)max_unacked);
+
+    uint32_t value = 0;
+    ensure_ssl_mutex();
+    if (open) {
+        /* Re-open while running: restart so the counters and the session
+         * pointer are fresh. stop() joins the capture task, so nothing
+         * touches s_mic_ctx while we rewrite it. */
+        mic_capture_stop();
+        if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) == pdTRUE) {
+            s_mic_ctx = (mic_ctx_t){ .sock = sock, .tls = tls, .ch = ch, .open = true };
+            xSemaphoreGiveRecursive(s_ssl_mutex);
+        }
+        esp_err_t e = mic_capture_start(mic_pcm_cb, &s_mic_ctx);
+        if (e != ESP_OK) {
+            ESP_LOGW(TAG, "mic open failed: %s", esp_err_to_name(e));
+            s_mic_ctx.open = false;
+            value = 1;
+        }
+    } else {
+        if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) == pdTRUE) {
+            s_mic_ctx.open = false;
+            xSemaphoreGiveRecursive(s_ssl_mutex);
+        }
+        mic_capture_stop();
+        ESP_LOGI(TAG, "mic closed: sent=%u acked=%u dropped=%u",
+                 (unsigned)s_mic_ctx.sent,
+                 (unsigned)__atomic_load_n(&s_mic_ctx.acked, __ATOMIC_RELAXED),
+                 (unsigned)s_mic_ctx.dropped);
+    }
+
+    uint8_t resp[8];
+    size_t  rp = 0;
+    pb_w_uint32(resp, sizeof(resp), &rp, 1, 0 /* session */);
+    pb_w_uint32(resp, sizeof(resp), &rp, 2, value);
+    return send_encrypted(sock, tls, ch, AA_MSG_AV_INPUT_OPEN_RESP,
+                          resp, rp, cipher_buf, cipher_cap);
 }
 
 /* ---------- Periodic IDR request ----------
@@ -1339,6 +1578,7 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
     /* Drop any reassembly leftovers from a previous session — a TCP reconnect
      * shouldn't carry over half-finished video fragments. */
     recv_partial_reset();
+    s_peer_shutdown_reason = -1;
 
     touch_send_ctx_t touch_ctx = { .sock = sock, .tls = tls, .cipher = tx_cipher };
     if (touch_input_start(touch_send_event, &touch_ctx) != ESP_OK) {
@@ -1396,6 +1636,16 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
                 err = handle_nav_focus(sock, tls, body, body_len,
                                        cipher, CIPHER_BUF_SIZE);
                 break;
+            case AA_MSG_SHUTDOWN_REQ:
+                err = handle_shutdown_request(sock, tls, body, body_len,
+                                              cipher, CIPHER_BUF_SIZE);
+                if (err == ESP_OK) {
+                    /* Response is out; leave the loop the way a peer close
+                     * does (tcp_server maps this to "closed by the phone"). */
+                    err = ESP_ERR_INVALID_STATE;
+                    goto done;
+                }
+                break;
             default:
                 ESP_LOGW(TAG, "control msg 0x%04x — not handled yet", msg_id);
                 break;
@@ -1417,6 +1667,21 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             } else if (kind == CH_KIND_TOUCH && msg_id == AA_MSG_INPUT_BINDING_REQ) {
                 err = handle_input_binding(sock, tls, ch, body, body_len,
                                            cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            } else if (kind == CH_KIND_MIC && msg_id == AA_MSG_AV_MEDIA_SETUP_REQ) {
+                /* Same MediaSetupResponse as the AV channels (status OK,
+                 * max_unacked=1, configs=[0]); the focus pushes inside
+                 * handle_av_setup are keyed on video / ch 4 and stay quiet. */
+                err = handle_av_setup(sock, tls, ch, body, body_len,
+                                      cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            } else if (kind == CH_KIND_MIC && msg_id == AA_MSG_AV_INPUT_OPEN_REQ) {
+                err = handle_av_input_open(sock, tls, ch, body, body_len,
+                                           cipher, CIPHER_BUF_SIZE);
+                handled = true;
+            } else if (kind == CH_KIND_MIC && msg_id == AA_MSG_AV_MEDIA_ACK) {
+                /* Phone acking our PCM chunks — see mic_pcm_cb. */
+                __atomic_fetch_add(&s_mic_ctx.acked, 1, __ATOMIC_RELAXED);
                 handled = true;
             } else if ((kind == CH_KIND_AV_VIDEO || kind == CH_KIND_AV_AUDIO) &&
                        msg_id == AA_MSG_AV_MEDIA_SETUP_REQ) {
@@ -1472,9 +1737,23 @@ esp_err_t aa_service_run(int sock, aa_tls_t *tls)
             break;
         }
     }
+done:
 
     idr_timer_stop();
     touch_input_stop();
+    /* Joins the capture task before the TLS context goes away; the ctx
+     * pointer is cleared under s_ssl_mutex below like the AV ack one. */
+    mic_capture_stop();
+    /* Detach the deferred AV acks from this session's TLS context before the
+     * caller frees it — see av_ack_callback. */
+    ensure_ssl_mutex();
+    if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) == pdTRUE) {
+        s_av_ack_ctx.tls  = NULL;
+        s_av_ack_ctx.sock = -1;
+        s_mic_ctx.open    = false;
+        s_mic_ctx.tls     = NULL;
+        xSemaphoreGiveRecursive(s_ssl_mutex);
+    }
     recv_partial_reset();
     free(cipher); free(plain); free(scratch); free(tx_cipher);
     return err;

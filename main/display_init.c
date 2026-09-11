@@ -1,5 +1,7 @@
 #include "display_init.h"
 
+#include "flash_shade.h"
+
 #include "bsp/esp-bsp.h"
 #include "dev_settings.h"
 #include "esp_log.h"
@@ -204,6 +206,30 @@ esp_err_t display_init(void)
      * preempted by the decoder for the entire duration of a frame, blocking
      * the bsp_display_lock for hundreds of ms and stalling vesc_ui_updater. */
     cfg.lv_adapter_cfg.task_core_id = 0;
+    /* Make the worker's sleep survive the tick rate. It runs
+     * lv_timer_handler() in a loop and then vTaskDelay()s for however long
+     * LVGL says the next timer is away, clamped to [min, max] = [1, 15] ms by
+     * default. At CONFIG_FREERTOS_HZ=100 a tick is 10 ms, so pdMS_TO_TICKS()
+     * of anything under 10 rounds to ZERO and vTaskDelay(0) does not block —
+     * it only yields to tasks at the worker's own priority or above. The
+     * worker sits at priority 6 on core 0, so for as long as LVGL keeps
+     * reporting work due within 9 ms the loop spins and everything below it
+     * on that core stops: BLE and the BT-agent link at 5, the VESC sim at 4,
+     * the splash worker at 3, and IDLE0 — which is what trips the task
+     * watchdog every 5 s.
+     *
+     * And it is the steady state, not a rare coincidence: lv_conf.h sets both
+     * LV_DISP_DEF_REFR_PERIOD and LV_INDEV_DEF_READ_PERIOD to 10 ms. Two
+     * 10 ms timers running out of phase mean the next one due is always less
+     * than 10 ms away — fire one at t=0 and the other at t=5 and the handler
+     * answers "5 ms" forever, never the 10 it would take to round up to a
+     * tick. Asking for one whole tick costs nothing (the worker measures 2%
+     * busy, and 10 ms is the period those two timers already want) and gives
+     * the rest of core 0 its time back. */
+    cfg.lv_adapter_cfg.task_min_delay_ms = portTICK_PERIOD_MS;
+    if (cfg.lv_adapter_cfg.task_max_delay_ms < portTICK_PERIOD_MS) {
+        cfg.lv_adapter_cfg.task_max_delay_ms = portTICK_PERIOD_MS;
+    }
     s_display = bsp_display_start_with_config(&cfg);
     if (!s_display) {
         ESP_LOGE(TAG, "bsp_display_start failed");
@@ -305,6 +331,10 @@ esp_err_t display_init(void)
      * whatever stale data was in the framebuffer. */
     vTaskDelay(pdMS_TO_TICKS(200));
     bsp_display_backlight_on();
+
+    /* From here on every flash write/erase dims the panel for its duration
+     * instead of tearing it (see flash_shade.h). */
+    flash_shade_arm();
 
     return ESP_OK;
 }

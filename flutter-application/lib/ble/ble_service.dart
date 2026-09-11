@@ -18,6 +18,7 @@ import '../bridge/foreground_bridge.dart';
 import '../firmware/ble_ota.dart';
 import '../firmware/ota_info.dart';
 import 'messages.dart';
+import 'nav_stream.dart';
 import 'protocol.dart';
 import 'uuids.dart';
 
@@ -53,6 +54,12 @@ class BleService {
   // Present together; drive the device file browser (see FileManager).
   BluetoothCharacteristic? _fileCtrl;
   BluetoothCharacteristic? _fileData;
+  // Optional — null when the firmware predates the navigator screen
+  // (...000b/...000c). Present together; carry the map picture the phone
+  // renders (see nav_stream.dart).
+  BluetoothCharacteristic? _navCtrl;
+  BluetoothCharacteristic? _navData;
+  NavStream? _nav;
   // Optional — the head unit's separate Nordic UART Service (VESC-Tool bridge).
   // Present together; drive the LISP editor (see lib/ble/vesc/). Absent on
   // firmware without the bridge.
@@ -93,16 +100,31 @@ class BleService {
     // Use `unawaited` semantics — boot path mustn't block on a BLE scan.
     // flutter_blue_plus's autoConnect:true returns immediately and lets
     // the OS hold the connection request.
-    _attachKnownDevice(_savedRemoteId!);
+    unawaited(_attachKnownDevice(_savedRemoteId!));
   }
 
-  void _attachKnownDevice(String remoteId) {
+  Future<void> _attachKnownDevice(String remoteId) async {
     final dev = BluetoothDevice.fromId(remoteId);
     _device = dev;
     _userInitiatedDisconnect = false;
     _connSub?.cancel();
     _connSub = dev.connectionState.listen(_onConnectionStateChanged);
     _setState(BleConnState.connecting);
+    // Cancel whatever is already queued for this device before asking again.
+    // With autoConnect the request lives in the OS, and asking twice without
+    // cancelling opens a second link: a Samsung held two connections to the
+    // head unit at once, both writing, and the head unit's bridge binding
+    // flipped between them several times a second — half the map tiles were
+    // acknowledged on the wrong link and never arrived.
+    //
+    // Awaited, not fired off: a cancellation that lands after the new request
+    // cancels that one instead, and nothing reconnects at all.
+    try {
+      await dev.disconnect();
+    } on Object {
+      // Nothing was queued. That is the normal first attach.
+    }
+    if (_userInitiatedDisconnect) return;
     // autoConnect:true → Android queues the GATT connect; the OS wakes
     // when the peripheral advertises. iOS handles the equivalent through
     // CoreBluetooth's stored-peripheral mechanism, but only if the user
@@ -234,6 +256,8 @@ class BleService {
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;
+    _navCtrl = null;
+    _navData = null;
     for (final c in svc.characteristics) {
       final u = c.uuid.toString().toLowerCase();
       if (u == NotifBridgeUuids.charTime) _time = c;
@@ -242,6 +266,8 @@ class BleService {
       if (u == NotifBridgeUuids.charOtaData) _otaData = c;
       if (u == NotifBridgeUuids.charFileCtrl) _fileCtrl = c;
       if (u == NotifBridgeUuids.charFileData) _fileData = c;
+      if (u == NotifBridgeUuids.charNavCtrl) _navCtrl = c;
+      if (u == NotifBridgeUuids.charNavData) _navData = c;
     }
     // Separate NUS service (VESC-Tool bridge) for the LISP editor — optional.
     _nusRx = null;
@@ -257,6 +283,7 @@ class BleService {
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
     _outSub = _outbound!.onValueReceived.listen(_onOutbound);
+    await _startNavStream();
     _setState(BleConnState.connected);
     _startClock();
   }
@@ -527,7 +554,7 @@ class BleService {
         await dev?.disconnect();
       } catch (_) {}
       if (_userInitiatedDisconnect || _savedRemoteId == null) return;
-      _attachKnownDevice(_savedRemoteId!);
+      unawaited(_attachKnownDevice(_savedRemoteId!));
     });
   }
 
@@ -573,7 +600,7 @@ class BleService {
     } catch (_) {}
     // Let the OS tear the ACL link fully down before re-arming autoConnect.
     await Future.delayed(const Duration(milliseconds: 500));
-    _attachKnownDevice(id);
+    unawaited(_attachKnownDevice(id));
   }
 
   Future<void> _teardown() async {
@@ -601,6 +628,7 @@ class BleService {
     _fileData = null;
     _nusRx = null;
     _nusTx = null;
+    await _stopNavStream();
     _setState(BleConnState.idle);
   }
 
@@ -609,6 +637,39 @@ class BleService {
 
   /// Whether the connected head unit exposes the NUS bridge (LISP editor).
   bool get supportsLisp => _nusRx != null && _nusTx != null;
+
+  /// Whether the connected head unit can show the navigator picture we render
+  /// (...000b/...000c). Absent on older firmware; the app hides the feature.
+  bool get supportsNavStream => _nav != null;
+
+  /// The frame sender, or null when the head unit has no navigator screen.
+  NavStream? get navStream => _nav;
+
+  /// Bring the frame channel up on a fresh link: subscribe to its
+  /// notifications and ask for the head unit's screen state right away, so
+  /// the UI knows whether to start rendering before the first frame is due.
+  Future<void> _startNavStream() async {
+    await _stopNavStream();
+    final ctrl = _navCtrl;
+    final data = _navData;
+    if (ctrl == null || data == null) return;
+    try {
+      await ctrl.setNotifyValue(true);
+      final nav = NavStream(_FbpNavChannel(ctrl, data, () => _device));
+      _nav = nav;
+      await nav.hello();
+    } catch (_) {
+      // The head unit has the characteristics but would not talk: leave the
+      // feature off rather than half-wired. The next reconnect tries again.
+      await _stopNavStream();
+    }
+  }
+
+  Future<void> _stopNavStream() async {
+    final nav = _nav;
+    _nav = null;
+    if (nav != null) await nav.dispose();
+  }
 
   /// File-manager characteristics + link facts for FileManager. Null/false
   /// when not connected or unsupported.
@@ -719,4 +780,28 @@ class BleService {
     };
     _fg.setStatus(connected: connected, subtitle: subtitle).catchError((_) {});
   }
+}
+
+
+/// [NavChannel] over the real flutter_blue_plus characteristics.
+class _FbpNavChannel implements NavChannel {
+  _FbpNavChannel(this._ctrl, this._data, this._device);
+
+  final BluetoothCharacteristic _ctrl;
+  final BluetoothCharacteristic _data;
+  final BluetoothDevice? Function() _device;
+
+  @override
+  Future<void> writeCtrl(Uint8List value) =>
+      _ctrl.write(value, withoutResponse: false);
+
+  @override
+  Future<void> writeData(Uint8List value, {required bool withoutResponse}) =>
+      _data.write(value, withoutResponse: withoutResponse);
+
+  @override
+  Stream<List<int>> get notifications => _ctrl.onValueReceived;
+
+  @override
+  int? get mtu => _device()?.mtuNow;
 }

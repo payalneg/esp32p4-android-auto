@@ -35,6 +35,19 @@ void idle_screen_hide(void);
  * backoff). Tap routes through bt_link_request_connect_now(). */
 void idle_screen_set_connect_visible(bool visible);
 
+/* Link state, shown as the title in its own colour (red / amber / green)
+ * with `detail` as the subtitle. Cached like show()'s strings, so a later
+ * refresh re-applies it. Does not change visibility. ASCII only. */
+typedef enum {
+    IDLE_STATE_DISCONNECTED = 0,
+    IDLE_STATE_CONNECTING,
+    IDLE_STATE_CONNECTED,
+} idle_screen_state_t;
+void idle_screen_set_state(idle_screen_state_t state, const char *detail);
+
+/* Small grey third line — the AP / IP / port reference. Cached. */
+void idle_screen_set_info(const char *info);
+
 #ifdef __cplusplus
 }
 #endif

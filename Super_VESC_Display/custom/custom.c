@@ -210,6 +210,8 @@ static lv_obj_t *settings_theme_dropdown = NULL;
 static lv_obj_t *settings_theme_label = NULL;
 static lv_obj_t *settings_splash_loops_dropdown = NULL;
 static lv_obj_t *settings_splash_loops_label = NULL;
+static lv_obj_t *settings_phone_screen_dropdown = NULL;
+static lv_obj_t *settings_phone_screen_label = NULL;
 static lv_obj_t *settings_display_flip_switch = NULL;
 static lv_obj_t *settings_display_flip_label = NULL;
 static lv_obj_t *settings_brightness_slider = NULL;
@@ -1357,6 +1359,21 @@ static void splash_loops_dropdown_event_cb(lv_event_t *e) {
     settings_wrapper_set_splash_loops(s_splash_loop_opts[sel]);
 }
 
+/* Which full-screen source the 3-finger gesture brings up from the dashboard:
+ * Android Auto (the phone projecting over Wi-Fi) or the Navigator picture the
+ * companion app streams over BLE. Only one of them can own the panel. Read by
+ * ui_mode_toggle, so the choice applies on the next gesture. */
+static void phone_screen_dropdown_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    uint16_t sel = lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_wrapper_set_phone_screen(sel > 1 ? 0 : (uint8_t)sel);
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label,
+                          sel == 1 ? "3-finger hold shows the Navigator"
+                                   : "3-finger hold shows Android Auto");
+    }
+}
+
 // Event handler for the display-flip switch. ON = 180° flip for upside-down
 // mounting. The LVGL adapter's rotation is fixed at boot, so the new
 // orientation only takes effect after a reboot — tell the user.
@@ -2228,6 +2245,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_dashboard_theme(0); // Cockpit
         settings_wrapper_set_splash_loops(1);     // play boot splash once
         settings_wrapper_set_display_flip(false); // normal orientation
+        settings_wrapper_set_phone_screen(0);     // 3-finger gesture shows AA
         settings_wrapper_set_brightness_gesture_enabled(true);
 
         // Update UI elements
@@ -2244,6 +2262,9 @@ static void reset_button_event_cb(lv_event_t *e) {
         }
         if (settings_splash_loops_dropdown) {
             lv_dropdown_set_selected(settings_splash_loops_dropdown, splash_loops_to_index(1));
+        }
+        if (settings_phone_screen_dropdown) {
+            lv_dropdown_set_selected(settings_phone_screen_dropdown, 0);
         }
         if (settings_display_flip_switch) {
             lv_obj_clear_state(settings_display_flip_switch, LV_STATE_CHECKED);
@@ -2514,6 +2535,24 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_border_width(settings_splash_loops_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_splash_loops_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_splash_loops_dropdown, splash_loops_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Phone screen (what the 3-finger gesture shows) ==========
+    settings_phone_screen_label = settings_heading_create(ui->settings, y_pos, "Phone screen (3-finger):");
+
+    settings_phone_screen_dropdown = lv_dropdown_create(ui->settings);
+    lv_dropdown_set_options(settings_phone_screen_dropdown, "Android Auto\nNavigator");
+    lv_dropdown_set_selected(settings_phone_screen_dropdown,
+                             settings_wrapper_get_phone_screen() == 1 ? 1 : 0);
+    lv_obj_set_pos(settings_phone_screen_dropdown, 400, y_pos + 5);
+    lv_obj_set_size(settings_phone_screen_dropdown, 390, 50);
+    lv_obj_set_style_bg_color(settings_phone_screen_dropdown, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(settings_phone_screen_dropdown, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_phone_screen_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_border_width(settings_phone_screen_dropdown, 0, 0);
+    lv_obj_set_style_radius(settings_phone_screen_dropdown, 8, 0);
+    lv_obj_add_event_cb(settings_phone_screen_dropdown, phone_screen_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     y_pos += SETTINGS_ROW_H;
 

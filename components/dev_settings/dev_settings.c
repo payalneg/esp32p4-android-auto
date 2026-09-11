@@ -39,6 +39,7 @@ static struct {
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
     bool                 display_flip;     /* 180° flip for upside-down mount */
+    uint8_t              phone_screen;     /* 0 = Android Auto, 1 = Navigator */
 } s_cache;
 
 static settings_can_speed_cb_t     s_can_speed_cb;
@@ -94,6 +95,7 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
     if (nvs_get_u8 (h, "disp_flip",   &u8 ) == ESP_OK) s_cache.display_flip      = (u8 != 0);
+    if (nvs_get_u8 (h, "phone_scr",   &u8 ) == ESP_OK) s_cache.phone_screen     = (u8 > 1) ? 0 : u8;
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
 
@@ -150,6 +152,7 @@ void settings_init(void) {
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
     s_cache.display_flip      = false;
+    s_cache.phone_screen      = 0;   /* the 3-finger gesture shows Android Auto */
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -180,6 +183,7 @@ uint8_t             settings_get_second_head_id(void)    { return s_cache.second
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
 bool                settings_get_display_flip(void)       { return s_cache.display_flip; }
+uint8_t             settings_get_phone_screen(void)       { return s_cache.phone_screen; }
 
 /* ---------------- setters ---------------- */
 
@@ -319,6 +323,16 @@ void settings_set_splash_loops(uint8_t loops) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "splash_loops", loops);
+    commit(h);
+}
+
+void settings_set_phone_screen(uint8_t which) {
+    if (which > 1) which = 0;
+    if (s_cache.phone_screen == which) return;
+    s_cache.phone_screen = which;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "phone_scr", which);
     commit(h);
 }
 

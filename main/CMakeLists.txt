@@ -3,8 +3,11 @@ idf_component_register(
         "main.c"
         "wifi_manager.c"
         "tcp_server.c"
+        "aa_reconnect.c"
+        "aa_link_status.c"
         "mdns_advertise.c"
         "display_init.c"
+        "flash_shade.c"
         "idle_screen.c"
         "ota_screen.c"
         "c6_ota.c"
@@ -27,7 +30,10 @@ idf_component_register(
         "speed_sensor.c"
         "ble_ota.c"
         "ble_files.c"
+        "ble_nav.c"
+        "ble_link_boost.c"
         "notif_toast.c"
+        "charge_prompt.c"
         "music_info_view.c"
         "fonts/aabridge_font_24.c"
         "fonts/aabridge_font_32.c"
@@ -39,6 +45,7 @@ idf_component_register(
         "display_video.c"
         "aa_overlay.c"
         "touch_input.c"
+        "mic_capture.c"
         "aa_overclock.c"
         "ui_mode.c"
         "vesc_ui_updater.c"
@@ -46,10 +53,15 @@ idf_component_register(
         "vbat_routing.c"
         "files_screen.c"
         "splash_screen.c"
+        "nav_screen.c"
+        "nav_tiles.c"
+        "nav_map.c"
+        "nav_route.c"
         "debug_uart_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
+        spi_flash
         esp_event
         esp_netif
         esp_wifi
@@ -80,6 +92,7 @@ idf_component_register(
         vesc_can
         vesc_config
         dev_settings
+        espressif__libpng
         log_capture
         trip_log
         joltwallet__littlefs
@@ -126,3 +139,13 @@ target_add_binary_data(${COMPONENT_LIB} "${_lisp_web_gz}" BINARY)
 idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=mbedtls_x509_get_time" APPEND)
 idf_build_set_property(LINK_OPTIONS "-u" APPEND)
 idf_build_set_property(LINK_OPTIONS "__wrap_mbedtls_x509_get_time" APPEND)
+
+# flash_shade.c sits between every caller and the flash driver's write/erase
+# entry points so the backlight can go dark for the duration of the op (each
+# one stalls the DSI scan-out — see main/flash_shade.h). The wrap applies at
+# the final link, so NVS, littlefs, esp_partition and OTA are all routed
+# through it without any call-site changes.
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=esp_flash_write"
+    "-Wl,--wrap=esp_flash_erase_region"
+    "-Wl,--wrap=esp_flash_erase_chip")

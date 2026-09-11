@@ -38,6 +38,15 @@ static const char *TAG = "touch_input";
 #define EDGE_SWIPE_START_PX 40
 #define EDGE_SWIPE_DIST_PX  100
 
+/* AA mode: a finger has to stay down this long before the phone hears about
+ * it. Shorter contacts (vibration, a knuckle, a raindrop) produce no events
+ * at all. When the hold matures we send PRESS at the touch-down point and,
+ * if the finger has travelled meanwhile, a DRAG to where it is now, so a
+ * slow-starting swipe keeps its full distance. Fast flicks under this
+ * threshold are lost — deliberate (2026-09-08). */
+#define AA_MIN_TOUCH_MS     250
+#define AA_MIN_TOUCH_US     (AA_MIN_TOUCH_MS * 1000LL)
+
 static TaskHandle_t      s_task;
 static touch_send_fn     s_aa_cb;
 static void             *s_aa_ctx;
@@ -47,6 +56,16 @@ static touch_gesture_fn  s_edge_swipe_cb;
 /* Mode flag — default LVGL because the dashboard is the active screen at
  * boot. Flipped to AA by ui_mode_set when the user triple-taps. */
 static _Atomic int       s_mode = TOUCH_MODE_LVGL;
+
+/* Real-finger blackout after a mode flip. The flip itself is a touch (the
+ * 3-finger gesture, a tap on Connect, the phone's video appearing under a
+ * finger) and the new mode reads the tail of that same touch as a fresh
+ * press — a phantom tap on whatever is now under the finger, very often
+ * (field report 2026-09-04). Ignore single-finger input for a second after
+ * every switch. Debug-bridge injection is screen-space and deliberate, so it
+ * is not gated. */
+#define MODE_SWITCH_BLACKOUT_US   (1000 * 1000)
+static _Atomic int64_t   s_mode_switch_us;
 
 /* Landscape-rotated coords for the LVGL indev. Updated by poll_task in
  * TOUCH_MODE_LVGL; LVGL pulls them via touch_input_lvgl_read(). */
@@ -86,6 +105,9 @@ static void poll_task(void *arg)
 
     bool was_pressed = false;       /* AA single-finger state */
     uint16_t last_x = 0, last_y = 0;
+    bool     press_sent = false;    /* AA: PRESS delivered after the min hold */
+    int64_t  down_since_us = 0;     /* AA: when the current finger landed */
+    uint16_t down_x = 0, down_y = 0;/* AA: where it landed */
     bool gesture_latched = false;   /* latched until all fingers lift */
     int64_t gesture_armed_us = 0;
 
@@ -144,8 +166,13 @@ static void poll_task(void *arg)
              * release+regrab still register without bouncing to IDLE. */
 
             /* --- single-finger handling, demuxed by mode --- */
-            /* Common: pre-compute panel-native coords once. */
-            const bool single = (cnt == 1 && !gesture_latched);
+            /* Common: pre-compute panel-native coords once. A finger seen
+             * inside the post-switch blackout is treated as no finger: no
+             * LVGL press, no AA PRESS/DRAG, no edge swipe. A press that was
+             * already reported to AA still gets its RELEASE (cnt==0 path). */
+            const bool blackout =
+                (int64_t)ts - atomic_load(&s_mode_switch_us) < MODE_SWITCH_BLACKOUT_US;
+            const bool single = (cnt == 1 && !gesture_latched && !blackout);
             uint16_t panel_x = 0, panel_y = 0;
             if (single) {
                 panel_x = tx[0] < PANEL_NATIVE_W ? tx[0] : PANEL_NATIVE_W - 1;
@@ -212,6 +239,7 @@ static void poll_task(void *arg)
                 /* AA-side state must not survive a mode flip — reset every
                  * cycle so the next AA session starts clean. */
                 was_pressed = false;
+                press_sent  = false;
 
                 /* --- left-edge swipe detector (opens the LISP panel) ---
                  * Runs on the effective landscape coords reported to LVGL this
@@ -253,33 +281,52 @@ static void poll_task(void *arg)
                     if (aa_x >= AA_W) aa_x = AA_W - 1;
                     if (aa_y >= AA_H) aa_y = AA_H - 1;
 
-                    touch_action_t action;
                     if (!was_pressed) {
-                        action = TOUCH_ACTION_PRESS;
-                    } else if (aa_x != last_x || aa_y != last_y) {
-                        action = TOUCH_ACTION_DRAG;
-                    } else {
+                        /* Finger just landed: arm the hold timer, say nothing
+                         * to the phone yet (see AA_MIN_TOUCH_MS). */
+                        was_pressed   = true;
+                        press_sent    = false;
+                        down_since_us = (int64_t)ts;
+                        down_x = last_x = aa_x;
+                        down_y = last_y = aa_y;
+                        goto next;
+                    }
+                    if (!press_sent) {
+                        last_x = aa_x;
+                        last_y = aa_y;
+                        if ((int64_t)ts - down_since_us < AA_MIN_TOUCH_US) goto next;
+                        /* Hold matured: PRESS where it landed, then catch up
+                         * to the current position if the finger moved. */
+                        if (s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_PRESS, down_x, down_y, s_aa_ctx);
+                        if ((aa_x != down_x || aa_y != down_y) && s_aa_cb) {
+                            s_aa_cb(ts, TOUCH_ACTION_DRAG, aa_x, aa_y, s_aa_ctx);
+                        }
+                        press_sent = true;
+                        goto next;
+                    }
+                    if (aa_x == last_x && aa_y == last_y) {
                         /* Same position, still touching — phone doesn't need
                          * an event for this. Skip to avoid spamming the input
                          * channel at 50 Hz with redundant DRAGs. */
                         goto next;
                     }
-
-                    if (s_aa_cb) s_aa_cb(ts, action, aa_x, aa_y, s_aa_ctx);
+                    if (s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_DRAG, aa_x, aa_y, s_aa_ctx);
                     last_x = aa_x;
                     last_y = aa_y;
-                    was_pressed = true;
                 } else if (cnt == 0 && was_pressed) {
                     /* Final position with RELEASE — openauto sends the last
-                     * (x, y) we saw, not (0, 0). */
-                    if (s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_RELEASE, last_x, last_y, s_aa_ctx);
+                     * (x, y) we saw, not (0, 0). A contact that never reached
+                     * the min hold was never reported, so nothing to release. */
+                    if (press_sent && s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_RELEASE, last_x, last_y, s_aa_ctx);
                     was_pressed = false;
+                    press_sent  = false;
                 } else if (cnt >= 2 && was_pressed) {
                     /* Multi-touch begun while we had a single-finger press
                      * pending — release it cleanly so the phone doesn't see
                      * the gesture as a stuck-finger drag. */
-                    if (s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_RELEASE, last_x, last_y, s_aa_ctx);
+                    if (press_sent && s_aa_cb) s_aa_cb(ts, TOUCH_ACTION_RELEASE, last_x, last_y, s_aa_ctx);
                     was_pressed = false;
+                    press_sent  = false;
                 }
             }
         }
@@ -340,6 +387,7 @@ void touch_input_stop(void)
 
 void touch_input_set_mode(touch_mode_t mode)
 {
+    atomic_store(&s_mode_switch_us, esp_timer_get_time());
     atomic_store(&s_mode, (int)mode);
     if (mode == TOUCH_MODE_LVGL) {
         /* Drop any pending AA state so a stale RELEASE doesn't fire when we

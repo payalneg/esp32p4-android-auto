@@ -5,9 +5,13 @@
     Port of Super_VESC_Display/src/vesc_battery_calc.cpp. Arduino Preferences
     swapped for esp-idf nvs_flash; millis() swapped for esp_timer_get_time().
     Behaviour matches the original: a single ESP32 owns one battery's worth
-    of state at a time. Charge/swap is detected at boot by a > +5 % jump in the
-    pack voltage (v_in) versus the value saved at the previous power-on — see
-    battery_calc_voltage_boot_check(). The save/compare happens only at startup.
+    of state at a time. Charge/swap is detected at boot by a jump in the pack
+    voltage (v_in) versus the value seen at the previous power-on — see
+    battery_calc_voltage_boot_check(). The compare happens only at startup. The
+    baseline rides in the trip-log records (trip_log seeds it back in its boot
+    scan, while the panel is dark); the legacy NVS "last_vin" key is only read
+    (upgrade path) or written when there is no trip log at all — an nvs_commit
+    as the ESC comes up is a full-screen blue flash on this board.
 */
 
 #include "vesc_battery_calc.h"
@@ -58,6 +62,12 @@ static const char *TAG = "batt_calc";
 #define SAVE_INTERVAL_US          (600ULL * 1000 * 1000)
 
 static bool     s_initialized;
+
+/* Charge-detection baseline plumbing (see battery_calc_seed_boot_vin). */
+static bool     s_triplog_alive;          /* trip log carries boot_vin forward */
+static float    s_prev_boot_vin = -1.0f;  /* previous power-on's v_in, < 0 = none */
+static float    s_boot_vin;               /* this boot's first valid v_in, 0 until seen */
+static battery_calc_charge_cb_t s_charge_cb;   /* NULL = auto-reset on detection */
 static float    s_remaining_ah;
 static float    s_last_saved_capacity;
 static float    s_last_net_ah;            /* last (discharged − charged) reading */
@@ -271,6 +281,11 @@ static float smart_percentage_locked(float controller_battery_level,
              * jump straight to 13.05 Ah / 87 %. */
             s_last_net_ah             = net_ah;
             s_first_calculation       = false;
+            /* Start the periodic-save clock from the first ESC data, not
+             * from boot: with s_last_save_us == 0 an ESC that shows up more
+             * than SAVE_INTERVAL after power-on would trigger an nvs_commit
+             * (blue flash) on its very first tick. */
+            s_last_save_us            = esp_timer_get_time();
         } else {
             /* No saved state — seed from controller. */
             battery_calc_reset(current_controller_percent, battery_capacity);
@@ -365,10 +380,16 @@ void battery_calc_reset_trip_and_ah(void)
 void battery_calc_voltage_boot_check(float v_in)
 {
     /* Runs once per boot. The first valid reading is compared against the pack
-     * voltage stored at the previous power-on; a jump up beyond the threshold
+     * voltage seen at the previous power-on; a jump up beyond the threshold
      * means the battery was charged or swapped while we were off → roll the
      * trip over. Either way, this boot's voltage becomes the next boot's
-     * baseline. Independent of the Direct/Smart percentage path. */
+     * baseline. Independent of the Direct/Smart percentage path.
+     *
+     * Baseline source: the newest trip-log record (seeded in trip_log's boot
+     * scan, panel still dark). The legacy NVS key is read only when no record
+     * carries a baseline yet (first boot after the update / empty log), and
+     * written only when there is no trip log at all — otherwise the commit
+     * would land right here, seconds after the panel lit up (blue flash). */
     if (s_vin_boot_checked) return;
     if (v_in < VIN_VALID_MIN) return;   /* ESC not really up yet — retry next tick */
 
@@ -376,12 +397,28 @@ void battery_calc_voltage_boot_check(float v_in)
     if (s_vin_boot_checked) { unlock(); return; }   /* lost the race — already done */
 
     float saved = 0.0f;
-    if (load_vin(&saved)) {
+    bool  have_saved = false;
+    if (s_triplog_alive && s_prev_boot_vin >= VIN_VALID_MIN) {
+        saved = s_prev_boot_vin;
+        have_saved = true;
+    } else {
+        have_saved = load_vin(&saved);
+    }
+    bool  ask = false;          /* hand the decision to s_charge_cb after unlock */
+    float ask_pct = 0.0f;
+    if (have_saved) {
         float change_pct = (v_in - saved) / saved * 100.0f;
         if (change_pct > VIN_CHARGE_PCT_THRESHOLD) {
-            ESP_LOGI(TAG, "charge detected at boot: pack %.1f V → %.1f V (+%.1f%%) — reset trip",
-                     saved, v_in, change_pct);
-            battery_calc_reset_trip_and_ah();
+            if (s_charge_cb) {
+                ESP_LOGI(TAG, "charge detected at boot: pack %.1f V → %.1f V (+%.1f%%) — asking",
+                         saved, v_in, change_pct);
+                ask = true;
+                ask_pct = change_pct;
+            } else {
+                ESP_LOGI(TAG, "charge detected at boot: pack %.1f V → %.1f V (+%.1f%%) — reset trip",
+                         saved, v_in, change_pct);
+                battery_calc_reset_trip_and_ah();
+            }
         } else {
             ESP_LOGI(TAG, "no charge at boot: pack %.1f V → %.1f V (%+.1f%%) — keep trip",
                      saved, v_in, change_pct);
@@ -390,8 +427,22 @@ void battery_calc_voltage_boot_check(float v_in)
         ESP_LOGI(TAG, "no saved pack voltage — baseline set to %.1f V", v_in);
     }
 
-    save_vin(v_in);            /* baseline for the next power-on */
+    s_boot_vin = v_in;         /* trip_log stamps it into every record from now on */
+    if (!s_triplog_alive) {
+        save_vin(v_in);        /* no trip log to carry it → legacy NVS baseline */
+    }
     s_vin_boot_checked = true;
+    unlock();
+
+    /* Outside the lock: the UI callback may build widgets and later call
+     * battery_calc_reset_trip_and_ah() from a button handler. */
+    if (ask) s_charge_cb(saved, v_in, ask_pct);
+}
+
+void battery_calc_set_charge_detected_cb(battery_calc_charge_cb_t cb)
+{
+    lock();
+    s_charge_cb = cb;
     unlock();
 }
 
@@ -401,6 +452,21 @@ float battery_calc_get_remaining_ah(void)
     float rem = s_remaining_ah;
     unlock();
     return rem;
+}
+
+void battery_calc_seed_boot_vin(bool triplog_alive, float prev_boot_vin)
+{
+    lock();
+    s_triplog_alive = triplog_alive;
+    s_prev_boot_vin = prev_boot_vin;
+    unlock();
+    ESP_LOGI(TAG, "boot-vin baseline: %s, prev power-on %.1f V",
+             triplog_alive ? "trip log" : "NVS (no trip log)", prev_boot_vin);
+}
+
+float battery_calc_get_boot_vin(void)
+{
+    return s_boot_vin;
 }
 
 void battery_calc_get_persist(float *remaining_ah, uint32_t *epoch)
