@@ -24,6 +24,14 @@ built in C must ask the display how wide it is: `UI_W` / `UI_H` / `UI_SX()`
 from `Super_VESC_Display/custom/ui_geom.h`, never a literal 800. Simulator for
 the square one: `cd Super_VESC_Display/lvgl-simulator && make dash480`.
 
+**Look at the layout without hardware or a window.** In `lvgl-simulator/`:
+`make shots` (800×480) and `make shots480` (480×480) build the simulator
+headless (SDL dummy driver + `lv_snapshot`), walk every dashboard theme plus
+Settings and write one BMP each into `buildshot*/shots/`. `SHOT="Cockpit"`
+grabs just one. This is the way to check a layout change — the report from
+make_480_project.py estimates text widths, the screenshots show what actually
+rendered, and the two disagreed the first time.
+
 ## The #1 rule: `generated/` vs `custom/`
 
 - `Super_VESC_Display/generated/` is **overwritten** every time the `.guiguider`
