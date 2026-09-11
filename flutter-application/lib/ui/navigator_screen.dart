@@ -131,7 +131,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// errored and is not retried while the camera sits still, which is how the
   /// map ends up blank and stays blank. Firing this after tiles land makes
   /// them appear where they are, without the user having to pan to provoke it.
-  final StreamController<void> _tileReset = StreamController<void>.broadcast();
 
   @override
   void initState() {
@@ -170,7 +169,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     if (_screenPinned) unawaited(ScreenBridge.keepOn(false));
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
-    _tileReset.close();
     _map.dispose();
     super.dispose();
   }
@@ -681,7 +679,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           TileLayer(
             urlTemplate: kOsmTileUrl,
             tileProvider: CachedTileProvider(tiles),
-            reset: _tileReset.stream,
             userAgentPackageName: 'com.aabridge.aa_bridge',
             // Retina simulation shifts the layer down a level: flutter_map
             // takes one off both of these and adds it back when it asks for a
@@ -1196,7 +1193,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       tiles,
       _tileUrls,
       onProgress: (done, total) {
-        _refreshTilesEvery(done, total);
         if (!mounted) return;
         setState(() {
           _tilesDone = done;
@@ -1208,7 +1204,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
     setState(() => _corridorRunning = false);
-    _refreshTiles();
     // Quiet means quiet — except a refusal from the tile server, which the
     // rider should know about whoever started the download.
     if (!quiet || report.blocked) {
@@ -1243,7 +1238,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final report = await cache.downloadCorridor(tiles, _tileUrls,
         onProgress: (done, total) {
-          _refreshTilesEvery(done, total);
           if (mounted) {
             setState(() {
               _tilesDone = done;
@@ -1257,7 +1251,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
     setState(() => _corridorRunning = false);
-    _refreshTiles();
     messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
   }
 
@@ -1272,22 +1265,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     }
     return tf(context, 'mapdata.corridor.done',
         <String, Object?>{'n': report.downloaded + report.skipped});
-  }
-
-  /// Asks the layer to re-read its tiles; cached ones then paint immediately.
-  void _refreshTiles() {
-    if (mounted && !_tileReset.isClosed) _tileReset.add(null);
-  }
-
-  /// Same, but rarely during a long download.
-  ///
-  /// A reset drops and re-creates every tile on screen, not only the missing
-  /// ones. Tiles the rider can see are fetched ahead of the download anyway
-  /// (TilePriority.view), so this only has to catch the odd tile that failed
-  /// on a bad second of signal and has since landed on disk — every hundred
-  /// is plenty for that, and every ten made the map churn.
-  void _refreshTilesEvery(int done, int total) {
-    if (done % 100 == 0 || done == total) _refreshTiles();
   }
 
   /// Addresses to try for one tile: the OSMF server first, then its mirrors,
@@ -1307,16 +1284,14 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     _prefetching = true;
     _lastPrefetchAt = at;
     try {
-      final report = await cache.downloadCorridor(
+      await cache.downloadCorridor(
         tilesAround(at,
             radiusM: kSharpRadiusM,
             zooms: const <int>[kSharpZoom],
             maxTiles: 60),
         _tileUrls,
-        onProgress: _refreshTilesEvery,
         cancelled: () => !mounted,
       );
-      if (report.downloaded > 0) _refreshTiles();
     } on Object {
       // Offline is the normal case here; the map simply stays as it was.
     } finally {
