@@ -255,12 +255,29 @@ static void zoom_step(int delta)
     int z = (v.valid ? v.zoom : NAV_ZOOM_MAX - 1) + delta;
     if (z < NAV_ZOOM_MIN) z = NAV_ZOOM_MIN;
     if (z > NAV_ZOOM_MAX) z = NAV_ZOOM_MAX;
-    if (s_zoom_lbl) {
-        char buf[8];
-        snprintf(buf, sizeof buf, "z%d", z);
-        lv_label_set_text(s_zoom_lbl, buf);
+    if (s_zoom_cb) s_zoom_cb((uint8_t)z);   /* refresh_zoom() shows the level */
+}
+
+/* The level between the buttons, so it reads right from the first frame
+ * rather than only after the rider has pressed something. */
+static void refresh_zoom(void)
+{
+    static int shown = -1;
+    if (!s_zoom_lbl) return;
+    nav_map_view_t v;
+    nav_map_get_view(&v);
+    const int z = v.valid ? (int)v.zoom : -1;
+    if (z == shown) return;
+    shown = z;
+    if (z < 0) {
+        lv_label_set_text(s_zoom_lbl, "");
+        lv_obj_add_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
+        return;
     }
-    if (s_zoom_cb) s_zoom_cb((uint8_t)z);
+    char buf[8];
+    snprintf(buf, sizeof buf, "z%d", z);
+    lv_label_set_text(s_zoom_lbl, buf);
+    lv_obj_clear_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
@@ -384,6 +401,7 @@ static void tick_cb(lv_timer_t *t)
      * the last picture is still the right one. */
     refresh_hud();
     refresh_guide();
+    refresh_zoom();
 
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
@@ -535,6 +553,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_pad_all(s_zoom_lbl, 4, 0);
     lv_obj_set_style_radius(s_zoom_lbl, 8, 0);
     lv_label_set_text(s_zoom_lbl, "");
+    lv_obj_add_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
 
     /* The turn plate: where to go next, and how far. Top left, clear of the
      * destination prompt in the middle. */

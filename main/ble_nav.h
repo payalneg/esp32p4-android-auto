@@ -22,7 +22,9 @@
  *     0x07 VIEW        : [op][i32 lat_e7][i32 lon_e7][u8 zoom][u16 heading]
  *                        [u16 speed_cm_s]
  *     0x08 ROUTE_BEGIN : [op][u16 points][u16 seq]   then DATA carries
- *                        points x [i32 lat_e7][i32 lon_e7]
+ *                        points x [i32 lat_e7][i32 lon_e7]. **points = 0
+ *                        clears the route** — no DATA follows, and the line
+ *                        and the manoeuvre plate come off the screen.
  *     0x09 ROUTE_END   : [op][u16 seq]
  *     0x0A GUIDE       : [op][u8 turn][u16 dist_m][u32 remaining_m]
  *                        [u16 remaining_s][u8 flags]  (bit0 = off route)

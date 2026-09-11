@@ -217,6 +217,7 @@ class HeadUnitFeed {
   List<({double lat, double lon})>? _route;
   Object? _routeSource;
   bool _routeSent = false;
+  bool _clearRoute = false;
   ({int turn, int distM, int remainingM, int remainingS, bool offRoute})? _guide;
   Object? _guideSent;
   DateTime? _lastViewAt;
@@ -244,6 +245,12 @@ class HeadUnitFeed {
     _routeSource = source;
     _route = points;
     _routeSent = false;
+    // Telling it to forget is as important as telling it to draw. The head
+    // unit has no idea a ride ended, so it kept the last line and the last
+    // manoeuvre — an arrival plate reading "0.0 km | 0 min" over a map whose
+    // line had gone off screen.
+    _clearRoute = points == null || points.length < 2;
+    if (_clearRoute) _guide = null;
   }
 
   /// Where the next turn is. Cheap to call on every fix; only a change goes
@@ -327,6 +334,15 @@ class HeadUnitFeed {
     // The line and the turn before any tile: a rider needs to know where to
     // go more than they need the ground sharp.
     final route = _route;
+    if (_clearRoute) {
+      final r = await _link.sendRoute(const <({double lat, double lon})>[]);
+      if (r.ok) {
+        _clearRoute = false;
+        _routeSent = false;
+        _guideSent = null;
+      }
+      return true;
+    }
     if (route != null && !_routeSent && route.length >= 2) {
       final r = await _link.sendRoute(route);
       if (r.ok) _routeSent = true;
