@@ -74,6 +74,9 @@ void port_start_app_hook(void)
 #include "debug_uart_bridge.h"
 #include "vbat_routing.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
+#include "vesc_ble_link.h"
+#include "vesc_head2.h"
 #include "vesc_battery_calc.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_lisp_console.h"
@@ -192,6 +195,9 @@ static void vesc_packet_dispatch(const uint8_t *data, unsigned int len)
     /* LISP quick-action panel UI_DESC/STATE replies (COMM_CUSTOM_APP_DATA +
      * 'VP' magic). Gates internally; ignores everything else. */
     vesc_lisp_panel_process_response(data, len);
+    /* Second-head temperatures, polled instead of broadcast on a BLE link.
+     * Gates on COMM_GET_VALUES_SELECTIVE, which nothing else here sends. */
+    vesc_head2_process_response(data, len);
     ble_nus_forward_response(data, (uint16_t)len);
 }
 
@@ -209,6 +215,9 @@ static void init_nvs(void)
  * baud rate, keeping the current controller_id from settings. */
 static void on_can_speed_changed(int new_kbps)
 {
+    /* Nothing to re-arm while the VESC link is BLE — and installing TWAI
+     * behind the live transport's back is exactly the surprise to avoid. */
+    if (vesc_link_get_mode() != VESC_LINK_MODE_CAN) return;
     if (comm_can_reinit(settings_get_controller_id(), new_kbps) != ESP_OK) {
         ESP_LOGW(TAG, "comm_can_reinit(%d kbps) failed", new_kbps);
     }
@@ -236,9 +245,93 @@ static void on_dashboard_theme_switched(lv_obj_t *screen, lv_obj_t *music_tile)
  * out under the new ID. Speed comes back from settings (single source). */
 static void on_controller_id_changed(uint8_t new_id)
 {
+    if (vesc_link_get_mode() != VESC_LINK_MODE_CAN) return;
     if (comm_can_reinit(new_id, (int)settings_get_can_speed()) != ESP_OK) {
         ESP_LOGW(TAG, "comm_can_reinit(ctrl=%u) failed", new_id);
     }
+}
+
+/* Identity for VESC Tool's CAN scan: it pings the bus, then asks each node
+ * that answered for its firmware version, and lists whoever stays quiet as
+ * "Unknown". UUID = our WiFi MAC so two units on one bus are still
+ * distinguishable. CAN mode only — over BLE we are not a node on the bus at
+ * all and simply do not appear in that scan. */
+static void announce_can_identity(void)
+{
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    const esp_app_desc_t *desc = esp_app_get_description();
+    unsigned maj = 0, min = 0;
+    if (desc) sscanf(desc->version, "%u.%u", &maj, &min);
+    comm_can_set_fw_info("Super VESC Display", (uint8_t)maj, (uint8_t)min,
+                         mac, sizeof(mac));
+}
+
+/* Bring up whichever transport the user picked. Returns false only when the
+ * CAN driver refuses to install — a BLE link that is merely not connected yet
+ * is still a working configuration (the pollers wait for it), so BLE mode
+ * always succeeds here. */
+static bool vesc_link_bringup(uint8_t ctrl_id, int can_kbps)
+{
+    if (settings_get_vesc_link_ble()) {
+        vesc_link_set_mode(VESC_LINK_MODE_BLE);
+        vesc_ble_link_start();
+        return true;
+    }
+    if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
+                       ctrl_id, can_kbps) != ESP_OK) {
+        return false;
+    }
+    announce_can_identity();
+    return true;
+}
+
+/* The actual transport swap. Runs on a timer task, never on the caller's:
+ * the setter fires from the LVGL thread, and tearing a transport down means
+ * stopping pollers and installing/removing a driver. */
+static void vesc_link_swap_cb(void *arg)
+{
+    bool ble = (bool)(intptr_t)arg;
+
+    vesc_rt_data_stop();
+    vesc_lisp_panel_polls_pause(true);
+    vesc_io_data_set_active(false);
+
+    if (ble) {
+        vesc_link_set_mode(VESC_LINK_MODE_BLE);
+        comm_can_stop();
+        vesc_ble_link_start();
+    } else {
+        vesc_ble_link_stop();
+        vesc_link_set_mode(VESC_LINK_MODE_CAN);
+        if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
+                           settings_get_controller_id(),
+                           (int)settings_get_can_speed()) == ESP_OK) {
+            announce_can_identity();
+        } else {
+            ESP_LOGW(TAG, "CAN restart failed — dashboard will show no data");
+        }
+    }
+
+    vesc_lisp_panel_polls_pause(false);
+    vesc_rt_data_start();
+    ESP_LOGW(TAG, "VESC link switched to %s", ble ? "BLE" : "CAN");
+}
+
+/* settings_set_vesc_link_ble → here, on the LVGL thread. Hand the work to a
+ * zero-delay one-shot timer (same trick ble_nus.c uses for its poller-resume)
+ * so the UI thread never blocks on a driver teardown. */
+static void on_vesc_link_changed(bool ble)
+{
+    static esp_timer_handle_t s_swap_timer;
+    if (s_swap_timer) esp_timer_delete(s_swap_timer);
+    const esp_timer_create_args_t args = {
+        .callback = vesc_link_swap_cb,
+        .arg      = (void *)(intptr_t)ble,
+        .name     = "vesc_link_swap",
+    };
+    if (esp_timer_create(&args, &s_swap_timer) != ESP_OK) return;
+    esp_timer_start_once(s_swap_timer, 0);
 }
 
 /* settings_set_target_vesc_id → here. Both pollers store the target ID
@@ -433,6 +526,13 @@ void app_main(void)
      * second the dashboard is alive so RT data starts streaming even
      * before WiFi is up. The decode-side handler routes reassembled
      * VESC packets to vesc_rt_data (and vesc_lisp_poll if enabled). */
+    /* The BLE transport's own plumbing (parser, request queue, paired-adapter
+     * address) comes up before the link is chosen, so bring-up below can just
+     * ask it to connect. It touches no NimBLE state that must wait for
+     * ble_host_init: binding an address only records the wish, and the actual
+     * connect is armed from the stack's sync callback. */
+    vesc_ble_link_init();
+
     int     can_kbps = (int)settings_get_can_speed();
     uint8_t ctrl_id  = settings_get_controller_id();
     uint8_t tgt_id   = settings_get_target_vesc_id();
@@ -446,21 +546,7 @@ void app_main(void)
         /* Config menu backed by in-RAM defaults (no CAN in emulator mode). */
         vesc_config_init();
         vesc_ui_updater_start();
-    } else if (comm_can_start(CONFIG_VESC_CAN_TX_GPIO, CONFIG_VESC_CAN_RX_GPIO,
-                              ctrl_id, can_kbps) == ESP_OK) {
-        /* Identity for VESC Tool's CAN scan: it pings the bus, then asks each
-         * node that answered for its firmware version, and lists whoever stays
-         * quiet as "Unknown". UUID = our WiFi MAC so two units on one bus are
-         * still distinguishable. */
-        {
-            uint8_t mac[6] = {0};
-            esp_read_mac(mac, ESP_MAC_WIFI_STA);
-            const esp_app_desc_t *desc = esp_app_get_description();
-            unsigned maj = 0, min = 0;
-            if (desc) sscanf(desc->version, "%u.%u", &maj, &min);
-            comm_can_set_fw_info("Super VESC Display", (uint8_t)maj, (uint8_t)min,
-                                 mac, sizeof(mac));
-        }
+    } else if (vesc_link_bringup(ctrl_id, can_kbps)) {
         vesc_rt_data_init(tgt_id, CONFIG_VESC_CAN_RT_INTERVAL_MS);
         /* Unconditional: init only stores the target id and leaves the poll
          * inactive. The periodic poll still needs its Kconfig (below), but the
@@ -472,9 +558,13 @@ void app_main(void)
         /* LISP code upload/read worker (used by the LISP editor screen). */
         vesc_lisp_code_init(tgt_id);
         /* LISP quick-action panel (swipe-out drawer driven by the master
-         * LISP script). Reply CAN id is fetched live from comm_can. */
+         * LISP script). The reply id it embeds comes from the live transport:
+         * our CAN node id, or the 255 sentinel on a BLE link. */
         vesc_lisp_panel_init(tgt_id);
-        comm_can_set_packet_handler(vesc_packet_dispatch);
+        vesc_link_set_packet_handler(vesc_packet_dispatch);
+        /* Second head: broadcast STATUS_4 on CAN, polled over BLE — the hook
+         * is a no-op in CAN mode. */
+        vesc_rt_data_register_aux_loop(vesc_head2_poll_loop);
         vesc_rt_data_start();
         vesc_rt_data_start_task();
         /* Probe the downstream VESC's firmware version over CAN and pick the
@@ -487,17 +577,18 @@ void app_main(void)
          * see rt_task() in vesc_rt_data.c. */
         vesc_lisp_poll_start();
 #endif
-        ESP_LOGI(TAG, "VESC CAN ready, polling target ID %u (own ID %u)",
-                 tgt_id, ctrl_id);
+        ESP_LOGI(TAG, "VESC link ready (%s), polling target ID %u (own ID %u)",
+                 settings_get_vesc_link_ble() ? "BLE" : "CAN", tgt_id, ctrl_id);
         vesc_ui_updater_start();
-        /* Hook the setters that drive the CAN bus to live reconfig.
-         * Registered after the driver is up so callbacks can never run
-         * before the first comm_can_start. */
+        /* Hook the setters that drive the transport to live reconfig.
+         * Registered after it is up so callbacks can never run before the
+         * first bring-up. */
         settings_register_can_speed_cb(on_can_speed_changed);
         settings_register_controller_id_cb(on_controller_id_changed);
         settings_register_target_id_cb(on_target_id_changed);
+        settings_register_vesc_link_cb(on_vesc_link_changed);
     } else {
-        ESP_LOGW(TAG, "VESC CAN init failed — dashboard will show no data");
+        ESP_LOGW(TAG, "VESC link init failed — dashboard will show no data");
     }
 
 #if CONFIG_C6_OTA_ENABLED

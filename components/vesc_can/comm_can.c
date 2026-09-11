@@ -226,6 +226,11 @@ esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps)
     return ESP_OK;
 }
 
+bool comm_can_is_running(void)
+{
+    return s_init_done;
+}
+
 void comm_can_transmit_eid(uint32_t id, const uint8_t *data, uint8_t len)
 {
     if (!s_init_done) return;

@@ -248,7 +248,13 @@
     (pu8 10) (pu8 1) (pstr "Slow 25 km/h")   (pu8 (if (= current-profile 0) 1 0))
     (pu8 11) (pu8 1) (pstr "Medium 40 km/h") (pu8 (if (= current-profile 1) 1 0))
     (pu8 12) (pu8 1) (pstr "Fast 60 km/h")   (pu8 (if (= current-profile 2) 1 0))
-    (send-data pbuf 2 reply-id)
+    ; reply-id 255 means the request did NOT come in over CAN — it is a head
+    ; unit talking through a VESC Express BLE adapter, which has no CAN id of
+    ; its own. Answer on the interface the request arrived on (send-data's
+    ; default) and the reply rides back up that adapter's BLE link. 255 is the
+    ; CAN broadcast address, so no real node can claim it and the CAN branch
+    ; below stays exactly as it was.
+    (if (= reply-id 255) (send-data pbuf) (send-data pbuf 2 reply-id))
 })
 (defun panel-send-state (reply-id) {
     (setq pi 0)
@@ -258,7 +264,13 @@
     (pu8 10) (pi32 (* (if (= current-profile 0) 1 0) 1000))
     (pu8 11) (pi32 (* (if (= current-profile 1) 1 0) 1000))
     (pu8 12) (pi32 (* (if (= current-profile 2) 1 0) 1000))
-    (send-data pbuf 2 reply-id)
+    ; reply-id 255 means the request did NOT come in over CAN — it is a head
+    ; unit talking through a VESC Express BLE adapter, which has no CAN id of
+    ; its own. Answer on the interface the request arrived on (send-data's
+    ; default) and the reply rides back up that adapter's BLE link. 255 is the
+    ; CAN broadcast address, so no real node can claim it and the CAN branch
+    ; below stays exactly as it was.
+    (if (= reply-id 255) (send-data pbuf) (send-data pbuf 2 reply-id))
 })
 (defun panel-send-dash (reply-id) {
     (setq pi 0)
@@ -267,7 +279,13 @@
     (pi32 (* cruise-rpm 1000))
     (pi32 (* current-profile 1000))
     (pi32 (* rpm-per-ms 1000.0))
-    (send-data pbuf 2 reply-id)
+    ; reply-id 255 means the request did NOT come in over CAN — it is a head
+    ; unit talking through a VESC Express BLE adapter, which has no CAN id of
+    ; its own. Answer on the interface the request arrived on (send-data's
+    ; default) and the reply rides back up that adapter's BLE link. 255 is the
+    ; CAN broadcast address, so no real node can claim it and the CAN branch
+    ; below stays exactly as it was.
+    (if (= reply-id 255) (send-data pbuf) (send-data pbuf 2 reply-id))
 })
 ; Master enable is just a flag now — the motor arbiter owns all output and
 ; coasts (set-current 0) while throttle-on = 0. No app juggling needed.
@@ -396,12 +414,22 @@
 ; Motor Current Max in VESC Tool takes effect immediately. A released throttle
 ; (thr <= 0.05) ramps DOWN through the same slew — the arbiter keeps calling
 ; this until out-rel reaches 0 instead of cutting the current instantly.
+; Pedal assist is not overridden by the throttle: whichever asks for MORE
+; current wins. A light throttle on top of pedaling keeps the assist, a hard
+; throttle takes over, and the hand-off is seamless both ways because the
+; throttle side of the comparison is the slewed out-rel, not the raw target.
+(defun pas-fresh () (and (> pas-amps 0.0) (< (secs-since pas-seen) 0.4)))
 (defun throttle-out (thr) {
     (let ((target (if (> thr 0.05)
                       (throttle-curve thr thr-curve-accel 0.0 thr-curve-mode)
                       0.0)))
         (setq out-rel (slew out-rel target (ramp-pos) (ramp-neg))))
-    (set-current-rel out-rel 0.2)
+    ; out-rel is relative to l-current-max × profile scale (the same base
+    ; cruise-out uses for imax); pas-amps is absolute — compare in amps.
+    (if (and (pas-fresh)
+             (> pas-amps (* out-rel (conf-get 'l-current-max) (conf-get 'l-current-max-scale))))
+        (set-current pas-amps 0.2)          ; fw clamps to lo_current_max
+        (set-current-rel out-rel 0.2))
 })
 ; Brake output, same shape and same ADC ramp times (the stock ADC app ramped
 ; the brake with them too): grabbing the lever is a fast ramp, not an instant
@@ -434,7 +462,7 @@
 ; this script ever dies: motor stops via the motor-command timeout (every
 ; set-* here feeds it), and ~1.5 s later the stock ADC throttle comes back —
 ; the bike stays rideable (without cruise/PAS) instead of bricking.
-; Priority: master-off > brake > throttle > cruise > PAS > coast.
+; Priority: master-off > brake > throttle (max'ed with PAS) > cruise > PAS > coast.
 (defun motor-control-loop () {
     (loopwhile t {
         (app-disable-output 1500)
@@ -456,13 +484,12 @@
                     (if (> brake 0.05) (deactivate-cruise-control))
                     (setq out-rel 0.0)        ; throttle cut is fine under brake
                     (brake-out brake) })      ; full range, never profile-scaled
-                ((or (> thr 0.05) (> out-rel 0.001)) {    ; 2. throttle
+                ((or (> thr 0.05) (> out-rel 0.001)) {    ; 2. throttle (max with PAS)
                     (if (> thr 0.05) (deactivate-cruise-control))
                     (throttle-out thr) })
                 ((= cruise-active 1)          ; 3. cruise (PI → current)
                     (cruise-out))
-                ((and (> pas-amps 0.0)        ; 4. pedal assist from head unit
-                      (< (secs-since pas-seen) 0.4))
+                ((pas-fresh)                  ; 4. pedal assist alone (throttle released)
                     ; Stale setpoint (sensor/link dropped) falls through to
                     ; coast — the P4 watchdog also sends an explicit 0.
                     (set-current pas-amps 0.2))  ; fw clamps to lo_current_max

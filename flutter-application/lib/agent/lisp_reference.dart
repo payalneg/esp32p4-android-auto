@@ -133,6 +133,7 @@ the rider's own VESC Tool numbers stay the master value.
 (bufcpy dst di src si len) (bufclear b)
 (crc16 buf optLen) (crc32 buf init optLen)
 (send-data buf 2 can-id)   ; interface 2 = CAN with an explicit destination id
+(send-data buf)            ; the interface the request came in on (BLE adapter)
 ```
 
 ## GPIO, sound, persistence
@@ -174,10 +175,14 @@ reset or a re-flash. Anything that must survive needs a timer flush as well.
 * The head unit talks to the script over `COMM_CUSTOM_APP_DATA`: magic
   `0x56 0x50` ('V' 'P'), a 1-byte message id, then a reply-id (the sender's CAN
   id). Replies are built in `pbuf` at index `pi` with `(pu8 v)`, `(pi32 v)`,
-  `(pstr s)` and sent with `(send-data pbuf 2 reply-id)`. Full byte layout in
-  "Quick-action panel protocol" below.
+  `(pstr s)` and sent with `(send-data pbuf 2 reply-id)` — or with plain
+  `(send-data pbuf)` when reply-id is 255, which means the head unit reached
+  the controller through a VESC Express BLE adapter and has no CAN id. Full
+  byte layout in "Quick-action panel protocol" below.
 * ONE loop commands the motor (`motor-control-loop`), with a fixed priority:
-  master-off > brake > throttle > cruise > pedal assist > coast. Add a new
+  master-off > brake > throttle > cruise > pedal assist > coast. Throttle and
+  pedal assist are not exclusive: while pedaling, the throttle branch commands
+  whichever of the two asks for more current (see `throttle-out`). Add a new
   source as a branch there; never call `set-current` from a second thread.
 
 ### The motor arbiter, and why it is shaped like that

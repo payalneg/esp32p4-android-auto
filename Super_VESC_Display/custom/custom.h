@@ -78,6 +78,13 @@ void show_pas_settings(void);
  * directly — no phone involvement. Defined in custom/speed_screen.c. */
 void show_speed_settings(void);
 
+/* VESC link settings screen. Opened from the Settings screen. Picks the
+ * transport to the motor controller — the wired CAN bus or BLE to a VESC
+ * Express adapter — pairs that adapter, and shows the live link state. Talks
+ * to the BLE backend (main/vesc_ble_link.h, main/ble_vesc_client.h) directly.
+ * Defined in custom/vesc_link_screen.c. */
+void show_vesc_link_settings(void);
+
 void update_current(float current);
 void update_speed(float speed);
 void update_battery_proc(float battery_proc);

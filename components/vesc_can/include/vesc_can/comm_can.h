@@ -28,6 +28,11 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
 void      comm_can_stop(void);
 esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps);
 
+/* True while the TWAI driver is installed and started, i.e. a send would
+ * actually go out. Cheap enough to call at poll rate (a flag read), unlike
+ * comm_can_get_bus_health which queries the driver. */
+bool comm_can_is_running(void);
+
 /* Raw transmit (extended ID). */
 void comm_can_transmit_eid(uint32_t id, const uint8_t *data, uint8_t len);
 

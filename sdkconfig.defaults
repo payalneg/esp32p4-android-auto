@@ -189,15 +189,17 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 # task, 2×5 KiB).
 CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
 # Dual-role: we advertise a GATT server (peripheral, for the phone) AND act
-# as a central/GATT-client to connect to external BLE sensors — the cadence
-# sensor (PAS) and the CSC wheel-speed sensor — scan (OBSERVER) + connect
+# as a central/GATT-client to connect to external BLE devices — the cadence
+# sensor (PAS), the CSC wheel-speed sensor, and (in BLE link mode) the VESC
+# Express adapter that replaces the CAN bus — scan (OBSERVER) + connect
 # (CENTRAL) + service discovery / subscribe (GATT_CLIENT). The C6 controller
 # is role-agnostic so no slave rebuild is needed. MAX_CONNECTIONS = 2
-# peripheral (phone app + VESC Tool) + 2 central (cadence + speed sensors).
+# peripheral (phone app + VESC Tool) + 3 central (cadence, speed sensor,
+# VESC adapter).
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_GATT_CLIENT=y
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=5
 # 512 B ATT MTU (NimBLE's own default is 256). VESC Tool already asks for 512
 # and the companion app now does too, so a ~415 B framed LISP READ reply rides
 # in ONE notification instead of two — one fewer connection event per chunk on
@@ -207,7 +209,10 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # which ble_nus.c can only answer with a 5 ms backoff. Both pools live in
 # PSRAM here (MEM_ALLOC_MODE_EXTERNAL), so the extra 3 KiB is free.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
-CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+# A fifth link (the VESC adapter) shares this pool with the phone-facing NUS
+# notifications, and in BLE link mode every dashboard poll is another pair of
+# PDUs through it. Both pools live in PSRAM, so the headroom is cheap.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=32
 # Every GATT write on the NotifBridge service — notifications, icons, OTA
 # chunks, file uploads, navigator tiles — is parsed on the nimble_host task,
 # and with a 512 B MTU those parses are deep. The stock 4 KiB overflowed on

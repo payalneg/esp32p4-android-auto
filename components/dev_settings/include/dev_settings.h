@@ -36,6 +36,14 @@ uint16_t             settings_get_wheel_diameter_mm(void);
 uint8_t              settings_get_motor_poles(void);
 float                settings_get_power_max_kw(void);
 bool                 settings_get_vesc_emulator(void);
+/* Which transport carries the VESC protocol: false = the CAN bus (TWAI),
+ * true = BLE, as a GATT central to a VESC Express adapter. Takes effect
+ * immediately via the hot-apply callback below. */
+bool                 settings_get_vesc_link_ble(void);
+/* BLE mode only: true when the motor controller sits behind the adapter on
+ * the CAN bus (payloads are wrapped in COMM_FORWARD_CAN and addressed to
+ * Target VESC ID), false when the adapter itself is the target. */
+bool                 settings_get_vesc_ble_forward(void);
 bool                 settings_get_aa_autoconnect(void);
 bool                 settings_get_use_imperial(void);
 bool                 settings_get_use_fahrenheit(void);
@@ -87,6 +95,8 @@ void settings_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_set_motor_poles(uint8_t poles);
 void settings_set_power_max_kw(float power_max_kw);
 void settings_set_vesc_emulator(bool on);
+void settings_set_vesc_link_ble(bool on);
+void settings_set_vesc_ble_forward(bool on);
 void settings_set_aa_autoconnect(bool on);
 void settings_set_use_imperial(bool on);
 void settings_set_use_fahrenheit(bool on);
@@ -134,12 +144,14 @@ typedef void (*settings_can_speed_cb_t)(int new_kbps);
 typedef void (*settings_brightness_cb_t)(uint8_t new_pct);
 typedef void (*settings_target_id_cb_t)(uint8_t new_id);
 typedef void (*settings_controller_id_cb_t)(uint8_t new_id);
+typedef void (*settings_vesc_link_cb_t)(bool ble);
 typedef void (*settings_aa_autoconnect_cb_t)(bool on);
 
 void settings_register_can_speed_cb(settings_can_speed_cb_t cb);
 void settings_register_brightness_cb(settings_brightness_cb_t cb);
 void settings_register_target_id_cb(settings_target_id_cb_t cb);
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb);
+void settings_register_vesc_link_cb(settings_vesc_link_cb_t cb);
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb);
 
 /* Firmware-version strings shown on the Settings screen.

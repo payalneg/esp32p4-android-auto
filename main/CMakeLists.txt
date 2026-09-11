@@ -24,6 +24,8 @@ idf_component_register(
         "ble_cadence_client.c"
         "ble_central_arb.c"
         "ble_speed_client.c"
+        "ble_vesc_client.c"
+        "vesc_ble_link.c"
         "ble_nus.c"
         "notif_bridge.c"
         "pas.c"

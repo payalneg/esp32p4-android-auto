@@ -28,6 +28,17 @@ void vesc_rt_data_init(uint8_t target_vesc_id, uint32_t poll_interval_ms);
 void      vesc_rt_data_loop(void);
 esp_err_t vesc_rt_data_start_task(void);
 
+/* Add a poll callback to the single VESC poll task's cycle (~50 Hz; each
+ * callback owns its own interval gate, exactly like the built-in loops).
+ *
+ * This exists so code that must not be a dependency of this component can
+ * still poll on the one task that owns request serialisation — the second-head
+ * temperature poll lives in dev_settings, which already depends on vesc_can.
+ * Up to VESC_RT_AUX_LOOPS of them; extra registrations are ignored. */
+#define VESC_RT_AUX_LOOPS 2
+typedef void (*vesc_rt_aux_loop_t)(void);
+void vesc_rt_data_register_aux_loop(vesc_rt_aux_loop_t fn);
+
 void vesc_rt_data_start(void);
 void vesc_rt_data_stop(void);
 

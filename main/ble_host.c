@@ -17,6 +17,7 @@
 #include "ble_cadence_client.h"
 #include "ble_central_arb.h"
 #include "ble_speed_client.h"
+#include "ble_vesc_client.h"
 #include "ble_nus.h"
 #include "notif_bridge.h"
 
@@ -30,12 +31,12 @@ static const char *TAG = "ble_host";
 
 #define DEVICE_NAME "SuperVESCDisplay"
 
-/* Peripheral (adv-initiated) links only — the sensor central links (cadence
- * + wheel speed) have their own GAP callbacks in ble_cadence_client /
- * ble_speed_client (shared connect-initiator via ble_central_arb) and never
- * land here. Two peers can be up at once (phone app + VESC Tool); the other
- * two NimBLE conn slots (CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4) stay reserved
- * for the sensors. */
+/* Peripheral (adv-initiated) links only — the central links (cadence sensor,
+ * wheel speed, and the VESC Express adapter in BLE link mode) have their own
+ * GAP callbacks in ble_cadence_client / ble_speed_client / ble_vesc_client
+ * (shared connect-initiator via ble_central_arb) and never land here. Two
+ * peers can be up at once (phone app + VESC Tool); the remaining NimBLE conn
+ * slots (CONFIG_BT_NIMBLE_MAX_CONNECTIONS) stay reserved for those three. */
 #define MAX_PERIPH_LINKS 2
 
 static uint8_t       s_own_addr_type;
@@ -68,7 +69,7 @@ static void gatts_register_dispatcher(struct ble_gatt_register_ctxt *ctxt,
 static uint8_t count_periph_links(void)
 {
     uint8_t n = 0;
-    for (uint16_t h = 0; h < MAX_PERIPH_LINKS + 4; h++) {
+    for (uint16_t h = 0; h < CONFIG_BT_NIMBLE_MAX_CONNECTIONS; h++) {
         struct ble_gap_conn_desc d;
         if (ble_gap_conn_find(h, &d) != 0) continue;
         if (d.role == BLE_GAP_ROLE_SLAVE) n++;
@@ -93,7 +94,7 @@ static void drop_older_link_from_same_peer(uint16_t fresh)
     if (ble_gap_conn_find(fresh, &now) != 0) return;
     if (now.role != BLE_GAP_ROLE_SLAVE) return;
 
-    for (uint16_t h = 0; h < MAX_PERIPH_LINKS + 4; h++) {
+    for (uint16_t h = 0; h < CONFIG_BT_NIMBLE_MAX_CONNECTIONS; h++) {
         if (h == fresh) continue;
         struct ble_gap_conn_desc other;
         if (ble_gap_conn_find(h, &other) != 0) continue;
@@ -304,6 +305,7 @@ static void on_sync_cb(void)
     ble_arb_on_sync(s_own_addr_type);
     ble_cadence_on_ble_sync(s_own_addr_type);
     ble_speed_on_ble_sync(s_own_addr_type);
+    ble_vesc_on_ble_sync(s_own_addr_type);
 }
 
 static void host_task(void *arg)
@@ -359,6 +361,7 @@ esp_err_t ble_host_init(void)
     ble_arb_init();
     ble_cadence_client_init();
     ble_speed_client_init();
+    ble_vesc_client_init();
 
     const struct ble_gatt_svc_def *nus_svcs   = ble_nus_get_svcs();
     const struct ble_gatt_svc_def *bridge_svcs = notif_bridge_get_svcs();

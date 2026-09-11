@@ -49,6 +49,7 @@ static int s_units_epoch = 0;
 #include "vesc_head2.h"
 #include "app_fs.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #endif
 
 int cruise_active = 0;
@@ -2327,6 +2328,12 @@ static void pas_open_btn_event_cb(lv_event_t *e) {
     show_pas_settings();   /* opens the on-device PAS screen (custom/pas_screen.c) */
 }
 
+static void vesc_link_open_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    show_vesc_link_settings();
+}
+
 static void speed_open_btn_event_cb(lv_event_t *e) {
     (void)e;
     show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
@@ -2342,31 +2349,20 @@ static void speed_open_btn_event_cb(lv_event_t *e) {
 static lv_obj_t   *settings_can_health_label = NULL;
 static lv_timer_t *s_can_health_tmr = NULL;
 /* Dedup cache — set_text invalidates unconditionally, so skip no-op rewrites.
- * Reset to the sentinel whenever the label is (re)created (settings_ui_init),
- * otherwise a rebuilt screen would keep an empty label until the count moves. */
-static uint32_t s_can_health_last_err = UINT32_MAX;
-static uint32_t s_can_health_last_rec = UINT32_MAX;
+ * Cleared whenever the label is (re)created (settings_ui_init), otherwise a
+ * rebuilt screen would keep an empty label until the text happens to change.
+ * The text itself comes from whichever transport is live (CAN error counters
+ * or the BLE link state), so the dedup is on the string, not on counters. */
+static char s_can_health_last[80] = "";
 
 static void settings_can_health_refresh(void)
 {
     if (!settings_can_health_label) return;
 
-    uint32_t err = 0, rec = 0;
-    char buf[64];
-    if (comm_can_get_bus_health(&err, &rec)) {
-        if (err == s_can_health_last_err && rec == s_can_health_last_rec) return;
-        s_can_health_last_err = err; s_can_health_last_rec = rec;
-        if (rec) {
-            snprintf(buf, sizeof(buf), "CAN errors: %lu\nBus-off recoveries: %lu",
-                     (unsigned long)err, (unsigned long)rec);
-        } else {
-            snprintf(buf, sizeof(buf), "CAN errors: %lu", (unsigned long)err);
-        }
-    } else {
-        if (s_can_health_last_err == 0 && s_can_health_last_rec == 0) return;
-        s_can_health_last_err = 0; s_can_health_last_rec = 0;
-        snprintf(buf, sizeof(buf), "CAN errors: (bus down)");
-    }
+    char buf[80];
+    if (!vesc_link_health_text(buf, sizeof(buf))) return;
+    if (strcmp(buf, s_can_health_last) == 0) return;
+    snprintf(s_can_health_last, sizeof(s_can_health_last), "%s", buf);
     lv_label_set_text(settings_can_health_label, buf);
 }
 
@@ -3093,6 +3089,25 @@ void settings_ui_init(lv_ui *ui) {
         lv_obj_add_event_cb(spd_btn, speed_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
     }
     y_pos += SETTINGS_ROW_H;
+
+    // ========== VESC link (CAN vs Bluetooth) ==========
+    // Opens the dedicated link screen: transport selector, VESC Express
+    // pairing and the live link state. The paired adapter lives in its own
+    // "vescble" NVS namespace, so it survives the settings Reset button the
+    // same way the sensors do.
+    settings_heading_create(ui->settings, y_pos, "VESC link");
+    {
+        lv_obj_t *lnk_btn = lv_btn_create(ui->settings);
+        lv_obj_set_pos(lnk_btn, 600, y_pos + 8);
+        lv_obj_set_size(lnk_btn, 190, 44);
+        lv_obj_set_style_bg_color(lnk_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(lnk_btn, 8, 0);
+        lv_obj_t *lnk_lbl = lv_label_create(lnk_btn);
+        lv_label_set_text(lnk_lbl, "Open");
+        lv_obj_center(lnk_lbl);
+        lv_obj_add_event_cb(lnk_btn, vesc_link_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+    y_pos += SETTINGS_ROW_H;
     /*
     // ========== Wheel Diameter Spinbox ==========
     uint16_t wheel_diameter = settings_wrapper_get_wheel_diameter_mm();
@@ -3341,8 +3356,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_pos(settings_can_health_label, 380, y_pos);
     lv_obj_set_style_text_color(settings_can_health_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_can_health_label, &lv_font_montserrat_20, 0);
-    s_can_health_last_err = UINT32_MAX;   /* fresh label — force first paint */
-    s_can_health_last_rec = UINT32_MAX;
+    s_can_health_last[0] = '\0';          /* fresh label — force first paint */
     settings_can_health_refresh();
     if (!s_can_health_tmr) {
         s_can_health_tmr = lv_timer_create(settings_can_health_timer_cb, 1000, NULL);

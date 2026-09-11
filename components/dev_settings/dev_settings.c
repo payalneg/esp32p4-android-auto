@@ -30,6 +30,12 @@ static struct {
     uint8_t              motor_poles;
     float                power_max_kw;
     bool                 vesc_emulator;
+    /* Which transport talks to the motor controller: false = the CAN bus,
+     * true = BLE to a VESC Express adapter. */
+    bool                 vesc_link_ble;
+    /* In BLE mode: is the controller a node BEHIND the adapter (reached by
+     * wrapping every payload in COMM_FORWARD_CAN), or the adapter itself? */
+    bool                 vesc_ble_forward;
     bool                 aa_autoconnect;
     bool                 use_imperial;
     bool                 use_fahrenheit;
@@ -47,6 +53,7 @@ static settings_brightness_cb_t    s_brightness_cb;
 static settings_target_id_cb_t     s_target_id_cb;
 static settings_controller_id_cb_t s_controller_id_cb;
 static settings_aa_autoconnect_cb_t s_aa_autoconnect_cb;
+static settings_vesc_link_cb_t     s_vesc_link_cb;
 
 /* Validate a kbps value (read from NVS / passed by callers). Bad values
  * fall back to the Kconfig default. The UI dropdown can only produce one
@@ -86,6 +93,8 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "batt_calc",   &u8 ) == ESP_OK) s_cache.battery_calc_mode = (battery_calc_mode_t)u8;
     if (nvs_get_u8 (h, "show_fps",    &u8 ) == ESP_OK) s_cache.show_fps          = (u8 != 0);
     if (nvs_get_u8 (h, "vesc_sim",    &u8 ) == ESP_OK) s_cache.vesc_emulator     = (u8 != 0);
+    if (nvs_get_u8 (h, "link_ble",    &u8 ) == ESP_OK) s_cache.vesc_link_ble     = (u8 != 0);
+    if (nvs_get_u8 (h, "ble_fwd",     &u8 ) == ESP_OK) s_cache.vesc_ble_forward  = (u8 != 0);
     if (nvs_get_u8 (h, "aa_autocon",  &u8 ) == ESP_OK) s_cache.aa_autoconnect    = (u8 != 0);
     if (nvs_get_u8 (h, "use_imp",     &u8 ) == ESP_OK) s_cache.use_imperial      = (u8 != 0);
     if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
@@ -143,6 +152,15 @@ void settings_init(void) {
     s_cache.motor_poles       = 7;
     s_cache.power_max_kw      = 4.5f;
     s_cache.vesc_emulator     = false;
+#ifdef CONFIG_VESC_LINK_DEFAULT_BLE
+    s_cache.vesc_link_ble     = true;
+#else
+    s_cache.vesc_link_ble     = false;
+#endif
+    /* A VESC Express sits on the CAN bus next to the controller, so the
+     * default is to forward to Target VESC ID rather than talk to the
+     * adapter itself. */
+    s_cache.vesc_ble_forward  = true;
     s_cache.aa_autoconnect    = true;
     s_cache.use_imperial      = false;
     s_cache.use_fahrenheit    = false;
@@ -174,6 +192,8 @@ uint16_t            settings_get_wheel_diameter_mm(void) { return s_cache.wheel_
 uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_poles; }
 float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 bool                settings_get_vesc_emulator(void)     { return s_cache.vesc_emulator; }
+bool                settings_get_vesc_link_ble(void)     { return s_cache.vesc_link_ble; }
+bool                settings_get_vesc_ble_forward(void)  { return s_cache.vesc_ble_forward; }
 bool                settings_get_aa_autoconnect(void)    { return s_cache.aa_autoconnect; }
 bool                settings_get_use_imperial(void)      { return s_cache.use_imperial; }
 bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
@@ -395,6 +415,22 @@ void settings_set_vesc_emulator(bool on) {
     commit(h);
 }
 
+void settings_set_vesc_link_ble(bool on) {
+    if (s_cache.vesc_link_ble == on) return;
+    s_cache.vesc_link_ble = on;
+    nvs_handle_t h;
+    if (open_rw(&h) == ESP_OK) { nvs_set_u8(h, "link_ble", on ? 1 : 0); commit(h); }
+    /* Hot-apply: main.c tears one transport down and brings the other up. */
+    if (s_vesc_link_cb) s_vesc_link_cb(on);
+}
+
+void settings_set_vesc_ble_forward(bool on) {
+    if (s_cache.vesc_ble_forward == on) return;
+    s_cache.vesc_ble_forward = on;
+    nvs_handle_t h;
+    if (open_rw(&h) == ESP_OK) { nvs_set_u8(h, "ble_fwd", on ? 1 : 0); commit(h); }
+}
+
 void settings_set_aa_autoconnect(bool on) {
     if (s_cache.aa_autoconnect == on) return;
     s_cache.aa_autoconnect = on;
@@ -539,6 +575,7 @@ void settings_register_brightness_cb(settings_brightness_cb_t cb)       { s_brig
 void settings_register_target_id_cb(settings_target_id_cb_t cb)         { s_target_id_cb     = cb; }
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb) { s_controller_id_cb = cb; }
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb) { s_aa_autoconnect_cb = cb; }
+void settings_register_vesc_link_cb(settings_vesc_link_cb_t cb)           { s_vesc_link_cb = cb; }
 
 /* ---------------- firmware-version info ----------------
  * Pure RAM, no NVS. Race-tolerant in practice: setters fire once at boot

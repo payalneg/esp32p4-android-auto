@@ -11,11 +11,16 @@
     Requires the user to enable "Send status over CAN" on the second head.
     All functions return false when the second head is disabled or its STATUS
     is stale, so callers degrade to single-head behaviour automatically.
+
+    Over a BLE adapter link there are no broadcasts to listen to — the link is
+    point-to-point — so the same temperatures are polled instead, once a
+    second, through the adapter's CAN bus. Callers see no difference.
 */
 
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +35,15 @@ bool vesc_head2_get_temps(float *temp_fet, float *temp_motor);
 /* True iff the second head is enabled and currently broadcasting fresh STATUS.
  * Used by the connection-state logic ("ESC NOT CONNECTED" if any head silent). */
 bool vesc_head2_is_fresh(void);
+
+/* Poll hook for the BLE link, driven by the single VESC poll task (rt_task);
+ * a no-op on CAN, where the second head broadcasts on its own, and whenever
+ * the second head is disabled. Registered by main.c. */
+void vesc_head2_poll_loop(void);
+
+/* Reply hook, fed from the same dispatcher as every other VESC reply. Gates
+ * on the command byte and ignores anything else. */
+void vesc_head2_process_response(const uint8_t *data, unsigned int len);
 
 #ifdef __cplusplus
 }
