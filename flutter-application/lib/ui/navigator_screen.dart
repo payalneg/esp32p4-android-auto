@@ -201,7 +201,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final fix = _controller.lastFix;
     if (fix != null) {
       if (_controller.follow) _followCamera(fix);
-      _followHeadUnit(fix);
+      // Outside a ride the head unit mirrors the rider's map instead, so it
+      // shows what they are looking at rather than a dot on a default view.
+      if (_controller.navigating) _followHeadUnit(fix);
       unawaited(_topUpAroundPosition(fix.position));
     }
     if (_controller.navigating != _screenPinned) {
@@ -340,14 +342,34 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     }
   }
 
-  /// Before a ride starts there is no position to follow, so the head unit
-  /// simply mirrors what the rider is looking at.
+  /// Outside a ride there is nothing to follow, so the head unit mirrors what
+  /// the rider is looking at.
   void _mirrorToHeadUnit(MapCamera camera) {
     if (!_huReady || _controller.navigating) return;
     try {
       _huMap.moveAndRotate(camera.center, camera.zoom, 0);
     } on Object {
       // Not attached yet.
+    }
+  }
+
+  /// Put the head unit's map where it belongs right now.
+  ///
+  /// Needed whenever the little map appears — on the first build, and again
+  /// every time the head unit reconnects — because until then it sits at its
+  /// own initial camera and the display would show a stale overview until the
+  /// rider happened to pan.
+  void _syncHeadUnitCamera() {
+    if (!_huReady) return;
+    final fix = _controller.lastFix;
+    if (_controller.navigating && fix != null) {
+      _followHeadUnit(fix);
+      return;
+    }
+    try {
+      _mirrorToHeadUnit(_map.camera);
+    } on Object {
+      // The rider's own map is not laid out yet; the next move syncs us.
     }
   }
 
@@ -652,7 +674,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               tiles: MapData.instance.tiles,
               routeLine: _routeLine,
               boundaryKey: _huKey,
-              onMapReady: () => _huReady = true,
+              onMapReady: () {
+                _huReady = true;
+                _syncHeadUnitCamera();
+              },
             ),
           );
         },
@@ -694,7 +719,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         onLongPress: (_, p) => _offerPoint(LatLon(p.latitude, p.longitude)),
         onPositionChanged: (camera, hasGesture) {
           if (hasGesture && _controller.follow) _controller.setFollow(false);
-          if (_controller.lastFix == null) _mirrorToHeadUnit(camera);
+          _mirrorToHeadUnit(camera);
           unawaited(NavSettings.instance.saveLastView(
               camera.center.latitude, camera.center.longitude, camera.zoom));
         },

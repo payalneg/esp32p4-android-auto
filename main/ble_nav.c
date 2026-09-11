@@ -43,8 +43,9 @@ static const char *TAG = "ble_nav";
 #define NAV_BEGIN_LEN  (1 + 2 + 2 + 4 + 2)
 #define NAV_END_LEN    (1 + 2)
 
-/* Frames stop counting as "streaming" this long after the last one, so the
- * screen can say the app went quiet without the app having to say so. */
+/* With no frame for this long the link goes back to its normal duty cycle.
+ * Not a fault and not shown on screen: the app skips frames whose pixels did
+ * not change, so a parked bike is silent by design. */
 #define NAV_IDLE_US (6 * 1000 * 1000)
 
 typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
@@ -279,7 +280,8 @@ static void worker(void *arg)
             if (s_stats.streaming && s_last_frame_us != 0 &&
                 esp_timer_get_time() - s_last_frame_us > NAV_IDLE_US) {
                 s_stats.streaming = false;
-                nav_screen_set_streaming(false);
+                /* Only the radio is stood down — the picture on screen is
+                 * still current, so the placeholder stays away. */
                 set_boost(false);
             }
             continue;

@@ -35,9 +35,13 @@ the one recorded in the release commit.
   can be checked without a phone. The bridge's console now follows the board:
   on one whose console is the USB-Serial-JTAG port (the Guition JC4880 brings
   out no UART0 header) the REPL binds there instead of UART0.
-- Verified on a Guition JC4880: a 400x240 test frame decodes, scales to the
-  full panel and appears in 9-10 ms, colours in the right order. The transfer
-  itself is still only exercised by unit tests — that needs the phone.
+- Verified end to end on a Guition JC4880 and a phone: frames arrive within
+  a second of the navigator screen coming up, decode and scale to the full
+  panel in 7-9 ms, and land at 10-26 KB each. Panning the map continuously
+  moves about 0.6 frames a second; a map that is not moving sends nothing at
+  all. Switching the head unit to the dashboard stops the phone (it captions
+  the preview "Display is on another screen"), switching back resumes within
+  a second, and a head-unit reboot reconnects on its own.
 
 ## v1.3.17 / app 0.3.17 — 2026-09-09
 

@@ -19,10 +19,6 @@ static const char *TAG = "nav_screen";
  * text honest. */
 #define TICK_PERIOD_MS 100
 
-/* No frame for this long with the phone connected → say we are waiting. The
- * last picture stays on screen underneath. */
-#define STALE_FRAME_US (5 * 1000 * 1000)
-
 /* Ticks the just-retired front buffer stays off limits after a swap. LVGL
  * renders the image into the panel framebuffer asynchronously (and twice, once
  * per framebuffer in DOUBLE_DIRECT), so handing it straight back to the BLE
@@ -104,16 +100,17 @@ static void tick_cb(lv_timer_t *t)
         atomic_store(&s_cooldown, SWAP_COOLDOWN_TICKS);
     }
 
+    /* A caption only when there is nothing to look at, or when the phone
+     * said it stopped. Quiet is not a fault: the app skips frames whose
+     * pixels did not change, so a parked bike sends nothing for minutes and
+     * the last picture is still the right one. */
     const bool have_frame = atomic_load(&s_frames) > 0;
-    const int64_t age = esp_timer_get_time() - atomic_load(&s_last_frame_us);
     if (!atomic_load(&s_phone)) {
         set_status("Phone not connected");
-    } else if (!atomic_load(&s_streaming)) {
-        set_status("Navigator app is not streaming");
     } else if (!have_frame) {
         set_status("Waiting for the navigator app...");
-    } else if (age > STALE_FRAME_US) {
-        set_status("No picture from the phone");
+    } else if (!atomic_load(&s_streaming)) {
+        set_status("Navigator app stopped streaming");
     } else {
         set_status(NULL);
     }
