@@ -179,6 +179,23 @@ the one recorded in the release commit.
   unit refuses and wrong for the far more common case — not cached, no signal
   yet. It now waits thirty seconds and is asked for again.
 
+### The mirror in the app is gone
+
+- The navigator screen no longer carries a thumbnail of a second, smaller map
+  rendered for the head unit. The head unit draws its own map from the tiles,
+  so the picture path had nothing left to do: the frame streamer, the JPEG
+  encoder and that second map are all deleted from the phone. What is left in
+  its place is a one-line badge, and only when something is actually wrong —
+  a firmware too old to speak the tile protocol, or a display showing another
+  screen.
+- That also takes out a flicker. The screen repainted on every feed status
+  change — which is once per tile sent — and each repaint rebuilt the whole
+  map widget tree, the thumbnail's own map included. Nothing subscribes to
+  the feed's counters any more.
+- The head unit still accepts pictures (`FRAME_*` and `navtest` are
+  untouched), so the path is retired on the phone rather than removed from
+  the protocol.
+
 ### Reboots under a phone: the Bluetooth host ran out of stack
 
 - The head unit restarted every few minutes with the navigator up. The panic

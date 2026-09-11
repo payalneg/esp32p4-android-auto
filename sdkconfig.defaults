@@ -215,6 +215,13 @@ CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
 # mid-tile-stream). The flatten buffers moved off that stack, and this gives
 # the rest of the path room to spare.
 CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
+# NimBLE's own log level is INFO by default, and at INFO it prints two lines
+# for every notification it sends ("GATT procedure initiated: notify" plus the
+# attribute handle). A ride streaming map tiles acknowledges hundreds of them
+# and every line is a blocking console write — seen flooding the bench console
+# at ~10 lines a second with nothing else going on. Warnings and errors still
+# come through.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 
 # ===== H.264 SW decoder =====
 # IRAM-resident hot path (~22 KiB) leaves too little internal SRAM heap

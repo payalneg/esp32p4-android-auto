@@ -7,10 +7,8 @@
 library;
 
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -21,8 +19,6 @@ import '../bridge/nav_intent_bridge.dart';
 import '../bridge/screen_bridge.dart';
 import '../i18n/strings.dart';
 import '../nav/announcer.dart';
-import '../nav/frame_codec.dart';
-import '../nav/frame_streamer.dart';
 import '../nav/head_unit_feed.dart';
 import '../nav/geo.dart';
 import '../nav/link_resolver.dart';
@@ -39,7 +35,6 @@ import '../nav/tile_math.dart';
 import '../nav/way_classes.dart';
 import '../settings/nav_settings.dart';
 import 'nav/cached_tile_provider.dart';
-import 'nav/head_unit_view.dart';
 import 'nav/maneuver_banner.dart';
 import 'nav/route_info_bar.dart';
 import 'region_picker_screen.dart';
@@ -84,17 +79,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
 
   /// The head unit's own camera. Its map is a separate widget at the size the
   /// picture is sent in, so it neither follows nor fights the rider's pans.
-  final _huMap = MapController();
-  final _huKey = GlobalKey();
 
   /// Its own smoothing, fed the same fixes as the phone's camera — same
   /// algorithm, same input, so the two views agree without sharing state.
-  final _huCamera = NavCamera();
-  NavFrameStreamer? _streamer;
   HeadUnitFeed? _feed;
   /// Set once the head-unit map has been laid out, so a camera move before
   /// that does not throw.
-  bool _huReady = false;
   final _controller = NavController();
   final _location = LocationService();
   final _camera = NavCamera();
@@ -153,16 +143,10 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     unawaited(NavIntentBridge.initial().then((payload) {
       if (payload != null && mounted) _openLink(payload);
     }));
-    _streamer = NavFrameStreamer(
-      capture: _captureHeadUnitFrame,
-      sink: const _ProxyFrameSink(),
-    );
-    _streamer!.status.addListener(_onStreamStatus);
     _feed = HeadUnitFeed(
       tiles: () => MapData.instance.tiles,
       link: const _ProxyHeadUnitLink(),
     );
-    _feed!.status.addListener(_onStreamStatus);
     // The rider can pick somewhere to go on the head unit's own map; the
     // phone is what routes and guides, so the tap comes back here.
     _huDestSub = BleProxy.instance.navDestinations.listen(_onHeadUnitDest);
@@ -173,23 +157,13 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     _syncStreamer();
   }
 
-  /// The preview's badge follows the stream, so a status change has to repaint.
-  void _onStreamStatus() {
-    if (mounted) setState(() {});
-  }
-
   @override
   void dispose() {
-    _streamer?.status.removeListener(_onStreamStatus);
-    unawaited(_streamer?.dispose());
-    _streamer = null;
-    unawaited(_huDestSub?.cancel());
-    unawaited(_huZoomSub?.cancel());
-    _feed?.status.removeListener(_onStreamStatus);
     unawaited(_feed?.dispose());
     _feed = null;
-    _huMap.dispose();
     MapData.instance.removeListener(_onMapDataChanged);
+    unawaited(_huDestSub?.cancel());
+    unawaited(_huZoomSub?.cancel());
     _linkSub?.cancel();
     _announceSub?.cancel();
     unawaited(_voice.stop());
@@ -230,9 +204,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final fix = _controller.lastFix;
     if (fix != null) {
       if (_controller.follow) _followCamera(fix);
-      // Outside a ride the head unit mirrors the rider's map instead, so it
-      // shows what they are looking at rather than a dot on a default view.
-      if (_controller.navigating) _followHeadUnit(fix);
       _feed?.setPosition(fix.position,
           headingDeg: fix.headingDeg, speedMs: fix.speedMs);
       final g = _controller.guidance;
@@ -375,86 +346,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         viewportHeightPx: _map.camera.nonRotatedSize.height);
     _map.moveAndRotate(
         LatLng(pose.center.lat, pose.center.lon), pose.zoom, pose.rotationDeg);
-  }
-
-  /// The head unit's own view follows the same fixes as the phone's map, but
-  /// at its own size: the rider's forward bias depends on how tall the picture
-  /// is, and the head unit's is 240 px, not a phone screen.
-  void _followHeadUnit(GeoFix fix) {
-    if (!_huReady) return;
-    try {
-      if (_controller.navigating) {
-        final pose = _huCamera.pose(fix, _controller.guidance,
-            trackUp: _controller.trackUp,
-            viewportHeightPx: kNavFrameH.toDouble());
-        _huMap.moveAndRotate(LatLng(pose.center.lat, pose.center.lon),
-            pose.zoom, pose.rotationDeg);
-      } else {
-        _huMap.move(
-            LatLng(fix.position.lat, fix.position.lon), kRouteZoom.toDouble());
-      }
-    } on Object {
-      // The little map is not attached yet — the next fix lands on a live one.
-    }
-  }
-
-  /// Outside a ride there is nothing to follow, so the head unit mirrors what
-  /// the rider is looking at.
-  void _mirrorToHeadUnit(MapCamera camera) {
-    if (!_huReady || _controller.navigating) return;
-    try {
-      _huMap.moveAndRotate(camera.center, camera.zoom, 0);
-    } on Object {
-      // Not attached yet.
-    }
-  }
-
-  /// Put the head unit's map where it belongs right now.
-  ///
-  /// Needed whenever the little map appears — on the first build, and again
-  /// every time the head unit reconnects — because until then it sits at its
-  /// own initial camera and the display would show a stale overview until the
-  /// rider happened to pan.
-  void _syncHeadUnitCamera() {
-    if (!_huReady) return;
-    final fix = _controller.lastFix;
-    if (_controller.navigating && fix != null) {
-      _followHeadUnit(fix);
-      return;
-    }
-    try {
-      _mirrorToHeadUnit(_map.camera);
-    } on Object {
-      // The rider's own map is not laid out yet; the next move syncs us.
-    }
-  }
-
-  /// Grab the head-unit view as raw pixels.
-  ///
-  /// The RepaintBoundary paints in its own layer at the frame's real size, so
-  /// what comes back is the full picture however small the on-screen preview
-  /// is drawn.
-  Future<RawFrame?> _captureHeadUnitFrame() async {
-    final ctx = _huKey.currentContext;
-    if (ctx == null) return null;
-    final boundary = ctx.findRenderObject();
-    if (boundary is! RenderRepaintBoundary) return null;
-    if (boundary.debugNeedsPaint) return null;
-    ui.Image? image;
-    try {
-      image = await boundary.toImage();
-      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (data == null) return null;
-      return RawFrame(
-        image.width,
-        image.height,
-        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-      );
-    } on Object {
-      return null;
-    } finally {
-      image?.dispose();
-    }
   }
 
   /// Run the stream only while the rider has asked for it. Whether a head unit
@@ -688,7 +579,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                 ),
               ),
             ),
-            _headUnitPreview(context),
+            _headUnitBadge(context),
             Positioned(
                 right: 12,
                 bottom: 72 + MediaQuery.paddingOf(context).bottom,
@@ -708,13 +599,12 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     );
   }
 
-  /// A thumbnail of exactly what the head unit is being sent, so the rider can
-  /// see at a glance that the display is alive and showing the right thing.
-  ///
-  /// It is also where the picture is rendered: the layer underneath is the
-  /// full frame, drawn at the size it is sent in, and the thumbnail is only
-  /// that layer scaled down.
-  Widget _headUnitPreview(BuildContext context) {
+  /// The head unit used to get a thumbnail here — a second, smaller map of
+  /// its own, rendered on the phone and streamed over as pictures. It draws
+  /// its own map from the tiles now, so all that is left to say is when it
+  /// cannot: an old firmware that does not speak the tile protocol, or a
+  /// display showing something else entirely.
+  Widget _headUnitBadge(BuildContext context) {
     if (!NavSettings.instance.streamToDisplay) return const SizedBox.shrink();
     return Positioned(
       left: 12,
@@ -724,54 +614,34 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         initialData: BleProxy.instance.currentState,
         builder: (ctx, snap) {
           final ble = BleProxy.instance;
-          // No head unit to show anything on — say nothing rather than take
-          // up the map with an empty frame.
           if (snap.data != BleConnState.connected) {
             return const SizedBox.shrink();
           }
-          if (!ble.supportsNavStream) {
-            return _headUnitBadge(ctx, t(ctx, 'nav.hu.badge.oldFirmware'));
-          }
-          final status = _feed?.status.value;
-          final visible = ble.navState.visible;
-          final String? badge = !visible
-              ? t(ctx, 'nav.hu.badge.other')
-              : (status == null || status.tilesSent == 0)
-                  ? t(ctx, 'nav.hu.badge.waiting')
+          final String? text = !ble.supportsNavStream
+              ? t(ctx, 'nav.hu.badge.oldFirmware')
+              : !ble.navState.visible
+                  ? t(ctx, 'nav.hu.badge.other')
                   : null;
-          return _PreviewFrame(
-            badge: badge,
-            child: HeadUnitView(
-              controller: _controller,
-              mapController: _huMap,
-              tiles: MapData.instance.tiles,
-              routeLine: _routeLine,
-              boundaryKey: _huKey,
-              onMapReady: () {
-                _huReady = true;
-                _syncHeadUnitCamera();
-              },
+          if (text == null) return const SizedBox.shrink();
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              color:
+                  Theme.of(ctx).colorScheme.surface.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+                const Icon(Icons.tv_off, size: 16),
+                const SizedBox(width: 6),
+                Text(text, style: Theme.of(ctx).textTheme.labelMedium),
+              ]),
             ),
           );
         },
       ),
     );
   }
-
-  Widget _headUnitBadge(BuildContext context, String text) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            const Icon(Icons.tv_off, size: 16),
-            const SizedBox(width: 6),
-            Text(text, style: Theme.of(context).textTheme.labelMedium),
-          ]),
-        ),
-      );
 
   Widget _buildMap(BuildContext context) {
     final saved = NavSettings.instance.lastView;
@@ -792,7 +662,6 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
         onLongPress: (_, p) => _offerPoint(LatLon(p.latitude, p.longitude)),
         onPositionChanged: (camera, hasGesture) {
           if (hasGesture && _controller.follow) _controller.setFollow(false);
-          _mirrorToHeadUnit(camera);
           // With no fix yet, the head unit follows what the rider is looking
           // at — otherwise it would have nowhere to point its own map.
           if (_controller.lastFix == null) {
@@ -1551,89 +1420,6 @@ class _PlaceSearchDelegate extends SearchDelegate<SearchHit?> {
 }
 
 
-/// [FrameSink] over the BLE proxy. The streamer only needs to know whether a
-/// head unit is there and what it says about its screen.
-class _ProxyFrameSink implements FrameSink {
-  const _ProxyFrameSink();
-
-  BleProxy get _ble => BleProxy.instance;
-
-  @override
-  bool get available =>
-      _ble.currentState == BleConnState.connected && _ble.supportsNavStream;
-
-  @override
-  NavDisplayState get displayState => _ble.navState;
-
-  @override
-  Stream<NavDisplayState> get displayStates => _ble.navStates;
-
-  @override
-  Future<NavFrameResult> send(int width, int height, Uint8List jpeg) =>
-      _ble.sendNavFrame(width, height, jpeg);
-
-  @override
-  void hello() => _ble.navHello();
-
-  @override
-  void stop() => _ble.navStop();
-}
-
-
-/// The head-unit picture, shrunk to a thumbnail with an optional caption.
-///
-/// [FittedBox] scales the painted layer; it does not re-lay-out the child, so
-/// the frame underneath stays the size it is sent in.
-class _PreviewFrame extends StatelessWidget {
-  const _PreviewFrame({required this.child, this.badge});
-
-  final Widget child;
-  final String? badge;
-
-  /// Wide enough to make out the road ahead, small enough to leave the map be.
-  static const double _width = 160;
-
-  @override
-  Widget build(BuildContext context) {
-    final height = _width * kNavFrameH / kNavFrameW;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: SizedBox(
-            width: _width,
-            height: height,
-            child: IgnorePointer(
-              child: FittedBox(fit: BoxFit.fill, child: child),
-            ),
-          ),
-        ),
-        if (badge != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color:
-                    Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                child: Text(badge!,
-                    style: Theme.of(context).textTheme.labelSmall),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-
-/// [HeadUnitLink] over the BLE proxy.
 class _ProxyHeadUnitLink implements HeadUnitLink {
   const _ProxyHeadUnitLink();
 
