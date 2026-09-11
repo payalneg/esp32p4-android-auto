@@ -191,6 +191,11 @@ Five things the probing turned up, all fixed:
   A "123" button switches to the number pad, which has both — and a house
   number in a street search was equally impossible before. "50.06 19.93" on
   the panel now comes back as a place to go to.
+- **The keyboard remembered the number pad.** Look up one pair of
+  coordinates, and every search after it typed digits into a box expecting a
+  street name — three characters never accumulated, so nothing was ever sent
+  and the panel simply sat there. Found by a soak, which stopped getting
+  answers after its first coordinate round. It opens on letters now.
 - **A coordinate between -1 and 0 lost its minus** in the log and in
   `navstat`: the integer part of -0.5 is zero, and printing that as a number
   drops the sign. The sign is printed on its own now.
