@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// A stand-in head unit: records what was written and answers on demand.
 class _FakeChannel implements NavChannel {
-  _FakeChannel({this.mtu = 512});
+  _FakeChannel();
 
   final ctrl = <Uint8List>[];
   final data = <Uint8List>[];
@@ -26,7 +26,7 @@ class _FakeChannel implements NavChannel {
   int busyWrites = 0;
 
   @override
-  int? mtu;
+  int? mtu = 512;
 
   @override
   Stream<List<int>> get notifications => _notify.stream;

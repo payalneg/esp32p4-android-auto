@@ -478,9 +478,9 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
            (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
-    printf("view %s %.5f,%.5f z%u hdg=%u | renders=%u last=%u ms tiles %d/%d\n",
+    printf("view %s %.5f,%.5f z%u hdg=%u | views=%u renders=%u last=%u ms tiles %d/%d\n",
            v.valid ? "set" : "unset", v.lat, v.lon, (unsigned)v.zoom,
-           (unsigned)v.heading_deg, (unsigned)st.renders,
+           (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,
            (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
     return 0;
 }

@@ -463,25 +463,54 @@ static void reasm_feed(const uint8_t *chunk, uint16_t chunk_len)
 /* Bind the bridge (and the OTA / file-manager links riding on it) to the
  * phone's connection. With two peers connected at once (phone + VESC Tool)
  * the GAP connect order says nothing about which one is the phone — but a
- * write to any bridge characteristic does: only the app touches them. */
-static void bridge_bind(uint16_t conn)
+ * write to any bridge characteristic does: only the app touches them.
+ *
+ * Sticky, though. A phone can hold two links at once — a stale one the
+ * peripheral has not timed out yet alongside the fresh one — and both write.
+ * Re-binding on every write then flipped the owner back and forth several
+ * times a second, so acknowledgements went to the wrong link and half the map
+ * tiles were never confirmed (seen on the bench). The binding therefore only
+ * moves to a different connection once the current owner has gone quiet;
+ * writes from anyone else are ignored until then. VESC Tool never touches
+ * these characteristics, so the phone still takes the bridge from it at once.
+ *
+ * Returns false when the write belongs to somebody else and should be dropped. */
+#define BRIDGE_STEAL_AFTER_US (5 * 1000 * 1000)
+
+static int64_t s_last_bridge_write_us;
+
+static bool bridge_bind(uint16_t conn)
 {
-    if (s_conn_handle == conn) return;
+    const int64_t now = esp_timer_get_time();
+    if (s_conn_handle == conn) {
+        s_last_bridge_write_us = now;
+        return true;
+    }
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+        now - s_last_bridge_write_us < BRIDGE_STEAL_AFTER_US) {
+        return false;          /* the owner is mid-conversation */
+    }
     if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
         ESP_LOGI(TAG, "bridge re-bound, conn=%u", (unsigned)conn);
         reasm_reset();
     }
     s_conn_handle = conn;
+    s_last_bridge_write_us = now;
     ble_ota_set_link(conn, s_ota_ctrl_handle);
     ble_files_set_link(conn, s_file_ctrl_handle);
     ble_nav_set_link(conn, s_nav_ctrl_handle);
+    return true;
 }
 
 static int access_cb(uint16_t conn, uint16_t attr,
                      struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) bridge_bind(conn);
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && !bridge_bind(conn)) {
+        /* Another link owns the bridge right now. Say so rather than let two
+         * clients interleave into one transfer. */
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_in_handle) {
         uint8_t  buf[260];
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
@@ -691,6 +720,7 @@ void notif_bridge_on_connect(uint16_t conn) {
 void notif_bridge_on_disconnect(uint16_t conn) {
     if (conn != s_conn_handle) return;       /* an idle peer left */
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    s_last_bridge_write_us = 0;
     ble_ota_on_disconnect();
     ble_files_on_disconnect();
     ble_nav_on_disconnect();

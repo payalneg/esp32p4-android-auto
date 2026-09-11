@@ -187,10 +187,16 @@ bool nav_tiles_put(uint8_t z, uint32_t x, uint32_t y,
         s_stats.rejected++;
         return false;
     }
-    /* The JPEG engine wrote these by DMA; the render pass reads them with the
-     * CPU. (The PNG path wrote them with the CPU, where this is a no-op.) */
-    esp_cache_msync(s->px, TILE_BYTES,
-                    ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    if (fmt == NAV_TILE_FMT_JPEG) {
+        /* The JPEG engine wrote these by DMA, behind the cache: drop what the
+         * cache thinks it knows so the render pass reads the real pixels.
+         *
+         * Only for that path. The PNG decoder writes with the CPU, so the
+         * fresh pixels ARE the dirty cache lines — invalidating them threw
+         * the tile away line by line and the map came out in black bands. */
+        esp_cache_msync(s->px, TILE_BYTES,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    }
     s->z = z;
     s->x = x;
     s->y = y;

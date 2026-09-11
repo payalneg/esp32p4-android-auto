@@ -14,6 +14,11 @@
 #define COL_RIDER     0x1B1B   /* blue */
 #define COL_RING      0xFFFF
 
+/* The panel the view is composed for. Only the debug helper needs it as a
+ * constant; nav_map_render is told the size it is filling. */
+#define NAV_VIEW_W 800
+#define NAV_VIEW_H 480
+
 static nav_map_view_t s_view;
 
 double nav_map_world_x(double lon, uint8_t zoom)
@@ -68,6 +73,22 @@ static void draw_marker(uint16_t *dst, int w, int h, int cx, int cy)
                          ? COL_RING : COL_RIDER;
         }
     }
+}
+
+bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
+                        int64_t *y0, int64_t *y1)
+{
+    if (!s_view.valid) return false;
+    const double cx = nav_map_world_x(s_view.lon, s_view.zoom);
+    const double cy = nav_map_world_y(s_view.lat, s_view.zoom);
+    const double left = cx - NAV_VIEW_W / 2.0;
+    const double top  = cy - NAV_VIEW_H / 2.0;
+    if (z)  *z  = s_view.zoom;
+    if (x0) *x0 = (int64_t)floor(left / NAV_TILE_PX);
+    if (x1) *x1 = (int64_t)floor((left + NAV_VIEW_W - 1) / NAV_TILE_PX);
+    if (y0) *y0 = (int64_t)floor(top / NAV_TILE_PX);
+    if (y1) *y1 = (int64_t)floor((top + NAV_VIEW_H - 1) / NAV_TILE_PX);
+    return true;
 }
 
 int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)

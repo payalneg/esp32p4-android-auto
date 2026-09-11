@@ -419,9 +419,26 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     final feed = _feed;
     if (feed == null) return;
     if (NavSettings.instance.streamToDisplay) {
+      _seedFeedPosition();
       feed.start();
     } else {
       unawaited(feed.stop());
+    }
+  }
+
+  /// Point the head unit at whatever the rider's map is showing.
+  ///
+  /// Without a position the feed has nothing to send, and a phone that has
+  /// not got a fix yet — or is indoors — would otherwise leave the display
+  /// empty for as long as nobody panned the map.
+  void _seedFeedPosition() {
+    final feed = _feed;
+    if (feed == null || _controller.lastFix != null) return;
+    try {
+      final c = _map.camera.center;
+      feed.setPosition(LatLon(c.latitude, c.longitude));
+    } on Object {
+      // The map is not laid out yet; onMapReady comes back to this.
     }
   }
 
@@ -670,11 +687,11 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           if (!ble.supportsNavStream) {
             return _headUnitBadge(ctx, t(ctx, 'nav.hu.badge.oldFirmware'));
           }
-          final status = _streamer?.status.value;
+          final status = _feed?.status.value;
           final visible = ble.navState.visible;
           final String? badge = !visible
               ? t(ctx, 'nav.hu.badge.other')
-              : (status == null || status.framesSent == 0)
+              : (status == null || status.tilesSent == 0)
                   ? t(ctx, 'nav.hu.badge.waiting')
                   : null;
           return _PreviewFrame(
@@ -740,6 +757,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           unawaited(NavSettings.instance.saveLastView(
               camera.center.latitude, camera.center.longitude, camera.zoom));
         },
+        onMapReady: _seedFeedPosition,
         // Rotation would put the labels of a raster tile on their side.
         interactionOptions: const InteractionOptions(
             flags: InteractiveFlag.all & ~InteractiveFlag.rotate),

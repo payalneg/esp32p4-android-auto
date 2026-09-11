@@ -29,6 +29,11 @@ void nav_map_get_view(nav_map_view_t *out);
  * actually there. */
 int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted);
 
+/* The tile rectangle the current view covers, for the debug command.
+ * Returns false when no view has been set yet. */
+bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
+                        int64_t *y0, int64_t *y1);
+
 /* Slippy helpers, exposed for the debug command and the tests. */
 double nav_map_world_x(double lon, uint8_t zoom);
 double nav_map_world_y(double lat, uint8_t zoom);

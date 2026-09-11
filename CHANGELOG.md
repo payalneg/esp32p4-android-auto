@@ -49,6 +49,21 @@ the one recorded in the release commit.
   forwards what it already holds without transcoding, and coloured labels stay
   crisp. A screenful is 15-20 tiles, so about 30 seconds on first arrival;
   keeping up at riding speed costs around 1 KB/s.
+- Verified on a Guition JC4880 with a phone: a screenful of 30 tiles (the
+  panel plus a ring) lands in about a minute at 13 KB/s, a PNG decodes in
+  30-35 ms, and composing the whole 800x480 view from what is held takes
+  17-19 ms — so the map redraws on every position update with room to spare.
+- Four things the bench turned up, all fixed: the head unit's screen state
+  could be announced before the app had subscribed, leaving it convinced the
+  display was showing something else; tiles were chosen in square rings while
+  the panel is a wide rectangle, so off-screen corners went over before the
+  ground either side of the rider; an acknowledgement sent right after sixty
+  chunk writes could be dropped by a congested host, and the phone then sent
+  the whole tile again; and the bridge re-bound to whichever connection wrote
+  last, which with two links from one phone flipped the owner several times a
+  second. The binding is now sticky until its owner goes quiet for five
+  seconds, and the app cancels a queued connection before asking for another
+  so the second link stops happening in the first place.
 
 - Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
   without the 3-finger hold, `navstat` reports the frame stream (mode, frames

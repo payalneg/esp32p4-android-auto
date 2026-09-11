@@ -161,6 +161,33 @@ void main() {
     expect(link.tiles.last, here);
   });
 
+  test('the tiles asked for are the ones the panel covers', () {
+    final feed = build();
+    final tiles = feed.viewportTiles(_krakow);
+    final here = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
+
+    // The tile under the rider first — the one the screen most obviously
+    // lacks — and a screenful plus a ring in total.
+    expect(tiles.first, here);
+    expect(tiles.length, inInclusiveRange(24, 42));
+    expect(tiles.toSet().length, tiles.length, reason: 'no duplicates');
+
+    // The panel is 800x480: it reaches two tiles sideways but only one up and
+    // down. Everything actually on screen must be sent before any of the ring
+    // around it — asking in square rings put off-screen corners first and the
+    // map stayed half empty.
+    final centre = deg2tileF(_krakow.lat, _krakow.lon, kHeadUnitZoom);
+    bool onScreen(TileId t) =>
+        t.x >= (centre.x - kHeadUnitW / 2 / kTilePx).floor() &&
+        t.x <= (centre.x + kHeadUnitW / 2 / kTilePx).floor() &&
+        t.y >= (centre.y - kHeadUnitH / 2 / kTilePx).floor() &&
+        t.y <= (centre.y + kHeadUnitH / 2 / kTilePx).floor();
+    final lastOnScreen = tiles.lastIndexWhere(onScreen);
+    final firstOffScreen = tiles.indexWhere((t) => !onScreen(t));
+    expect(firstOffScreen, greaterThan(lastOnScreen),
+        reason: 'a margin tile was queued ahead of one the rider can see');
+  });
+
   test('stopping ends the loop', () async {
     final feed = build()..setPosition(_krakow);
     feed.start();

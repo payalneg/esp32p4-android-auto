@@ -100,16 +100,31 @@ class BleService {
     // Use `unawaited` semantics — boot path mustn't block on a BLE scan.
     // flutter_blue_plus's autoConnect:true returns immediately and lets
     // the OS hold the connection request.
-    _attachKnownDevice(_savedRemoteId!);
+    unawaited(_attachKnownDevice(_savedRemoteId!));
   }
 
-  void _attachKnownDevice(String remoteId) {
+  Future<void> _attachKnownDevice(String remoteId) async {
     final dev = BluetoothDevice.fromId(remoteId);
     _device = dev;
     _userInitiatedDisconnect = false;
     _connSub?.cancel();
     _connSub = dev.connectionState.listen(_onConnectionStateChanged);
     _setState(BleConnState.connecting);
+    // Cancel whatever is already queued for this device before asking again.
+    // With autoConnect the request lives in the OS, and asking twice without
+    // cancelling opens a second link: a Samsung held two connections to the
+    // head unit at once, both writing, and the head unit's bridge binding
+    // flipped between them several times a second — half the map tiles were
+    // acknowledged on the wrong link and never arrived.
+    //
+    // Awaited, not fired off: a cancellation that lands after the new request
+    // cancels that one instead, and nothing reconnects at all.
+    try {
+      await dev.disconnect();
+    } on Object {
+      // Nothing was queued. That is the normal first attach.
+    }
+    if (_userInitiatedDisconnect) return;
     // autoConnect:true → Android queues the GATT connect; the OS wakes
     // when the peripheral advertises. iOS handles the equivalent through
     // CoreBluetooth's stored-peripheral mechanism, but only if the user
@@ -539,7 +554,7 @@ class BleService {
         await dev?.disconnect();
       } catch (_) {}
       if (_userInitiatedDisconnect || _savedRemoteId == null) return;
-      _attachKnownDevice(_savedRemoteId!);
+      unawaited(_attachKnownDevice(_savedRemoteId!));
     });
   }
 
@@ -585,7 +600,7 @@ class BleService {
     } catch (_) {}
     // Let the OS tear the ACL link fully down before re-arming autoConnect.
     await Future.delayed(const Duration(milliseconds: 500));
-    _attachKnownDevice(id);
+    unawaited(_attachKnownDevice(id));
   }
 
   Future<void> _teardown() async {

@@ -11,7 +11,6 @@
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -40,6 +39,13 @@ const int kTileMaxAttempts = 2;
 /// Kraków's latitude, which is a town-scale view at riding speed; the phone
 /// already prefetches 18 and 19 along a route, and 17 sits one step out.
 const int kHeadUnitZoom = 17;
+
+/// Slippy tiles are 256 px square.
+const int kTilePx = 256;
+
+/// A ring of tiles beyond the screen, so the map does not run out at the edge
+/// the moment the rider moves.
+const int kTileMargin = 1;
 
 /// What the feed is doing, for the screen that shows it.
 @immutable
@@ -194,28 +200,60 @@ class HeadUnitFeed {
     return true;
   }
 
-  /// Tiles covering the head unit's screen around [at], nearest first, that it
-  /// does not already have.
-  List<TileId> _missingTiles(LatLon at) {
-    // A screenful plus a ring, so the map does not run out at the edge the
-    // moment the rider moves.
-    const radiusPx = kHeadUnitW / 2 + kHeadUnitH / 2;
-    final metresPerPixel = 156543.03392 *
-        math.cos(at.lat * math.pi / 180.0) /
-        (1 << kHeadUnitZoom);
-    final wanted = tilesAround(
-      at,
-      radiusM: radiusPx * metresPerPixel,
-      zooms: const <int>[kHeadUnitZoom],
-      maxTiles: 64,
-    );
-    return <TileId>[
-      for (final t in wanted)
-        if (!_sentThisSession.contains(t) &&
-            (_attempts[t] ?? 0) < kTileMaxAttempts)
-          t,
-    ];
+  /// Exactly the tiles the head unit's screen covers around [at], plus a ring,
+  /// nearest to the middle first.
+  ///
+  /// Not a disc and not a square of rings: the panel is 800x480, so it reaches
+  /// two tiles sideways but only one up and down. Asking in rings sent the
+  /// off-screen corners before the tiles either side of the rider, and the map
+  /// stayed half empty while the link was busy with ground nobody could see.
+  List<TileId> viewportTiles(LatLon at) {
+    final n = 1 << kHeadUnitZoom;
+    final centre = deg2tileF(at.lat, at.lon, kHeadUnitZoom);
+    final halfW = kHeadUnitW / 2 / kTilePx;
+    final halfH = kHeadUnitH / 2 / kTilePx;
+    final x0 = (centre.x - halfW).floor() - kTileMargin;
+    final x1 = (centre.x + halfW).floor() + kTileMargin;
+    final y0 = (centre.y - halfH).floor() - kTileMargin;
+    final y1 = (centre.y + halfH).floor() + kTileMargin;
+
+    // What the panel actually covers, before the ring is added.
+    final sx0 = (centre.x - halfW).floor();
+    final sx1 = (centre.x + halfW).floor();
+    final sy0 = (centre.y - halfH).floor();
+    final sy1 = (centre.y + halfH).floor();
+
+    final out = <({TileId tile, int ring, double d})>[];
+    for (var y = y0; y <= y1; y++) {
+      if (y < 0 || y >= n) continue;
+      for (var x = x0; x <= x1; x++) {
+        // The world wraps sideways; the head unit does the same arithmetic.
+        var wx = x % n;
+        if (wx < 0) wx += n;
+        final dx = (x + 0.5) - centre.x;
+        final dy = (y + 0.5) - centre.y;
+        // Anything the rider can see outranks anything they cannot, however
+        // close: a corner of the screen matters more than the ground just
+        // above it.
+        final visible = x >= sx0 && x <= sx1 && y >= sy0 && y <= sy1;
+        out.add((
+          tile: TileId(kHeadUnitZoom, wx, y),
+          ring: visible ? 0 : 1,
+          d: dx * dx + dy * dy,
+        ));
+      }
+    }
+    out.sort((a, b) =>
+        a.ring != b.ring ? a.ring - b.ring : a.d.compareTo(b.d));
+    return <TileId>[for (final e in out) e.tile];
   }
+
+  List<TileId> _missingTiles(LatLon at) => <TileId>[
+        for (final t in viewportTiles(at))
+          if (!_sentThisSession.contains(t) &&
+              (_attempts[t] ?? 0) < kTileMaxAttempts)
+            t,
+      ];
 
   Future<void> _sendTile(TileId t) async {
     // The head unit's view is not always where the rider's own map is looking,

@@ -107,10 +107,18 @@ static void notify(uint8_t status, uint8_t a, uint16_t b, uint16_t c)
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) return;
     uint8_t f[6] = { status, a, (uint8_t)b, (uint8_t)(b >> 8),
                      (uint8_t)c, (uint8_t)(c >> 8) };
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
-    if (!om) return;
-    int rc = ble_gatts_notify_custom(s_conn, s_ctrl_handle, om);
-    if (rc != 0) ESP_LOGW(TAG, "notify status=0x%02x rc=%d", status, rc);
+    /* Ride out a congested host: an acknowledgement lands right after sixty
+     * chunk writes, which is exactly when NimBLE's mbuf pool is emptiest. A
+     * dropped one is not cosmetic — the phone waits, times out and sends the
+     * whole tile again (seen on the bench as tiles decoded twice). The pool
+     * drains in milliseconds, so a bounded retry is enough. */
+    for (int attempt = 0; attempt < 200; attempt++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
+        if (om && ble_gatts_notify_custom(s_conn, s_ctrl_handle, om) == 0) return;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGW(TAG, "notify status=0x%02x gave up", status);
 }
 
 static void notify_state(void)
