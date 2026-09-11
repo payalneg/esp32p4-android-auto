@@ -138,6 +138,8 @@ typedef struct {
     uint32_t views;
     uint32_t renders;
     uint32_t render_last_ms;
+    uint32_t compose_us;    /* the map itself */
+    uint32_t msync_us;      /* pushing the frame out of the cache */
     int      last_have;     /* tiles present for the last composed view */
     int      last_wanted;
     uint32_t stack_free;    /* worker stack high-water mark, bytes */

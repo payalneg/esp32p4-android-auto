@@ -457,6 +457,59 @@ static int cmd_uimode(int argc, char **argv)
     return 0;
 }
 
+/* What a heading-up map would cost.
+ *
+ * The panel has no hardware for an arbitrary-angle rotation (the PPA turns in
+ * 90-degree steps only), so track-up means warping every one of the 384000
+ * pixels from one PSRAM buffer into another each frame. This measures exactly
+ * that, in the block size a real implementation would use, so the decision is
+ * a number rather than an opinion: `navwarp [angle] [block]`.
+ */
+static int cmd_navwarp(int argc, char **argv)
+{
+    const int deg = (argc > 1) ? clampi(atoi(argv[1]), 0, 359) : 30;
+    const int blk = (argc > 2) ? clampi(atoi(argv[2]), 1, 64) : 8;
+    uint16_t *dst = nav_screen_back_buffer();
+    if (!dst) {
+        printf("ERR: no back buffer (navigator screen not up?)\n");
+        return 1;
+    }
+    /* Source is the same buffer read at a rotated offset — the access pattern
+     * is what costs, and it is identical to a real source buffer. */
+    const uint16_t *src = dst;
+    const int w = NAV_SCREEN_W, h = NAV_SCREEN_H;
+    const double rad = deg * M_PI / 180.0;
+    const int32_t cos_q = (int32_t)lround(cos(rad) * 65536.0);
+    const int32_t sin_q = (int32_t)lround(sin(rad) * 65536.0);
+    const int64_t t0 = esp_timer_get_time();
+    for (int by = 0; by < h; by += blk) {
+        for (int bx = 0; bx < w; bx += blk) {
+            /* Source position of this block's corner, stepped per pixel. */
+            const int dx0 = bx - w / 2, dy0 = by - h / 2;
+            int32_t sx = (int32_t)(w / 2 * 65536) + dx0 * cos_q - dy0 * sin_q;
+            int32_t sy = (int32_t)(h / 2 * 65536) + dx0 * sin_q + dy0 * cos_q;
+            for (int y = 0; y < blk && by + y < h; y++) {
+                int32_t px = sx, py = sy;
+                uint16_t *drow = dst + (size_t)(by + y) * w;
+                for (int x = 0; x < blk && bx + x < w; x++) {
+                    const int ix = px >> 16, iy = py >> 16;
+                    if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+                        drow[bx + x] = src[(size_t)iy * w + ix];
+                    }
+                    px += cos_q;
+                    py += sin_q;
+                }
+                sx -= sin_q;
+                sy += cos_q;
+            }
+        }
+    }
+    const int64_t us = esp_timer_get_time() - t0;
+    printf("warp %d deg, %dx%d block: %lld us (%lld ms) for %d px\n",
+           deg, blk, blk, (long long)us, (long long)(us / 1000), w * h);
+    return 0;
+}
+
 static int cmd_navstat(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -483,6 +536,8 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
            (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("frame: compose %u us + cache flush %u us\n",
+           (unsigned)st.compose_us, (unsigned)st.msync_us);
     printf("route %u points, last draw %u us\n",
            (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
     printf("view %s %.5f,%.5f z%u hdg=%u | views=%u renders=%u last=%u ms tiles %d/%d\n",
@@ -593,6 +648,10 @@ static void register_cmds(void)
           .help = "Show a locally-made test frame on the navigator screen "
                   "[width, default 400]",
           .hint = NULL, .func = cmd_navtest },
+        { .command = "navwarp",
+          .help = "Time a full-screen rotated copy, as a heading-up map would "
+                  "need every frame [degrees] [block]",
+          .hint = NULL, .func = cmd_navwarp },
         { .command = "navstat",
           .help = "Navigator frame stream: mode, frames, last frame size/time",
           .hint = NULL, .func = cmd_navstat },

@@ -644,17 +644,24 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
     return Positioned(
       left: 12,
       bottom: 72 + MediaQuery.paddingOf(context).bottom,
+      // Two streams, because the badge depends on both and nothing else
+      // repaints this screen any more: the thumbnail it replaced was redrawn
+      // by the feed's status listener, and that listener is what made the map
+      // blink.
       child: StreamBuilder<BleConnState>(
         stream: BleProxy.instance.state,
         initialData: BleProxy.instance.currentState,
-        builder: (ctx, snap) {
+        builder: (ctx, snap) => StreamBuilder<NavDisplayState>(
+          stream: BleProxy.instance.navStates,
+          initialData: BleProxy.instance.navState,
+          builder: (ctx, navSnap) {
           final ble = BleProxy.instance;
           if (snap.data != BleConnState.connected) {
             return const SizedBox.shrink();
           }
           final String? text = !ble.supportsNavStream
               ? t(ctx, 'nav.hu.badge.oldFirmware')
-              : !ble.navState.visible
+              : !(navSnap.data?.visible ?? false)
                   ? t(ctx, 'nav.hu.badge.other')
                   : null;
           if (text == null) return const SizedBox.shrink();
@@ -673,7 +680,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
               ]),
             ),
           );
-        },
+          },
+        ),
       ),
     );
   }

@@ -423,12 +423,19 @@ static void render_view(void)
     const int64_t t0 = esp_timer_get_time();
     int wanted = 0;
     const int have = nav_map_render(dst, NAV_SCREEN_W, NAV_SCREEN_H, &wanted);
+    const int64_t t1 = esp_timer_get_time();
+    /* Push the frame out of the cache before LVGL's DMA reads it. Timed
+     * separately because it is 768 KB of write-back and therefore a fixed
+     * cost per frame, unlike composing, which depends on what is missing. */
     esp_cache_msync(dst, nav_screen_back_buffer_bytes(),
                     ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    const int64_t t2 = esp_timer_get_time();
     nav_screen_commit();
     nav_screen_set_streaming(true);
     s_stats.renders++;
-    s_stats.render_last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    s_stats.render_last_ms = (uint32_t)((t2 - t0) / 1000);
+    s_stats.compose_us = (uint32_t)(t1 - t0);
+    s_stats.msync_us = (uint32_t)(t2 - t1);
     s_stats.last_have = have;
     s_stats.last_wanted = wanted;
     s_last_frame_us = esp_timer_get_time();

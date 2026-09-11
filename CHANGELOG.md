@@ -142,6 +142,24 @@ the one recorded in the release commit.
   tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
   PSRAM is worth more than the extra history.
 
+### Which way the rider is pointing — and why the map stays north-up
+
+- The marker is an arrow along the course now, with a white casing, and falls
+  back to the plain dot when the rider is standing still (a parked bike
+  pointing somewhere definite is a lie).
+- Heading-up was measured before being decided against. The panel has no
+  hardware for an arbitrary-angle rotation — the PPA turns in 90-degree steps
+  — so track-up means warping all 384000 pixels between two PSRAM buffers
+  every frame. A new bench command, `navwarp [degrees] [block]`, does exactly
+  that and times it: **38 ms at 30 degrees and 118 ms at 90**, against a frame
+  that composes in 33-40 ms and an LVGL flush that already costs 57 ms on the
+  same core. So the map stays north-up and the marker carries the heading.
+- The arrow itself cost 28 ms a frame at first, which is the same lesson as
+  the route line: its three edge tests per pixel were in double, and this chip
+  has no double-precision hardware. Vertices in double (three a frame), fill
+  in integers — and `navstat` now splits the frame into composing and the
+  cache flush, which is how the 28 ms was found rather than guessed at.
+
 ### Typing an address on the head unit
 
 - A **FIND** button on the navigator screen opens a keyboard on the panel.
