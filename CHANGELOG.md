@@ -65,9 +65,39 @@ the one recorded in the release commit.
   seconds, and the app cancels a queued connection before asking for another
   so the second link stops happening in the first place.
 
+### A map that never goes bare, and moves
+
+- The rider's speed and battery charge now sit over the navigator map, in the
+  same typeface Android Auto gets (Antonio), read from the same place, with
+  the cruise indicator lighting up beside the speed when cruise is engaged.
+- Two blurred fallback layers under the detail tiles, three and six zoom
+  levels out. One tile of the widest is twenty kilometres across, so a couple
+  of them blanket a whole region: move faster than 25 KB tiles can arrive —
+  or jump somewhere nothing was cached — and the map goes chunky rather than
+  empty. The phone sends them before anything sharp, and the ring around the
+  panel last of all.
+- The map now moves between position updates instead of stepping twice a
+  second: the phone includes its speed, and the head unit carries the view
+  forward at the last heading and redraws about seven times a second.
+- Composing a frame costs 26 ms, down from 155 ms when the layers were first
+  added. Three things got it there: blitting per tile rather than per screen
+  pixel, writing one row of a scaled band and copying it down the rest, and
+  drawing the blurred layers only in the gaps the detail tiles leave — with
+  the map caught up, the coarse passes cost nothing at all.
+- Tiles no longer wait on position updates while the map is filling: a
+  screenful lands in about 8 seconds rather than 15, and the whole ring in 21
+  rather than 41. A tile that is neither cached nor reachable is skipped
+  within the pass instead of costing one.
+- Both ends now ask the radio for the fastest link they can (a 251-byte
+  link-layer packet and the 2M PHY). Both are accepted, and neither changed
+  anything: 25 KB takes 49 writes and 780 ms, which is one ATT write per
+  connection interval. The phone's stack sends one and waits, so the round
+  trip is the limit and air time never was.
+
 - Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
-  without the 3-finger hold, `navstat` reports the frame stream (mode, frames
-  accepted and rejected, last frame size and decode time), and `navtest` puts
+  without the 3-finger hold, `navstat` reports the frame and tile streams (mode, tiles
+  accepted and rejected, decode and compose times, and which tiles the view
+  is still missing), and `navtest` puts
   a locally-made frame through the decode-and-scale path so the picture chain
   can be checked without a phone. The bridge's console now follows the board:
   on one whose console is the USB-Serial-JTAG port (the Guition JC4880 brings

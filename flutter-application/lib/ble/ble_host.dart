@@ -335,6 +335,7 @@ class BleTaskHandler extends TaskHandler {
             (m['lon'] as num).toDouble(),
             m['zoom'] as int,
             m['heading'] as int,
+            speedMs: (m['speed'] as num?)?.toDouble() ?? 0,
           );
           break;
 

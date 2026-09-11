@@ -44,7 +44,8 @@ class _FakeLink implements HeadUnitLink {
   }
 
   @override
-  Future<void> sendView(double lat, double lon, int zoom, int heading) async {
+  Future<void> sendView(double lat, double lon, int zoom, int heading,
+      {double speedMs = 0}) async {
     views.add((lat: lat, lon: lon, zoom: zoom, heading: heading));
   }
 
@@ -67,6 +68,15 @@ void main() {
     final f = cache.fileFor(t);
     await f.parent.create(recursive: true);
     await f.writeAsBytes(Uint8List.fromList(List<int>.filled(64, 7)));
+  }
+
+  /// The blurred fallback tile for the same spot. It is sent before anything
+  /// sharp, so most tests need it on disk too.
+  Future<TileId> seedCoarse() async {
+    // The widest layer goes first, so that is the one a single pass sends.
+    final t = deg2tile(_krakow.lat, _krakow.lon, kWideZoom);
+    await seed(t);
+    return t;
   }
 
   HeadUnitFeed build() => HeadUnitFeed(
@@ -110,27 +120,39 @@ void main() {
     expect(link.views.first.heading, 91);
   });
 
-  test('the tile under the rider goes over, and only once', () async {
+  test('the blurred layers go first, sharpest last', () async {
+    // Moving faster than 25 KB tiles can arrive must show a blurred map, not
+    // a hole — so the fallback layers cross the link first, widest of all
+    // first, and the detail tiles come behind them.
+    final wide = deg2tile(_krakow.lat, _krakow.lon, kWideZoom);
+    final coarse = deg2tile(_krakow.lat, _krakow.lon, kCoarseZoom);
     final here = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
-    await seed(here);
+    for (final t in <TileId>[wide, coarse, here]) {
+      await seed(t);
+    }
     final feed = build()..setPosition(_krakow);
 
-    // One tile per pass, so the position keeps flowing while the map fills.
-    await feed.tick();
-    expect(link.tiles, <TileId>[here]);
-    expect(feed.status.value.tilesSent, 1);
+    // The widest layer asks for a ring the offline cache cannot supply, so a
+    // few passes go by dropping those before the finer layers come up.
+    for (var i = 0; i < 10; i++) {
+      await feed.tick();
+    }
+    expect(link.tiles.first, wide);
+    expect(link.tiles, containsAllInOrder(<TileId>[wide, coarse, here]));
+    expect(feed.status.value.tilesSent, 3);
 
     // Everything else around is missing from the cache and unreachable, so
-    // the only tile it can send is the one it already sent.
+    // none of the three goes again.
     for (var i = 0; i < 5; i++) {
       await feed.tick();
     }
-    expect(link.tiles.where((t) => t == here).length, 1);
+    for (final t in <TileId>[wide, coarse, here]) {
+      expect(link.tiles.where((x) => x == t).length, 1);
+    }
   });
 
   test('a refused tile is retried, then given up on', () async {
-    final here = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
-    await seed(here);
+    await seedCoarse();
     link.ack = NavAck.decodeFailed;
     final feed = build()..setPosition(_krakow);
 
@@ -144,8 +166,7 @@ void main() {
   });
 
   test('a head unit that went away is told everything again', () async {
-    final here = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
-    await seed(here);
+    final here = await seedCoarse();
     final feed = build()..setPosition(_krakow);
     await feed.tick();
     expect(link.tiles.length, 1);
@@ -186,6 +207,40 @@ void main() {
     final firstOffScreen = tiles.indexWhere((t) => !onScreen(t));
     expect(firstOffScreen, greaterThan(lastOnScreen),
         reason: 'a margin tile was queued ahead of one the rider can see');
+  });
+
+  test('while the map is filling, tiles do not wait on position updates',
+      () async {
+    // A screenful used to take a view period per tile on top of the transfer,
+    // which was nearly half the time it took to fill.
+    await seedCoarse();
+    final fine = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
+    var clock = DateTime(2026);
+    final feed = HeadUnitFeed(
+      tiles: () => cache,
+      link: link,
+      sleep: (_) async {},
+      now: () => clock,
+    )..setPosition(_krakow);
+
+    // First pass: the position is due, and a tile goes with it.
+    expect(await feed.tick(), isTrue);
+    expect(link.views.length, 1);
+    expect(link.tiles.length, 1);
+
+    // A moment later, still inside the view period: the next tile goes anyway
+    // and no second position is sent.
+    clock = clock.add(const Duration(milliseconds: 50));
+    await seed(fine);
+    expect(await feed.tick(), isTrue);
+    expect(link.views.length, 1);
+    expect(link.tiles.length, 2);
+
+    // Once the period has passed, the position goes out again.
+    clock = clock.add(kViewPeriod);
+    await seed(TileId(fine.z, fine.x + 1, fine.y));
+    await feed.tick();
+    expect(link.views.length, 2);
   });
 
   test('stopping ends the loop', () async {

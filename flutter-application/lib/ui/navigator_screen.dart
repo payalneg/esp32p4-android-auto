@@ -214,7 +214,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       // Outside a ride the head unit mirrors the rider's map instead, so it
       // shows what they are looking at rather than a dot on a default view.
       if (_controller.navigating) _followHeadUnit(fix);
-      _feed?.setPosition(fix.position, headingDeg: fix.headingDeg);
+      _feed?.setPosition(fix.position,
+          headingDeg: fix.headingDeg, speedMs: fix.speedMs);
       unawaited(_topUpAroundPosition(fix.position));
     }
     if (_controller.navigating != _screenPinned) {
@@ -1584,6 +1585,7 @@ class _ProxyHeadUnitLink implements HeadUnitLink {
       _ble.sendNavTile(z, x, y, format, bytes);
 
   @override
-  Future<void> sendView(double lat, double lon, int zoom, int headingDeg) async =>
-      _ble.sendNavView(lat, lon, zoom, headingDeg);
+  Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
+          {double speedMs = 0}) async =>
+      _ble.sendNavView(lat, lon, zoom, headingDeg, speedMs: speedMs);
 }

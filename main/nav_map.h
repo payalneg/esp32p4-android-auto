@@ -20,7 +20,29 @@ typedef struct {
     bool     valid;
 } nav_map_view_t;
 
+/* The fallback layers, in levels below the detail zoom.
+ *
+ * Two of them, because one is not enough. Three levels down, a tile covers
+ * sixty-four detail tiles — enough for the blur to bridge the seconds while
+ * sharp tiles arrive alongside. Six levels down, a single tile is twenty
+ * kilometres across, so four of them blanket a whole city: jump the view to
+ * somewhere nothing is cached and there is still a map, coarse as it is.
+ *
+ * Drawn coarsest first, each overwriting the last where it has tiles, then
+ * the detail layer on top. */
+#define NAV_COARSE_DZ  3
+#define NAV_WIDE_DZ    6
+
 void nav_map_set_view(double lat, double lon, uint8_t zoom, uint16_t heading_deg);
+
+/* Rider speed, in centimetres per second, for the dead-reckoning between
+ * position updates. */
+void nav_map_set_speed(uint16_t cm_per_s);
+
+/* Advance the view by `dt_ms` of travel at the last known speed and heading.
+ * Called between the phone's updates — twice a second is a visible step, and
+ * the head unit can redraw far more often than that from what it holds. */
+void nav_map_dead_reckon(uint32_t dt_ms);
 void nav_map_get_view(nav_map_view_t *out);
 
 /* Compose the current view into `dst` (w x h, RGB565). Tiles that have not

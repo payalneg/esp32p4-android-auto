@@ -214,17 +214,20 @@ void main() {
     expect(ch.data.expand((c) => c).length, 700);
   });
 
-  test('the view is twelve bytes and needs no answer', () async {
-    await nav.sendView(50.0619, 19.9368, 17, 271);
+  test('the view is a fourteen-byte control that needs no answer', () async {
+    await nav.sendView(50.0619, 19.9368, 17, 271, speedMs: 5.5);
     expect(ch.ctrl.length, 1);
     final v = ch.ctrl.first;
     final bd = ByteData.sublistView(v);
     expect(v[0], NavOp.view);
-    expect(v.length, 12);
+    expect(v.length, 14);
     expect(bd.getInt32(1, Endian.little), 500619000);
     expect(bd.getInt32(5, Endian.little), 199368000);
     expect(v[9], 17);
     expect(bd.getUint16(10, Endian.little), 271);
+    // Speed in centimetres a second, so the head unit can carry the view
+    // forward between updates instead of stepping.
+    expect(bd.getUint16(12, Endian.little), 550);
     // Nothing was waited on: the next position is a moment away anyway.
     expect(ch.data, isEmpty);
   });

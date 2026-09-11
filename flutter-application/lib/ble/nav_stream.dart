@@ -278,16 +278,23 @@ class NavStream {
     }
   }
 
-  /// Say where the rider is. Twelve bytes, unacknowledged, as often as the map
-  /// should move — this is what replaces sending a picture.
-  Future<void> sendView(double lat, double lon, int zoom, int headingDeg) {
-    final v = Uint8List(12);
+  /// Say where the rider is, and how fast. Fourteen bytes, unacknowledged, as
+  /// often as the map should move — this is what replaces sending a picture.
+  ///
+  /// The speed is what lets the head unit carry the view forward between
+  /// updates and redraw at its own rate, so the map glides rather than
+  /// stepping twice a second.
+  Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
+      {double speedMs = 0}) {
+    final v = Uint8List(14);
     final bd = ByteData.sublistView(v);
     v[0] = NavOp.view;
     bd.setInt32(1, (lat * 1e7).round(), Endian.little);
     bd.setInt32(5, (lon * 1e7).round(), Endian.little);
     v[9] = zoom;
     bd.setUint16(10, headingDeg, Endian.little);
+    final cms = (speedMs * 100).round().clamp(0, 0xFFFF);
+    bd.setUint16(12, cms, Endian.little);
     return _channel.writeCtrl(v);
   }
 

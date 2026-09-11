@@ -444,9 +444,15 @@ class BleProxy {
   }
 
   /// Tell the head unit where the rider is. This is what moves its map.
-  void sendNavView(double lat, double lon, int zoom, int headingDeg) =>
-      _fireAndForget(IpcCmd.navView,
-          {'lat': lat, 'lon': lon, 'zoom': zoom, 'heading': headingDeg});
+  void sendNavView(double lat, double lon, int zoom, int headingDeg,
+          {double speedMs = 0}) =>
+      _fireAndForget(IpcCmd.navView, {
+        'lat': lat,
+        'lon': lon,
+        'zoom': zoom,
+        'heading': headingDeg,
+        'speed': speedMs,
+      });
 
   /// Ask the head unit to describe its screen; the answer arrives on
   /// [navStates].

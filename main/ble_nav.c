@@ -50,6 +50,14 @@ static const char *TAG = "ble_nav";
 #define NAV_END_LEN    (1 + 2)
 #define NAV_TILE_BEGIN_LEN (1 + 1 + 1 + 4 + 4 + 4 + 2)
 #define NAV_VIEW_LEN       (1 + 4 + 4 + 1 + 2)
+#define NAV_VIEW_LEN_SPEED (NAV_VIEW_LEN + 2)
+
+/* How often the map is redrawn between the phone's position updates. The
+ * phone speaks twice a second, which as a step is plainly visible; the head
+ * unit knows the speed and heading, so in between it carries the view
+ * forward itself and redraws. 120 ms is about eight frames a second, and a
+ * compose costs under 20 ms. */
+#define NAV_FRAME_MS 120
 
 /* With no frame for this long the link goes back to its normal duty cycle.
  * Not a fault and not shown on screen: the app skips frames whose pixels did
@@ -97,6 +105,8 @@ static uint16_t s_dec_w, s_dec_h;
 static size_t   s_cache_line = 64;
 static bool     s_boosted;
 static int64_t  s_last_frame_us;
+static int64_t  s_last_view_us;   /* last position from the phone */
+static int64_t  s_last_step_us;   /* last dead-reckoning step */
 
 static ble_nav_stats_t s_stats;
 
@@ -351,12 +361,23 @@ static void worker(void *arg)
 
     for (;;) {
         nav_evt_t ev;
-        if (xQueueReceive(s_q, &ev, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        if (xQueueReceive(s_q, &ev, pdMS_TO_TICKS(NAV_FRAME_MS)) != pdTRUE) {
+            const int64_t now = esp_timer_get_time();
+            /* Carry the view forward and redraw, so the map glides instead of
+             * stepping twice a second. Only while the phone is actually
+             * feeding us — otherwise we would drift off on a stale speed. */
+            if (s_stats.streaming && s_last_view_us != 0 &&
+                now - s_last_view_us < NAV_IDLE_US) {
+                const uint32_t dt = (uint32_t)((now - s_last_step_us) / 1000);
+                s_last_step_us = now;
+                nav_map_dead_reckon(dt);
+                render_view();
+            }
             /* Idle sweep: the app stopped without saying so (screen off, out
              * of range, killed) — stop claiming we are streaming and hand the
              * radio back to its normal duty cycle. */
             if (s_stats.streaming && s_last_frame_us != 0 &&
-                esp_timer_get_time() - s_last_frame_us > NAV_IDLE_US) {
+                now - s_last_frame_us > NAV_IDLE_US) {
                 s_stats.streaming = false;
                 /* Only the radio is stood down — the picture on screen is
                  * still current, so the placeholder stays away. */
@@ -384,7 +405,10 @@ static void worker(void *arg)
             case EV_VIEW:
                 s_stats.views++;
                 s_stats.streaming = true;
+                s_last_view_us = esp_timer_get_time();
+                s_last_step_us = s_last_view_us;
                 nav_screen_set_streaming(true);
+                set_boost(true);
                 render_view();
                 break;
             case EV_REJECT:
@@ -557,7 +581,12 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             const uint8_t zoom = data[9];
             const uint16_t heading = (uint16_t)data[10] | ((uint16_t)data[11] << 8);
             if (zoom > 22) return;
+            /* Speed arrived later than the rest of the message; a phone that
+             * does not send it simply gets no dead reckoning. */
+            const uint16_t speed_cms = (len >= NAV_VIEW_LEN_SPEED)
+                ? (uint16_t)data[12] | ((uint16_t)data[13] << 8) : 0;
             nav_map_set_view(lat_e7 / 1e7, lon_e7 / 1e7, zoom, heading);
+            nav_map_set_speed(speed_cms);
             nav_evt_t ev = { .kind = EV_VIEW };
             xQueueSend(s_q, &ev, 0);
             break;

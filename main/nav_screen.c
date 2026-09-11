@@ -10,26 +10,36 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "dev_settings.h"
 #include "fonts/aabridge_fonts.h"
+#include "speed_sensor.h"
+#include "vesc_battery_calc.h"
+#include "vesc_can/vesc_rt_data.h"
+#include "vesc_can/vesc_lisp_panel.h"
 
 static const char *TAG = "nav_screen";
 
 /* How often the LVGL side looks for a committed frame. Frames arrive around
  * once a second; a short tick only costs a flag read and keeps the "waiting"
  * text honest. */
-#define TICK_PERIOD_MS 100
+#define TICK_PERIOD_MS 50
 
 /* Ticks the just-retired front buffer stays off limits after a swap. LVGL
  * renders the image into the panel framebuffer asynchronously (and twice, once
  * per framebuffer in DOUBLE_DIRECT), so handing it straight back to the BLE
- * worker's DMA would tear the picture being drawn. 300 ms at one frame per
- * second costs nothing. */
-#define SWAP_COOLDOWN_TICKS 3
+ * worker's DMA would tear the picture being drawn. One 50 ms tick is enough
+ * — a full-screen image flushes in about 7 ms in this render mode — and it
+ * lets the map move at the eight frames a second the head unit can compose. */
+#define SWAP_COOLDOWN_TICKS 1
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_img;
 static lv_obj_t *s_status_box;
 static lv_obj_t *s_status_lbl;
+static lv_obj_t *s_speed_lbl;
+static lv_obj_t *s_speed_unit;
+static lv_obj_t *s_batt_lbl;
+static lv_obj_t *s_cc_img;
 static lv_timer_t *s_tick;
 
 static uint16_t *s_fb[2];
@@ -52,6 +62,102 @@ static _Atomic int64_t s_last_frame_us;
 /* Text currently on the placeholder, so a tick that changes nothing does not
  * touch LVGL at all. */
 static const char *s_status_text;
+
+/* The same two readouts Android Auto gets painted over its video, in the same
+ * typeface: Antonio 64 for the number, Antonio 22 for the unit. Over there
+ * aa_overlay.c has to draw glyphs into the framebuffer by hand because AA
+ * bypasses LVGL; the map is an ordinary LVGL image, so ordinary labels do it.
+ *
+ * The plate behind each readout replaces the halo the hand-drawn version
+ * uses — the ground under it is anything from a pale road to a dark park. */
+extern const lv_font_t lv_font_Antonio_Regular_64;
+extern const lv_font_t lv_font_Antonio_Regular_22;
+LV_IMG_DECLARE(_cruise_control_alpha_38x38);
+
+#define HUD_PLATE   0x101418
+#define CC_COLOUR   0x33FF66
+
+/* A transparent row that lays its children out left to right, so a readout is
+ * just "big number" + "small unit" without any arithmetic. */
+static lv_obj_t *hud_row_create(lv_obj_t *parent, lv_align_t align, int x, int y)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(row, align, x, y);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_color(row, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_60, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_pad_hor(row, 10, 0);
+    lv_obj_set_style_pad_ver(row, 2, 0);
+    lv_obj_set_style_pad_column(row, 6, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    return row;
+}
+
+static lv_obj_t *hud_text(lv_obj_t *row, const lv_font_t *font, uint32_t colour)
+{
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(colour), 0);
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_label_set_text(lbl, "");
+    return lbl;
+}
+
+/* Speed and charge, read the way aa_overlay.c reads them: straight from the
+ * VESC RT poller rather than the cockpit cache, honouring the BLE wheel
+ * sensor choice and the km/miles toggle, with cruise from the LISP panel. */
+static void refresh_hud(void)
+{
+    if (!s_speed_lbl || !s_batt_lbl) return;
+
+    const bool ble_src = speed_source_is_ble();
+    float kmh = ble_src ? speed_sensor_get_kmh() : 0.0f;
+    int batt = -1;
+    if (vesc_rt_data_is_fresh()) {
+        const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
+        if (!ble_src) kmh = vesc_rt_data_get_speed_kmh();
+        const float pct = battery_calc_display_percentage(
+            rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
+        batt = (int)(pct + 0.5f);
+        if (batt < 0) batt = 0;
+        if (batt > 99) batt = 99;
+    }
+    if (kmh < 0) kmh = -kmh;
+    const bool imperial = settings_get_use_imperial();
+    if (imperial) kmh *= 0.621371f;
+    int shown = (int)(kmh + 0.5f);
+    if (shown < 0) shown = 0;
+    if (shown > 999) shown = 999;
+
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d", shown);
+    if (strcmp(buf, lv_label_get_text(s_speed_lbl)) != 0) {
+        lv_label_set_text(s_speed_lbl, buf);
+    }
+    const char *unit = imperial ? "MPH" : "KM/H";
+    if (strcmp(unit, lv_label_get_text(s_speed_unit)) != 0) {
+        lv_label_set_text(s_speed_unit, unit);
+    }
+
+    if (batt < 0) snprintf(buf, sizeof buf, "--");
+    else          snprintf(buf, sizeof buf, "%d", batt);
+    if (strcmp(buf, lv_label_get_text(s_batt_lbl)) != 0) {
+        lv_label_set_text(s_batt_lbl, buf);
+    }
+
+    /* Cruise comes from the LISP dash packet, which has its own pump — it can
+     * report cruise while an RT poll has just gapped. */
+    vlp_dash_t dash;
+    const bool cc = vesc_lisp_panel_get_dash(&dash) && dash.cruise_active;
+    if (s_cc_img) {
+        if (cc) lv_obj_clear_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
+        else    lv_obj_add_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
+    }
+}
 
 static void set_status(const char *text)
 {
@@ -104,6 +210,8 @@ static void tick_cb(lv_timer_t *t)
      * said it stopped. Quiet is not a fault: the app skips frames whose
      * pixels did not change, so a parked bike sends nothing for minutes and
      * the last picture is still the right one. */
+    refresh_hud();
+
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
         set_status("Phone not connected");
@@ -167,6 +275,21 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_text_font(s_status_lbl, &aabridge_font_32, 0);
     lv_label_set_text(s_status_lbl, "Phone not connected");
     s_status_text = "Phone not connected";
+
+    lv_obj_t *left = hud_row_create(s_screen, LV_ALIGN_BOTTOM_LEFT, 10, -8);
+    /* Cruise sits to the left of the digits, as it does in Android Auto, so
+     * engaging it never shifts the speed. */
+    s_cc_img = lv_img_create(left);
+    lv_img_set_src(s_cc_img, &_cruise_control_alpha_38x38);
+    lv_obj_set_style_img_recolor(s_cc_img, lv_color_hex(CC_COLOUR), 0);
+    lv_obj_set_style_img_recolor_opa(s_cc_img, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
+    s_speed_lbl = hud_text(left, &lv_font_Antonio_Regular_64, 0xFFFFFF);
+    s_speed_unit = hud_text(left, &lv_font_Antonio_Regular_22, 0xC8D0D8);
+
+    lv_obj_t *right = hud_row_create(s_screen, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
+    s_batt_lbl = hud_text(right, &lv_font_Antonio_Regular_64, 0xFFFFFF);
+    lv_label_set_text(hud_text(right, &lv_font_Antonio_Regular_22, 0xC8D0D8), "%");
 
     s_tick = lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
