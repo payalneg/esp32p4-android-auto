@@ -59,6 +59,55 @@ static void gatts_register_dispatcher(struct ble_gatt_register_ctxt *ctxt,
     notif_bridge_gatts_register_cb(ctxt, arg);
 }
 
+/* How many phones (or VESC Tools) are actually connected to us.
+ *
+ * Counted by asking the stack rather than by adding and subtracting on
+ * events: one missed disconnect used to leave the count permanently high,
+ * and since it decides whether to keep advertising, the head unit then
+ * quietly stopped being findable. */
+static uint8_t count_periph_links(void)
+{
+    uint8_t n = 0;
+    for (uint16_t h = 0; h < MAX_PERIPH_LINKS + 4; h++) {
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(h, &d) != 0) continue;
+        if (d.role == BLE_GAP_ROLE_SLAVE) n++;
+    }
+    return n;
+}
+
+/* One phone, one link.
+ *
+ * A phone can end up asking twice — Android's autoConnect queue and an
+ * explicit connect racing each other — and then two links from the same
+ * address are up at once. Both subscribe, both write, and the bridge binding
+ * flips between them: on the bench that showed up as a panel that never got
+ * a single position while the app was sure it was connected. The older link
+ * is the stale one by definition, so it goes.
+ *
+ * Peripheral links only: a sensor we dialled out to as a central is a
+ * different matter entirely. */
+static void drop_older_link_from_same_peer(uint16_t fresh)
+{
+    struct ble_gap_conn_desc now;
+    if (ble_gap_conn_find(fresh, &now) != 0) return;
+    if (now.role != BLE_GAP_ROLE_SLAVE) return;
+
+    for (uint16_t h = 0; h < MAX_PERIPH_LINKS + 4; h++) {
+        if (h == fresh) continue;
+        struct ble_gap_conn_desc other;
+        if (ble_gap_conn_find(h, &other) != 0) continue;
+        if (other.role != BLE_GAP_ROLE_SLAVE) continue;
+        if (memcmp(&other.peer_id_addr, &now.peer_id_addr,
+                   sizeof(other.peer_id_addr)) != 0) {
+            continue;
+        }
+        ESP_LOGW(TAG, "same phone on conn=%u and conn=%u — dropping the older",
+                 (unsigned)h, (unsigned)fresh);
+        ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -69,10 +118,30 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
 #endif
         if (event->connect.status == 0) {
-            s_periph_links++;
-            ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u)",
-                     (unsigned)event->connect.conn_handle,
-                     (unsigned)s_periph_links);
+            drop_older_link_from_same_peer(event->connect.conn_handle);
+            s_periph_links = count_periph_links();
+            struct ble_gap_conn_desc who;
+            if (ble_gap_conn_find(event->connect.conn_handle, &who) == 0) {
+                /* The address too: two links from one phone look like two
+                 * different peers when Android rotates its private address,
+                 * and that is worth seeing in the log rather than guessing. */
+                ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u) peer=%02x:%02x:"
+                              "%02x:%02x:%02x:%02x type=%u id=%02x:%02x:%02x:"
+                              "%02x:%02x:%02x",
+                         (unsigned)event->connect.conn_handle,
+                         (unsigned)s_periph_links,
+                         who.peer_ota_addr.val[5], who.peer_ota_addr.val[4],
+                         who.peer_ota_addr.val[3], who.peer_ota_addr.val[2],
+                         who.peer_ota_addr.val[1], who.peer_ota_addr.val[0],
+                         (unsigned)who.peer_ota_addr.type,
+                         who.peer_id_addr.val[5], who.peer_id_addr.val[4],
+                         who.peer_id_addr.val[3], who.peer_id_addr.val[2],
+                         who.peer_id_addr.val[1], who.peer_id_addr.val[0]);
+            } else {
+                ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u)",
+                         (unsigned)event->connect.conn_handle,
+                         (unsigned)s_periph_links);
+            }
             s_connected = true;
             ble_nus_on_connect(event->connect.conn_handle);
             notif_bridge_on_connect(event->connect.conn_handle);
@@ -88,7 +157,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        if (s_periph_links) s_periph_links--;
+        s_periph_links = count_periph_links();
         ESP_LOGI(TAG, "GAP disconnect, conn=%u reason=%d (links=%u)",
                  (unsigned)event->disconnect.conn.conn_handle,
                  event->disconnect.reason, (unsigned)s_periph_links);

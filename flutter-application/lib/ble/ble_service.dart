@@ -95,6 +95,7 @@ class BleService {
   /// reboots on every firmware flash and every power cycle of the bike, so
   /// "the OS will handle it" is not good enough.
   Timer? _linkWatchdog;
+  Timer? _helloRetry;
   int _idleTicks = 0;
   static const Duration _watchdogPeriod = Duration(seconds: 20);
 
@@ -116,7 +117,26 @@ class BleService {
     unawaited(_attachKnownDevice(_savedRemoteId!));
   }
 
+  /// Guards against two attaches overlapping.
+  ///
+  /// Each one cancels the queued request and asks again; two of them racing
+  /// (the boot-time resume and the watchdog, say) left TWO links up to the
+  /// same head unit, 130 ms apart. Both subscribed, both wrote, and the head
+  /// unit's bridge binding flipped between them — the panel got nothing while
+  /// the app was sure it was connected.
+  bool _attaching = false;
+
   Future<void> _attachKnownDevice(String remoteId) async {
+    if (_attaching) return;
+    _attaching = true;
+    try {
+      await _attachOnce(remoteId);
+    } finally {
+      _attaching = false;
+    }
+  }
+
+  Future<void> _attachOnce(String remoteId) async {
     final dev = BluetoothDevice.fromId(remoteId);
     _device = dev;
     _userInitiatedDisconnect = false;
@@ -701,17 +721,52 @@ class BleService {
     if (ctrl == null || data == null) return;
     try {
       await ctrl.setNotifyValue(true);
-      final nav = NavStream(_FbpNavChannel(ctrl, data, () => _device));
-      _nav = nav;
+    } catch (_) {
+      // No notifications means no acknowledgements and no screen state, which
+      // the protocol is built on. Leave the feature off rather than
+      // half-wired; the next reconnect tries again.
+      await _stopNavStream();
+      return;
+    }
+    final nav = NavStream(_FbpNavChannel(ctrl, data, () => _device));
+    _nav = nav;
+    try {
       await nav.hello();
     } catch (_) {
-      // The head unit has the characteristics but would not talk: leave the
-      // feature off rather than half-wired. The next reconnect tries again.
-      await _stopNavStream();
+      // A refused greeting is not an old firmware. The head unit answers
+      // anyone who is not the bound writer with INSUFFICIENT_AUTHOR, so a
+      // second phone in the room — or one of our own stale links — makes the
+      // first hello fail. Tearing the channel down here is what put "Display
+      // firmware is too old" on the screen and left the navigator dead until
+      // the app was restarted. Keep it and keep greeting: the binding frees
+      // after five seconds of the owner's silence.
+      _armHelloRetry();
     }
   }
 
+  /// Greet the head unit again every few seconds until it answers with its
+  /// screen state, which is what tells the app the channel really works.
+  void _armHelloRetry() {
+    _helloRetry?.cancel();
+    _helloRetry = Timer.periodic(const Duration(seconds: 5), (t) {
+      final nav = _nav;
+      if (nav == null || _state != BleConnState.connected) {
+        t.cancel();
+        _helloRetry = null;
+        return;
+      }
+      if (nav.state.navMode || nav.state.visible) {
+        t.cancel();          // it has spoken; nothing left to ask for
+        _helloRetry = null;
+        return;
+      }
+      unawaited(nav.hello().catchError((_) {}));
+    });
+  }
+
   Future<void> _stopNavStream() async {
+    _helloRetry?.cancel();
+    _helloRetry = null;
     final nav = _nav;
     _nav = null;
     if (nav != null) await nav.dispose();

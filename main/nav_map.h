@@ -5,6 +5,7 @@
  * the radio or to LVGL — it writes pixels into a buffer the caller owns. */
 #pragma once
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -12,9 +13,17 @@
 extern "C" {
 #endif
 
-/* Where to look, as the phone last said. */
+/* Where to look, as the phone last said.
+ *
+ * Position in tenths of a micro-degree — the unit the wire already uses, and
+ * about eleven millimetres. Integers on purpose: this is stepped eight times
+ * a second by dead reckoning, and it is the accumulation that decides whether
+ * the marker glides or grinds. There is also no double-precision hardware on
+ * this chip, so a double here is a software routine on the frame path; the
+ * projection below is arranged so single precision is enough everywhere it is
+ * used. */
 typedef struct {
-    double   lat, lon;      /* the rider */
+    int32_t  lat_e7, lon_e7;   /* the rider */
     uint8_t  zoom;          /* slippy zoom of the tiles to compose from */
     uint16_t heading_deg;   /* 0..359, 0 = north; 0xFFFF when unknown */
     bool     valid;
@@ -41,11 +50,43 @@ typedef struct {
 /* Where the phone says the rider is. The view does not jump there: it eases
  * towards it over the following frames, so a position that disagrees with
  * where dead reckoning had got to does not yank the map. */
-void nav_map_set_view(double lat, double lon, uint8_t zoom, uint16_t heading_deg);
+void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
+                     uint16_t heading_deg);
 
 /* Rider speed, in centimetres per second, for the dead-reckoning between
  * position updates. */
 void nav_map_set_speed(uint16_t cm_per_s);
+
+/* How to turn a position near the view into a pixel on it.
+ *
+ * Mercator is a logarithm and a tangent, and doing it per point cost forty
+ * milliseconds a frame. It only has to be done once, for the view's own
+ * centre: within a screen of it the projection is linear to well under a
+ * pixel, so every other point is two multiplies away. Differences are taken
+ * in integers, which is what keeps single precision honest — the absolute
+ * coordinates are in the hundreds of millions and a float cannot hold those
+ * to the pixel, but a difference of a screen's width it holds exactly. */
+typedef struct {
+    int32_t lat_e7, lon_e7;   /* the view centre this was built for */
+    int     cx, cy;           /* where that centre sits on the panel */
+    float   kx, ky;           /* pixels per 1e-7 degree, east and north */
+} nav_map_proj_t;
+
+/* Build the projection for the current view on a w x h panel. Returns false
+ * when no view has been set. */
+bool nav_map_get_proj(nav_map_proj_t *out, int w, int h);
+
+/* Place a position on the panel. Off-screen results are normal and wanted —
+ * the caller clips. */
+static inline void nav_map_project(const nav_map_proj_t *p,
+                                   int32_t lat_e7, int32_t lon_e7,
+                                   int *x, int *y)
+{
+    const float dx = (float)((int64_t)lon_e7 - (int64_t)p->lon_e7);
+    const float dy = (float)((int64_t)lat_e7 - (int64_t)p->lat_e7);
+    *x = p->cx + (int)lroundf(dx * p->kx);
+    *y = p->cy - (int)lroundf(dy * p->ky);   /* north is up */
+}
 
 /* The rider's own zoom, from the buttons on the panel. Once set it wins over
  * the zoom the phone sends: the rider is looking at this screen, and the
@@ -83,11 +124,8 @@ bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
 
 /* Where a point on the panel is on the ground — the inverse of what
  * nav_map_render does, for picking a destination by tapping the map. */
-void nav_map_unproject(int x, int y, int w, int h, double *lat, double *lon);
-
-/* Slippy helpers, exposed for the debug command and the tests. */
-double nav_map_world_x(double lon, uint8_t zoom);
-double nav_map_world_y(double lat, uint8_t zoom);
+void nav_map_unproject(int x, int y, int w, int h,
+                       int32_t *lat_e7, int32_t *lon_e7);
 
 #ifdef __cplusplus
 }

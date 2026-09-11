@@ -431,7 +431,7 @@ static int cmd_mic(int argc, char **argv)
         uint32_t n = st.samples;
         int32_t  peak = st.peak;
         st.sq = 0; st.samples = 0; st.peak = 0;
-        unsigned rms = n ? (unsigned)sqrt((double)sq / n) : 0;
+        unsigned rms = n ? (unsigned)sqrtf((float)sq / (float)n) : 0;
         printf("t=%2ds chunks=%u rms=%u peak=%d%s\n", s, (unsigned)st.chunks, rms, (int)peak,
                n == 0 ? "  <-- no data from the codec" : "");
     }
@@ -478,9 +478,9 @@ static int cmd_navwarp(int argc, char **argv)
      * is what costs, and it is identical to a real source buffer. */
     const uint16_t *src = dst;
     const int w = NAV_SCREEN_W, h = NAV_SCREEN_H;
-    const double rad = deg * M_PI / 180.0;
-    const int32_t cos_q = (int32_t)lround(cos(rad) * 65536.0);
-    const int32_t sin_q = (int32_t)lround(sin(rad) * 65536.0);
+    const float rad = (float)deg * 0.0174532925f;
+    const int32_t cos_q = (int32_t)lroundf(cosf(rad) * 65536.0f);
+    const int32_t sin_q = (int32_t)lroundf(sinf(rad) * 65536.0f);
     const int64_t t0 = esp_timer_get_time();
     for (int by = 0; by < h; by += blk) {
         for (int bx = 0; bx < w; bx += blk) {
@@ -540,8 +540,12 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.compose_us, (unsigned)st.msync_us);
     printf("route %u points, last draw %u us\n",
            (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
-    printf("view %s %.5f,%.5f z%u hdg=%u | views=%u renders=%u last=%u ms tiles %d/%d\n",
-           v.valid ? "set" : "unset", v.lat, v.lon, (unsigned)v.zoom,
+    printf("view %s %ld.%07ld,%ld.%07ld z%u hdg=%u | views=%u renders=%u "
+           "last=%u ms tiles %d/%d\n",
+           v.valid ? "set" : "unset",
+           (long)(v.lat_e7 / 10000000), (long)labs(v.lat_e7 % 10000000),
+           (long)(v.lon_e7 / 10000000), (long)labs(v.lon_e7 % 10000000),
+           (unsigned)v.zoom,
            (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,
            (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
     return 0;

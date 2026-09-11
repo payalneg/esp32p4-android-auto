@@ -4,6 +4,7 @@
 #include "nav_route.h"
 
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
@@ -71,7 +72,7 @@ static nav_search_hit_t s_hits[NAV_SEARCH_MAX];
 static atomic_int  s_nhits;
 static atomic_bool s_hits_fresh;
 static lv_obj_t *s_zoom_lbl;
-static double s_pick_lat, s_pick_lon;
+static int32_t s_pick_lat_e7, s_pick_lon_e7;
 static lv_timer_t *s_tick;
 
 static uint16_t *s_fb[2];
@@ -253,7 +254,7 @@ static void pick_go_cb(lv_event_t *e)
 {
     (void)e;
     pick_hide();
-    if (s_dest_cb) s_dest_cb(s_pick_lat, s_pick_lon);
+    if (s_dest_cb) s_dest_cb(s_pick_lat_e7, s_pick_lon_e7);
 }
 
 static void pick_cancel_cb(lv_event_t *e)
@@ -334,9 +335,9 @@ static void hit_pressed_cb(lv_event_t *e)
 {
     const int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= atomic_load(&s_nhits)) return;
-    const double lat = s_hits[idx].lat, lon = s_hits[idx].lon;
+    const int32_t lat_e7 = s_hits[idx].lat_e7, lon_e7 = s_hits[idx].lon_e7;
     find_close();
-    if (s_dest_cb) s_dest_cb(lat, lon);
+    if (s_dest_cb) s_dest_cb(lat_e7, lon_e7);
 }
 
 /* Rebuild the list from what the worker left us. LVGL task only. */
@@ -414,9 +415,15 @@ static void map_pressed_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     nav_map_unproject(p.x, p.y, NAV_SCREEN_W, NAV_SCREEN_H,
-                      &s_pick_lat, &s_pick_lon);
+                      &s_pick_lat_e7, &s_pick_lon_e7);
+    /* Printed from the integer, digit by digit: a "%.5f" would pull the
+     * software double-precision formatter in for one label. */
     char buf[64];
-    snprintf(buf, sizeof buf, "Go to %.5f, %.5f?", s_pick_lat, s_pick_lon);
+    snprintf(buf, sizeof buf, "Go to %s%ld.%05ld, %s%ld.%05ld?",
+             s_pick_lat_e7 < 0 ? "-" : "", labs(s_pick_lat_e7) / 10000000L,
+             (labs(s_pick_lat_e7) % 10000000L) / 100L,
+             s_pick_lon_e7 < 0 ? "-" : "", labs(s_pick_lon_e7) / 10000000L,
+             (labs(s_pick_lon_e7) % 10000000L) / 100L);
     lv_label_set_text(s_pick_lbl, buf);
     lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
     if (s_pick_timer) lv_timer_del(s_pick_timer);

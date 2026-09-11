@@ -50,11 +50,10 @@ size_t nav_route_count(void);
 void nav_route_set_guide(const nav_guide_t *g);
 void nav_route_get_guide(nav_guide_t *out);
 
-/* Draw the line into a composed view. `zoom` and the screen origin in world
- * pixels are what nav_map used to place the tiles, so the line lands exactly
- * on the roads underneath. */
-void nav_route_draw(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
-                    uint8_t zoom);
+/* Draw the line into a composed view. It asks nav_map for the projection of
+ * the view it is drawing over, so the line lands exactly on the roads
+ * underneath without being told where they are. */
+void nav_route_draw(uint16_t *dst, int w, int h);
 
 #ifdef __cplusplus
 }

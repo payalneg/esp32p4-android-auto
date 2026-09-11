@@ -54,7 +54,7 @@ bool nav_screen_active(void);
 
 /* Called when the rider has picked somewhere to go by tapping the map and
  * confirming it. Runs on the LVGL task, so the handler must only enqueue. */
-typedef void (*nav_screen_dest_cb_t)(double lat, double lon);
+typedef void (*nav_screen_dest_cb_t)(int32_t lat_e7, int32_t lon_e7);
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
 
 /* Somewhere the phone found for a typed query. Names come from the offline
@@ -63,8 +63,8 @@ void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
 #define NAV_SEARCH_MAX   6
 #define NAV_SEARCH_NAME  56
 typedef struct {
-    double lat, lon;
-    char   name[NAV_SEARCH_NAME];   /* UTF-8, NUL-terminated */
+    int32_t lat_e7, lon_e7;         /* the wire's units, no conversion needed */
+    char    name[NAV_SEARCH_NAME];  /* UTF-8, NUL-terminated */
 } nav_search_hit_t;
 
 /* Show what the phone found (n == 0 means "nothing"), or clear the list. */
