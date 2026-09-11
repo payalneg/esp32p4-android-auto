@@ -32,13 +32,18 @@ extern "C" {
 
 /* How many decoded tiles to keep.
  *
- * 64 x 128 KB = 8 MB. A view wants about forty-five — twelve on screen,
- * eighteen in the ring, the rest across the two blurred layers — and a ride
- * in progress wants a few more ahead of it. Forty-eight thrashed within a
- * minute of riding; ninety-six claimed half the PSRAM for ground nobody was
- * looking at. This leaves most of the ~25 MB free for Wi-Fi, the video
- * decoder and everything else. */
-#define NAV_TILE_SLOTS 64
+ * 96 x 128 KB = 12 MB of the ~25 MB free, which still leaves Wi-Fi, the video
+ * decoder and the framebuffers their room.
+ *
+ * A view wants about forty-five — twelve on screen, eighteen in the ring, the
+ * rest across the blurred layers — and a ride in progress wants a few more
+ * ahead of it. Forty-eight thrashed within a minute. Sixty-four looked
+ * enough and was not: at zoom 18 a screenful plus its ring is four times the
+ * ground of zoom 17, and a 1.6 km ride evicted 890 tiles while the phone
+ * re-sent the same ground over and over — every eviction is reported, and a
+ * tile still wanted comes straight back. Watch `evicted` in `navstat`: it
+ * should creep up as ground goes behind, not run away. */
+#define NAV_TILE_SLOTS 96
 
 /* Told when a tile is dropped to make room. The phone keeps its own list of
  * what it has sent and will never send a tile twice, so it has to hear about

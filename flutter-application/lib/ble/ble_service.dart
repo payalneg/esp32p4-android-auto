@@ -85,6 +85,18 @@ class BleService {
   int _reconnectAttempt = 0;
   Timer? _reconnectTimer;
 
+  /// Keeps asking while a paired head unit is away.
+  ///
+  /// The OS-level autoConnect request is supposed to survive a remote
+  /// disconnect, and mostly does — but not after we cancel it ourselves, and
+  /// not, on this Samsung, after the head unit reboots: the head unit came
+  /// back advertising and nothing connected to it for minutes (its log showed
+  /// no GAP connect at all) until the app was force-stopped. A head unit
+  /// reboots on every firmware flash and every power cycle of the bike, so
+  /// "the OS will handle it" is not good enough.
+  Timer? _linkWatchdog;
+  static const Duration _watchdogPeriod = Duration(seconds: 20);
+
   Stream<BleConnState> get state => _stateCtrl.stream;
   Stream<InboundCommand> get commands => _cmdCtrl.stream;
   BleConnState get currentState => _state;
@@ -132,6 +144,7 @@ class BleService {
     // mtu MUST be null with autoConnect — the package's default is 512
     // and the assertion `(mtu == null) || !autoConnect` would trip.
     dev.connect(autoConnect: true, mtu: null).catchError((_) {});
+    _armLinkWatchdog();
   }
 
   /// The head unit's adv packet carries the NUS UUID (legacy, for VESC
@@ -186,6 +199,7 @@ class BleService {
     // With autoConnect:true this returns immediately; the link comes up
     // asynchronously through the connectionState stream.
     await device.connect(autoConnect: true, mtu: null);
+    _armLinkWatchdog();
 
     // Wait for connectionState→connected→_completeHandshake to succeed.
     // First-attempt timeout: 20 s covers a slow GATT discovery on real
@@ -477,10 +491,13 @@ class BleService {
       _handleLinkUp(_device!);
     } else if (s == BluetoothConnectionState.disconnected) {
       _setState(BleConnState.disconnected);
-      // autoConnect:true keeps the OS-level reconnect queue active by itself;
-      // nothing to retry here. The foreground service stays up regardless (it
-      // hosts this whole BLE isolate — see ble_host.dart) so the link can come
-      // back, or the user can re-pair, without relaunching the app.
+      // Re-arm rather than trust the OS queue: see _linkWatchdog. Cheap when
+      // the queue is in fact still live — the head unit is either advertising,
+      // in which case we connect, or it is not and the backoff waits.
+      // The foreground service stays up regardless (it hosts this whole BLE
+      // isolate — see ble_host.dart), so the link can come back without the
+      // app being relaunched.
+      _scheduleForceReconnect();
     }
   }
 
@@ -537,6 +554,19 @@ class BleService {
   /// stack can otherwise hand back stale attribute handles and every write
   /// lands nowhere (link up, no data). Capped backoff covers a head unit
   /// that's still booting.
+  /// Every [_watchdogPeriod], if a paired head unit is still not connected
+  /// and no attempt is already pending, ask again.
+  void _armLinkWatchdog() {
+    _linkWatchdog?.cancel();
+    _linkWatchdog = Timer.periodic(_watchdogPeriod, (_) {
+      if (_userInitiatedDisconnect || _savedRemoteId == null) return;
+      if (_state == BleConnState.connected) return;
+      if (_handshaking) return;
+      if (_reconnectTimer?.isActive ?? false) return;
+      _scheduleForceReconnect();
+    });
+  }
+
   void _scheduleForceReconnect() {
     if (_userInitiatedDisconnect || _savedRemoteId == null) return;
     _reconnectAttempt++;
@@ -604,6 +634,8 @@ class BleService {
   }
 
   Future<void> _teardown() async {
+    _linkWatchdog?.cancel();
+    _linkWatchdog = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempt = 0;
