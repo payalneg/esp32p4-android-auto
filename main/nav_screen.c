@@ -355,6 +355,11 @@ static void find_open_cb(lv_event_t *e)
     lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_find_box);   /* over the zoom buttons */
+    /* Letters again, whatever it was last time. The number pad sticking
+     * around was caught by a soak: every search after one coordinate lookup
+     * typed digits into a box expecting a street name, so nothing was ever
+     * sent and the panel just sat there. */
+    lv_keyboard_set_mode(s_find_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(s_find_kb, s_find_ta);
 }
 
