@@ -474,6 +474,7 @@ static int cmd_navstat(int argc, char **argv)
     nav_tiles_get_stats(&ts);
     nav_map_view_t v;
     nav_map_get_view(&v);
+    printf("worker stack free=%u B\n", (unsigned)st.stack_free);
     printf("tiles ok=%u failed=%u stored=%u/%u evicted=%u last=%u B in %u ms\n",
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,

@@ -442,7 +442,11 @@ void ble_nav_init(void)
     }
     nav_tiles_init();
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
-    xTaskCreatePinnedToCore(worker, "ble_nav", 4096, NULL, 5, &s_task, 0);
+    /* 8 KiB, like the other two workers on this link. Four was enough when
+     * this task only memcpy'd, but it now runs libpng — whose simplified read
+     * API is generous with the stack — and composes the view on top. A task
+     * that overflows here takes the whole device down with it. */
+    xTaskCreatePinnedToCore(worker, "ble_nav", 8192, NULL, 5, &s_task, 0);
     ESP_LOGI(TAG, "ble_nav ready");
 }
 
@@ -455,7 +459,12 @@ void ble_nav_notify_state(void)
 
 void ble_nav_get_stats(ble_nav_stats_t *out)
 {
-    if (out) *out = s_stats;
+    if (!out) return;
+    *out = s_stats;
+    /* Worth watching: this task decodes PNGs through libpng and composes the
+     * view, so it is the one that would overflow and take the device with it. */
+    out->stack_free = s_task
+        ? (uint32_t)uxTaskGetStackHighWaterMark(s_task) : 0;
 }
 
 void ble_nav_set_link(uint16_t conn, uint16_t ctrl_val_handle)

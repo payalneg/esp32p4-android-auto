@@ -102,6 +102,7 @@ typedef struct {
     uint32_t render_last_ms;
     int      last_have;     /* tiles present for the last composed view */
     int      last_wanted;
+    uint32_t stack_free;    /* worker stack high-water mark, bytes */
 } ble_nav_stats_t;
 void ble_nav_get_stats(ble_nav_stats_t *out);
 

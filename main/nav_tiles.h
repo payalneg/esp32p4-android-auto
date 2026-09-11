@@ -30,9 +30,14 @@ extern "C" {
 #define NAV_TILE_FMT_PNG  0
 #define NAV_TILE_FMT_JPEG 1
 
-/* How many decoded tiles to keep. 96 x 128 KB = 12 MB of the ~25 MB free
- * PSRAM — enough for several screenfuls around the rider at two zooms. */
-#define NAV_TILE_SLOTS 96
+/* How many decoded tiles to keep.
+ *
+ * 48 x 128 KB = 6 MB. A screenful is twelve, the ring around it another
+ * eighteen, and the two blurred fallback layers a dozen more — so this holds
+ * everything in view with room to spare while leaving most of the ~25 MB of
+ * free PSRAM to Wi-Fi, the video decoder and everything else. It was 96 for a
+ * while, which claimed half the PSRAM for tiles nobody was looking at. */
+#define NAV_TILE_SLOTS 48
 
 void nav_tiles_init(void);
 
