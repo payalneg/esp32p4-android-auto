@@ -168,6 +168,26 @@ the one recorded in the release commit.
   whole map at NaN.
 - Composing a frame is **26-27 ms** now, from 33-40 before.
 
+### Two phones, one panel
+
+- A spare phone with the app installed is enough to break the navigator, and
+  on the bench it did. It held both of the head unit's peripheral slots (its
+  older app opened two links at once), kept the notification bridge bound by
+  sending a steady trickle of notifications, and the phone the rider was
+  actually navigating with could not write a single byte: its greeting came
+  back refused, and the app — told nothing else — reported "Display firmware
+  is too old" and switched the navigator off.
+- Three fixes, one per link in that chain. A navigator write now takes the
+  bridge binding on the spot rather than waiting for the owner to go quiet:
+  whoever is drawing the panel outranks whoever is sending notifications. A
+  refused greeting no longer means "no support" — the app keeps the channel
+  and greets again every five seconds until the head unit answers. And the
+  app cannot open two links any more, which is what filled both slots.
+- The head unit also stopped trusting its own link count: it was kept by
+  adding and subtracting on events, one missed disconnect left it
+  permanently high, and since it decides whether to keep advertising, the
+  head unit then quietly stopped being findable. It asks the stack now.
+
 ### Which way the rider is pointing — and why the map stays north-up
 
 - The marker is an arrow along the course now, with a white casing, and falls

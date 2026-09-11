@@ -479,14 +479,14 @@ static void reasm_feed(const uint8_t *chunk, uint16_t chunk_len)
 
 static int64_t s_last_bridge_write_us;
 
-static bool bridge_bind(uint16_t conn)
+static bool bridge_bind(uint16_t conn, bool insist)
 {
     const int64_t now = esp_timer_get_time();
     if (s_conn_handle == conn) {
         s_last_bridge_write_us = now;
         return true;
     }
-    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+    if (!insist && s_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
         now - s_last_bridge_write_us < BRIDGE_STEAL_AFTER_US) {
         return false;          /* the owner is mid-conversation */
     }
@@ -534,10 +534,22 @@ static int access_cb(uint16_t conn, uint16_t attr,
 {
     (void)arg;
     if (!s_host_task) s_host_task = xTaskGetCurrentTaskHandle();
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && !bridge_bind(conn)) {
-        /* Another link owns the bridge right now. Say so rather than let two
-         * clients interleave into one transfer. */
-        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        /* Whoever is drawing the panel outranks whoever is sending
+         * notifications: a navigator write takes the bridge on the spot,
+         * while everything else waits for the owner to go quiet.
+         *
+         * Two phones in the same room is not a strange case — a spare in a
+         * drawer with the app installed is enough — and with the older rule
+         * the one sending notifications kept the binding for ever, so the one
+         * the rider was actually navigating with could not write a thing. Its
+         * greeting came back refused and the app, being told nothing else,
+         * called the firmware too old. */
+        const bool navigating = (attr == s_nav_ctrl_handle ||
+                                 attr == s_nav_data_handle);
+        if (!bridge_bind(conn, navigating)) {
+            return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+        }
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_in_handle) {
         uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
@@ -740,7 +752,7 @@ void notif_bridge_on_connect(uint16_t conn) {
     /* First peer takes the bridge by default (single-connection behaviour
      * unchanged); if that peer is actually VESC Tool, the phone's first
      * write to a bridge characteristic re-binds (see bridge_bind). */
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) bridge_bind(conn);
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) bridge_bind(conn, false);
 }
 void notif_bridge_on_disconnect(uint16_t conn) {
     if (conn != s_conn_handle) return;       /* an idle peer left */
