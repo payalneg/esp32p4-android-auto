@@ -57,8 +57,8 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_status_vesc = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_status_vesc, "VESC");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_status_vesc, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_status_vesc, 6, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_status_vesc, 52, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_status_vesc, 4, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_status_vesc, 56, 30);
     lv_obj_add_flag(ui->dashboard_Classic_Max_status_vesc, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_Max_status_vesc, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -81,8 +81,8 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_mode_text = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_mode_text, "MODE ");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_mode_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_mode_text, 62, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_mode_text, 74, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_mode_text, 66, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_mode_text, 67, 30);
 
     //Write style for dashboard_Classic_Max_mode_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_Max_mode_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -104,14 +104,15 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_uptime_text = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_uptime_text, "--:--:--");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_uptime_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_uptime_text, 140, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_uptime_text, 84, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_uptime_text, 123, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_uptime_text, 66, 30);
+    lv_obj_add_flag(ui->dashboard_Classic_Max_uptime_text, LV_OBJ_FLAG_HIDDEN);
 
     //Write style for dashboard_Classic_Max_uptime_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_Max_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Classic_Max_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Classic_Max_uptime_text, lv_color_hex(0x8A9499), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Classic_Max_uptime_text, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Classic_Max_uptime_text, &lv_font_montserratMedium_20, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Classic_Max_uptime_text, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Classic_Max_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Classic_Max_uptime_text, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -127,8 +128,8 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_status_bt = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_status_bt, "BT\n");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_status_bt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_status_bt, 452, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_status_bt, 26, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_status_bt, 371, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_status_bt, 30, 30);
 
     //Write style for dashboard_Classic_Max_status_bt, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_Max_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2144,8 +2145,8 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_Settings_text = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_Settings_text, "SETTINGS");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_Settings_text, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_Settings_text, 350, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_Settings_text, 100, 29);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_Settings_text, 264, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_Settings_text, 101, 29);
     lv_obj_add_flag(ui->dashboard_Classic_Max_Settings_text, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_Max_Settings_text, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -2237,15 +2238,14 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_cur_time_label = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_cur_time_label, "--:--");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_cur_time_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_cur_time_label, 303, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_cur_time_label, 66, 30);
-    lv_obj_add_flag(ui->dashboard_Classic_Max_cur_time_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_cur_time_label, 407, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_cur_time_label, 41, 30);
 
     //Write style for dashboard_Classic_Max_cur_time_label, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Classic_Max_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_radius(ui->dashboard_Classic_Max_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui->dashboard_Classic_Max_cur_time_label, lv_color_hex(0xB6FF2E), LV_PART_MAIN|LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->dashboard_Classic_Max_cur_time_label, &lv_font_montserratMedium_24, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->dashboard_Classic_Max_cur_time_label, &lv_font_montserratMedium_16, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui->dashboard_Classic_Max_cur_time_label, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_letter_space(ui->dashboard_Classic_Max_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_text_line_space(ui->dashboard_Classic_Max_cur_time_label, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -2283,8 +2283,8 @@ void setup_scr_dashboard_Classic_Max(lv_ui *ui)
     ui->dashboard_Classic_Max_statistics_button = lv_label_create(ui->dashboard_Classic_Max);
     lv_label_set_text(ui->dashboard_Classic_Max_statistics_button, "STATISTICS");
     lv_label_set_long_mode(ui->dashboard_Classic_Max_statistics_button, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Classic_Max_statistics_button, 228, 5);
-    lv_obj_set_size(ui->dashboard_Classic_Max_statistics_button, 116, 30);
+    lv_obj_set_pos(ui->dashboard_Classic_Max_statistics_button, 139, 5);
+    lv_obj_set_size(ui->dashboard_Classic_Max_statistics_button, 119, 30);
     lv_obj_add_flag(ui->dashboard_Classic_Max_statistics_button, LV_OBJ_FLAG_CLICKABLE);
 
     //Write style for dashboard_Classic_Max_statistics_button, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

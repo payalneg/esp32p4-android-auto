@@ -95,6 +95,101 @@ FONT_MIN_PX = 14
 # here is overridable by hand in GUI Guider afterwards.
 #
 # Keys: x, y, w, h, font (size), family, hidden.
+# Advance width per character as a fraction of the font size, used to decide how
+# much width a label needs. One constant does not do: the captions are all-caps
+# Montserrat (~0.72 em per glyph) while the readouts are digits (~0.60), and
+# sizing a caption by the digit figure is exactly what makes "RANGE" wrap to
+# "RANG/E". Calibrated against the rendered screenshots, erring high — a
+# transparent box a few pixels too wide costs nothing, a wrapped caption reads
+# as broken. Letter spacing from the style is added on top.
+CHAR_EM_DEFAULT = 0.62
+CHAR_EM = {
+    # Capitals, which is what the captions and the unit suffixes are made of.
+    # M and W are nearly twice the width of I — averaging them is what made
+    # "KM" and "kW" wrap in boxes the estimate said were big enough.
+    **{c: 0.95 for c in "MW"},
+    **{c: 0.74 for c in "ABCDGHKNOPQRSUVXYZ"},
+    **{c: 0.66 for c in "CEFLT"},
+    **{c: 0.35 for c in "IJ"},
+    **{c: 0.60 for c in "abcdefghijklmnopqrstuvwxyz0123456789"},
+    **{c: 0.85 for c in "mw"},
+    **{c: 0.32 for c in " .,:;'`|!"},
+    **{c: 0.42 for c in "-()[]/"},
+    "%": 0.95,
+    "°": 0.45,
+}
+
+
+def text_width_estimate(text, font_size, letter_space=0):
+    """Widest line of `text`, in pixels, roughly."""
+    if not text or not font_size:
+        return 0
+    widest = 0
+    for line in text.split("\n"):
+        w = sum(CHAR_EM.get(c, CHAR_EM_DEFAULT) * font_size + letter_space
+                for c in line)
+        widest = max(widest, w)
+    return int(widest + 0.5)
+
+
+def _classic_status_bar():
+    """Lay the Classic status bar out across 480 px.
+
+    The row carries VESC, the ride mode, uptime, STATISTICS, SETTINGS, the BT
+    indicator and the clock. Measured and packed left to right rather than
+    placed by hand, so changing a caption re-flows the row instead of silently
+    overlapping the next one.
+
+    The clock is NOT the wall clock: with ENABLE_WALL_CLOCK=0 (what ships) the
+    companion app pushes "HH:MM" over BLE every 15 s and the label un-hides
+    itself as soon as the data is fresh (main/vesc_ui_updater.c ->
+    cockpit_cur_time_hm), so it needs a slot of its own — hiding it here would
+    only mean it reappears on top of whatever took its place.
+
+    Seven items do not fit 480 px at a readable size, so the row sheds items
+    from BAR_DROP_ORDER until it does. Uptime goes first: the Statistics screen
+    shows it too, and unlike the mode text (hidden and shown at runtime by the
+    updater) it stays hidden once hidden."""
+    items = [
+        ("status_vesc",       "VESC"),
+        ("mode_text",         "MODE "),
+        ("uptime_text",       "--:--:--"),
+        ("statistics_button", "STATISTICS"),
+        ("Settings_text",     "SETTINGS"),
+        ("status_bt",         "BT"),
+        ("cur_time_label",    "--:--"),
+    ]
+    BAR_DROP_ORDER = ["uptime_text"]
+    # The per-character table is calibrated against rendered screenshots but
+    # still runs a few percent low on long all-caps strings; a caption that
+    # wraps costs far more than a few spare pixels.
+    FUDGE = 1.12
+    FONT, PAD, GAP, MARGIN = 16, 6, 6, 4
+
+    def pack(chosen):
+        widths = [int(text_width_estimate(t, FONT) * FUDGE) + PAD
+                  for _n, t in chosen]
+        total = sum(widths) + GAP * (len(chosen) - 1) + 2 * MARGIN
+        return widths, total
+
+    dropped = []
+    widths, total = pack(items)
+    for name in BAR_DROP_ORDER:
+        if total <= NEW_W:
+            break
+        items = [(n, t) for n, t in items if n != name]
+        dropped.append(name)
+        widths, total = pack(items)
+
+    rules, x = {}, MARGIN
+    for (name, _t), w in zip(items, widths):
+        rules[name] = {"x": x, "w": w, "font": FONT}
+        x += w + GAP
+    for name in dropped:
+        rules[name] = {"hidden": True}
+    return rules
+
+
 def _classic_bottom_strip():
     """The five-column readout strip along the bottom of the Classic screens.
 
@@ -147,19 +242,13 @@ SQUARE_OVERRIDES = {
     # not, and the firmware hides it anyway (ENABLE_WALL_CLOCK=0), so it is
     # hidden rather than left to overlap. The red "ESC NOT CONNECTED" banner
     # moves out of the bar and onto the speed column, where there is room.
-    "status_bar": {
-        "status_vesc":       {"x": 6,   "w": 52,  "font": 16},
-        "mode_text":         {"x": 62,  "w": 74,  "font": 16},
-        "uptime_text":       {"x": 140, "w": 84,  "font": 16},
-        "statistics_button": {"x": 228, "w": 116, "font": 16},
-        "Settings_text":     {"x": 350, "w": 100, "font": 16},
-        "status_bt":         {"x": 452, "w": 26,  "font": 16},
-        "cur_time_label":    {"hidden": True},
+    "status_bar": dict(
+        _classic_status_bar(),
         # Antonio 22 carries capitals and digits in the subsetted firmware
         # font, so the warning keeps its typeface — it just stops covering
         # the status bar.
-        "esc_not_connected_text": {"x": 110, "y": 40, "w": 260, "h": 26},
-    },
+        **{"esc_not_connected_text": {"x": 110, "y": 40, "w": 260, "h": 26}},
+    ),
 
     # The two side columns are 108 px wide on the square panel (the separators
     # land at 108 and 372). A value and its unit cannot sit side by side in
@@ -252,29 +341,6 @@ KEEP_ASPECT = {
 # it), so the 480 project drops it rather than carrying a broken copy.
 DROP_SCREENS = {"reference"}
 
-# Advance width per character as a fraction of the font size, used to decide how
-# much width a label needs. One constant does not do: the captions are all-caps
-# Montserrat (~0.72 em per glyph) while the readouts are digits (~0.60), and
-# sizing a caption by the digit figure is exactly what makes "RANGE" wrap to
-# "RANG/E". Calibrated against the rendered screenshots, erring high — a
-# transparent box a few pixels too wide costs nothing, a wrapped caption reads
-# as broken. Letter spacing from the style is added on top.
-CHAR_EM_DEFAULT = 0.62
-CHAR_EM = {
-    # Capitals, which is what the captions and the unit suffixes are made of.
-    # M and W are nearly twice the width of I — averaging them is what made
-    # "KM" and "kW" wrap in boxes the estimate said were big enough.
-    **{c: 0.95 for c in "MW"},
-    **{c: 0.74 for c in "ABCDGHKNOPQRSUVXYZ"},
-    **{c: 0.66 for c in "CEFLT"},
-    **{c: 0.35 for c in "IJ"},
-    **{c: 0.60 for c in "abcdefghijklmnopqrstuvwxyz0123456789"},
-    **{c: 0.85 for c in "mw"},
-    **{c: 0.32 for c in " .,:;'`|!"},
-    **{c: 0.42 for c in "-()[]/"},
-    "%": 0.95,
-    "°": 0.45,
-}
 
 
 class Geometry:
@@ -346,16 +412,6 @@ def letter_space_of(widget):
     return 0
 
 
-def text_width_estimate(text, font_size, letter_space=0):
-    """Widest line of `text`, in pixels, roughly."""
-    if not text or not font_size:
-        return 0
-    widest = 0
-    for line in text.split("\n"):
-        w = sum(CHAR_EM.get(c, CHAR_EM_DEFAULT) * font_size + letter_space
-                for c in line)
-        widest = max(widest, w)
-    return int(widest + 0.5)
 
 
 def step_font_down(widget, family, size, text, letter_space, avail_w):
