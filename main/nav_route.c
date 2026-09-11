@@ -143,8 +143,7 @@ static void draw_span(uint16_t *dst, int w, int h,
     stamp(dst, w, h, bx, by, half, c);
 }
 
-void nav_route_draw(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
-                    uint8_t zoom)
+void nav_route_draw(uint16_t *dst, int w, int h)
 {
     if (!dst || s_count < 2 || !s_pts) return;
     if (!s_px) {
@@ -156,27 +155,27 @@ void nav_route_draw(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
     }
 
     /* Which points are anywhere near the screen, in latitude and longitude —
-     * plain comparisons, no projection. This is what keeps a long route
-     * cheap: projecting every point of a four-kilometre line took 40 ms of
-     * the frame, because a Mercator y is a log and a tan in double and this
-     * chip has no double-precision hardware. Only the visible handful now
-     * gets projected, and each of those exactly once. */
-    const double margin_px = (w > h ? w : h);
-    double lat0, lon0, lat1, lon1;
-    nav_map_unproject(-(int)margin_px, -(int)margin_px, w, h, &lat0, &lon0);
-    nav_map_unproject(w + (int)margin_px, h + (int)margin_px, w, h, &lat1, &lon1);
-    const int32_t lat_lo = (int32_t)((lat1 < lat0 ? lat1 : lat0) * 1e7);
-    const int32_t lat_hi = (int32_t)((lat1 > lat0 ? lat1 : lat0) * 1e7);
-    const int32_t lon_lo = (int32_t)((lon1 < lon0 ? lon1 : lon0) * 1e7);
-    const int32_t lon_hi = (int32_t)((lon1 > lon0 ? lon1 : lon0) * 1e7);
+     * plain integer comparisons on the wire's own units. This is what keeps a
+     * long route cheap: it used to project every point of a four-kilometre
+     * line, at a logarithm and a tangent each, and that alone was 40 ms of
+     * the frame. */
+    nav_map_proj_t proj;
+    if (!nav_map_get_proj(&proj, w, h)) return;
+    const int margin_px = (w > h ? w : h);
+    int32_t lat_lo, lat_hi, lon_lo, lon_hi;
+    nav_map_unproject(-margin_px, h + margin_px, w, h, &lat_lo, &lon_lo);
+    nav_map_unproject(w + margin_px, -margin_px, w, h, &lat_hi, &lon_hi);
+    if (lat_lo > lat_hi) { const int32_t t = lat_lo; lat_lo = lat_hi; lat_hi = t; }
+    if (lon_lo > lon_hi) { const int32_t t = lon_lo; lon_lo = lon_hi; lon_hi = t; }
 
     for (size_t i = 0; i < s_count; i++) {
         const int32_t la = s_pts[i * 2], lo = s_pts[i * 2 + 1];
         s_on[i] = (la >= lat_lo && la <= lat_hi && lo >= lon_lo && lo <= lon_hi);
     }
 
-    /* Project what the spans below need — a point is wanted if it or either
-     * neighbour is near the screen — and project it exactly once. */
+    /* Place what the spans below need — a point is wanted if it or either
+     * neighbour is near the screen — with two multiplies each, against the
+     * projection built once for the view's centre. */
     int32_t *px = s_px;
     bool any = false;
     for (size_t i = 0; i < s_count; i++) {
@@ -184,10 +183,10 @@ void nav_route_draw(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
                             (i > 0 && s_on[i - 1]) ||
                             (i + 1 < s_count && s_on[i + 1]);
         if (!wanted) continue;
-        const double lat = s_pts[i * 2] / 1e7;
-        const double lon = s_pts[i * 2 + 1] / 1e7;
-        px[i * 2]     = (int32_t)lround(nav_map_world_x(lon, zoom) - sl);
-        px[i * 2 + 1] = (int32_t)lround(nav_map_world_y(lat, zoom) - st);
+        int x, y;
+        nav_map_project(&proj, s_pts[i * 2], s_pts[i * 2 + 1], &x, &y);
+        px[i * 2]     = x;
+        px[i * 2 + 1] = y;
         any = true;
     }
     if (!any) return;

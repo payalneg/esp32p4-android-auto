@@ -8,6 +8,7 @@
 #include "ble_nav.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/jpeg_decode.h"
@@ -207,16 +208,14 @@ static void on_tile_evicted(uint8_t z, uint32_t x, uint32_t y)
 
 /* From the LVGL task, so it only enqueues — the notify happens on the worker
  * like every other one. */
-static void on_dest_picked(double lat, double lon)
+static void on_dest_picked(int32_t lat_e7, int32_t lon_e7)
 {
     if (!s_q) return;
-    nav_evt_t ev = {
-        .kind = EV_DEST,
-        .lat_e7 = (int32_t)lround(lat * 1e7),
-        .lon_e7 = (int32_t)lround(lon * 1e7),
-    };
+    nav_evt_t ev = { .kind = EV_DEST, .lat_e7 = lat_e7, .lon_e7 = lon_e7 };
     xQueueSend(s_q, &ev, 0);
-    ESP_LOGI(TAG, "destination picked on the panel: %.5f, %.5f", lat, lon);
+    ESP_LOGI(TAG, "destination picked on the panel: %ld.%07ld, %ld.%07ld",
+             (long)(lat_e7 / 10000000), (long)labs(lat_e7 % 10000000),
+             (long)(lon_e7 / 10000000), (long)labs(lon_e7 % 10000000));
 }
 
 /* The rider pressed a zoom button. The map changes level at once — it has
@@ -502,8 +501,8 @@ static void handle_found(const nav_evt_t *ev)
             size_t copy = nl < NAV_SEARCH_NAME - 1 ? nl : NAV_SEARCH_NAME - 1;
             memcpy(hits[n].name, s_stage + off, copy);
             hits[n].name[copy] = '\0';
-            hits[n].lat = lat_e7 / 1e7;
-            hits[n].lon = lon_e7 / 1e7;
+            hits[n].lat_e7 = lat_e7;
+            hits[n].lon_e7 = lon_e7;
             n++;
             off += nl;
         }
@@ -870,7 +869,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
              * does not send it simply gets no dead reckoning. */
             const uint16_t speed_cms = (len >= NAV_VIEW_LEN_SPEED)
                 ? (uint16_t)data[12] | ((uint16_t)data[13] << 8) : 0;
-            nav_map_set_view(lat_e7 / 1e7, lon_e7 / 1e7, zoom, heading);
+            nav_map_set_view(lat_e7, lon_e7, zoom, heading);
             nav_map_set_speed(speed_cms);
             nav_evt_t ev = { .kind = EV_VIEW };
             xQueueSend(s_q, &ev, 0);

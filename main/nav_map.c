@@ -23,7 +23,7 @@
 #define NAV_VIEW_H 480
 
 static nav_map_view_t s_view;
-static double s_speed_ms;
+static float s_speed_ms;
 
 /* The rider's choice from the panel's zoom buttons, or 0 while they have not
  * touched them and the phone's zoom is used as it arrives. */
@@ -33,89 +33,149 @@ static uint8_t s_zoom_override;
 static uint32_t s_route_us;
 
 /* Where the phone last said we are. The drawn view chases this. */
-static double s_target_lat, s_target_lon;
-static bool   s_have_target;
+static int32_t s_target_lat_e7, s_target_lon_e7;
+static bool    s_have_target;
 
-/* How much of the remaining error to take out per frame. A quarter converges
- * within a couple of updates and never overshoots. */
-#define CATCH_UP 0.25
+/* How much of the remaining error to take out per frame, as a divisor: a
+ * quarter converges within a couple of updates and never overshoots. A shift
+ * rather than a multiply because the position is an integer, which is what
+ * keeps eight steps a second from drifting. */
+#define CATCH_UP_DIV 4
 
-double nav_map_world_x(double lon, uint8_t zoom)
+/* Fixed conversions, so the frame path has no named constants to divide by.
+ *   e7 degrees -> radians : pi/180 * 1e-7
+ *   metres -> e7 degrees  : 1e7 / 111320
+ */
+#define E7_TO_RAD   1.74532925e-9f
+#define M_TO_E7     89.8320f
+#define DEG_TO_RAD  0.0174532925f
+
+/* A position that disagrees with the drawn one by more than this is not
+ * drift, it is a different place: jump rather than glide. Two hundredths of a
+ * degree is a couple of kilometres, well past a screen. */
+#define JUMP_LAT_E7 200000
+#define JUMP_LON_E7 300000
+
+/* Integer division that rounds down rather than towards zero, so a view west
+ * of the prime meridian picks the same tile as one east of it. */
+static int64_t floor_div(int64_t a, int64_t b)
 {
-    return (lon + 180.0) / 360.0 * (double)NAV_TILE_PX * (double)(1u << zoom);
+    return (a >= 0) ? a / b : -(((-a) + b - 1) / b);
 }
 
-double nav_map_world_y(double lat, uint8_t zoom)
+/* The view centre in world pixels, which is the one place that needs more
+ * precision than a float carries. */
+static int64_t world_x_px(int32_t lon_e7, uint8_t zoom)
 {
-    const double r = lat * M_PI / 180.0;
-    const double s = log(tan(r) + 1.0 / cos(r));
-    return (1.0 - s / M_PI) / 2.0 * (double)NAV_TILE_PX * (double)(1u << zoom);
+    /* Exact: (lon + 180) / 360 * 256 * 2^zoom, in integers all the way. */
+    const int64_t n = (int64_t)NAV_TILE_PX << zoom;
+    return ((int64_t)lon_e7 + 1800000000LL) * n / 3600000000LL;
 }
 
-void nav_map_set_view(double lat, double lon, uint8_t zoom, uint16_t heading_deg)
+static int64_t world_y_px(int32_t lat_e7, uint8_t zoom)
 {
-    s_target_lat = lat;
-    s_target_lon = lon;
+    /* The only logarithm left on the frame path: once, for the centre.
+     *
+     * Single precision carries about seven digits, and the result here runs
+     * to sixty-seven million pixels at zoom 18 — so this can be up to three
+     * pixels out (about a metre and a half on the ground). It is a systematic
+     * offset, not jitter: the same position always gives the same answer, and
+     * everything on screen — tiles, line, marker — shifts together, because
+     * every other point is placed relative to this one. A double here would
+     * be exact and would also put a software floating-point routine on the
+     * frame path; the metre and a half is the better trade. */
+    const float r = (float)lat_e7 * E7_TO_RAD;
+    const float my = logf(tanf(r) + 1.0f / cosf(r));
+    const float t = (1.0f - my * (float)M_1_PI) * 0.5f;
+    return (int64_t)llroundf(t * (float)((int64_t)NAV_TILE_PX << zoom));
+}
+
+void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
+                     uint16_t heading_deg)
+{
+    s_target_lat_e7 = lat_e7;
+    s_target_lon_e7 = lon_e7;
     s_have_target = true;
     s_view.zoom = s_zoom_override ? s_zoom_override : zoom;
     s_view.heading_deg = heading_deg;
     if (!s_view.valid) {
         /* Nothing drawn yet — start where we are told rather than easing in
          * from the middle of the ocean. */
-        s_view.lat = lat;
-        s_view.lon = lon;
+        s_view.lat_e7 = lat_e7;
+        s_view.lon_e7 = lon_e7;
         s_view.valid = true;
         return;
     }
-    /* A position that disagrees with the drawn one by more than a screenful
-     * is not drift, it is a different place: jump. */
-    const double dlat = fabs(lat - s_view.lat);
-    const double dlon = fabs(lon - s_view.lon);
-    if (dlat > 0.02 || dlon > 0.03) {
-        s_view.lat = lat;
-        s_view.lon = lon;
+    const int32_t dlat = lat_e7 > s_view.lat_e7 ? lat_e7 - s_view.lat_e7
+                                                : s_view.lat_e7 - lat_e7;
+    const int32_t dlon = lon_e7 > s_view.lon_e7 ? lon_e7 - s_view.lon_e7
+                                                : s_view.lon_e7 - lon_e7;
+    if (dlat > JUMP_LAT_E7 || dlon > JUMP_LON_E7) {
+        s_view.lat_e7 = lat_e7;
+        s_view.lon_e7 = lon_e7;
     }
 }
 
-void nav_map_unproject(int x, int y, int w, int h, double *lat, double *lon)
+bool nav_map_get_proj(nav_map_proj_t *out, int w, int h)
+{
+    if (!out || !s_view.valid) return false;
+    /* Pixels per 1e-7 degree of longitude: 256 * 2^zoom / 3.6e9. Latitude is
+     * the same times 1/cos(lat) — the Mercator stretch, taken at the centre
+     * and constant to well under a pixel across one panel. */
+    const float n = (float)((int64_t)NAV_TILE_PX << s_view.zoom);
+    out->lat_e7 = s_view.lat_e7;
+    out->lon_e7 = s_view.lon_e7;
+    out->cx = w / 2;
+    out->cy = h / 2;
+    out->kx = n / 3.6e9f;
+    out->ky = out->kx / cosf((float)s_view.lat_e7 * E7_TO_RAD);
+    return true;
+}
+
+void nav_map_unproject(int x, int y, int w, int h,
+                       int32_t *lat_e7, int32_t *lon_e7)
 {
     if (!s_view.valid) {
-        if (lat) *lat = 0;
-        if (lon) *lon = 0;
+        if (lat_e7) *lat_e7 = 0;
+        if (lon_e7) *lon_e7 = 0;
         return;
     }
-    const double n = (double)NAV_TILE_PX * (double)(1u << s_view.zoom);
-    const double wx = nav_map_world_x(s_view.lon, s_view.zoom) - w / 2.0 + x;
-    const double wy = nav_map_world_y(s_view.lat, s_view.zoom) - h / 2.0 + y;
-    if (lon) *lon = wx / n * 360.0 - 180.0;
-    if (lat) {
-        const double m = M_PI * (1.0 - 2.0 * wy / n);
-        *lat = atan(sinh(m)) * 180.0 / M_PI;
+    /* The inverse of nav_map_project, and just as local: e7 degrees per
+     * pixel, stretched by the latitude for the north-south axis. */
+    const float per_px = 3.6e9f / (float)((int64_t)NAV_TILE_PX << s_view.zoom);
+    if (lon_e7) {
+        *lon_e7 = s_view.lon_e7 + (int32_t)lroundf((float)(x - w / 2) * per_px);
+    }
+    if (lat_e7) {
+        const float stretch = cosf((float)s_view.lat_e7 * E7_TO_RAD);
+        *lat_e7 = s_view.lat_e7 -
+                  (int32_t)lroundf((float)(y - h / 2) * per_px * stretch);
     }
 }
 
 void nav_map_set_speed(uint16_t cm_per_s)
 {
-    s_speed_ms = cm_per_s / 100.0;
+    s_speed_ms = (float)cm_per_s * 0.01f;
 }
 
 void nav_map_dead_reckon(uint32_t dt_ms)
 {
     if (!s_view.valid) return;
 
-    if (s_speed_ms > 0.1 && s_view.heading_deg <= 360) {
-        const double metres = s_speed_ms * (dt_ms / 1000.0);
-        const double bearing = s_view.heading_deg * M_PI / 180.0;
+    if (s_speed_ms > 0.1f && s_view.heading_deg <= 360) {
+        const float metres = s_speed_ms * ((float)dt_ms * 0.001f);
+        const float bearing = (float)s_view.heading_deg * DEG_TO_RAD;
         /* Flat-earth step: at a few metres a tick the error is far below a
          * pixel, and the easing below takes out whatever it gets wrong. */
-        s_view.lat += metres * cos(bearing) / 111320.0;
-        s_view.lon += metres * sin(bearing) /
-                      (111320.0 * cos(s_view.lat * M_PI / 180.0));
+        const float lat_rad = (float)s_view.lat_e7 * E7_TO_RAD;
+        s_view.lat_e7 += (int32_t)lroundf(metres * cosf(bearing) * M_TO_E7);
+        s_view.lon_e7 += (int32_t)lroundf(metres * sinf(bearing) * M_TO_E7 /
+                                          cosf(lat_rad));
     }
 
     if (s_have_target) {
-        s_view.lat += (s_target_lat - s_view.lat) * CATCH_UP;
-        s_view.lon += (s_target_lon - s_view.lon) * CATCH_UP;
+        s_view.lat_e7 += (s_target_lat_e7 - s_view.lat_e7) / CATCH_UP_DIV;
+        s_view.lon_e7 += (s_target_lon_e7 - s_view.lon_e7) / CATCH_UP_DIV;
     }
 }
 
@@ -154,31 +214,31 @@ static void fill(uint16_t *dst, int w, int x0, int y0, int x1, int y1, uint16_t 
  * Filled by three edge tests per pixel over the arrow's own bounding box:
  * a few hundred pixels, unmeasurable next to the rest of the frame. */
 static void draw_arrow(uint16_t *dst, int w, int h, int cx, int cy,
-                       double heading_deg)
+                       float heading_deg)
 {
-    const double rad = heading_deg * M_PI / 180.0;
+    const float rad = heading_deg * DEG_TO_RAD;
     /* Screen y grows downwards, so north (heading 0) is -y. */
-    const double dx = sin(rad), dy = -cos(rad);
-    const double px = -dy, py = dx;          /* to the rider's right */
+    const float dx = sinf(rad), dy = -cosf(rad);
+    const float px = -dy, py = dx;           /* to the rider's right */
 
     /* The body, then the same triangle grown about its own centre for the
      * casing. Growing it rather than nudging tip, tail and width by hand is
      * what makes the white border even — the first version did the latter and
      * the border vanished along two edges.
      *
-     * Vertices in double (three of them, once a frame), the fill in plain
+     * Three vertices from one sine and one cosine, then the fill in plain
      * integers. That distinction is the whole cost: the first version ran the
-     * three edge tests per pixel in double, and on a chip with no
-     * double-precision hardware those two thousand pixels added FORTY
-     * milliseconds to a frame that composes in twenty. */
-    const double tipf = 15.0, backf = 7.0, halff = 9.0;
+     * three edge tests per pixel in double precision, and on a chip whose
+     * hardware knows only single precision those two thousand pixels added
+     * nearly THIRTY milliseconds to a frame that composes in twenty. */
+    const float tipf = 15.0f, backf = 7.0f, halff = 9.0f;
     int vx[3], vy[3];
-    vx[0] = (int)lround(cx + dx * tipf);
-    vy[0] = (int)lround(cy + dy * tipf);
-    vx[1] = (int)lround(cx - dx * backf + px * halff);
-    vy[1] = (int)lround(cy - dy * backf + py * halff);
-    vx[2] = (int)lround(cx - dx * backf - px * halff);
-    vy[2] = (int)lround(cy - dy * backf - py * halff);
+    vx[0] = (int)lroundf((float)cx + dx * tipf);
+    vy[0] = (int)lroundf((float)cy + dy * tipf);
+    vx[1] = (int)lroundf((float)cx - dx * backf + px * halff);
+    vy[1] = (int)lroundf((float)cy - dy * backf + py * halff);
+    vx[2] = (int)lroundf((float)cx - dx * backf - px * halff);
+    vy[2] = (int)lroundf((float)cy - dy * backf - py * halff);
     const int gx = (vx[0] + vx[1] + vx[2]) / 3;
     const int gy = (vy[0] + vy[1] + vy[2]) / 3;
 
@@ -251,15 +311,13 @@ bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
                         int64_t *y0, int64_t *y1)
 {
     if (!s_view.valid) return false;
-    const double cx = nav_map_world_x(s_view.lon, s_view.zoom);
-    const double cy = nav_map_world_y(s_view.lat, s_view.zoom);
-    const double left = cx - NAV_VIEW_W / 2.0;
-    const double top  = cy - NAV_VIEW_H / 2.0;
+    const int64_t left = world_x_px(s_view.lon_e7, s_view.zoom) - NAV_VIEW_W / 2;
+    const int64_t top  = world_y_px(s_view.lat_e7, s_view.zoom) - NAV_VIEW_H / 2;
     if (z)  *z  = s_view.zoom;
-    if (x0) *x0 = (int64_t)floor(left / NAV_TILE_PX);
-    if (x1) *x1 = (int64_t)floor((left + NAV_VIEW_W - 1) / NAV_TILE_PX);
-    if (y0) *y0 = (int64_t)floor(top / NAV_TILE_PX);
-    if (y1) *y1 = (int64_t)floor((top + NAV_VIEW_H - 1) / NAV_TILE_PX);
+    if (x0) *x0 = floor_div(left, NAV_TILE_PX);
+    if (x1) *x1 = floor_div(left + NAV_VIEW_W - 1, NAV_TILE_PX);
+    if (y0) *y0 = floor_div(top, NAV_TILE_PX);
+    if (y1) *y1 = floor_div(top + NAV_VIEW_H - 1, NAV_TILE_PX);
     return true;
 }
 
@@ -415,11 +473,11 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
         return 0;
     }
 
-    /* World pixel of the top-left corner of the screen, at the detail zoom. */
-    const double cx = nav_map_world_x(s_view.lon, s_view.zoom);
-    const double cy = nav_map_world_y(s_view.lat, s_view.zoom);
-    const int64_t sl = (int64_t)floor(cx - w / 2.0);
-    const int64_t st = (int64_t)floor(cy - h / 2.0);
+    /* World pixel of the top-left corner of the screen, at the detail zoom.
+     * Integers: the longitude exactly, the latitude through the frame's one
+     * logarithm (see world_y_px). */
+    const int64_t sl = world_x_px(s_view.lon_e7, s_view.zoom) - w / 2;
+    const int64_t st = world_y_px(s_view.lat_e7, s_view.zoom) - h / 2;
 
     /* The detail tiles first, then the blurred layers only where they are
      * missing. Painting every layer across the whole screen wrote each pixel
@@ -498,12 +556,12 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
      * is the one part of the frame whose cost depends on the route rather
      * than on the panel, so it is the first suspect when a frame gets slow. */
     const int64_t t0 = esp_timer_get_time();
-    nav_route_draw(dst, w, h, sl, st, s_view.zoom);
+    nav_route_draw(dst, w, h);
     s_route_us = (uint32_t)(esp_timer_get_time() - t0);
     /* An arrow while there is a heading to show, a plain dot when standing
      * still — a parked bike pointing somewhere definite is a lie. */
     if (s_view.heading_deg <= 360 && s_speed_ms > 0.5) {
-        draw_arrow(dst, w, h, w / 2, h / 2, (double)s_view.heading_deg);
+        draw_arrow(dst, w, h, w / 2, h / 2, (float)s_view.heading_deg);
     } else {
         draw_marker(dst, w, h, w / 2, h / 2);
     }

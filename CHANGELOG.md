@@ -142,6 +142,32 @@ the one recorded in the release commit.
   tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
   PSRAM is worth more than the extra history.
 
+### No double precision left on the frame path
+
+- This chip has hardware for single precision and emulates double in
+  software, and the navigator kept learning that the hard way — 40 ms a frame
+  for the route projection, 28 ms for the heading arrow. So the doubles are
+  gone from everything that runs per frame or per point.
+- Positions are now tenths of a micro-degree in `int32_t` — the unit the wire
+  already uses, about eleven millimetres — all the way through the view, the
+  dead reckoning, the destination taps and the search results. Integers also
+  fix the accumulation: the easing towards each reported position is now an
+  exact quarter of an exact difference, eight times a second, with no drift
+  of its own.
+- Tiles are addressed in `int64` arithmetic, exactly. The one logarithm left
+  on the frame path is the view centre's own latitude, in single precision;
+  everything else — the route's points, the tap that becomes a destination —
+  is placed relative to that centre with two multiplies, which is both exact
+  and free.
+- `scripts/nav_proj_check.c` holds the formulas next to the double versions
+  they replaced and prints the disagreement: **under a pixel for the view
+  centre up to zoom 17 (1.8 px at 18, where a float can no longer hold 67
+  million pixels), and exactly zero for everything placed relative to it.**
+  It earned its keep immediately — the first run found a constant ten times
+  too large, which would have put the latitude past a right angle and the
+  whole map at NaN.
+- Composing a frame is **26-27 ms** now, from 33-40 before.
+
 ### Which way the rider is pointing — and why the map stays north-up
 
 - The marker is an arrow along the course now, with a white casing, and falls
