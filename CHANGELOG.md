@@ -168,6 +168,33 @@ the one recorded in the release commit.
   whole map at NaN.
 - Composing a frame is **26-27 ms** now, from 33-40 before.
 
+### A bug hunt around the edges
+
+Five things the probing turned up, all fixed:
+
+- **A quiet moment could park the navigator for good.** The head unit sent its
+  screen state only to the link holding the bridge binding. Switch the panel
+  to the dashboard and back, and in that silence a second phone's
+  notification took the binding — so the phone the rider was navigating with
+  never heard that the screen was live again, and since it only writes when
+  it believes the screen is live, it never wrote again either. State and
+  "my tile store is empty" now go to every subscribed link, because they are
+  facts about the panel rather than answers to anyone in particular; and the
+  phone greets the head unit every five seconds while it is told the screen
+  is not its own.
+- **"Looking..." could hang for ever** when no answer came back. Seven seconds
+  and the panel says "No answer from the phone".
+- **A stale verdict stayed under a shrinking query**: deleting back to one or
+  two letters left "Nothing found" on screen. It returns to the prompt.
+- **Coordinates could not be typed at all.** LVGL's letters layer has a
+  decimal point but no digits, and its symbol layer has digits but no point.
+  A "123" button switches to the number pad, which has both — and a house
+  number in a street search was equally impossible before. "50.06 19.93" on
+  the panel now comes back as a place to go to.
+- **A coordinate between -1 and 0 lost its minus** in the log and in
+  `navstat`: the integer part of -0.5 is zero, and printing that as a number
+  drops the sign. The sign is printed on its own now.
+
 ### Two phones, one panel
 
 - A spare phone with the app installed is enough to break the navigator, and

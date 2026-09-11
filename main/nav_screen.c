@@ -65,6 +65,7 @@ static lv_obj_t *s_find_kb;
 static lv_obj_t *s_find_list;
 static lv_obj_t *s_find_hint;
 static lv_timer_t *s_query_timer;
+static lv_timer_t *s_answer_timer;
 
 /* What the phone last found. Written by the BLE worker, drained on the LVGL
  * tick — nothing here may touch LVGL from another task. */
@@ -267,12 +268,30 @@ static void pick_cancel_cb(lv_event_t *e)
 
 #define FIND_DEBOUNCE_MS 600
 #define FIND_MIN_CHARS   3
+/* How long to wait for the phone before saying so. Long enough for a slow
+ * link and a big index, short enough that a rider is not left reading
+ * "Looking..." at a phone that never answered — which is what a stolen
+ * bridge binding looked like from up here. */
+#define FIND_ANSWER_MS   7000
+
+static void answer_timeout_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_answer_timer = NULL;      /* one-shot */
+    if (!s_find_hint) return;
+    lv_label_set_text(s_find_hint, "No answer from the phone");
+    lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+}
 
 static void find_close(void)
 {
     if (s_query_timer) {
         lv_timer_del(s_query_timer);
         s_query_timer = NULL;
+    }
+    if (s_answer_timer) {
+        lv_timer_del(s_answer_timer);
+        s_answer_timer = NULL;
     }
     if (s_find_box) lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
 }
@@ -291,12 +310,24 @@ static void send_query(lv_timer_t *t)
         lv_label_set_text(s_find_hint, "Looking...");
         lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_answer_timer) lv_timer_del(s_answer_timer);
+    s_answer_timer = lv_timer_create(answer_timeout_cb, FIND_ANSWER_MS, NULL);
+    lv_timer_set_repeat_count(s_answer_timer, 1);
     s_search_cb(q);
 }
 
 static void query_changed_cb(lv_event_t *e)
 {
     (void)e;
+    /* Back under the minimum: whatever the last answer was, it is not about
+     * what is in the box now. */
+    const char *typed = lv_textarea_get_text(s_find_ta);
+    if (s_find_hint && (!typed || strlen(typed) < FIND_MIN_CHARS)) {
+        lv_obj_clean(s_find_list);
+        atomic_store(&s_nhits, 0);
+        lv_label_set_text(s_find_hint, "Type a street or a place");
+        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_query_timer) lv_timer_del(s_query_timer);
     s_query_timer = lv_timer_create(send_query, FIND_DEBOUNCE_MS, NULL);
     lv_timer_set_repeat_count(s_query_timer, 1);
@@ -329,6 +360,18 @@ static void find_open_cb(lv_event_t *e)
 
 static void find_close_cb(lv_event_t *e) { (void)e; find_close(); }
 
+/* Digits with a decimal point, for typing a pair of coordinates; pressing it
+ * again goes back to letters. */
+static void num_mode_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_find_kb) return;
+    const lv_keyboard_mode_t m = lv_keyboard_get_mode(s_find_kb);
+    lv_keyboard_set_mode(s_find_kb, m == LV_KEYBOARD_MODE_NUMBER
+                                        ? LV_KEYBOARD_MODE_TEXT_LOWER
+                                        : LV_KEYBOARD_MODE_NUMBER);
+}
+
 /* One of the results. Straight down the same path as a tap on the map: the
  * phone is told where to go and does the routing. */
 static void hit_pressed_cb(lv_event_t *e)
@@ -344,6 +387,10 @@ static void hit_pressed_cb(lv_event_t *e)
 static void refresh_results(void)
 {
     if (!s_find_list || !atomic_exchange(&s_hits_fresh, false)) return;
+    if (s_answer_timer) {
+        lv_timer_del(s_answer_timer);
+        s_answer_timer = NULL;
+    }
     lv_obj_clean(s_find_list);
     const int n = atomic_load(&s_nhits);
     if (n <= 0) {
@@ -679,7 +726,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
 
     s_find_ta = lv_textarea_create(s_find_box);
-    lv_obj_set_size(s_find_ta, 560, 56);
+    lv_obj_set_size(s_find_ta, 460, 56);
     lv_obj_align(s_find_ta, LV_ALIGN_TOP_LEFT, 12, 10);
     lv_textarea_set_one_line(s_find_ta, true);
     lv_textarea_set_placeholder_text(s_find_ta, "street, cafe, address");
@@ -711,6 +758,20 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_text_color(s_find_hint, lv_color_hex(0x9AA7B4), 0);
     lv_obj_set_style_text_font(s_find_hint, &aabridge_font_24, 0);
     lv_label_set_text(s_find_hint, "");
+
+    /* LVGL's own "1#" layer has the digits but no decimal point, and the
+     * letters layer has the point but no digits — so a pair of coordinates
+     * could not be typed at all. This switches to the number PAD, which has
+     * both. */
+    lv_obj_t *num = lv_btn_create(s_find_box);
+    lv_obj_set_size(num, 90, 56);
+    lv_obj_align(num, LV_ALIGN_TOP_RIGHT, -110, 10);
+    lv_obj_set_style_bg_color(num, lv_color_hex(0x3A4450), 0);
+    lv_obj_add_event_cb(num, num_mode_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *num_lbl = lv_label_create(num);
+    lv_label_set_text(num_lbl, "123");
+    lv_obj_set_style_text_font(num_lbl, &aabridge_font_24, 0);
+    lv_obj_center(num_lbl);
 
     s_find_kb = lv_keyboard_create(s_find_box);
     lv_obj_set_size(s_find_kb, NAV_SCREEN_W, 240);
