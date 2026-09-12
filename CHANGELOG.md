@@ -9,6 +9,45 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.20 / app 0.3.20 — 2026-09-12
+
+### The app stops working when there is nothing to work on
+
+- **A core, spinning.** The loop that feeds the head unit waits "until the
+  next position is due" between passes, and that is "now" until a first
+  position has actually gone out — exactly the state of a phone with no head
+  unit connected. So it ran as fast as the event loop would carry it for as
+  long as the navigator screen existed, and a phone with the app merely open
+  was spending a core on it. It now recognises having nothing to do and waits
+  a couple of seconds before looking again.
+- **A receiver that never switched off.** The navigator asked for positions at
+  the best accuracy the phone can manage and nothing ever cancelled that:
+  leaving the app running in the background kept the GNSS chip on until the
+  screen left the stack, which for a rider who opened the navigator once is
+  the rest of the day. It is released when the app goes away and taken again
+  on return — unless the fix is genuinely needed while hidden, which is two
+  cases and only two: guiding a route with the phone in a pocket, and feeding
+  a head unit that is showing the map.
+
+### Searching for a village finds the village
+
+- Typing "tyniec" offered every house on Tyniecka and never Tyniec itself.
+  The index held addresses and named POIs; a settlement is neither — OSM tags
+  it `place=village` — so it was drawn on the map and absent from search, and
+  every hit came from the street named after it. Places are indexed now.
+- Ranking had to follow: a name is a prefix of every street named after it,
+  so the village sat behind a hundred addresses, and the panel then sorts by
+  distance, where somewhere a few kilometres out loses to a doorstep two
+  blocks away. What was typed in full comes first and stays first.
+- **An index built before this has no places in it.** Download the region
+  again to rebuild it.
+
+### Saving the map says which tile it is on
+
+- The card counted tiles and bytes, and a count that stops moving says nothing
+  about why. It now names the tile the request is out for, so a slow tile
+  looks different from a job that has quietly died.
+
 ## v1.3.19 / app 0.3.19 — 2026-09-12
 
 ### Two things the first ride with the navigator showed
