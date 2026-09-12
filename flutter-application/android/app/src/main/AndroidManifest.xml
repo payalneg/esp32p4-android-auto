@@ -6,16 +6,20 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <!-- Android 12+ lets the user grant "approximate" instead of precise;
-         without this the navigator gets no fix at all in that case.
-         Guidance is foreground-only: adding background navigation would
-         need ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE_LOCATION and
-         foregroundServiceType="connectedDevice|location" below. -->
+         without this the navigator gets no fix at all in that case. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- HTTP OTA upload to the head unit (release builds; Flutter only adds
          INTERNET to the debug/profile manifests by default) -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <!-- The phone is the head unit's only source of position, and it rides in
+         a pocket: fixes have to keep coming with no screen on. A background
+         app gets location "a few times per hour" — which is why guidance used
+         to die the moment the app was put away — unless a foreground service
+         declares the location type, and then while-in-use permission is
+         enough and ACCESS_BACKGROUND_LOCATION is not needed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -91,7 +95,7 @@
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="connectedDevice"/>
+            android:foregroundServiceType="connectedDevice|location"/>
 
         <meta-data
             android:name="flutterEmbedding"

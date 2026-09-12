@@ -37,6 +37,14 @@ Future<void> main() async {
     if (!await Permission.ignoreBatteryOptimizations.isGranted) {
       await Permission.ignoreBatteryOptimizations.request();
     }
+    // Asked here rather than when the navigator first wants a fix: the
+    // foreground service declares the location type now, and Android 14
+    // refuses to start such a service unless the permission is already held.
+    // "While in use" is enough — the service is what keeps the fixes coming
+    // once the app is put away.
+    if (!await Permission.locationWhenInUse.isGranted) {
+      await Permission.locationWhenInUse.request();
+    }
   }
   // Wire up the UI side of the port and prime the saved-device id so the home
   // screen shows it at first paint.
