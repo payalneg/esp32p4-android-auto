@@ -9,6 +9,25 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.22 / app 0.3.22 — 2026-09-12
+
+### The position keeps coming with the phone in a pocket
+
+- Guidance stopped the moment the app was put away, and the head unit's map
+  stopped with it. Not a permission the rider had missed: Android gives a
+  backgrounded app a location fix a few times an hour, and nothing in the app
+  lifted it out of that. The manifest said so in a comment — "guidance is
+  foreground-only" — which is a fair description of a navigator that only
+  works while you are looking at it.
+- The foreground service that already holds the BLE link now declares the
+  location type, and an app with such a service running counts as in use for
+  as long as it does. While-in-use permission is enough with that in place, so
+  there is no "allow all the time" trip to Settings.
+- Location is asked for at startup rather than when the navigator first wants
+  a fix, because Android 14 refuses to start a service of that type without
+  it. A phone where it is refused gets no background service — the app still
+  works while open — instead of a crash.
+
 ## v1.3.21 / app 0.3.21 — 2026-09-12
 
 ### The head unit's map can be dragged
