@@ -762,9 +762,12 @@ esp_err_t nav_screen_init(void)
     lv_obj_add_event_cb(s_recentre_btn, recentre_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
     {
+        /* Plain ASCII, like the zoom glyphs and FIND: the panel's font carries
+         * Latin, Cyrillic and punctuation, and nothing from LVGL's symbol
+         * range — LV_SYMBOL_GPS came out as an empty box. */
         lv_obj_t *l = lv_label_create(s_recentre_btn);
-        lv_label_set_text(l, LV_SYMBOL_GPS);
-        lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
+        lv_label_set_text(l, "GPS");
+        lv_obj_set_style_text_font(l, &aabridge_font_24, 0);
         lv_obj_center(l);
     }
 

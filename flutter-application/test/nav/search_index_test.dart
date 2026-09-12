@@ -60,6 +60,36 @@ void main() {
       expect(hits.length, 4); // the street is still offered, just not first
     });
 
+    test('words match in any order, across hyphens and gaps', () {
+      // What a rider types on the panel: the part of the name they remember,
+      // without the punctuation. None of this matched when a hit had to be
+      // one unbroken run of characters.
+      final index = SearchIndex.parse(<String>[
+        'stefana grota-roweckiego 12\tStefana Grota-Roweckiego 12\taddress\t50.07\t19.91',
+        'grunwaldzka 5\tGrunwaldzka 5\taddress\t50.05\t19.93',
+      ].join('\n'));
+
+      for (final q in <String>[
+        'grota roweckiego',   // no hyphen
+        'stefa grota',        // half a word, then a later one
+        'roweckiego stefana', // the other way round
+        'grota 12',           // street and number without the rest
+      ]) {
+        expect(index.search(q).map((h) => h.display), contains('Stefana Grota-Roweckiego 12'),
+            reason: q);
+      }
+    });
+
+    test('a word has to start a word, not land mid-one', () {
+      final index = SearchIndex.parse(
+          'stefana grota-roweckiego 12\tStefana Grota-Roweckiego 12\taddress\t50.07\t19.91');
+      // 'rota' is inside 'grota' — a match there would make every long name a
+      // hit for every short string, which is the noise this is meant to avoid.
+      expect(index.search('rota roweckiego'), isEmpty);
+      // ...but as a whole word it still works from the start of one.
+      expect(index.search('grota').length, 1);
+    });
+
     test('isExact only says yes to the whole name', () {
       final hits = SearchIndex.parse(
               'tyniec\tTyniec\tvillage\t50.0217\t19.8617\n'

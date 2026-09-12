@@ -76,6 +76,12 @@ static const char *TAG = "ble_nav";
  * forward itself and redraws. 120 ms is about eight frames a second, and a
  * compose costs under 20 ms. */
 #define NAV_FRAME_MS 120
+/* How often the view is carried forward between the phone's position
+ * messages. Those arrive twice a second, which is a visible hop if the map
+ * only moves when one lands; in between, the rider's own speed and heading
+ * say where they have got to. Ten a second is as fast as the panel swaps
+ * buffers, and composing a frame costs about 20 ms of one core. */
+#define NAV_STEP_MS 100
 /* How soon to come back for a render the buffer was too busy to take. The
  * screen swaps on a 50 ms tick and holds the buffer one tick after that, so
  * anything under that is a wasted wake-up and much over it is a visible
@@ -523,6 +529,32 @@ static void render_view(void)
     s_last_frame_us = esp_timer_get_time();
 }
 
+/* Carry the view forward and redraw, so the map glides instead of stepping
+ * twice a second.
+ *
+ * This used to live in the queue-timeout branch, which meant it only ran when
+ * nothing else was happening — and while tiles stream in, something always
+ * is. The map then sat still between position messages and jumped when one
+ * arrived, which is exactly when a rider is looking at it. Now it runs on
+ * every pass and gates on the clock instead.
+ *
+ * Only while the phone is actually feeding us: otherwise we would drift off
+ * on a stale speed. Dragged away from the rider nothing moves anyway. */
+static void step_view(void)
+{
+    const int64_t now = esp_timer_get_time();
+    if (!s_stats.streaming || s_last_view_us == 0 ||
+        now - s_last_view_us >= NAV_IDLE_US) {
+        return;
+    }
+    if (nav_map_is_panned()) return;
+    if (now - s_last_step_us < NAV_STEP_MS * 1000) return;
+    const uint32_t dt = (uint32_t)((now - s_last_step_us) / 1000);
+    s_last_step_us = now;
+    nav_map_dead_reckon(dt);
+    render_view();
+}
+
 static void handle_tile(const nav_evt_t *ev)
 {
     const int64_t t0 = esp_timer_get_time();
@@ -625,20 +657,8 @@ static void worker(void *arg)
                                     : pdMS_TO_TICKS(NAV_FRAME_MS);
         if (xQueueReceive(s_q, &ev, wait) != pdTRUE) {
             const int64_t now = esp_timer_get_time();
-            /* Carry the view forward and redraw, so the map glides instead of
-             * stepping twice a second. Only while the phone is actually
-             * feeding us — otherwise we would drift off on a stale speed. */
-            if (s_stats.streaming && s_last_view_us != 0 &&
-                now - s_last_view_us < NAV_IDLE_US) {
-                const uint32_t dt = (uint32_t)((now - s_last_step_us) / 1000);
-                s_last_step_us = now;
-                nav_map_dead_reckon(dt);
-                render_view();
-            }
-            /* Whatever the dead-reckon branch decided, an owed render still
-             * has to happen: tiles land while the rider is parked too, and
-             * nothing else would ever put them on screen. A no-op when the
-             * branch above already rendered. */
+            /* An owed render still has to happen: tiles land while the rider
+             * is parked too, and nothing else would ever put them on screen. */
             if (atomic_load(&s_render_owed)) render_view();
             /* Idle sweep: the app stopped without saying so (screen off, out
              * of range, killed) — stop claiming we are streaming and hand the
@@ -650,6 +670,7 @@ static void worker(void *arg)
                  * still current, so the placeholder stays away. */
                 set_boost(false);
             }
+            step_view();
             continue;
         }
         switch (ev.kind) {
@@ -718,6 +739,9 @@ static void worker(void *arg)
                 handle_found(&ev);
                 break;
         }
+        /* Every pass ends here, so the glide keeps its own time rather
+         * than only running when nothing else arrived. */
+        step_view();
     }
 }
 

@@ -146,10 +146,18 @@ class SearchIndex {
   static Future<SearchIndex> load(String path) =>
       Isolate.run(() => parse(File(path).readAsStringSync()));
 
-  /// What was typed exactly, then prefix matches, then substring — near
-  /// enough to search.py, with the exact bucket added because a place is
-  /// usually spelled in full and the streets named after it are not: "Tyniec"
-  /// has to come before the hundred houses on Tyniecka.
+  /// Exactly what was typed, then what starts with it, then what contains
+  /// every word of it, then what contains it as written.
+  ///
+  /// The word bucket is what makes the index usable by someone typing on a
+  /// panel. Street names here are long and punctuated — "Stefana
+  /// Grota-Roweckiego" — and a rider types the part they remember, in the
+  /// order they remember it, without the hyphen: "grota roweckiego" matched
+  /// nothing at all when a match had to be one unbroken run of characters.
+  /// Each word has to start a word in the entry, so "grota" finds
+  /// Grota-Roweckiego and "rota" does not; the house number is just another
+  /// word, so "grota roweckiego 12" works without spelling the street out in
+  /// full first.
   ///
   /// Entries are sorted by their folded key, so an exact match is always met
   /// before the longer keys that merely start with it — the early exit below
@@ -157,8 +165,10 @@ class SearchIndex {
   List<SearchHit> search(String query, {int limit = kMaxSearchResults}) {
     final q = normalizeQuery(query.trim());
     if (q.isEmpty) return const <SearchHit>[];
+    final words = _words(q);
     final exact = <SearchHit>[];
     final prefix = <SearchHit>[];
+    final wordy = <SearchHit>[];
     final contains = <SearchHit>[];
     for (var i = 0; i < _norm.length; i++) {
       final n = _norm[i];
@@ -167,12 +177,44 @@ class SearchIndex {
       } else if (n.startsWith(q)) {
         prefix.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
         if (prefix.length >= limit) break;
+      } else if (wordy.length < limit && _hasEveryWord(n, words)) {
+        wordy.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
       } else if (contains.length < limit && n.contains(q)) {
         contains.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
       }
     }
-    final out = <SearchHit>[...exact, ...prefix, ...contains];
+    final out = <SearchHit>[...exact, ...prefix, ...wordy, ...contains];
     return out.length <= limit ? out : out.sublist(0, limit);
+  }
+
+  /// A hyphen is a separator to someone typing, whatever it is to a street
+  /// sign; so is a full stop after "ul" and the space either side of it.
+  static List<String> _words(String s) => s
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((w) => w.isNotEmpty)
+      .toList(growable: false);
+
+  static bool _isWordChar(int c) =>
+      (c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39);
+
+  /// Every word of the query starts a word of [n], in any order.
+  static bool _hasEveryWord(String n, List<String> words) {
+    if (words.isEmpty) return false;
+    for (final w in words) {
+      var from = 0;
+      var found = false;
+      while (true) {
+        final at = n.indexOf(w, from);
+        if (at < 0) break;
+        if (at == 0 || !_isWordChar(n.codeUnitAt(at - 1))) {
+          found = true;
+          break;
+        }
+        from = at + 1;
+      }
+      if (!found) return false;
+    }
+    return true;
   }
 
   /// True when this hit is what the query said, letter for letter. The panel
