@@ -678,6 +678,7 @@ const _en = <String, String>{
       'The tile server refused further requests — try again later',
   'mapdata.corridor.stalled':
       'Stopped after {n} tiles: the tile servers are not answering ({err})',
+  'mapdata.tiles.now': '\nNow: z{z} {x}/{y}',
   'mapdata.tiles.failing': ' · {n} failed ({err})',
   'mapdata.profile.default': 'Default ride profile',
 };
@@ -1351,6 +1352,7 @@ const _ru = <String, String>{
       'Сервер тайлов отказал в запросах — попробуйте позже',
   'mapdata.corridor.stalled':
       'Остановлено на {n} тайлах: серверы тайлов не отвечают ({err})',
+  'mapdata.tiles.now': '\nСейчас: z{z} {x}/{y}',
   'mapdata.tiles.failing': ' · {n} с ошибкой ({err})',
   'mapdata.profile.default': 'Профиль поездки по умолчанию',
 };

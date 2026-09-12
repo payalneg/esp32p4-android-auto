@@ -122,6 +122,9 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   int _tilesBytes = 0;
   int _tilesBytesAtStart = 0;
   int _tilesFailedAtStart = 0;
+  /// The tile the download is waiting on right now, so a count
+  /// that pauses on a slow tile still looks alive.
+  TileId? _tileNow;
   Stopwatch? _tilesClock;
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
@@ -844,6 +847,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             'mb': mb.toStringAsFixed(1),
             'rate': rate,
           }) +
+          // Which tile the download is on. A number that has not moved for a
+          // few seconds says nothing on its own — with this line it is a slow
+          // tile rather than a job that has quietly died.
+          (_tileNow != null
+              ? tf(context, 'mapdata.tiles.now', <String, Object?>{
+                  'z': _tileNow!.z,
+                  'x': _tileNow!.x,
+                  'y': _tileNow!.y,
+                })
+              : '') +
           // A count that sits at zero means one of two very different things;
           // the failure tally is what tells them apart at a glance.
           (failed > 0
@@ -1265,11 +1278,17 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
           _tilesBytes = cache.bytesFetched - _tilesBytesAtStart;
         });
       },
+      onTile: (tile) {
+        if (mounted) setState(() => _tileNow = tile);
+      },
       cancelled: () => _cancelCorridor || !mounted,
     );
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
-    setState(() => _corridorRunning = false);
+    setState(() {
+      _corridorRunning = false;
+      _tileNow = null;
+    });
     // Quiet means quiet — except a refusal from the tile server, which the
     // rider should know about whoever started the download.
     if (!quiet || report.blocked) {
@@ -1313,10 +1332,16 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
             });
           }
         },
+        onTile: (tile) {
+          if (mounted) setState(() => _tileNow = tile);
+        },
         cancelled: () => _cancelCorridor || !mounted);
     await cache.evictToCap(NavSettings.instance.tileCapMb << 20);
     if (!mounted) return;
-    setState(() => _corridorRunning = false);
+    setState(() {
+      _corridorRunning = false;
+      _tileNow = null;
+    });
     messenger.showSnackBar(SnackBar(content: Text(_corridorMessage(report))));
   }
 

@@ -409,6 +409,11 @@ class TileCache {
     List<TileId> tiles,
     List<Uri> Function(TileId) urlsFor, {
     void Function(int done, int total)? onProgress,
+    /// The tile about to be fetched, before the request goes out. onProgress
+    /// reports what is finished; this reports what is being waited on, which
+    /// is the difference between a count that has stopped and a download that
+    /// is simply on a slow tile.
+    void Function(TileId tile)? onTile,
     bool Function()? cancelled,
   }) async {
     var downloaded = 0;
@@ -430,6 +435,7 @@ class TileCache {
         skipped++;
         inARow = 0;
       } else {
+        onTile?.call(t);
         try {
           final bytes = await fetchAndStore(t, urlsFor(t),
               priority: TilePriority.bulk);
