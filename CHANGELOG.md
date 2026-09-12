@@ -9,6 +9,26 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.23 / app 0.3.23 — 2026-09-12
+
+### Three things the first ride with the new map screen showed
+
+- **The recentre button was an empty box.** It asked for LVGL's GPS symbol,
+  and the panel's font carries Latin, Cyrillic and punctuation — no symbols at
+  all. It says GPS in plain letters now, like the zoom glyphs and FIND beside
+  it.
+- **The map moved in hops.** Between the phone's twice-a-second position
+  messages the head unit carries the view forward itself, and that step was
+  only taken when nothing else had arrived — which, while tiles are streaming
+  in, is never. The map sat still and then jumped. The step keeps its own
+  clock now, ten times a second, whatever else is going on.
+- **Search wanted the street spelled exactly.** A hit had to be one unbroken
+  run of characters, so "grota roweckiego" found nothing: the street is
+  Stefana Grota-Roweckiego, and both the missing first word and the hyphen
+  broke the run. Words are matched one by one now, in any order, each having
+  to start a word in the name — and a house number is just another word, so
+  "grota 12" finds the address without writing the street out in full first.
+
 ## v1.3.22 / app 0.3.22 — 2026-09-12
 
 ### The position keeps coming with the phone in a pocket
