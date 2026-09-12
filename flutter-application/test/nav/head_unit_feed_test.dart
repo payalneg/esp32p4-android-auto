@@ -341,6 +341,25 @@ void main() {
     expect(link.tiles.length, 1);
   });
 
+  test('an idle feed waits instead of spinning', () async {
+    // The bug this pins: with no link — or no position, or a head unit
+    // looking at something else — every pass has nothing to send, and the
+    // wait until the next view is "now" until the first one has gone out. The
+    // loop then ran as fast as the event loop would carry it and sat on a
+    // core for as long as the screen was open.
+    final feed = build()..setPosition(_krakow);
+    link.available = false;
+    expect(feed.waitAfterPass(sentTile: false), greaterThanOrEqualTo(kIdlePeriod));
+
+    link.available = true;
+    link.setVisible(false);
+    expect(feed.waitAfterPass(sentTile: false), greaterThanOrEqualTo(kIdlePeriod),
+        reason: 'a head unit showing something else is idle too');
+
+    // A tile still goes straight on to the next one.
+    expect(feed.waitAfterPass(sentTile: true), Duration.zero);
+  });
+
   test('stopping ends the loop', () async {
     final feed = build()..setPosition(_krakow);
     feed.start();

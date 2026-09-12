@@ -74,7 +74,8 @@ class NavigatorScreen extends StatefulWidget {
   State<NavigatorScreen> createState() => _NavigatorScreenState();
 }
 
-class _NavigatorScreenState extends State<NavigatorScreen> {
+class _NavigatorScreenState extends State<NavigatorScreen>
+    with WidgetsBindingObserver {
   final _map = MapController();
 
   /// The head unit's own camera. Its map is a separate widget at the size the
@@ -139,6 +140,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _announceSub = _controller.announcements.listen(_onAnnouncement);
     _linkSub = NavIntentBridge.incoming.listen(_openLink);
@@ -165,6 +167,7 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_feed?.dispose());
     _feed = null;
     MapData.instance.removeListener(_onMapDataChanged);
@@ -1083,6 +1086,42 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       return;
     }
     if (await _ensureGps()) _controller.setFollow(true);
+  }
+
+  /// Whether a fix is worth the receiver being on while nobody is looking at
+  /// this screen.
+  ///
+  /// Two jobs need it in the background and nothing else does: guiding a
+  /// route, where the phone is in a pocket and the turns still have to be
+  /// called, and feeding a head unit that is showing the map, which has no
+  /// position of its own. Left out of that, a backgrounded navigator was
+  /// holding the GNSS receiver at its best accuracy for as long as the screen
+  /// stayed on the stack — hours after the ride, and from the moment the app
+  /// was opened whether or not anything was connected.
+  bool get _fixesNeededInBackground =>
+      _controller.navigating ||
+      (BleProxy.instance.currentState == BleConnState.connected &&
+          BleProxy.instance.navState.visible);
+
+  /// Set when the receiver was stopped on the way into the background, so
+  /// coming back turns it on again — and only then, because a rider who never
+  /// asked for GPS should not find it running after a trip to another app.
+  bool _gpsPausedByLifecycle = false;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final hidden = state != AppLifecycleState.resumed &&
+        state != AppLifecycleState.inactive;
+    if (hidden) {
+      if (_controller.gpsActive && !_fixesNeededInBackground) {
+        _gpsPausedByLifecycle = true;
+        _controller.detachFixes();
+      }
+    } else if (_gpsPausedByLifecycle) {
+      _gpsPausedByLifecycle = false;
+      unawaited(_ensureGps());
+    }
   }
 
   /// Starts the GPS feed if it is not running. False — with the remedy on a

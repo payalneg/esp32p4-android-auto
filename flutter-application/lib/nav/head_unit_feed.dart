@@ -28,6 +28,13 @@ const int kHeadUnitH = 480;
 /// anything worth measuring (13 bytes a time).
 const Duration kViewPeriod = Duration(milliseconds: 500);
 
+/// How long to wait before looking again when there is nothing to send and
+/// nobody to send it to. Anything that would change that — the link coming
+/// up, the head unit switching to the map, the first fix — is worth noticing
+/// within a couple of seconds, and until one of them happens the loop should
+/// cost nothing at all.
+const Duration kIdlePeriod = Duration(seconds: 2);
+
 /// A tile that failed this many times in a row waits [kTileRetryAfter] before
 /// being asked for again.
 const int kTileMaxAttempts = 2;
@@ -305,6 +312,11 @@ class HeadUnitFeed {
     status.dispose();
   }
 
+  /// Nothing to do: no link, a head unit looking at something else, or no
+  /// position to report yet.
+  bool get _idle =>
+      !_link.available || !_link.displayState.visible || _where == null;
+
   Future<void> _loop() async {
     while (_running) {
       final sentTile = await _tick();
@@ -313,8 +325,21 @@ class HeadUnitFeed {
       // next one. Pausing a view period between tiles was nearly half the time
       // a screenful took, and while it fills there is no new position to
       // report anyway — the rider is looking at an empty display.
-      await _sleep(sentTile ? Duration.zero : _untilNextView());
+      await _sleep(waitAfterPass(sentTile: sentTile));
     }
+  }
+
+  /// How long the loop waits after one pass.
+  ///
+  /// Idle needs its own answer. _untilNextView says "now" until the first
+  /// view has gone out, which is exactly the state a feed with no link is in
+  /// — so the loop ran as fast as the event loop would carry it for as long
+  /// as the navigator screen existed with nothing connected, and a phone with
+  /// the app merely open spent a core on it.
+  @visibleForTesting
+  Duration waitAfterPass({required bool sentTile}) {
+    if (sentTile) return Duration.zero;
+    return _idle ? kIdlePeriod : _untilNextView();
   }
 
   Duration _untilNextView() {
