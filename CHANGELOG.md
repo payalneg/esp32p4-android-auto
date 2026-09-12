@@ -9,7 +9,41 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## v1.3.18 / app 0.3.18 — 2026-09-12
+
+### The controller can be reached over Bluetooth instead of CAN
+
+- The head unit now talks to the VESC over Bluetooth as well as over the CAN
+  bus: it connects as a GATT central to a **VESC Express** adapter over the
+  Nordic UART Service — the same link VESC Tool uses — so a display can be
+  fitted with no CAN wiring at all. Pick the transport in **Settings -> VESC
+  link**; it applies immediately, no reboot. The adapter is paired by scanning
+  from that same screen, and its address lives in its own NVS namespace, so it
+  survives the settings Reset button the way the sensors do.
+- Nothing above the transport changed. The dashboard, the quick-action drawer,
+  pedal assist, the LISP editor, the config menu and VESC Tool bridged from the
+  phone all go through one new seam (`vesc_link`), and replies from either
+  transport land in the same dispatcher they always did.
+- A VESC Express sits on the CAN bus next to the controller, so requests are
+  wrapped in `COMM_FORWARD_CAN` addressed to Target VESC ID — that is what
+  VESC Tool's "scan CAN bus" does. The switch on the link screen turns it off
+  for a setup where the adapter itself is the target.
+- Pedal assist keeps its 20 Hz setpoint stream, with one rule the CAN path
+  never needed: a setpoint older than 100 ms is dropped rather than sent. A
+  stalled link would otherwise flush a burst of currents the rider asked for a
+  second ago; dropping them lets the script's own 0.4 s window coast the motor,
+  which is what a lost CAN frame did anyway. The count is on the link screen —
+  if it climbs while riding, the link is not keeping up.
+- The LISP script gains a reply-id sentinel: 255 means the request did not
+  arrive over CAN, and the script answers on the interface it came in on. The
+  CAN path is byte-identical. **An older script on the controller still works
+  over CAN, but over Bluetooth it will not answer the drawer or the
+  cruise/profile readout** — reflash `lisp/main.lisp` when switching.
+- Two things Bluetooth cannot do: the head unit no longer shows up in VESC
+  Tool's CAN scan (it is not on the bus), and a VESC Express holds one link at
+  a time, so VESC Tool on the phone must disconnect first. Second-head
+  temperatures, broadcast on CAN, are polled once a second instead.
+- Not yet verified on hardware.
 
 ### Navigator picture from the phone
 
