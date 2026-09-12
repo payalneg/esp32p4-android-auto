@@ -9,6 +9,36 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.21 / app 0.3.21 — 2026-09-12
+
+### The head unit's map can be dragged
+
+- Tapping the map offered the spot as a destination, which is in the way of
+  the thing a map is for, and a pocket or a bump could trigger it. The tap is
+  gone — somewhere to go is typed on the panel's keyboard — and the touch
+  belongs to the map: drag it and the view moves. A button under the zoom pair
+  puts it back on the rider, and is only there while it is away.
+- The view was centred on the rider by construction, so the rider's marker was
+  simply drawn in the middle. Dragged away from them it is placed like the
+  route line is, and allowed off the screen — which is the honest answer when
+  the rider is no longer in view.
+- The phone follows what the head unit is looking at. It sends tiles for the
+  ground around the rider, so a dragged view would otherwise stop at the edge
+  of whatever had already arrived; a new message says where the map has been
+  moved to and the phone keeps that covered instead. Where the rider actually
+  is still travels as before, because that is what draws their marker.
+- One message per drag, when the finger lifts: tiles begin arriving a moment
+  after the gesture rather than during it.
+
+### Guidance that starts with the phone away
+
+- Yesterday's battery fix decided once, on the way into the background,
+  whether the receiver was still needed, and never looked again. Picking a
+  destination on the head unit with the phone already in a pocket therefore
+  began a route that never got a position. The question is asked again now
+  whenever the answer can change, and a connected head unit keeps the receiver
+  on whatever it happens to be showing at that moment.
+
 ## v1.3.20 / app 0.3.20 — 2026-09-12
 
 ### The app stops working when there is nothing to work on
