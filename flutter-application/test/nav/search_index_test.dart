@@ -44,6 +44,32 @@ void main() {
           greaterThan(0));
     });
 
+    test('the place itself comes before the streets named after it', () {
+      // The bug this pins: "tyniec" found every address on Tyniecka and never
+      // Tyniec, because a name that is a prefix of many longer ones has no
+      // way to win on prefix rank alone.
+      final tsv = <String>[
+        'tyniec\tTyniec\tvillage\t50.0217\t19.8617',
+        'tyniecka 1\tTyniecka 1\taddress\t50.0400\t19.8900',
+        'tyniecka 2\tTyniecka 2\taddress\t50.0401\t19.8901',
+        'tyniecka 3\tTyniecka 3\taddress\t50.0402\t19.8902',
+      ].join('\n');
+      final hits = SearchIndex.parse(tsv).search('tyniec');
+      expect(hits.first.display, 'Tyniec');
+      expect(hits.first.kind, 'village');
+      expect(hits.length, 4); // the street is still offered, just not first
+    });
+
+    test('isExact only says yes to the whole name', () {
+      final hits = SearchIndex.parse(
+              'tyniec\tTyniec\tvillage\t50.0217\t19.8617\n'
+              'tyniecka 1\tTyniecka 1\taddress\t50.04\t19.89')
+          .search('tyniec');
+      expect(SearchIndex.isExact(hits[0], 'tyniec'), isTrue);
+      expect(SearchIndex.isExact(hits[0], ' Tyniec '), isTrue);
+      expect(SearchIndex.isExact(hits[1], 'tyniec'), isFalse);
+    });
+
     test('accepts an accented query for a folded index', () {
       expect(index.search('Floriańska').first.display, 'Floriańska');
     });

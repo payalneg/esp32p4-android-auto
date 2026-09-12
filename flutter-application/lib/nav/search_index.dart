@@ -146,22 +146,38 @@ class SearchIndex {
   static Future<SearchIndex> load(String path) =>
       Isolate.run(() => parse(File(path).readAsStringSync()));
 
-  /// Prefix matches first, then substring — same ranking as search.py.
+  /// What was typed exactly, then prefix matches, then substring — near
+  /// enough to search.py, with the exact bucket added because a place is
+  /// usually spelled in full and the streets named after it are not: "Tyniec"
+  /// has to come before the hundred houses on Tyniecka.
+  ///
+  /// Entries are sorted by their folded key, so an exact match is always met
+  /// before the longer keys that merely start with it — the early exit below
+  /// cannot skip past one.
   List<SearchHit> search(String query, {int limit = kMaxSearchResults}) {
     final q = normalizeQuery(query.trim());
     if (q.isEmpty) return const <SearchHit>[];
+    final exact = <SearchHit>[];
     final prefix = <SearchHit>[];
     final contains = <SearchHit>[];
     for (var i = 0; i < _norm.length; i++) {
       final n = _norm[i];
-      if (n.startsWith(q)) {
+      if (n == q) {
+        exact.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
+      } else if (n.startsWith(q)) {
         prefix.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
         if (prefix.length >= limit) break;
       } else if (contains.length < limit && n.contains(q)) {
         contains.add(SearchHit(_display[i], _kind[i], LatLon(_lat[i], _lon[i])));
       }
     }
-    final out = <SearchHit>[...prefix, ...contains];
+    final out = <SearchHit>[...exact, ...prefix, ...contains];
     return out.length <= limit ? out : out.sublist(0, limit);
   }
+
+  /// True when this hit is what the query said, letter for letter. The panel
+  /// sorts by distance, and without this an exact match for somewhere a few
+  /// kilometres off would sink below the near misses.
+  static bool isExact(SearchHit hit, String query) =>
+      normalizeQuery(hit.display) == normalizeQuery(query.trim());
 }

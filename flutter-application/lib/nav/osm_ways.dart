@@ -90,8 +90,26 @@ WayDirection wayDirection(Map<String, String> tags) {
   return WayDirection.both;
 }
 
-/// A searchable place pulled from an object's tags: a street address, or a
-/// named POI. Mirrors `_extract_search` in builder.py.
+/// Settlements and the named parts of a town: what a rider means when they
+/// type a bare name. Everything OSM calls a place except the administrative
+/// abstractions nobody rides to (region, county, continent...).
+const Set<String> kPlaceKinds = <String>{
+  'city',
+  'town',
+  'village',
+  'hamlet',
+  'isolated_dwelling',
+  'suburb',
+  'quarter',
+  'neighbourhood',
+  'borough',
+  'locality',
+  'island',
+  'islet',
+};
+
+/// A searchable place pulled from an object's tags: a street address, a
+/// settlement, or a named POI. Mirrors `_extract_search` in builder.py.
 ({String display, String kind})? searchEntry(Map<String, String> tags) {
   final street = tags['addr:street'];
   final housenumber = tags['addr:housenumber'];
@@ -99,7 +117,16 @@ WayDirection wayDirection(Map<String, String> tags) {
     return (display: '$street $housenumber', kind: 'address');
   }
   final name = tags['name'];
+  if (name == null) return null;
+  // A settlement is a destination in its own right, and the one a bare name
+  // usually means. Without this the index held every house on Tyniecka and
+  // not Tyniec, so searching for the village could only ever find the street
+  // named after it.
+  final place = tags['place'];
+  if (place != null && kPlaceKinds.contains(place)) {
+    return (display: name, kind: place);
+  }
   final kind = tags['shop'] ?? tags['amenity'] ?? tags['tourism'];
-  if (name != null && kind != null) return (display: name, kind: kind);
+  if (kind != null) return (display: name, kind: kind);
   return null;
 }

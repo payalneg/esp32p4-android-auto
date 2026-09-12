@@ -211,6 +211,12 @@ class Collector(osmium.SimpleHandler):
         if place in PLACE_CLASSES and "name" in tags:
             self._add(vt.LAYER_LABELS, PLACE_CLASSES[place], tags["name"],
                       [(n.location.lon, n.location.lat)], vt.GEOM_POINT)
+            # И в поиск: населённый пункт — это цель поездки сам по себе.
+            # Без этой строки в индексе были все дома на Тынецкой и не было
+            # самого Тынца, так что найти посёлок было нельзя — только улицу,
+            # названную в его честь.
+            self._add_search(tags["name"], place,
+                             n.location.lon, n.location.lat)
         if ("addr:housenumber" in tags or "shop" in tags
                 or "amenity" in tags or "tourism" in tags):
             self._extract_search(tags, n.location.lon, n.location.lat)

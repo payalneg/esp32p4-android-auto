@@ -251,8 +251,15 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
       final found = index.search(q, limit: kNavFoundMax * 3);
       // Nearest first: on a panel with six rows, the right answer is almost
       // always the one closest to the rider, not the first in the index.
-      found.sort((a, b) => haversineM(from, a.position)
-          .compareTo(haversineM(from, b.position)));
+      // Except when the rider typed the name in full — a village a few
+      // kilometres off still beats the street named after it two blocks
+      // away, so exact matches keep the top rows and distance orders the
+      // rest.
+      found.sort((a, b) {
+        final ea = SearchIndex.isExact(a, q), eb = SearchIndex.isExact(b, q);
+        if (ea != eb) return ea ? -1 : 1;
+        return haversineM(from, a.position).compareTo(haversineM(from, b.position));
+      });
       for (final h in found) {
         if (hits.length >= kNavFoundMax) break;
         final km = haversineM(from, h.position) / 1000.0;
