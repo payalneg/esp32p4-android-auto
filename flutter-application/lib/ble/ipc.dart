@@ -103,6 +103,9 @@ class IpcEvt {
   /// {zoom} — the rider changed the zoom on the head unit's own map.
   static const navZoom = 'navZoom';
 
+  /// The head unit's map was dragged off the rider, or put back.
+  static const navLook = 'navLook';
+
   /// {q} — the rider typed something on the head unit's keyboard.
   static const navSearch = 'navSearch';
 

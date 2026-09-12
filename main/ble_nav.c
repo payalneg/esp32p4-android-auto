@@ -57,6 +57,7 @@ static const char *TAG = "ble_nav";
 #define NAV_ST_DEST     0x13
 #define NAV_ST_DROPPED  0x14
 #define NAV_ST_ZOOM     0x15
+#define NAV_ST_LOOK     0x18
 #define NAV_ST_SEARCH   0x16
 #define NAV_ST_EMPTY    0x17
 
@@ -93,7 +94,8 @@ typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
 typedef enum { RX_FRAME, RX_TILE, RX_ROUTE, RX_FOUND } rx_kind_t;
 
 typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
-               EV_DEST, EV_ROUTE, EV_ZOOM, EV_SEARCH, EV_FOUND } ev_kind_t;
+               EV_DEST, EV_ROUTE, EV_ZOOM, EV_LOOK, EV_SEARCH,
+               EV_FOUND } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
@@ -101,6 +103,7 @@ typedef struct {
     int32_t   lat_e7;   /* EV_DEST */
     int32_t   lon_e7;
     uint8_t   zoom;     /* EV_ZOOM */
+    bool      following; /* EV_LOOK: back on the rider, ignore lat/lon */
     char      query[NAV_SEARCH_QUERY];   /* EV_SEARCH */
 } nav_evt_t;
 
@@ -175,6 +178,26 @@ static void notify_dest(int32_t lat_e7, int32_t lon_e7)
     ESP_LOGW(TAG, "destination notify gave up");
 }
 
+/* Where the head unit is looking, after the rider dragged the map. Ten bytes:
+ * the follow flag first, because "back on the rider" carries no position
+ * worth reading. The phone fetches tiles around this instead of around the
+ * rider — without it a dragged view runs out of ground at the edge of what
+ * was already sent. */
+static void notify_look(bool following, int32_t lat_e7, int32_t lon_e7)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) return;
+    uint8_t f[10] = { NAV_ST_LOOK, (uint8_t)(following ? 0 : 1) };
+    memcpy(&f[2], &lat_e7, 4);
+    memcpy(&f[6], &lon_e7, 4);
+    for (int attempt = 0; attempt < 200; attempt++) {
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(f, sizeof(f));
+        if (om && ble_gatts_notify_custom(s_conn, s_ctrl_handle, om) == 0) return;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGW(TAG, "look notify gave up");
+}
+
 /* What the rider typed. Longer than the usual six bytes and the only
  * head-to-phone message that carries text: [status][len][UTF-8]. */
 static void notify_search(const char *q)
@@ -226,6 +249,17 @@ static void on_dest_picked(int32_t lat_e7, int32_t lon_e7)
              (long)labs(lat_e7) % 10000000,
              lon_e7 < 0 ? "-" : "", (long)labs(lon_e7) / 10000000,
              (long)labs(lon_e7) % 10000000);
+}
+
+/* The rider dragged the map, or asked to go back to following themselves.
+ * From the LVGL task, so it only queues; the worker does the notify and the
+ * redraw. */
+static void on_look_changed(bool following, int32_t lat_e7, int32_t lon_e7)
+{
+    if (!s_q) return;
+    nav_evt_t ev = { .kind = EV_LOOK, .following = following,
+                     .lat_e7 = lat_e7, .lon_e7 = lon_e7 };
+    xQueueSend(s_q, &ev, 0);
 }
 
 /* The rider pressed a zoom button. The map changes level at once — it has
@@ -671,6 +705,12 @@ static void worker(void *arg)
                 notify(NAV_ST_ZOOM, ev.zoom, 0, 0);
                 render_view();
                 break;
+            case EV_LOOK:
+                notify_look(ev.following, ev.lat_e7, ev.lon_e7);
+                /* The drag already moved what we draw; this redraws from the
+                 * tiles we hold, and the phone fills the rest in. */
+                render_view();
+                break;
             case EV_SEARCH:
                 notify_search(ev.query);
                 break;
@@ -696,6 +736,7 @@ void ble_nav_init(void)
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
     nav_screen_set_dest_cb(on_dest_picked);
     nav_screen_set_zoom_cb(on_zoom_picked);
+    nav_screen_set_look_cb(on_look_changed);
     nav_screen_set_search_cb(on_search_typed);
     nav_tiles_set_evict_cb(on_tile_evicted);
     /* 8 KiB, like the other two workers on this link. Four was enough when

@@ -220,6 +220,12 @@ class HeadUnitFeed {
   final _lastAttempt = <TileId, DateTime>{};
 
   LatLon? _where;
+
+  /// Where the head unit is looking, when the rider has dragged its map off
+  /// their own position. Tiles follow this; VIEW keeps carrying where the
+  /// rider actually is, because that is what draws their marker and places
+  /// the route. Null means the two are the same.
+  LatLon? _lookAt;
   double? _headingDeg;
   double _speedMs = 0;
 
@@ -243,6 +249,13 @@ class HeadUnitFeed {
   bool get running => _running;
 
   /// The rider moved. Cheap to call on every fix; the loop picks up the latest.
+  /// The head unit says its map is no longer centred on the rider (or is
+  /// again, with null). Only the ground we keep covered changes.
+  void setLookAt(LatLon? at) {
+    if (_lookAt == at) return;
+    _lookAt = at;
+  }
+
   void setPosition(LatLon at, {double? headingDeg, double? speedMs}) {
     _where = at;
     if (headingDeg != null) _headingDeg = headingDeg;
@@ -399,7 +412,9 @@ class HeadUnitFeed {
       _guideSent = guide;
     }
 
-    final missing = _missingTiles(at);
+    // Tiles for what the rider is looking at, which is where they are unless
+    // they have dragged the head unit's map somewhere else.
+    final missing = _missingTiles(_lookAt ?? at);
     _publish(pending: missing.length);
     if (missing.isEmpty) return false;
 

@@ -122,8 +122,26 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted);
 bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
                         int64_t *y0, int64_t *y1);
 
+/* Drag the view, in panel pixels. The rider is looking somewhere other than
+ * where they are: the view stops following them until nav_map_pan_reset, and
+ * the marker is drawn wherever they have got to — off the screen, if that is
+ * where they are. The phone has to be told (CTRL 0x18 LOOK), or it keeps
+ * sending tiles for the ground around the rider and the dragged-to view stays
+ * blank. */
+void nav_map_pan(int dx_px, int dy_px);
+
+/* Back to following the rider, at once rather than easing across a city. */
+void nav_map_pan_reset(void);
+bool nav_map_is_panned(void);
+
+/* The middle of what is drawn — the rider's position normally, wherever they
+ * dragged to while panned. This is what the phone is told to fetch around. */
+void nav_map_get_centre(int32_t *lat_e7, int32_t *lon_e7);
+
 /* Where a point on the panel is on the ground — the inverse of what
- * nav_map_render does, for picking a destination by tapping the map. */
+ * nav_map_render does. Nothing calls it since tapping the map stopped picking
+ * a destination; kept because moving the map by dragging will want exactly
+ * this. */
 void nav_map_unproject(int x, int y, int w, int h,
                        int32_t *lat_e7, int32_t *lon_e7);
 

@@ -52,6 +52,14 @@
  *                     the panel. The phone sends tiles (and VIEW) at that
  *                     level from then on; the head unit has already changed
  *                     what it draws.
+ *     0x18 LOOK       [u8 status][u8 away][i32 lat_e7][i32 lon_e7] — ten
+ *                     bytes; the rider dragged the head unit's map. away = 1
+ *                     means it is no longer centred on them and the phone
+ *                     should send tiles for the position that follows;
+ *                     away = 0 means back on the rider and the coordinates
+ *                     mean nothing. Without this the phone keeps fetching
+ *                     around the rider and a dragged view runs out of ground
+ *                     at the edge of what it had already sent.
  *     0x17 EMPTY      the tile store holds nothing — sent alongside STATE, so
  *                     a phone reconnecting to a rebooted head unit knows that
  *                     everything it sent before is gone and starts again.

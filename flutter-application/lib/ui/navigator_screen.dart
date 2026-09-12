@@ -96,6 +96,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   StreamSubscription<int>? _huZoomSub;
   StreamSubscription<String>? _huSearchSub;
   StreamSubscription<BleConnState>? _huLinkSub;
+  StreamSubscription<({bool following, LatLon at})>? _huLookSub;
 
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
@@ -160,6 +161,11 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     // the new level from what it holds; we are the only one who can fetch the
     // tiles for it.
     _huZoomSub = BleProxy.instance.navZoom.listen((z) => _feed?.setZoom(z));
+    // ...and drag its map off their own position, which moves the ground the
+    // phone has to keep covered. Nothing else changes: the position we send
+    // is still the rider's, since that is what draws their marker there.
+    _huLookSub = BleProxy.instance.navLook
+        .listen((l) => _feed?.setLookAt(l.following ? null : l.at));
     // ...and look up what they typed there. The index is the one that came
     // with the offline map, so this answers with no signal at all.
     _huSearchSub = BleProxy.instance.navSearches.listen(_onHeadUnitSearch);
@@ -179,6 +185,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     unawaited(_huZoomSub?.cancel());
     unawaited(_huSearchSub?.cancel());
     unawaited(_huLinkSub?.cancel());
+    unawaited(_huLookSub?.cancel());
     _linkSub?.cancel();
     _announceSub?.cancel();
     unawaited(_voice.stop());

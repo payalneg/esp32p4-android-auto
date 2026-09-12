@@ -49,11 +49,11 @@ static lv_obj_t *s_turn_arrow;
 static lv_obj_t *s_turn_dist;
 static lv_obj_t *s_turn_unit;
 static lv_obj_t *s_remain_lbl;
-static lv_obj_t *s_pick_box;
-static lv_obj_t *s_pick_lbl;
-static lv_timer_t *s_pick_timer;
 static nav_screen_dest_cb_t s_dest_cb;
 static nav_screen_zoom_cb_t s_zoom_cb;
+static nav_screen_look_cb_t s_look_cb;
+/* Shown only while the map has been dragged off the rider. */
+static lv_obj_t *s_recentre_btn;
 static nav_screen_search_cb_t s_search_cb;
 
 /* Typing on the panel. The keyboard and the results live in one overlay that
@@ -73,7 +73,6 @@ static nav_search_hit_t s_hits[NAV_SEARCH_MAX];
 static atomic_int  s_nhits;
 static atomic_bool s_hits_fresh;
 static lv_obj_t *s_zoom_lbl;
-static int32_t s_pick_lat_e7, s_pick_lon_e7;
 static lv_timer_t *s_tick;
 
 static uint16_t *s_fb[2];
@@ -110,7 +109,6 @@ LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 
 #define HUD_PLATE   0x101418
 /* How long the "go here?" prompt waits for an answer. */
-#define PICK_TIMEOUT_MS 12000
 #define CC_COLOUR   0x33FF66
 
 /* A transparent row that lays its children out left to right, so a readout is
@@ -228,42 +226,6 @@ static void set_arrow(nav_turn_t t)
     lv_line_set_points(s_turn_arrow, k_arrows[t].p, k_arrows[t].n);
 }
 
-/* Picking a destination on the panel itself: tap the map, confirm, and the
- * phone is told where to route. The head unit knows exactly which patch of
- * ground each pixel is (it composed the view), so the tap needs nothing from
- * the phone to become a coordinate. */
-static void pick_hide(void)
-{
-    if (s_pick_box) lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
-    if (s_pick_timer) {
-        lv_timer_del(s_pick_timer);
-        s_pick_timer = NULL;
-    }
-}
-
-/* A prompt nobody answers goes away on its own. A pocket or a bump can tap
- * the map, and the plate used to stay up over the map until someone pressed
- * one of its buttons. */
-static void pick_timeout_cb(lv_timer_t *t)
-{
-    (void)t;
-    s_pick_timer = NULL;   /* one-shot: LVGL deletes it after this */
-    if (s_pick_box) lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void pick_go_cb(lv_event_t *e)
-{
-    (void)e;
-    pick_hide();
-    if (s_dest_cb) s_dest_cb(s_pick_lat_e7, s_pick_lon_e7);
-}
-
-static void pick_cancel_cb(lv_event_t *e)
-{
-    (void)e;
-    pick_hide();
-}
-
 /* ---- typing an address on the panel ---- */
 
 #define FIND_DEBOUNCE_MS 600
@@ -348,7 +310,6 @@ static void find_open_cb(lv_event_t *e)
 {
     (void)e;
     if (!s_find_box) return;
-    pick_hide();
     lv_textarea_set_text(s_find_ta, "");
     lv_obj_clean(s_find_list);
     lv_label_set_text(s_find_hint, "Type a street or a place");
@@ -458,29 +419,42 @@ static void refresh_zoom(void)
 static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
 static void zoom_out_cb(lv_event_t *e) { (void)e; zoom_step(-1); }
 
-static void map_pressed_cb(lv_event_t *e)
+/* ---- dragging the map ----
+ *
+ * Tapping the map used to offer the spot as a destination, which fought with
+ * dragging and went off in a pocket; an address typed on the panel is the way
+ * to pick somewhere now, and the touch is the map's own.
+ *
+ * The phone is told where we ended up, not where we are passing through: one
+ * message per drag, on release. It sends tiles around the rider otherwise,
+ * and a view dragged past what it has already sent would stay blank. */
+static void map_drag_cb(lv_event_t *e)
 {
     (void)e;
-    if (!s_pick_box) return;
     lv_indev_t *indev = lv_indev_get_act();
     if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-    nav_map_unproject(p.x, p.y, NAV_SCREEN_W, NAV_SCREEN_H,
-                      &s_pick_lat_e7, &s_pick_lon_e7);
-    /* Printed from the integer, digit by digit: a "%.5f" would pull the
-     * software double-precision formatter in for one label. */
-    char buf[64];
-    snprintf(buf, sizeof buf, "Go to %s%ld.%05ld, %s%ld.%05ld?",
-             s_pick_lat_e7 < 0 ? "-" : "", labs(s_pick_lat_e7) / 10000000L,
-             (labs(s_pick_lat_e7) % 10000000L) / 100L,
-             s_pick_lon_e7 < 0 ? "-" : "", labs(s_pick_lon_e7) / 10000000L,
-             (labs(s_pick_lon_e7) % 10000000L) / 100L);
-    lv_label_set_text(s_pick_lbl, buf);
-    lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
-    if (s_pick_timer) lv_timer_del(s_pick_timer);
-    s_pick_timer = lv_timer_create(pick_timeout_cb, PICK_TIMEOUT_MS, NULL);
-    lv_timer_set_repeat_count(s_pick_timer, 1);
+    lv_point_t v;
+    lv_indev_get_vect(indev, &v);
+    if (v.x == 0 && v.y == 0) return;
+    nav_map_pan(v.x, v.y);
+    if (s_recentre_btn) lv_obj_clear_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void map_released_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!nav_map_is_panned() || !s_look_cb) return;
+    int32_t lat_e7 = 0, lon_e7 = 0;
+    nav_map_get_centre(&lat_e7, &lon_e7);
+    s_look_cb(false, lat_e7, lon_e7);
+}
+
+static void recentre_cb(lv_event_t *e)
+{
+    (void)e;
+    nav_map_pan_reset();
+    if (s_recentre_btn) lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_look_cb) s_look_cb(true, 0, 0);
 }
 
 /* The turn plate and the remaining-distance line, from whatever the phone
@@ -631,6 +605,11 @@ esp_err_t nav_screen_init(void)
     s_img = lv_img_create(s_screen);
     lv_obj_set_pos(s_img, 0, 0);
     lv_obj_set_size(s_img, NAV_SCREEN_W, NAV_SCREEN_H);
+    /* Drag to move the map. CLICKABLE is what makes an image take touch at
+     * all; there is no click handler on it any more, only the drag. */
+    lv_obj_add_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_img, map_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_img, map_released_cb, LV_EVENT_RELEASED, NULL);
 
     /* Placeholder card, centred, drawn over whatever the last picture was. */
     s_status_box = lv_obj_create(s_screen);
@@ -663,46 +642,6 @@ esp_err_t nav_screen_init(void)
     lv_obj_t *right = hud_row_create(s_screen, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
     s_batt_lbl = hud_text(right, &lv_font_Antonio_Regular_64, 0xFFFFFF);
     lv_label_set_text(hud_text(right, &lv_font_Antonio_Regular_22, 0xC8D0D8), "%");
-
-    /* Tap anywhere on the map to offer it as a destination. */
-    lv_obj_add_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_img, map_pressed_cb, LV_EVENT_CLICKED, NULL);
-
-    s_pick_box = lv_obj_create(s_screen);
-    lv_obj_set_size(s_pick_box, 560, 74);
-    /* Low and centred: at the top it sat across the turn plate, which is the
-     * one thing on this screen that must never be covered. */
-    lv_obj_align(s_pick_box, LV_ALIGN_BOTTOM_MID, 0, -96);
-    lv_obj_set_style_bg_color(s_pick_box, lv_color_hex(0x1c2530), 0);
-    lv_obj_set_style_bg_opa(s_pick_box, LV_OPA_90, 0);
-    lv_obj_set_style_border_width(s_pick_box, 0, 0);
-    lv_obj_set_style_radius(s_pick_box, 12, 0);
-    lv_obj_set_style_pad_all(s_pick_box, 8, 0);
-    lv_obj_clear_flag(s_pick_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_pick_box, LV_OBJ_FLAG_HIDDEN);
-
-    s_pick_lbl = lv_label_create(s_pick_box);
-    lv_obj_align(s_pick_lbl, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_style_text_color(s_pick_lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_pick_lbl, &aabridge_font_24, 0);
-
-    lv_obj_t *go = lv_btn_create(s_pick_box);
-    lv_obj_set_size(go, 96, 56);
-    lv_obj_align(go, LV_ALIGN_RIGHT_MID, -66, 0);
-    lv_obj_set_style_bg_color(go, lv_color_hex(0x1E64DC), 0);
-    lv_obj_add_event_cb(go, pick_go_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *go_lbl = lv_label_create(go);
-    lv_label_set_text(go_lbl, "GO");
-    lv_obj_center(go_lbl);
-
-    lv_obj_t *no = lv_btn_create(s_pick_box);
-    lv_obj_set_size(no, 56, 56);
-    lv_obj_align(no, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(no, lv_color_hex(0x3A4450), 0);
-    lv_obj_add_event_cb(no, pick_cancel_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *no_lbl = lv_label_create(no);
-    lv_label_set_text(no_lbl, LV_SYMBOL_CLOSE);
-    lv_obj_center(no_lbl);
 
     /* "FIND" opens the keyboard. Top right, above the zoom buttons — plain
      * ASCII on purpose, like the zoom glyphs. */
@@ -811,6 +750,24 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
         lv_obj_center(l);
     }
+    /* Back to the rider. Only there when the map has been dragged away from
+     * them — on a screen this size an always-present button would be one more
+     * thing between the rider and the map. */
+    s_recentre_btn = lv_btn_create(s_screen);
+    lv_obj_set_size(s_recentre_btn, 62, 62);
+    lv_obj_align(s_recentre_btn, LV_ALIGN_RIGHT_MID, -12, 132);
+    lv_obj_set_style_bg_color(s_recentre_btn, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(s_recentre_btn, LV_OPA_70, 0);
+    lv_obj_set_style_radius(s_recentre_btn, 14, 0);
+    lv_obj_add_event_cb(s_recentre_btn, recentre_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *l = lv_label_create(s_recentre_btn);
+        lv_label_set_text(l, LV_SYMBOL_GPS);
+        lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
+        lv_obj_center(l);
+    }
+
     s_zoom_lbl = lv_label_create(s_screen);
     lv_obj_align(s_zoom_lbl, LV_ALIGN_RIGHT_MID, -30, -42);
     lv_obj_set_style_text_color(s_zoom_lbl, lv_color_white(), 0);
@@ -879,6 +836,7 @@ bool nav_screen_active(void) { return atomic_load(&s_active); }
 
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }
 void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb) { s_zoom_cb = cb; }
+void nav_screen_set_look_cb(nav_screen_look_cb_t cb) { s_look_cb = cb; }
 void nav_screen_set_search_cb(nav_screen_search_cb_t cb) { s_search_cb = cb; }
 
 void nav_screen_set_results(const nav_search_hit_t *hits, size_t n)

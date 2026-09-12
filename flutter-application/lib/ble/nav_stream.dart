@@ -79,6 +79,11 @@ class NavStatus {
   /// The head unit's tile store holds nothing — start again. See
   /// NAV_ST_EMPTY in main/ble_nav.h.
   static const empty = 0x17;
+
+  /// Ten bytes: the rider dragged the head unit's map off their own position,
+  /// or put it back. Tiles have to follow what they are looking at, not where
+  /// they are. See NAV_ST_LOOK in main/ble_nav.h.
+  static const look = 0x18;
 }
 
 /// FRAME_ACK results.
@@ -195,6 +200,8 @@ class NavStream {
   final _destCtrl = StreamController<({double lat, double lon})>.broadcast();
   final _droppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
   final _zoomCtrl = StreamController<int>.broadcast();
+  final _lookCtrl =
+      StreamController<({bool following, double lat, double lon})>.broadcast();
   final _searchCtrl = StreamController<String>.broadcast();
   final _emptyCtrl = StreamController<void>.broadcast();
 
@@ -215,6 +222,11 @@ class NavStream {
 
   /// The zoom level the rider picked on the head unit's own map.
   Stream<int> get zooms => _zoomCtrl.stream;
+
+  /// Where the head unit is looking. `following` means back on the rider and
+  /// the coordinates carry nothing.
+  Stream<({bool following, double lat, double lon})> get looks =>
+      _lookCtrl.stream;
 
   /// What the rider typed on the panel's keyboard, to be looked up here.
   Stream<String> get searches => _searchCtrl.stream;
@@ -258,6 +270,17 @@ class NavStream {
     }
     if (raw[0] == NavStatus.zoom && raw.length >= 2) {
       if (!_zoomCtrl.isClosed) _zoomCtrl.add(raw[1]);
+      return;
+    }
+    if (raw[0] == NavStatus.look && raw.length >= 10) {
+      final bd = ByteData.sublistView(Uint8List.fromList(raw));
+      if (!_lookCtrl.isClosed) {
+        _lookCtrl.add((
+          following: raw[1] == 0,
+          lat: bd.getInt32(2, Endian.little) / 1e7,
+          lon: bd.getInt32(6, Endian.little) / 1e7,
+        ));
+      }
       return;
     }
     if (raw[0] == NavStatus.destination && raw.length >= 9) {
@@ -589,6 +612,7 @@ class NavStream {
     await _stateCtrl.close();
     await _ackCtrl.close();
     await _destCtrl.close();
+    await _lookCtrl.close();
     await _droppedCtrl.close();
     await _zoomCtrl.close();
     await _searchCtrl.close();

@@ -58,6 +58,8 @@ class BleTaskHandler extends TaskHandler {
   StreamSubscription<({double lat, double lon})>? _navDestSub;
   StreamSubscription<({int z, int x, int y})>? _navDroppedSub;
   StreamSubscription<int>? _navZoomSub;
+  StreamSubscription<({bool following, double lat, double lon})>?
+      _navLookSub;
   StreamSubscription<String>? _navSearchSub;
   StreamSubscription<void>? _navEmptySub;
   Timer? _navIdleTimer;
@@ -106,6 +108,7 @@ class BleTaskHandler extends TaskHandler {
     await _navDestSub?.cancel();
     await _navDroppedSub?.cancel();
     await _navZoomSub?.cancel();
+    await _navLookSub?.cancel();
     await _navSearchSub?.cancel();
     await _navEmptySub?.cancel();
     await _stateSub?.cancel();
@@ -147,6 +150,8 @@ class BleTaskHandler extends TaskHandler {
     _navDroppedSub = null;
     unawaited(_navZoomSub?.cancel());
     _navZoomSub = null;
+    unawaited(_navLookSub?.cancel());
+    _navLookSub = null;
     unawaited(_navSearchSub?.cancel());
     _navSearchSub = null;
     unawaited(_navEmptySub?.cancel());
@@ -187,6 +192,14 @@ class BleTaskHandler extends TaskHandler {
     });
     _navZoomSub = nav.zooms.listen((z) {
       FlutterForegroundTask.sendDataToMain({'t': IpcEvt.navZoom, 'zoom': z});
+    });
+    _navLookSub = nav.looks.listen((l) {
+      FlutterForegroundTask.sendDataToMain({
+        't': IpcEvt.navLook,
+        'following': l.following,
+        'lat': l.lat,
+        'lon': l.lon,
+      });
     });
     _navDroppedSub = nav.dropped.listen((t) {
       FlutterForegroundTask.sendDataToMain({

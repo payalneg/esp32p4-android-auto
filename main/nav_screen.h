@@ -52,10 +52,22 @@ void nav_screen_commit(void);
 void nav_screen_set_active(bool active);
 bool nav_screen_active(void);
 
-/* Called when the rider has picked somewhere to go by tapping the map and
- * confirming it. Runs on the LVGL task, so the handler must only enqueue. */
+/* Called when the rider has picked somewhere to go — today by typing an
+ * address or coordinates and choosing a result. Tapping the map used to do it
+ * too; it was in the way of moving the map and a pocket could trigger it.
+ * Runs on the LVGL task, so the handler must only enqueue. */
 typedef void (*nav_screen_dest_cb_t)(int32_t lat_e7, int32_t lon_e7);
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb);
+
+/* The rider dragged the map away from their own position, or pressed the
+ * button that puts it back. The phone has to hear about it: it sends tiles
+ * for the ground around the rider, and a dragged view would otherwise run out
+ * of map at the edge of whatever had already been sent. `following` true
+ * means back on the rider and the coordinates mean nothing. Runs on the LVGL
+ * task, so the handler must only enqueue. */
+typedef void (*nav_screen_look_cb_t)(bool following, int32_t lat_e7,
+                                     int32_t lon_e7);
+void nav_screen_set_look_cb(nav_screen_look_cb_t cb);
 
 /* Somewhere the phone found for a typed query. Names come from the offline
  * search index the phone downloaded with its map, so this works with no

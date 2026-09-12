@@ -34,6 +34,12 @@ static uint32_t s_route_us;
 
 /* Where the phone last said we are. The drawn view chases this. */
 static int32_t s_target_lat_e7, s_target_lon_e7;
+
+/* The rider dragged the map away from themselves. While this is set the view
+ * stops following them: no easing towards their position, no dead reckoning,
+ * and the marker is drawn wherever they actually are rather than in the
+ * middle — which is the one assumption a centred view let us make. */
+static bool s_panned;
 static bool    s_have_target;
 
 /* How much of the remaining error to take out per frame, as a divisor: a
@@ -98,6 +104,9 @@ void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
     s_have_target = true;
     s_view.zoom = s_zoom_override ? s_zoom_override : zoom;
     s_view.heading_deg = heading_deg;
+    /* Where the rider is still matters — the marker and the route need it —
+     * but it no longer decides what is in the middle of the screen. */
+    if (s_panned && s_view.valid) return;
     if (!s_view.valid) {
         /* Nothing drawn yet — start where we are told rather than easing in
          * from the middle of the ocean. */
@@ -160,7 +169,7 @@ void nav_map_set_speed(uint16_t cm_per_s)
 
 void nav_map_dead_reckon(uint32_t dt_ms)
 {
-    if (!s_view.valid) return;
+    if (!s_view.valid || s_panned) return;
 
     if (s_speed_ms > 0.1f && s_view.heading_deg <= 360) {
         const float metres = s_speed_ms * ((float)dt_ms * 0.001f);
@@ -177,6 +186,44 @@ void nav_map_dead_reckon(uint32_t dt_ms)
         s_view.lat_e7 += (s_target_lat_e7 - s_view.lat_e7) / CATCH_UP_DIV;
         s_view.lon_e7 += (s_target_lon_e7 - s_view.lon_e7) / CATCH_UP_DIV;
     }
+}
+
+/* Pixels dragged on the panel, into a move of the view centre.
+ *
+ * The same local projection unproject uses, run the other way: e7 degrees per
+ * pixel at this zoom, stretched by the latitude going north-south. Dragging
+ * the map right means looking further west, hence the signs. */
+void nav_map_pan(int dx_px, int dy_px)
+{
+    if (!s_view.valid) return;
+    const float per_px = 3.6e9f / (float)((int64_t)NAV_TILE_PX << s_view.zoom);
+    const float stretch = cosf((float)s_view.lat_e7 * E7_TO_RAD);
+    s_view.lon_e7 -= (int32_t)lroundf((float)dx_px * per_px);
+    s_view.lat_e7 += (int32_t)lroundf((float)dy_px * per_px * stretch);
+    /* Past the poles there is no map and the projection stops meaning
+     * anything; the date line is fine and wraps on its own. */
+    if (s_view.lat_e7 >  850000000) s_view.lat_e7 =  850000000;
+    if (s_view.lat_e7 < -850000000) s_view.lat_e7 = -850000000;
+    s_panned = true;
+}
+
+void nav_map_pan_reset(void)
+{
+    if (!s_panned) return;
+    s_panned = false;
+    /* Straight back to the rider rather than easing across a city. */
+    if (s_have_target) {
+        s_view.lat_e7 = s_target_lat_e7;
+        s_view.lon_e7 = s_target_lon_e7;
+    }
+}
+
+bool nav_map_is_panned(void) { return s_panned; }
+
+void nav_map_get_centre(int32_t *lat_e7, int32_t *lon_e7)
+{
+    if (lat_e7) *lat_e7 = s_view.lat_e7;
+    if (lon_e7) *lon_e7 = s_view.lon_e7;
 }
 
 uint32_t nav_map_last_route_us(void) { return s_route_us; }
@@ -560,10 +607,23 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
     s_route_us = (uint32_t)(esp_timer_get_time() - t0);
     /* An arrow while there is a heading to show, a plain dot when standing
      * still — a parked bike pointing somewhere definite is a lie. */
+    /* Centred on the rider, the marker belongs in the middle by construction.
+     * Dragged away from them it does not, so place it the same way the route
+     * line is placed — and let it go off-screen, which is the honest answer
+     * when the rider is no longer in view. */
+    int mx = w / 2, my = h / 2;
+    if (s_panned) {
+        nav_map_proj_t proj;
+        if (s_have_target && nav_map_get_proj(&proj, w, h)) {
+            nav_map_project(&proj, s_target_lat_e7, s_target_lon_e7, &mx, &my);
+        } else {
+            mx = my = -10000;   /* nothing to draw */
+        }
+    }
     if (s_view.heading_deg <= 360 && s_speed_ms > 0.5) {
-        draw_arrow(dst, w, h, w / 2, h / 2, (float)s_view.heading_deg);
+        draw_arrow(dst, w, h, mx, my, (float)s_view.heading_deg);
     } else {
-        draw_marker(dst, w, h, w / 2, h / 2);
+        draw_marker(dst, w, h, mx, my);
     }
     if (out_wanted) *out_wanted = wanted;
     return have;

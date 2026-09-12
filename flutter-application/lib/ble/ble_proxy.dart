@@ -88,6 +88,8 @@ class BleProxy {
   final _navDestCtrl = StreamController<LatLon>.broadcast();
   final _navDroppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
   final _navZoomCtrl = StreamController<int>.broadcast();
+  final _navLookCtrl =
+      StreamController<({bool following, LatLon at})>.broadcast();
   final _navSearchCtrl = StreamController<String>.broadcast();
   final _navEmptyCtrl = StreamController<void>.broadcast();
   BleConnState _state = BleConnState.idle;
@@ -140,6 +142,11 @@ class BleProxy {
 
   /// The zoom the rider chose on the head unit's own map.
   Stream<int> get navZoom => _navZoomCtrl.stream;
+
+  /// Where the head unit is looking after the rider dragged its map.
+  /// `following` means back on the rider; `at` carries nothing then.
+  Stream<({bool following, LatLon at})> get navLook =>
+      _navLookCtrl.stream;
 
   /// What the rider typed on the head unit's keyboard.
   Stream<String> get navSearches => _navSearchCtrl.stream;
@@ -274,6 +281,12 @@ class BleProxy {
         break;
       case IpcEvt.navZoom:
         _navZoomCtrl.add((m['zoom'] as num).toInt());
+        break;
+      case IpcEvt.navLook:
+        _navLookCtrl.add((
+          following: m['following'] as bool,
+          at: LatLon((m['lat'] as num).toDouble(), (m['lon'] as num).toDouble()),
+        ));
         break;
       case IpcEvt.navDest:
         _navDestCtrl.add(LatLon(
