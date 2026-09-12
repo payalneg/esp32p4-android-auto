@@ -95,6 +95,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   StreamSubscription<LatLon>? _huDestSub;
   StreamSubscription<int>? _huZoomSub;
   StreamSubscription<String>? _huSearchSub;
+  StreamSubscription<BleConnState>? _huLinkSub;
 
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
@@ -162,6 +163,9 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     // ...and look up what they typed there. The index is the one that came
     // with the offline map, so this answers with no signal at all.
     _huSearchSub = BleProxy.instance.navSearches.listen(_onHeadUnitSearch);
+    // A head unit that connects while the phone is in a pocket is a reason to
+    // have the receiver on; one that goes away is a reason to let it go.
+    _huLinkSub = BleProxy.instance.state.listen((_) => _reviewBackgroundFixes());
     _syncStreamer();
   }
 
@@ -174,6 +178,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     unawaited(_huDestSub?.cancel());
     unawaited(_huZoomSub?.cancel());
     unawaited(_huSearchSub?.cancel());
+    unawaited(_huLinkSub?.cancel());
     _linkSub?.cancel();
     _announceSub?.cancel();
     unawaited(_voice.stop());
@@ -185,6 +190,9 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   }
 
   void _onControllerChanged() {
+    // Guiding may have just started or stopped, which changes whether the
+    // receiver has to keep running while the phone is away.
+    _reviewBackgroundFixes();
     final route = _controller.route;
     // Rebuilding the LatLng list on every GPS fix would churn thousands of
     // objects a minute, so only do it when the route itself changed.
@@ -1098,29 +1106,52 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   /// holding the GNSS receiver at its best accuracy for as long as the screen
   /// stayed on the stack — hours after the ride, and from the moment the app
   /// was opened whether or not anything was connected.
+  /// A connected head unit counts whatever it happens to be showing this
+  /// second. It has no position of its own, the rider can send it to the map
+  /// or start a route from its own screen at any moment, and the phone in the
+  /// pocket is the only thing that can answer — so asking whether its map is
+  /// visible right now is asking the wrong question. That narrower test is
+  /// what stopped the guidance: the receiver was let go while the head unit
+  /// sat on the dashboard, and a route started from there then never got a
+  /// fix.
   bool get _fixesNeededInBackground =>
       _controller.navigating ||
-      (BleProxy.instance.currentState == BleConnState.connected &&
-          BleProxy.instance.navState.visible);
+      BleProxy.instance.currentState == BleConnState.connected;
 
-  /// Set when the receiver was stopped on the way into the background, so
-  /// coming back turns it on again — and only then, because a rider who never
-  /// asked for GPS should not find it running after a trip to another app.
-  bool _gpsPausedByLifecycle = false;
+  bool _appHidden = false;
+
+  /// Whether the receiver was on when the app went away, so returning turns it
+  /// back on — and only then, because a rider who never asked for GPS should
+  /// not find it running after a trip to another app.
+  bool _gpsWanted = false;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     final hidden = state != AppLifecycleState.resumed &&
         state != AppLifecycleState.inactive;
+    if (hidden == _appHidden) return;
+    _appHidden = hidden;
     if (hidden) {
-      if (_controller.gpsActive && !_fixesNeededInBackground) {
-        _gpsPausedByLifecycle = true;
-        _controller.detachFixes();
-      }
-    } else if (_gpsPausedByLifecycle) {
-      _gpsPausedByLifecycle = false;
+      _gpsWanted = _controller.gpsActive;
+      _reviewBackgroundFixes();
+    } else if (_gpsWanted && !_controller.gpsActive) {
       unawaited(_ensureGps());
+    }
+  }
+
+  /// Whether the receiver should be running right now, while hidden.
+  ///
+  /// Has to be asked again whenever the answer can change, not once on the way
+  /// out: a route begun on the head unit with the phone already in a pocket
+  /// needs the receiver back, and the first version of this never looked
+  /// again — so guidance started after the screen went dark never got a fix.
+  void _reviewBackgroundFixes() {
+    if (!_appHidden || !_gpsWanted) return;
+    if (_fixesNeededInBackground) {
+      if (!_controller.gpsActive) _controller.attachFixes(_location.fixes());
+    } else if (_controller.gpsActive) {
+      _controller.detachFixes();
     }
   }
 
