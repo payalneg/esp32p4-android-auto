@@ -9,6 +9,24 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.19 / app 0.3.19 — 2026-09-12
+
+### Two things the first ride with the navigator showed
+
+- **Blank squares on the map while panning.** The tiles were there — decoded
+  and waiting in the store — but their squares stayed empty. Composing a view
+  needs the back buffer, and that buffer is held from the moment a frame is
+  committed until the screen has shown it, 50 to 100 ms. Tiles arrive faster
+  than that, so most of them asked for a redraw that was quietly dropped, and
+  nothing asked again: the sweep that would have caught it only runs after
+  120 ms of silence, which a stream of tiles never gives. A dropped redraw is
+  now remembered and taken as soon as the buffer frees.
+- **The stop button sat on top of the distance left.** The buttons were pinned
+  a fixed distance off the bottom of the phone screen and the info bar grew up
+  to meet them — with a download button in it, or a longer sentence, the two
+  overlapped. They are one bottom-anchored column now, so neither has to guess
+  how tall the other is.
+
 ## v1.3.18 / app 0.3.18 — 2026-09-12
 
 ### The controller can be reached over Bluetooth instead of CAN
