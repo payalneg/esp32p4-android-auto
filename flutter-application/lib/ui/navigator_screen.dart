@@ -599,26 +599,41 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
                 child: Center(
                     child: ManeuverBanner(guidance: _controller.guidance!)),
               ),
+            // One bottom cluster, stacked rather than three layers each
+            // guessing how tall the others are. The buttons used to sit at a
+            // fixed 72 px off the bottom, which the info bar grew past as
+            // soon as it carried a download button or a longer sentence —
+            // and then "stop navigation" sat on top of the distance left.
             Positioned(
               left: 12,
               right: 12,
               bottom: 12 + MediaQuery.paddingOf(context).bottom,
-              child: Center(
-                child: RouteInfoBar(
-                  controller: _controller,
-                  onSaveOffline: (_controller.hasRoute ||
-                          _controller.lastFix != null) &&
-                          !_corridorRunning
-                      ? _saveOffline
-                      : null,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      // All the width the buttons do not need, so a long
+                      // badge has somewhere to go instead of pushing them.
+                      Expanded(child: _headUnitBadge(context)),
+                      _controls(context),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: RouteInfoBar(
+                      controller: _controller,
+                      onSaveOffline: (_controller.hasRoute ||
+                              _controller.lastFix != null) &&
+                              !_corridorRunning
+                          ? _saveOffline
+                          : null,
+                    ),
+                  ),
+                ],
               ),
             ),
-            _headUnitBadge(context),
-            Positioned(
-                right: 12,
-                bottom: 72 + MediaQuery.paddingOf(context).bottom,
-                child: _controls(context)),
             if (MapData.instance.state == MapDataState.downloading ||
                 MapData.instance.state == MapDataState.loading)
               _busyOverlay(context)
@@ -641,9 +656,8 @@ class _NavigatorScreenState extends State<NavigatorScreen> {
   /// display showing something else entirely.
   Widget _headUnitBadge(BuildContext context) {
     if (!NavSettings.instance.streamToDisplay) return const SizedBox.shrink();
-    return Positioned(
-      left: 12,
-      bottom: 72 + MediaQuery.paddingOf(context).bottom,
+    return Align(
+      alignment: Alignment.bottomLeft,
       // Two streams, because the badge depends on both and nothing else
       // repaints this screen any more: the thumbnail it replaced was redrawn
       // by the feed's status listener, and that listener is what made the map

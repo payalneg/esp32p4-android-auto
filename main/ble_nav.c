@@ -8,6 +8,7 @@
 #include "ble_nav.h"
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -74,6 +75,11 @@ static const char *TAG = "ble_nav";
  * forward itself and redraws. 120 ms is about eight frames a second, and a
  * compose costs under 20 ms. */
 #define NAV_FRAME_MS 120
+/* How soon to come back for a render the buffer was too busy to take. The
+ * screen swaps on a 50 ms tick and holds the buffer one tick after that, so
+ * anything under that is a wasted wake-up and much over it is a visible
+ * stall. */
+#define NAV_RENDER_RETRY_MS 25
 
 /* With no frame for this long the link goes back to its normal duty cycle.
  * Not a fault and not shown on screen: the app skips frames whose pixels did
@@ -445,10 +451,22 @@ static void handle_frame(const nav_evt_t *ev)
 /* Compose the current view from the tiles we hold and put it on screen.
  * Cheap — a screenful is 768 KB of memcpy — so it runs on every position
  * update and again whenever a tile that might be visible arrives. */
+/* Set when a render had to be skipped because the buffer was busy, cleared
+ * when that render finally happens. Without it a skipped render was simply
+ * lost: the tile that prompted it sat in the store, decoded and ready, while
+ * its square on the screen stayed blank until something else happened to ask
+ * for a redraw. Panning made that constant — tiles arrive faster than the
+ * buffer frees, so most of them were composed by nobody. */
+static atomic_bool s_render_owed;
+
 static void render_view(void)
 {
     uint16_t *dst = nav_screen_back_buffer();
-    if (!dst) return;            /* the last one is still on its way out */
+    if (!dst) {                  /* the last one is still on its way out */
+        atomic_store(&s_render_owed, true);
+        return;
+    }
+    atomic_store(&s_render_owed, false);
     if (ui_mode_get() != UI_MODE_NAV) return;
     const int64_t t0 = esp_timer_get_time();
     int wanted = 0;
@@ -566,7 +584,12 @@ static void worker(void *arg)
 
     for (;;) {
         nav_evt_t ev;
-        if (xQueueReceive(s_q, &ev, pdMS_TO_TICKS(NAV_FRAME_MS)) != pdTRUE) {
+        /* A render we owe is worth waking up for sooner than the idle
+         * cadence — the buffer frees within a screen tick or two. */
+        const TickType_t wait = atomic_load(&s_render_owed)
+                                    ? pdMS_TO_TICKS(NAV_RENDER_RETRY_MS)
+                                    : pdMS_TO_TICKS(NAV_FRAME_MS);
+        if (xQueueReceive(s_q, &ev, wait) != pdTRUE) {
             const int64_t now = esp_timer_get_time();
             /* Carry the view forward and redraw, so the map glides instead of
              * stepping twice a second. Only while the phone is actually
@@ -578,6 +601,11 @@ static void worker(void *arg)
                 nav_map_dead_reckon(dt);
                 render_view();
             }
+            /* Whatever the dead-reckon branch decided, an owed render still
+             * has to happen: tiles land while the rider is parked too, and
+             * nothing else would ever put them on screen. A no-op when the
+             * branch above already rendered. */
+            if (atomic_load(&s_render_owed)) render_view();
             /* Idle sweep: the app stopped without saying so (screen off, out
              * of range, killed) — stop claiming we are streaming and hand the
              * radio back to its normal duty cycle. */
