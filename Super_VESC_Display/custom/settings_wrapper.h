@@ -68,10 +68,11 @@ void  settings_wrapper_set_vesc_emulator(bool on);
  * VESC Express adapter. Applied immediately on the device. */
 bool  settings_wrapper_get_vesc_link_ble(void);
 void  settings_wrapper_set_vesc_link_ble(bool on);
-/* BLE mode: is the controller behind the adapter on CAN (payloads wrapped in
- * COMM_FORWARD_CAN to Target VESC ID), or is the adapter itself the target? */
-bool  settings_wrapper_get_vesc_ble_forward(void);
-void  settings_wrapper_set_vesc_ble_forward(bool on);
+/* BLE mode: how a request is addressed. 0 = auto (ask the link who it is
+ * attached to and route per target), 1 = always direct, 2 = always through
+ * COMM_FORWARD_CAN. Matches vesc_ble_route_t on the device. */
+uint8_t settings_wrapper_get_vesc_ble_route(void);
+void    settings_wrapper_set_vesc_ble_route(uint8_t route);
 
 bool  settings_wrapper_get_aa_autoconnect(void);
 void  settings_wrapper_set_aa_autoconnect(bool on);

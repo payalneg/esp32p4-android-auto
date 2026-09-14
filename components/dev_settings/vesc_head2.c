@@ -23,6 +23,16 @@
  * 1 s avoids flicker if the bus hiccups. */
 #define HEAD2_FRESH_MS 1000u
 
+/* On a BLE link these temperatures are polled once a second instead of
+ * arriving as 50 Hz broadcasts, so the CAN window above is the same length as
+ * the poll period: every reply expires at almost exactly the moment its
+ * successor is asked for, and the answer to "is the second head alive" flips
+ * on and off. The dashboard gates ALL of its data on that flag, so what the
+ * rider sees is a screen that keeps going blank. Three poll periods is loose
+ * enough to ride through a missed reply and still short enough to notice a
+ * head that has actually gone. */
+#define HEAD2_FRESH_BLE_MS 3000u
+
 /* ---- BLE polling ----
  *
  * COMM_GET_VALUES_SELECTIVE with just the two temperature bits: the smallest
@@ -77,7 +87,7 @@ bool vesc_head2_get_temps(float *temp_fet, float *temp_motor)
 
     if (vesc_link_get_mode() == VESC_LINK_MODE_BLE) {
         if (s_polled_us == 0) return false;
-        if ((esp_timer_get_time() - s_polled_us) / 1000 > HEAD2_FRESH_MS) return false;
+        if ((esp_timer_get_time() - s_polled_us) / 1000 > HEAD2_FRESH_BLE_MS) return false;
         if (temp_fet)   *temp_fet   = s_polled_fet;
         if (temp_motor) *temp_motor = s_polled_motor;
         return true;

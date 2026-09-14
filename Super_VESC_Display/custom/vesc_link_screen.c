@@ -1,19 +1,27 @@
 /*
  * VESC link settings screen (show_vesc_link_settings).
  *
- * Picks how this display talks to the motor controller — the wired CAN bus,
- * or BLE to a VESC Express adapter, the same link VESC Tool uses — and pairs
- * the adapter:
+ * Everything about reaching the motor controller lives here, because all of it
+ * is one decision with several parts: which wire, which node, and — on BLE —
+ * how the request is addressed.
+ *
  *   - the transport selector, applied immediately (main.c swaps the transport
  *     on a timer task; the dashboard reconnects by itself);
+ *   - which controller to poll: Target VESC ID, and the optional second head.
+ *     These used to sit on the main Settings screen among the display and
+ *     battery options, where they read as unrelated numbers;
+ *   - the CAN bus parameters — this display's own node id and the bus speed —
+ *     which only mean anything in CAN mode and are labelled as such;
  *   - adapter pairing: "Search" starts the BLE central scan
  *     (ble_vesc_scan_start), advertisers carrying the Nordic UART Service
  *     stream in via the scan callback and become tappable rows; tapping pairs
  *     that adapter (vesc_ble_link_select). "Forget" unpairs;
- *   - live link state — connected / round trip / drops — so a pairing can be
- *     verified on the spot;
- *   - whether the controller sits behind the adapter on CAN, which is what
- *     decides if payloads get wrapped in COMM_FORWARD_CAN.
+ *   - live link state — connected / round trip / requests answered — so a
+ *     pairing can be verified on the spot, and a link that connects but
+ *     carries nothing says so instead of leaving a blank dashboard;
+ *   - addressing, which decides whether payloads get wrapped in
+ *     COMM_FORWARD_CAN. The default asks the link rather than guessing; see
+ *     main/vesc_ble_link.c.
  *
  * The scan callback fires on the NimBLE host task, so it only stashes the hit
  * and marshals the list rebuild onto the LVGL task with lv_async_call — same
@@ -63,6 +71,35 @@ static bool        s_alive;
 
 /* live labels */
 static lv_obj_t *s_status_lbl, *s_rt_lbl, *s_drops_lbl, *s_mtu_lbl;
+static lv_obj_t *s_peer_lbl, *s_answer_lbl;
+
+/* NVS commits stall the LVGL thread for ~100 ms, and these are +/- buttons the
+ * user taps in bursts — so every tap only updates the cache (and hot-applies),
+ * and one debounce timer writes them out once the tapping stops. Also flushed
+ * when the screen closes, in case the timer never fires. */
+#define PERSIST_DEBOUNCE_MS 800
+static lv_timer_t *s_persist_timer;
+static bool        s_dirty_target, s_dirty_ctrl, s_dirty_head2;
+
+static void persist_now(void)
+{
+    if (s_dirty_target) { settings_wrapper_persist_target_vesc_id(); s_dirty_target = false; }
+    if (s_dirty_ctrl)   { settings_wrapper_persist_controller_id();  s_dirty_ctrl   = false; }
+    if (s_dirty_head2)  { settings_wrapper_persist_second_head_id(); s_dirty_head2  = false; }
+}
+
+static void persist_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    persist_now();
+    if (s_persist_timer) { lv_timer_del(s_persist_timer); s_persist_timer = NULL; }
+}
+
+static void persist_soon(void)
+{
+    if (s_persist_timer) lv_timer_del(s_persist_timer);
+    s_persist_timer = lv_timer_create(persist_timer_cb, PERSIST_DEBOUNCE_MS, NULL);
+}
 
 /* scan results (written on the NimBLE host task, read on the LVGL task) */
 static portMUX_TYPE s_hit_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -119,6 +156,98 @@ static lv_obj_t *live_cell(lv_obj_t *row, uint32_t col, const lv_font_t *font)
     return v;
 }
 
+/* ---- number rows (Target VESC ID, Display CAN ID, second head ID) ----
+ *
+ * A label between two buttons. Deliberately not the hold-to-repeat stepper
+ * from the main Settings screen: these are node ids in a range of a couple of
+ * hundred that get set once, and each step hot-applies a transport reconfig. */
+
+typedef struct {
+    lv_obj_t *val;
+    uint8_t   value;
+    uint8_t   min, max;
+    void    (*apply)(uint8_t v);
+} numrow_t;
+
+static numrow_t s_target_row, s_ctrl_row, s_head2_row;
+
+static void numrow_refresh(numrow_t *r)
+{
+    if (!r->val) return;
+    char buf[8];
+    snprintf(buf, sizeof buf, "%u", (unsigned)r->value);
+    lv_label_set_text(r->val, buf);
+}
+
+static void numrow_step(lv_event_t *e)
+{
+    numrow_t *r = (numrow_t *)lv_event_get_user_data(e);
+    int delta = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+    int v = (int)r->value + delta;
+    if (v < r->min) v = r->max;          /* wrap: 254 ids is a long way to tap */
+    if (v > r->max) v = r->min;
+    r->value = (uint8_t)v;
+    numrow_refresh(r);
+    if (r->apply) r->apply(r->value);
+}
+
+static void numrow_add(lv_obj_t *list, const char *name, numrow_t *r,
+                       uint8_t value, uint8_t min, uint8_t max,
+                       void (*apply)(uint8_t))
+{
+    r->value = value;
+    r->min   = min;
+    r->max   = max;
+    r->apply = apply;
+
+    lv_obj_t *row = row_base(list, name, 52);
+
+    static const int dx[2]    = { -1, +1 };
+    static const char *gl[2]  = { "-", "+" };
+    lv_obj_t *btn[2];
+    for (int i = 0; i < 2; i++) {
+        btn[i] = lv_btn_create(row);
+        lv_obj_set_size(btn[i], 56, 44);
+        lv_obj_set_style_bg_color(btn[i], lv_color_hex(COL_BTN), 0);
+        lv_obj_set_style_radius(btn[i], 8, 0);
+        lv_obj_set_user_data(btn[i], (void *)(intptr_t)dx[i]);
+        lv_obj_t *l = lv_label_create(btn[i]);
+        lv_label_set_text(l, gl[i]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_center(l);
+        lv_obj_add_event_cb(btn[i], numrow_step, LV_EVENT_CLICKED, r);
+    }
+    lv_obj_align(btn[0], LV_ALIGN_RIGHT_MID, -132, 0);
+    lv_obj_align(btn[1], LV_ALIGN_RIGHT_MID, -8, 0);
+
+    r->val = lv_label_create(row);
+    lv_obj_align(r->val, LV_ALIGN_RIGHT_MID, -76, 0);
+    lv_obj_set_style_text_color(r->val, lv_color_hex(COL_CYAN), 0);
+    lv_obj_set_style_text_font(r->val, &lv_font_montserrat_24, 0);
+    numrow_refresh(r);
+}
+
+static void apply_target_id(uint8_t v)
+{
+    settings_wrapper_set_target_vesc_id_volatile(v);
+    s_dirty_target = true;
+    persist_soon();
+}
+
+static void apply_ctrl_id(uint8_t v)
+{
+    settings_wrapper_set_controller_id_volatile(v);
+    s_dirty_ctrl = true;
+    persist_soon();
+}
+
+static void apply_head2_id(uint8_t v)
+{
+    settings_wrapper_set_second_head_id_volatile(v);
+    s_dirty_head2 = true;
+    persist_soon();
+}
+
 /* ---- transport selector ---- */
 
 static void link_dd_cb(lv_event_t *e)
@@ -127,10 +256,22 @@ static void link_dd_cb(lv_event_t *e)
     settings_wrapper_set_vesc_link_ble(lv_dropdown_get_selected(dd) == 1);
 }
 
-static void forward_sw_cb(lv_event_t *e)
+static void route_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    settings_wrapper_set_vesc_ble_route((uint8_t)lv_dropdown_get_selected(dd));
+}
+
+static void can_speed_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    settings_wrapper_set_can_speed_index((uint8_t)lv_dropdown_get_selected(dd));
+}
+
+static void head2_sw_cb(lv_event_t *e)
 {
     lv_obj_t *sw = lv_event_get_target(e);
-    settings_wrapper_set_vesc_ble_forward(lv_obj_has_state(sw, LV_STATE_CHECKED));
+    settings_wrapper_set_second_head_enabled(lv_obj_has_state(sw, LV_STATE_CHECKED));
 }
 
 /* ---- adapter pairing ---- */
@@ -254,6 +395,59 @@ static void update_cb(lv_timer_t *t)
         else         snprintf(buf, sizeof buf, "--");
         lv_label_set_text(s_mtu_lbl, buf);
     }
+
+    /* Requests answered. This is the line that tells a connected-but-dead link
+     * apart from a working one, which is the failure the addressing setting
+     * causes and the one that used to look exactly like a broken dashboard. */
+    if (s_answer_lbl) {
+        snprintf(buf, sizeof buf, "%lu / %lu",
+                 (unsigned long)tel.replies, (unsigned long)tel.requests);
+        lv_label_set_text(s_answer_lbl, buf);
+        uint32_t c = COL_DIM;
+        if (tel.requests >= 4) c = tel.replies ? COL_ACCENT : COL_RED;
+        lv_obj_set_style_text_color(s_answer_lbl, lv_color_hex(c), 0);
+    }
+
+    /* What the link found on the other end, and what it does about it. */
+    if (s_peer_lbl) {
+        char pbuf[96];
+        uint32_t c = COL_DIM;
+        uint8_t target = settings_wrapper_get_target_vesc_id();
+        switch (tel.peer) {
+        case VESC_BLE_PEER_CONTROLLER:
+            if (!tel.wrapping) {
+                snprintf(pbuf, sizeof pbuf, "controller, node %u", (unsigned)tel.peer_id);
+                c = COL_ACCENT;
+            } else if (target != tel.peer_id) {
+                snprintf(pbuf, sizeof pbuf, "controller %u, target %u behind it",
+                         (unsigned)tel.peer_id, (unsigned)target);
+                c = COL_ACCENT;
+            } else {
+                /* The one combination that cannot work: we are wired to the
+                 * target itself and still sending through its CAN bus, which
+                 * means addressing it to itself. Only a manual override can
+                 * produce this. */
+                snprintf(pbuf, sizeof pbuf, "node %u - but routed via CAN, set Automatic",
+                         (unsigned)tel.peer_id);
+                c = COL_RED;
+            }
+            break;
+        case VESC_BLE_PEER_BRIDGE:
+            snprintf(pbuf, sizeof pbuf, "adapter - going on over CAN");
+            c = COL_ACCENT;
+            break;
+        case VESC_BLE_PEER_SILENT:
+            snprintf(pbuf, sizeof pbuf, "answers nothing (%u tries)",
+                     (unsigned)tel.probe_tries);
+            c = COL_RED;
+            break;
+        default:
+            snprintf(pbuf, sizeof pbuf, tel.ready ? "asking..." : "--");
+            break;
+        }
+        lv_label_set_text(s_peer_lbl, pbuf);
+        lv_obj_set_style_text_color(s_peer_lbl, lv_color_hex(c), 0);
+    }
 }
 
 /* ---- screen ---- */
@@ -270,12 +464,21 @@ static void screen_unloaded_cb(lv_event_t *e)
     s_alive = false;
     ble_vesc_set_scan_cb(NULL);
     if (s_timer) { lv_timer_del(s_timer); s_timer = NULL; }
+    /* Flush before the debounce timer dies with the screen, or the last few
+     * taps would be live in RAM and gone after a reboot. */
+    if (s_persist_timer) { lv_timer_del(s_persist_timer); s_persist_timer = NULL; }
+    persist_now();
     if (s_screen) { lv_obj_del_async(s_screen); s_screen = NULL; }
     s_scan_list  = NULL;
     s_status_lbl = NULL;
     s_rt_lbl     = NULL;
     s_drops_lbl  = NULL;
     s_mtu_lbl    = NULL;
+    s_peer_lbl   = NULL;
+    s_answer_lbl = NULL;
+    s_target_row.val = NULL;
+    s_ctrl_row.val   = NULL;
+    s_head2_row.val  = NULL;
 }
 
 void show_vesc_link_settings(void)
@@ -324,20 +527,61 @@ void show_vesc_link_settings(void)
     add_section(list, "Connection");
     lv_obj_t *lrow = row_base(list, "Talk to the VESC over", 50);
     lv_obj_t *dd = lv_dropdown_create(lrow);
-    lv_dropdown_set_options(dd, "CAN bus\nBluetooth (VESC Express)");
+    lv_dropdown_set_options(dd, "CAN bus\nBluetooth");
     lv_obj_set_width(dd, 320);
     lv_obj_align(dd, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_dropdown_set_selected(dd, settings_wrapper_get_vesc_link_ble() ? 1 : 0);
     lv_obj_add_event_cb(dd, link_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    add_hint(list, "Bluetooth needs no CAN wiring: this display connects to a "
-                   "VESC Express the same way VESC Tool does. The CAN settings "
-                   "on the previous screen only apply in CAN mode.");
+    add_hint(list, "Bluetooth needs no CAN wiring: this display connects over "
+                   "the Nordic UART Service the same way VESC Tool does - to a "
+                   "VESC Express, or straight to a BLE module on the "
+                   "controller's own UART.");
+
+    /* ---- Which controller ---- */
+    add_section(list, "Controller");
+    numrow_add(list, "Target VESC ID", &s_target_row,
+               settings_wrapper_get_target_vesc_id(), 1, 254, apply_target_id);
+
+    lv_obj_t *h2row = row_base(list, "Second head", 50);
+    lv_obj_t *h2sw = lv_switch_create(h2row);
+    lv_obj_align(h2sw, LV_ALIGN_RIGHT_MID, -8, 0);
+    if (settings_wrapper_get_second_head_enabled()) {
+        lv_obj_add_state(h2sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(h2sw, head2_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    numrow_add(list, "Second head ID", &s_head2_row,
+               settings_wrapper_get_second_head_id(), 1, 254, apply_head2_id);
+    add_hint(list, "The dashboard polls the target; a second head only adds its "
+                   "temperatures. With it on, the dashboard treats a silent "
+                   "second head as a dead link - so leave it off unless there "
+                   "really are two controllers.");
+
+    /* ---- CAN bus ---- */
+    add_section(list, "CAN bus");
+    numrow_add(list, "This display's CAN ID", &s_ctrl_row,
+               settings_wrapper_get_controller_id(), 1, 254, apply_ctrl_id);
+
+    lv_obj_t *csrow = row_base(list, "Bus speed (kbps)", 50);
+    lv_obj_t *csdd = lv_dropdown_create(csrow);
+    lv_dropdown_set_options(csdd, "125\n250\n500\n1000");
+    lv_obj_set_width(csdd, 200);
+    lv_obj_align(csdd, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_dropdown_set_selected(csdd, settings_wrapper_get_can_speed_index());
+    lv_obj_add_event_cb(csdd, can_speed_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    add_hint(list, "Used only in CAN mode. The display's own ID has to be free "
+                   "on the bus - VESC Tool lists it there as "
+                   "'Super VESC Display'.");
 
     /* ---- Adapter ---- */
     add_section(list, "Bluetooth adapter");
 
     lv_obj_t *strow = row_base(list, "Status", 40);
     s_status_lbl = live_cell(strow, COL_DIM, NULL);
+    lv_obj_t *anrow = row_base(list, "Answered / sent", 40);
+    s_answer_lbl = live_cell(anrow, COL_DIM, NULL);
+    lv_obj_t *prow = row_base(list, "Other end", 40);
+    s_peer_lbl = live_cell(prow, COL_DIM, NULL);
     lv_obj_t *rtrow = row_base(list, "Round trip", 40);
     s_rt_lbl = live_cell(rtrow, COL_CYAN, NULL);
     lv_obj_t *dprow = row_base(list, "Drops / timeouts / stale", 40);
@@ -380,23 +624,20 @@ void show_vesc_link_settings(void)
                    "Only one device can hold a VESC Express link at a time - "
                    "disconnect VESC Tool on the phone first.");
 
-    /* ---- Target ---- */
-    add_section(list, "Target");
-    lv_obj_t *fwrow = row_base(list, "Controller is behind the adapter", 50);
-    lv_obj_t *sw = lv_switch_create(fwrow);
-    lv_obj_align(sw, LV_ALIGN_RIGHT_MID, -8, 0);
-    if (settings_wrapper_get_vesc_ble_forward()) {
-        lv_obj_add_state(sw, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(sw, forward_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    /* ---- Addressing ---- */
+    add_section(list, "Bluetooth addressing");
+    lv_obj_t *rtrow2 = row_base(list, "Reach the controller", 50);
+    lv_obj_t *rdd = lv_dropdown_create(rtrow2);
+    lv_dropdown_set_options(rdd, "Automatic\nDirectly\nThrough the adapter's CAN");
+    lv_obj_set_width(rdd, 360);
+    lv_obj_align(rdd, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_dropdown_set_selected(rdd, settings_wrapper_get_vesc_ble_route());
+    lv_obj_add_event_cb(rdd, route_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    char hint[192];
-    snprintf(hint, sizeof hint,
-             "On: requests are forwarded across the adapter's CAN bus to "
-             "Target VESC ID %u, which is how a VESC Express is normally "
-             "wired. Off: the adapter itself is the target.",
-             (unsigned)settings_wrapper_get_target_vesc_id());
-    add_hint(list, hint);
+    add_hint(list, "Automatic asks the device on the other end which CAN node "
+                   "it is, then sends straight to it and routes anything else "
+                   "through COMM_FORWARD_CAN. Pick a fixed mode only if that "
+                   "answer is wrong - 'Other end' above shows what it found.");
 
     add_hint(list, "The quick-action drawer and the cruise/profile readout "
                    "need the LISP script from this firmware's lisp/main.lisp "

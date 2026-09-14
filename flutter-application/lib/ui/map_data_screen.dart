@@ -95,9 +95,15 @@ class _MapDataScreenState extends State<MapDataScreen> {
         children.add(const SizedBox(height: 8));
         children.add(const LinearProgressIndicator());
       case MapDataState.loading:
-        children.add(Text(t(context, 'mapdata.status.loading')));
+        // A province is minutes of parsing. Naming the stage and counting
+        // what has gone by is the difference between waiting and wondering.
+        final stage = data.stageKey;
+        children.add(Text(stage == null
+            ? t(context, 'mapdata.status.loading')
+            : tf(context, stage, <String, Object?>{'n': data.stageCount})));
         children.add(const SizedBox(height: 8));
-        children.add(const LinearProgressIndicator());
+        children.add(LinearProgressIndicator(
+            value: stage == null ? null : data.stageFraction));
       case MapDataState.error:
         children.add(Text(
           data.messageKey == null

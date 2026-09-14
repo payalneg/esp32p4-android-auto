@@ -23,6 +23,14 @@ typedef struct {
 } slot_t;
 
 static slot_t s_slots[NAV_TILE_SLOTS];
+
+/* The zoom the map is drawing. Tiles well below it are the blurred layers
+ * that fill holes, and they are only ever read while a hole is on screen —
+ * which under a plain LRU makes them the oldest thing in the cache and the
+ * first to go. They were then missing at the one moment they exist for, and
+ * a dragged map showed bare ground instead of a coarse version of itself. */
+static uint8_t s_detail_z;
+
 static uint32_t s_tick;
 static bool s_inited;
 static size_t s_cache_line = 64;
@@ -43,11 +51,25 @@ static slot_t *find(uint8_t z, uint32_t x, uint32_t y)
     return NULL;
 }
 
+/* A tile from one of the blurred fallback layers rather than the detail the
+ * map is drawing. Two levels down is already a quarter of the detail in each
+ * direction, which is the point where it is worth keeping for the holes. */
+static bool is_fallback(const slot_t *s)
+{
+    return s_detail_z > 1 && s->z + 2 <= s_detail_z;
+}
+
 /* A free slot, or the least recently touched one. Its pixels are reused, so
- * the caller must fill them before anyone reads. */
+ * the caller must fill them before anyone reads.
+ *
+ * Detail tiles are given up first. The fallback layers keep a reserve of the
+ * cache: they cover enormous ground for their size — one tile six levels down
+ * spans sixty-four by sixty-four of the detail — so holding a few of them is
+ * what makes a drag or a fast ride show a blurred map instead of nothing. */
 static slot_t *claim(void)
 {
-    slot_t *oldest = NULL;
+    slot_t *oldest = NULL, *oldest_fb = NULL;
+    int fallbacks = 0;
     for (int i = 0; i < NAV_TILE_SLOTS; i++) {
         slot_t *s = &s_slots[i];
         if (!s->px) {
@@ -56,8 +78,18 @@ static slot_t *claim(void)
             if (!s->px) continue;          /* PSRAM is full — reuse instead */
         }
         if (!s->used) return s;
-        if (!oldest || s->age < oldest->age) oldest = s;
+        if (is_fallback(s)) {
+            fallbacks++;
+            if (!oldest_fb || s->age < oldest_fb->age) oldest_fb = s;
+        } else if (!oldest || s->age < oldest->age) {
+            oldest = s;
+        }
     }
+    /* Past the reserve they are no longer a safety net, just old ground —
+     * a ride across a city would otherwise fill the cache with the parts of
+     * it already behind us. */
+    if (fallbacks > NAV_TILE_FALLBACK_RESERVE && oldest_fb) oldest = oldest_fb;
+    if (!oldest) oldest = oldest_fb;
     if (oldest) {
         s_stats.evicted++;
         /* Say so before the pixels are overwritten: the phone's idea of what
@@ -235,6 +267,11 @@ void nav_tiles_clear(void)
 {
     for (int i = 0; i < NAV_TILE_SLOTS; i++) s_slots[i].used = false;
     s_stats.stored = 0;
+}
+
+void nav_tiles_set_detail_zoom(uint8_t z)
+{
+    s_detail_z = z;
 }
 
 void nav_tiles_get_stats(nav_tiles_stats_t *out)

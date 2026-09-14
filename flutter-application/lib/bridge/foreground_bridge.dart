@@ -5,6 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../ble/ble_host.dart' show startBleTask;
+import '../log/app_log.dart';
 
 /// Keeps the app process alive while a BLE link to the head unit is wanted.
 ///
@@ -56,7 +57,7 @@ class ForegroundBridge {
     // loop. (A grant revoked after the fact still bites on the next boot,
     // where autoRunOnBoot starts the service with no Dart of ours involved.)
     if (!await Permission.locationWhenInUse.isGranted) {
-      debugPrint('foreground service not started: no location permission');
+      AppLog.w('svc', 'foreground service not started: no location permission');
       return;
     }
     _ensureInit();

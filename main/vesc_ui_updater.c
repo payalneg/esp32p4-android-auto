@@ -135,10 +135,19 @@ static void push_rt_locked(void)
 
     /* Feed trip-persist before reading any persistent counter — that way
      * trip_persist sees the latest raw VESC values and we get monotonic
-     * totals back on the line below. tachometer_abs is meters; rt->amp_hours
-     * already includes any in-flight regen offset from the VESC; uptime_ms
-     * is the VESC's own uptime which resets on reboot. */
-    trip_persist_update(rt->tachometer_abs, rt->amp_hours, rt->uptime_ms);
+     * totals back on the line below. tachometer_abs is meters; uptime_ms is
+     * the VESC's own uptime which resets on reboot.
+     *
+     * Amp-hours go in NET — discharged minus regenerated — which is what the
+     * battery percentage has always used. The consumption readout used the
+     * gross counter, so on a ride with any braking the two disagreed on the
+     * same screen: 4.8 Ah "used" out of 18 next to 78 % left, which is 4.0 Ah
+     * net. The pack only ever loses the net figure, so that is the honest one
+     * to show. (A descent can make it briefly negative; that is the truth
+     * too.) */
+    trip_persist_update(rt->tachometer_abs,
+                        rt->amp_hours - rt->amp_hours_charged,
+                        rt->uptime_ms);
     trip_log_tick(rt);   /* per-trip history on the triplog partition (throttled to 10 s) */
 
     if (!ble_src) update_speed(vesc_rt_data_get_speed_kmh());

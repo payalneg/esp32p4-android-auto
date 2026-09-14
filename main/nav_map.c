@@ -103,6 +103,8 @@ void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
     s_target_lon_e7 = lon_e7;
     s_have_target = true;
     s_view.zoom = s_zoom_override ? s_zoom_override : zoom;
+    /* The cache protects the blurred layers relative to this. */
+    nav_tiles_set_detail_zoom(s_view.zoom);
     s_view.heading_deg = heading_deg;
     /* Where the rider is still matters — the marker and the route need it —
      * but it no longer decides what is in the middle of the screen. */
@@ -234,6 +236,7 @@ void nav_map_set_zoom(uint8_t zoom)
     if (zoom > NAV_ZOOM_MAX) zoom = NAV_ZOOM_MAX;
     s_zoom_override = zoom;
     s_view.zoom = zoom;
+    nav_tiles_set_detail_zoom(zoom);
 }
 
 void nav_map_get_view(nav_map_view_t *out)

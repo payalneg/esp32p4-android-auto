@@ -52,6 +52,11 @@ static lv_obj_t *s_remain_lbl;
 static nav_screen_dest_cb_t s_dest_cb;
 static nav_screen_zoom_cb_t s_zoom_cb;
 static nav_screen_look_cb_t s_look_cb;
+/* Which layout the letters are in; the button beside the field says the
+ * other one, because that is what pressing it gets you. */
+static bool s_kb_cyrillic;
+static lv_obj_t *s_lang_lbl;
+
 /* Shown only while the map has been dragged off the rider. */
 static lv_obj_t *s_recentre_btn;
 static nav_screen_search_cb_t s_search_cb;
@@ -334,7 +339,9 @@ static void num_mode_cb(lv_event_t *e)
     if (!s_find_kb) return;
     const lv_keyboard_mode_t m = lv_keyboard_get_mode(s_find_kb);
     lv_keyboard_set_mode(s_find_kb, m == LV_KEYBOARD_MODE_NUMBER
-                                        ? LV_KEYBOARD_MODE_TEXT_LOWER
+                                        ? (s_kb_cyrillic
+                                               ? LV_KEYBOARD_MODE_USER_1
+                                               : LV_KEYBOARD_MODE_TEXT_LOWER)
                                         : LV_KEYBOARD_MODE_NUMBER);
 }
 
@@ -419,6 +426,48 @@ static void refresh_zoom(void)
 static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
 static void zoom_out_cb(lv_event_t *e) { (void)e; zoom_step(-1); }
 
+/* ---- the second layout ----
+ *
+ * LVGL decides what a key does by comparing its text with LV_SYMBOL_*, so
+ * backspace, enter and hide have to stay those glyphs — they live in the
+ * FontAwesome range, which our subsetted font has none of, while Montserrat
+ * has no Cyrillic. One font cannot draw both rows, so the keyboard gets a
+ * copy of our font with Montserrat behind it as a fallback: letters come from
+ * ours, the four symbols from theirs. */
+/* LVGL keeps this one to itself (lv_keyboard.c); the ctrl flags macro is in
+ * the header, this is not. */
+#define KB_BTN(width) (LV_BTNMATRIX_CTRL_POPOVER | (width))
+
+static const char *const kb_map_ru[] = {
+    "1#", "й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", LV_SYMBOL_BACKSPACE, "\n",
+    "ABC", "ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", LV_SYMBOL_NEW_LINE, "\n",
+    "х", "э", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "ъ", "\n",
+    LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
+};
+
+static const lv_btnmatrix_ctrl_t kb_ctrl_ru[] = {
+    LV_KEYBOARD_CTRL_BTN_FLAGS | 5, KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), KB_BTN(4), LV_BTNMATRIX_CTRL_CHECKED | 7,
+    LV_KEYBOARD_CTRL_BTN_FLAGS | 6, KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), KB_BTN(3), LV_BTNMATRIX_CTRL_CHECKED | 7,
+    KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1), KB_BTN(1),
+    LV_KEYBOARD_CTRL_BTN_FLAGS | 2, LV_BTNMATRIX_CTRL_CHECKED | 2, 6, LV_BTNMATRIX_CTRL_CHECKED | 2, LV_KEYBOARD_CTRL_BTN_FLAGS | 2
+};
+
+/* Our font, with Montserrat behind it for the glyphs it does not carry. */
+static lv_font_t s_kb_font;
+
+static void lang_mode_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_find_kb) return;
+    /* Read the keyboard rather than a flag: its own "ABC" key can walk out of
+     * the Cyrillic layer behind our back. */
+    s_kb_cyrillic = lv_keyboard_get_mode(s_find_kb) != LV_KEYBOARD_MODE_USER_1;
+    lv_keyboard_set_mode(s_find_kb, s_kb_cyrillic ? LV_KEYBOARD_MODE_USER_1
+                                                  : LV_KEYBOARD_MODE_TEXT_LOWER);
+    /* The button says where it takes you, not where you are. */
+    if (s_lang_lbl) lv_label_set_text(s_lang_lbl, s_kb_cyrillic ? "ABC" : "АБВ");
+}
+
 /* ---- dragging the map ----
  *
  * Tapping the map used to offer the spot as a destination, which fought with
@@ -501,6 +550,13 @@ static void refresh_guide(void)
     if (strcmp(buf, lv_label_get_text(s_remain_lbl)) != 0) {
         lv_label_set_text(s_remain_lbl, buf);
     }
+
+    /* Hang what is left of the ride off the bottom of the turn plate rather
+     * than at a fixed y. The plate grows with its own contents — the distance
+     * is set in 64 px digits, and "500 M" is taller than the 82 px the fixed
+     * offset assumed — so the two overlapped as soon as a turn came close. */
+    lv_obj_update_layout(s_turn_box);
+    lv_obj_align_to(s_remain_lbl, s_turn_box, LV_ALIGN_OUT_BOTTOM_LEFT, 4, 8);
 }
 
 static void set_status(const char *text)
@@ -717,6 +773,17 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_text_font(num_lbl, &aabridge_font_24, 0);
     lv_obj_center(num_lbl);
 
+    /* Cyrillic. Same place a phone puts it: next to the number key. */
+    lv_obj_t *lang = lv_btn_create(s_find_box);
+    lv_obj_set_size(lang, 90, 56);
+    lv_obj_align(lang, LV_ALIGN_TOP_RIGHT, -208, 10);
+    lv_obj_set_style_bg_color(lang, lv_color_hex(0x3A4450), 0);
+    lv_obj_add_event_cb(lang, lang_mode_cb, LV_EVENT_CLICKED, NULL);
+    s_lang_lbl = lv_label_create(lang);
+    lv_label_set_text(s_lang_lbl, "АБВ");
+    lv_obj_set_style_text_font(s_lang_lbl, &aabridge_font_24, 0);
+    lv_obj_center(s_lang_lbl);
+
     s_find_kb = lv_keyboard_create(s_find_box);
     lv_obj_set_size(s_find_kb, NAV_SCREEN_W, 240);
     lv_obj_align(s_find_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -724,7 +791,11 @@ esp_err_t nav_screen_init(void)
      * enter and hide keys are LV_SYMBOL glyphs from the FontAwesome range,
      * and a font without them draws four empty boxes along the bottom row
      * (the same trap as the zoom buttons, found the same way). */
-    lv_obj_set_style_text_font(s_find_kb, &lv_font_montserrat_24, 0);
+    s_kb_font = aabridge_font_24;
+    s_kb_font.fallback = &lv_font_montserrat_24;
+    lv_obj_set_style_text_font(s_find_kb, &s_kb_font, 0);
+    lv_keyboard_set_map(s_find_kb, LV_KEYBOARD_MODE_USER_1, kb_map_ru,
+                        kb_ctrl_ru);
     lv_keyboard_set_textarea(s_find_kb, s_find_ta);
     lv_obj_add_event_cb(s_find_kb, query_ready_cb, LV_EVENT_READY, NULL);
 

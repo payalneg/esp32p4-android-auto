@@ -309,11 +309,29 @@ class _NavigatorScreenState extends State<NavigatorScreen>
 
   /// A link held back for want of a graph is acted on once there is one.
   void _onMapDataChanged() {
+    // The banner over the map is drawn from this state, so the screen has to
+    // repaint when it moves. A region build reports several times a second
+    // and the map underneath is not cheap to redraw, so the progress is
+    // throttled; a change of state is never throttled, since that is the one
+    // the rider is waiting for.
+    if (mounted) {
+      final state = MapData.instance.state;
+      final now = DateTime.now();
+      if (state != _paintedDataState ||
+          now.difference(_paintedDataAt).inMilliseconds > 250) {
+        _paintedDataState = state;
+        _paintedDataAt = now;
+        setState(() {});
+      }
+    }
     final link = _pendingLink;
     if (link == null || !MapData.instance.isReady) return;
     _pendingLink = null;
     unawaited(_actOnLink(link));
   }
+
+  MapDataState? _paintedDataState;
+  DateTime _paintedDataAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Another app handed us a place — show it, route to it, or go, whichever
   /// the sender asked for.
@@ -619,6 +637,13 @@ class _NavigatorScreenState extends State<NavigatorScreen>
             if (MapData.instance.state == MapDataState.absent ||
                 MapData.instance.state == MapDataState.error)
               _dataBanner(context),
+            // A region takes minutes and is started from this screen's menu,
+            // which then closes and leaves the rider here with nothing to
+            // look at. The progress belonged where the work was asked for,
+            // not only on the map-data screen.
+            if (MapData.instance.state == MapDataState.downloading ||
+                MapData.instance.state == MapDataState.loading)
+              _buildingBanner(context),
             if (_controller.guidance != null && _controller.hasRoute)
               Positioned(
                 top: 12,
@@ -961,6 +986,54 @@ class _NavigatorScreenState extends State<NavigatorScreen>
           ),
         ),
       );
+
+  /// What the region build is doing, over the map it will replace.
+  Widget _buildingBanner(BuildContext context) {
+    final data = MapData.instance;
+    final theme = Theme.of(context);
+    final downloading = data.state == MapDataState.downloading;
+    final stage = data.stageKey;
+    final text = downloading
+        ? tf(context, 'mapdata.downloading',
+            <String, Object?>{'file': data.progressFile ?? ''})
+        : stage == null
+            ? t(context, 'mapdata.status.loading')
+            : tf(context, stage, <String, Object?>{'n': data.stageCount});
+    // Only the parse knows how far along it is; the download reports bytes in
+    // its own text and has no total worth trusting on a redirect.
+    final value = downloading || stage == null ? null : data.stageFraction;
+    return Positioned(
+      top: 12,
+      left: 12,
+      right: 12,
+      child: Card(
+        color: theme.colorScheme.secondaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Icon(Icons.map_outlined, size: 20),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(text,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              LinearProgressIndicator(value: value),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Saves the picture around the rider at every scale.
   ///

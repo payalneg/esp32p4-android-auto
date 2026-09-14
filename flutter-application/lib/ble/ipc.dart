@@ -90,6 +90,10 @@ class IpcEvt {
   static const lispConsole = 'lispConsole'; // {chunk} — batched print output
   static const vescTarget = 'vescTarget'; // {target} — VESC link target changed
 
+  /// {ms, lv, tag, msg} — a line the background service wrote to its own log.
+  /// The UI adopts it so Settings shows both isolates in one list.
+  static const log = 'log';
+
   /// {navMode, visible, maxChunk} — the head unit's navigator screen came up
   /// or went away. Unsolicited; also sent in reply to [IpcCmd.navHello].
   static const navState = 'navState';

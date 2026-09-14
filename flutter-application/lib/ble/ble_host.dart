@@ -35,6 +35,7 @@ import 'nav_stream.dart';
 import 'uuids.dart';
 import 'vesc/vesc_link.dart';
 import 'vesc/vesc_target.dart';
+import '../log/app_log.dart';
 
 /// Entry point executed in the foreground-service isolate. Must be a top-level
 /// (or static) function annotated for the AOT tree-shaker.
@@ -67,6 +68,13 @@ class BleTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    // This isolate's journal goes to the UI as it is written: Settings shows
+    // one list, and the half of the app that does the actual talking to the
+    // head unit is the half worth reading.
+    AppLog.forwarder = (entry) => FlutterForegroundTask.sendDataToMain(
+        <String, Object?>{'t': IpcEvt.log, ...entry.toJson()});
+    AppLog.i('svc', 'background service started');
+
     // Forward every connection-state change to the UI (and keep the
     // notification text in sync — BleService already does that via its own
     // ForegroundBridge calls).
@@ -227,6 +235,8 @@ class BleTaskHandler extends TaskHandler {
   }
 
   void _pushState(BleConnState s) {
+    // The link going up and down is the first thing anyone reads the log for.
+    AppLog.i('ble', 'link ${s.name}');
     // Head-unit link changed: if that's what the LISP editor is riding on,
     // stats polling would just time out — stop it.
     if (s != BleConnState.connected &&

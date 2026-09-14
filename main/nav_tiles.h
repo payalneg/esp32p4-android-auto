@@ -45,6 +45,11 @@ extern "C" {
  * should creep up as ground goes behind, not run away. */
 #define NAV_TILE_SLOTS 96
 
+/* How many of those slots the blurred fallback layers may hold. A third: the
+ * detail still has room for a panel and its surroundings, and the coarse
+ * layers survive long enough to be there when a hole opens. */
+#define NAV_TILE_FALLBACK_RESERVE 32
+
 /* Told when a tile is dropped to make room. The phone keeps its own list of
  * what it has sent and will never send a tile twice, so it has to hear about
  * this or the hole would never be filled again. Worker task. */
@@ -70,6 +75,10 @@ bool nav_tiles_have(uint8_t z, uint32_t x, uint32_t y);
 /* Forget everything — a new region, or a link that came back after long
  * enough that the phone will resend. */
 void nav_tiles_clear(void);
+
+/* The zoom the map is drawing, so the cache knows which tiles are the blurred
+ * fallback layers and keeps a reserve of them against a drag. */
+void nav_tiles_set_detail_zoom(uint8_t z);
 
 typedef struct {
     uint16_t stored;       /* slots in use */

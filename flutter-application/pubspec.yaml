@@ -1,7 +1,7 @@
 name: aa_bridge
 description: "Notification + media BLE bridge to ESP32-P4 head unit."
 publish_to: 'none'
-version: 0.3.24+84
+version: 0.3.36+96
 
 environment:
   sdk: ^3.7.2
@@ -22,6 +22,7 @@ dependencies:
   rxdart: ^0.27.7
   package_info_plus: ^8.0.0
   file_picker: ^8.1.2
+  share_plus: ^10.1.4
   path_provider: ^2.1.4
   image: ^4.2.0
   # The DeepSeek API key belongs in the Android Keystore / iOS Keychain, not in

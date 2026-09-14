@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../agent/ai_models.dart';
 import '../agent/embedded_key.dart';
+import '../log/app_log.dart';
 
 class AgentSettings extends ChangeNotifier {
   AgentSettings._();
@@ -133,7 +134,7 @@ class AgentSettings extends ChangeNotifier {
       } catch (e) {
         // A Keystore that can't be read (restored backup, changed lock screen)
         // must not take the app down — the user just re-enters the key.
-        debugPrint('[agent] secure storage read failed: $e');
+        AppLog.w('agent', 'secure storage read failed: $e');
         _apiKey = null;
       }
     }
@@ -152,7 +153,7 @@ class AgentSettings extends ChangeNotifier {
           await _secure.write(key: _kApiKey, value: _apiKey);
         }
       } catch (e) {
-        debugPrint('[agent] secure storage write failed: $e');
+        AppLog.w('agent', 'secure storage write failed: $e');
       }
     }
     notifyListeners();
@@ -169,7 +170,7 @@ class AgentSettings extends ChangeNotifier {
         await _secure.delete(key: _kApiKey);
       }
     } catch (e) {
-      debugPrint('[agent] secure storage update failed: $e');
+      AppLog.w('agent', 'secure storage update failed: $e');
     }
     notifyListeners();
   }

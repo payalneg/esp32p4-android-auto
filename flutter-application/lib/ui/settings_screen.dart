@@ -26,6 +26,8 @@ import 'display_settings_screen.dart';
 import 'helper_screen.dart';
 import 'lisp_editor_screen.dart';
 import 'map_data_screen.dart';
+import '../log/app_log.dart';
+import 'log_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -118,6 +120,22 @@ class SettingsScreen extends StatelessWidget {
                   'lang.${LocaleScope.of(context).locale.languageCode}')),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => _showLanguagePicker(context),
+            ),
+          ),
+          ListenableBuilder(
+            listenable: AppLog.instance,
+            builder: (ctx, _) => Card(
+              child: ListTile(
+                leading: const Icon(Icons.receipt_long_outlined),
+                title: Text(t(context, 'log.title')),
+                subtitle: Text(tf(context, 'log.subtitle',
+                    <String, Object?>{'n': AppLog.instance.length})),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LogScreen()),
+                ),
+              ),
             ),
           ),
           Card(

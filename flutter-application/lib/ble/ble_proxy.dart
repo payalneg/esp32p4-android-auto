@@ -23,6 +23,7 @@ import 'ipc.dart';
 import 'lisp_models.dart';
 import 'nav_stream.dart';
 import 'messages.dart';
+import '../log/app_log.dart';
 
 export 'ble_service.dart' show BleConnState;
 
@@ -222,6 +223,11 @@ class BleProxy {
     if (data is! Map) return;
     final m = Map<String, dynamic>.from(data);
     switch (m['t']) {
+      case IpcEvt.log:
+        // A line from the service isolate; it is already stamped there, so
+        // adopting it keeps both halves in one ordered list.
+        AppLog.instance.adopt(LogEntry.fromJson(m));
+        break;
       case IpcEvt.state:
         _applyState(m);
         break;

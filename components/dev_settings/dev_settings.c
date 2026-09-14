@@ -33,9 +33,8 @@ static struct {
     /* Which transport talks to the motor controller: false = the CAN bus,
      * true = BLE to a VESC Express adapter. */
     bool                 vesc_link_ble;
-    /* In BLE mode: is the controller a node BEHIND the adapter (reached by
-     * wrapping every payload in COMM_FORWARD_CAN), or the adapter itself? */
-    bool                 vesc_ble_forward;
+    /* In BLE mode: how requests are addressed — see vesc_ble_route_t. */
+    vesc_ble_route_t     vesc_ble_route;
     bool                 aa_autoconnect;
     bool                 use_imperial;
     bool                 use_fahrenheit;
@@ -47,6 +46,11 @@ static struct {
     bool                 display_flip;     /* 180° flip for upside-down mount */
     uint8_t              phone_screen;     /* 0 = Android Auto, 1 = Navigator */
 } s_cache;
+
+/* The BLE backend lives in main/ and re-runs its adapter probe when the route
+ * setting changes. Weak so the simulator and anything that links dev_settings
+ * without the backend still resolve. */
+__attribute__((weak)) void vesc_ble_link_route_changed(void) {}
 
 static settings_can_speed_cb_t     s_can_speed_cb;
 static settings_brightness_cb_t    s_brightness_cb;
@@ -94,7 +98,13 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "show_fps",    &u8 ) == ESP_OK) s_cache.show_fps          = (u8 != 0);
     if (nvs_get_u8 (h, "vesc_sim",    &u8 ) == ESP_OK) s_cache.vesc_emulator     = (u8 != 0);
     if (nvs_get_u8 (h, "link_ble",    &u8 ) == ESP_OK) s_cache.vesc_link_ble     = (u8 != 0);
-    if (nvs_get_u8 (h, "ble_fwd",     &u8 ) == ESP_OK) s_cache.vesc_ble_forward  = (u8 != 0);
+    /* The pre-AUTO key "ble_fwd" is deliberately not read. It was a guess the
+     * user had to make about hardware they could not inspect, and the wrong
+     * half of it is the failure this whole mechanism exists to remove — so a
+     * device carrying it starts over at AUTO rather than inheriting it. The
+     * manual modes are still there for anything AUTO reads wrong. */
+    if (nvs_get_u8 (h, "ble_route",   &u8 ) == ESP_OK && u8 <= VESC_BLE_ROUTE_CAN)
+        s_cache.vesc_ble_route = (vesc_ble_route_t)u8;
     if (nvs_get_u8 (h, "aa_autocon",  &u8 ) == ESP_OK) s_cache.aa_autoconnect    = (u8 != 0);
     if (nvs_get_u8 (h, "use_imp",     &u8 ) == ESP_OK) s_cache.use_imperial      = (u8 != 0);
     if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
@@ -157,10 +167,10 @@ void settings_init(void) {
 #else
     s_cache.vesc_link_ble     = false;
 #endif
-    /* A VESC Express sits on the CAN bus next to the controller, so the
-     * default is to forward to Target VESC ID rather than talk to the
-     * adapter itself. */
-    s_cache.vesc_ble_forward  = true;
+    /* Let the link work out whether it is attached to the controller or to an
+     * adapter in front of it. Guessing wrong costs a dashboard that connects
+     * and then shows nothing, which is exactly what a default should not do. */
+    s_cache.vesc_ble_route    = VESC_BLE_ROUTE_AUTO;
     s_cache.aa_autoconnect    = true;
     s_cache.use_imperial      = false;
     s_cache.use_fahrenheit    = false;
@@ -193,7 +203,7 @@ uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_
 float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 bool                settings_get_vesc_emulator(void)     { return s_cache.vesc_emulator; }
 bool                settings_get_vesc_link_ble(void)     { return s_cache.vesc_link_ble; }
-bool                settings_get_vesc_ble_forward(void)  { return s_cache.vesc_ble_forward; }
+vesc_ble_route_t    settings_get_vesc_ble_route(void)    { return s_cache.vesc_ble_route; }
 bool                settings_get_aa_autoconnect(void)    { return s_cache.aa_autoconnect; }
 bool                settings_get_use_imperial(void)      { return s_cache.use_imperial; }
 bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
@@ -424,11 +434,20 @@ void settings_set_vesc_link_ble(bool on) {
     if (s_vesc_link_cb) s_vesc_link_cb(on);
 }
 
-void settings_set_vesc_ble_forward(bool on) {
-    if (s_cache.vesc_ble_forward == on) return;
-    s_cache.vesc_ble_forward = on;
+void settings_set_vesc_ble_route(vesc_ble_route_t route) {
+    if (route > VESC_BLE_ROUTE_CAN) return;
+    if (s_cache.vesc_ble_route == route) return;
+    s_cache.vesc_ble_route = route;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) { nvs_set_u8(h, "ble_fwd", on ? 1 : 0); commit(h); }
+    if (open_rw(&h) == ESP_OK) {
+        nvs_set_u8(h, "ble_route", (uint8_t)route);
+        /* Drop the pre-AUTO key so it can't override the new one on the next
+         * boot (load_from_nvs reads it first, by design, for devices that
+         * never touched this screen). */
+        nvs_erase_key(h, "ble_fwd");
+        commit(h);
+    }
+    vesc_ble_link_route_changed();
 }
 
 void settings_set_aa_autoconnect(bool on) {

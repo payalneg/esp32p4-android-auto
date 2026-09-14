@@ -47,7 +47,7 @@ static struct {
     bool display_flip;
     uint8_t phone_screen;
     bool vesc_link_ble;
-    bool vesc_ble_forward;
+    uint8_t vesc_ble_route;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -62,7 +62,7 @@ static struct {
     .clock_offset_secs = 0,
     .aa_autoconnect = true,
     .vesc_link_ble = false,
-    .vesc_ble_forward = true,
+    .vesc_ble_route = 0,   /* auto */
     .use_imperial = false,
     .use_fahrenheit = false,
     .second_head_enabled = false,
@@ -307,19 +307,19 @@ void settings_wrapper_set_vesc_link_ble(bool on) {
 #endif
 }
 
-bool settings_wrapper_get_vesc_ble_forward(void) {
+uint8_t settings_wrapper_get_vesc_ble_route(void) {
 #if SIMULATOR_MODE
-    return sim_settings.vesc_ble_forward;
+    return sim_settings.vesc_ble_route;
 #else
-    return settings_get_vesc_ble_forward();
+    return (uint8_t)settings_get_vesc_ble_route();
 #endif
 }
 
-void settings_wrapper_set_vesc_ble_forward(bool on) {
+void settings_wrapper_set_vesc_ble_route(uint8_t route) {
 #if SIMULATOR_MODE
-    sim_settings.vesc_ble_forward = on;
+    sim_settings.vesc_ble_route = route;
 #else
-    settings_set_vesc_ble_forward(on);
+    settings_set_vesc_ble_route((vesc_ble_route_t)route);
 #endif
 }
 

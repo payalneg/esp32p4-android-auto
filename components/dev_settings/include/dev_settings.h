@@ -21,6 +21,24 @@ typedef enum {
     BATTERY_CALC_MODE_SMART  = 1,
 } battery_calc_mode_t;
 
+/* How a request is addressed on a BLE link.
+ *
+ * The device on the other end of the NUS link can be either the controller
+ * itself (a BLE module hanging off the VESC's UART, or a VESC with built-in
+ * BLE) or a separate adapter sitting on the CAN bus (a VESC Express). In the
+ * first case the payload goes out as-is; in the second it has to be wrapped in
+ * COMM_FORWARD_CAN so the adapter relays it to the right node — and the wrong
+ * choice is silent: the request is accepted and simply never answered.
+ *
+ * AUTO asks the link who it is talking to (see vesc_ble_link.c) and then
+ * decides per request: unwrapped for the node we are physically attached to,
+ * wrapped for any other id (the second head, for instance). */
+typedef enum {
+    VESC_BLE_ROUTE_AUTO   = 0,
+    VESC_BLE_ROUTE_DIRECT = 1,   /* never wrap */
+    VESC_BLE_ROUTE_CAN    = 2,   /* always wrap in COMM_FORWARD_CAN */
+} vesc_ble_route_t;
+
 /* Loads cache from NVS. Idempotent — settings_ui_init() also calls this
  * via settings_wrapper_init(), so order between main and UI doesn't matter. */
 void settings_init(void);
@@ -40,10 +58,8 @@ bool                 settings_get_vesc_emulator(void);
  * true = BLE, as a GATT central to a VESC Express adapter. Takes effect
  * immediately via the hot-apply callback below. */
 bool                 settings_get_vesc_link_ble(void);
-/* BLE mode only: true when the motor controller sits behind the adapter on
- * the CAN bus (payloads are wrapped in COMM_FORWARD_CAN and addressed to
- * Target VESC ID), false when the adapter itself is the target. */
-bool                 settings_get_vesc_ble_forward(void);
+/* BLE mode only: how requests are addressed — see vesc_ble_route_t. */
+vesc_ble_route_t     settings_get_vesc_ble_route(void);
 bool                 settings_get_aa_autoconnect(void);
 bool                 settings_get_use_imperial(void);
 bool                 settings_get_use_fahrenheit(void);
@@ -96,7 +112,7 @@ void settings_set_motor_poles(uint8_t poles);
 void settings_set_power_max_kw(float power_max_kw);
 void settings_set_vesc_emulator(bool on);
 void settings_set_vesc_link_ble(bool on);
-void settings_set_vesc_ble_forward(bool on);
+void settings_set_vesc_ble_route(vesc_ble_route_t route);
 void settings_set_aa_autoconnect(bool on);
 void settings_set_use_imperial(bool on);
 void settings_set_use_fahrenheit(bool on);

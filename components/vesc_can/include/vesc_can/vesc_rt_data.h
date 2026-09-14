@@ -35,7 +35,7 @@ esp_err_t vesc_rt_data_start_task(void);
  * still poll on the one task that owns request serialisation — the second-head
  * temperature poll lives in dev_settings, which already depends on vesc_can.
  * Up to VESC_RT_AUX_LOOPS of them; extra registrations are ignored. */
-#define VESC_RT_AUX_LOOPS 2
+#define VESC_RT_AUX_LOOPS 4
 typedef void (*vesc_rt_aux_loop_t)(void);
 void vesc_rt_data_register_aux_loop(vesc_rt_aux_loop_t fn);
 

@@ -28,6 +28,7 @@ import 'rgf2.dart';
 import 'router.dart';
 import 'search_index.dart';
 import 'tile_cache.dart';
+import '../log/app_log.dart';
 
 enum MapDataState { absent, downloading, loading, ready, error }
 
@@ -50,6 +51,9 @@ class MapData extends ChangeNotifier {
   MapDataState _state = MapDataState.absent;
   double _progress = 0;
   String? _progressFile;
+  String? _stageKey;
+  double _stageFraction = 0;
+  int _stageCount = 0;
   String? _messageKey;
   Map<String, String>? _messageArgs;
 
@@ -62,6 +66,12 @@ class MapData extends ChangeNotifier {
   MapDataState get state => _state;
   double get progress => _progress;
   String? get progressFile => _progressFile;
+
+  /// The stage a build is on, as an i18n key, and how far it has come. Null
+  /// while nothing is being built.
+  String? get stageKey => _stageKey;
+  double get stageFraction => _stageFraction;
+  int get stageCount => _stageCount;
   String? get messageKey => _messageKey;
   Map<String, String>? get messageArgs => _messageArgs;
   RouteGraph? get graph => _graph;
@@ -132,11 +142,12 @@ class MapData extends ChangeNotifier {
     _messageKey = null;
     _messageArgs = null;
     _set(MapDataState.downloading);
+    AppLog.i('map', 'region ${region.name}: downloading ${region.pbfUrl}');
     final pbf = File('${_dir!.path}/region.osm.pbf');
     final client = HttpClient()..userAgent = _userAgent;
     try {
       final clock = Stopwatch()..start();
-      await _downloadTo(client, region.pbfUrl, pbf, (received, total) {
+      await downloadTo(client, region.pbfUrl, pbf, (received, total) {
         final mb = received / (1 << 20);
         final seconds = clock.elapsedMilliseconds / 1000;
         final rate = seconds > 0 ? mb / seconds : 0;
@@ -157,7 +168,17 @@ class MapData extends ChangeNotifier {
       // MapData, its listeners and the whole widget tree across the isolate
       // boundary, which is not allowed. A static entry point has a context of
       // its own, holding nothing but the path.
-      final built = await PbfGraphSource.buildInIsolate(pbf.path);
+      final built = await PbfGraphSource.buildInIsolate(pbf.path,
+          onProgress: (p) {
+        _stageKey = p.stageKey;
+        _stageFraction = p.fraction;
+        _stageCount = p.count;
+        notifyListeners();
+      });
+      AppLog.i(
+          'map',
+          'built ${built.nodeCount} nodes, ${built.edgeCount} edges, '
+              '${built.placeCount} places');
       if (built.edgeCount == 0) {
         _fail('mapdata.err.emptyArea', null);
         return;
@@ -171,20 +192,49 @@ class MapData extends ChangeNotifier {
       }
       await _loadFromDisk();
     } on Object catch (e) {
+      AppLog.e('map', 'region build failed: $e');
       _fail('mapdata.err.download', <String, String>{'err': '$e'});
     } finally {
+      _stageKey = null;
       client.close(force: true);
       // The extract is only an input; keeping it would double the footprint.
       if (await pbf.exists()) await pbf.delete();
     }
   }
 
-  Future<void> _downloadTo(HttpClient client, Uri url, File dest,
+  /// Fetches [url] into [dest], resuming a part file left by an earlier try.
+  ///
+  /// A province is 190 MB over whatever connection a phone has at the time,
+  /// and losing all of it to one dropped connection is what made people give
+  /// up on the download. The bytes already on disk are asked for with a Range
+  /// header; If-Range carries the validator the server gave us last time, so
+  /// an extract rebuilt overnight answers 200 with the whole file instead of
+  /// 206 with a tail that would not match what we have.
+  @visibleForTesting
+  Future<void> downloadTo(HttpClient client, Uri url, File dest,
       void Function(int received, int total) onProgress) async {
+    final part = File('${dest.path}.part');
+    final tag = File('${dest.path}.part.tag');
+    var have = await part.exists() ? await part.length() : 0;
+    final validator = have > 0 && await tag.exists()
+        ? (await tag.readAsString()).trim()
+        : '';
+    if (have > 0 && validator.isEmpty) {
+      // Nothing to check the tail against: start over rather than splice two
+      // different files together.
+      await part.delete();
+      have = 0;
+    }
+
     var target = url;
     HttpClientResponse resp;
     for (var hop = 0;; hop++) {
-      resp = await (await client.getUrl(target)).close();
+      final req = await client.getUrl(target);
+      if (have > 0) {
+        req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
+        req.headers.set(HttpHeaders.ifRangeHeader, validator);
+      }
+      resp = await req.close();
       final location = resp.headers.value(HttpHeaders.locationHeader);
       if (resp.statusCode >= 300 && resp.statusCode < 400 && location != null) {
         await resp.drain<void>();
@@ -194,15 +244,33 @@ class MapData extends ChangeNotifier {
       }
       break;
     }
-    if (resp.statusCode != 200) {
+    if (resp.statusCode != 200 && resp.statusCode != 206) {
       await resp.drain<void>();
       throw HttpException('HTTP ${resp.statusCode}', uri: target);
     }
-    final total = resp.contentLength;
-    final part = File('${dest.path}.part');
-    final sink = part.openWrite();
-    var received = 0;
-    var lastReport = 0;
+
+    // 200 to a ranged request means the server would not resume — the file
+    // moved on, or it does not do ranges at all. Either way what is on disk
+    // is no use.
+    final resuming = resp.statusCode == 206;
+    if (!resuming) have = 0;
+
+    final newTag = resp.headers.value(HttpHeaders.etagHeader) ??
+        resp.headers.value(HttpHeaders.lastModifiedHeader) ??
+        '';
+    if (!resuming) {
+      if (newTag.isEmpty) {
+        if (await tag.exists()) await tag.delete();
+      } else {
+        await tag.writeAsString(newTag, flush: true);
+      }
+    }
+
+    final total = resp.contentLength < 0 ? -1 : resp.contentLength + have;
+    final sink = part.openWrite(
+        mode: resuming ? FileMode.writeOnlyAppend : FileMode.writeOnly);
+    var received = have;
+    var lastReport = received;
     try {
       await for (final chunk in resp) {
         sink.add(chunk);
@@ -216,7 +284,9 @@ class MapData extends ChangeNotifier {
     } finally {
       await sink.close();
     }
+    if (await dest.exists()) await dest.delete();
     await part.rename(dest.path);
+    if (await tag.exists()) await tag.delete();
   }
 
   /// Copies a file the user picked into place and loads it.

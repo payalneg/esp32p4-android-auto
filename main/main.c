@@ -562,6 +562,12 @@ void app_main(void)
          * our CAN node id, or the 255 sentinel on a BLE link. */
         vesc_lisp_panel_init(tgt_id);
         vesc_link_set_packet_handler(vesc_packet_dispatch);
+        /* On a BLE link, work out whether the device we are attached to is the
+         * controller itself or an adapter in front of it — the answer decides
+         * whether requests are wrapped in COMM_FORWARD_CAN, and guessing wrong
+         * means a link that connects and never answers. Registered first so
+         * the second head's poll below already routes correctly. No-op on CAN. */
+        vesc_rt_data_register_aux_loop(vesc_ble_link_probe_loop);
         /* Second head: broadcast STATUS_4 on CAN, polled over BLE — the hook
          * is a no-op in CAN mode. */
         vesc_rt_data_register_aux_loop(vesc_head2_poll_loop);

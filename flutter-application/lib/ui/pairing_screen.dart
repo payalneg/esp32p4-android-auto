@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../ble/ble_proxy.dart';
 import '../bridge/foreground_bridge.dart';
 import '../i18n/strings.dart';
+import '../log/app_log.dart';
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key});
@@ -29,7 +30,7 @@ class _PairingScreenState extends State<PairingScreen> {
         Permission.bluetoothConnect,
         Permission.locationWhenInUse,
       ].request();
-      debugPrint('[pairing] perms granted: $perms');
+      AppLog.i('pair', 'permissions granted: $perms');
       // Make sure the background BLE isolate is running before we talk to it:
       // if BLUETOOTH_CONNECT was denied at app launch, the foreground service
       // (and the task that owns BLE) was never started. Idempotent.
@@ -39,11 +40,11 @@ class _PairingScreenState extends State<PairingScreen> {
       }
       // Scan runs in the background BLE isolate; we get back serializable hits.
       final r = await BleProxy.instance.scan();
-      debugPrint('[pairing] scan returned ${r.length} results');
+      AppLog.i('pair', 'scan returned ${r.length} devices');
       if (!mounted) return;
       setState(() => _results = r);
-    } catch (e, st) {
-      debugPrint('[pairing] scan FAILED: $e\n$st');
+    } catch (e) {
+      AppLog.e('pair', 'scan failed: $e');
       if (mounted) setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _scanning = false);
@@ -51,14 +52,14 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _connect(ScanDevice d) async {
-    debugPrint('[pairing] connect → ${d.remoteId} (${d.name})');
+    AppLog.i('pair', 'connecting to ${d.name} (${d.remoteId})');
     try {
       await BleProxy.instance.connect(d.remoteId);
-      debugPrint('[pairing] connect OK');
+      AppLog.i('pair', 'connected');
       if (!mounted) return;
       Navigator.pop(context);
-    } catch (e, st) {
-      debugPrint('[pairing] connect FAILED: $e\n$st');
+    } catch (e) {
+      AppLog.e('pair', 'connect failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${t(context, 'pairing.error')}$e')),
