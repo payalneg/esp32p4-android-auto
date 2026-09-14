@@ -475,6 +475,14 @@ bool ble_vesc_is_ready(void)
     return s_ready;
 }
 
+uint32_t ble_vesc_drops(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    uint32_t n = s_reconnects;
+    portEXIT_CRITICAL(&s_mux);
+    return n;
+}
+
 int ble_vesc_write(const uint8_t *data, uint16_t len)
 {
     if (!data || len == 0) return 0;

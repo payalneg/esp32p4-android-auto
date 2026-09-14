@@ -73,7 +73,9 @@ void vesc_ble_link_get_telem(vesc_ble_telem_t *out);
 /* Ask the peer who it is, so AUTO routing knows whether to wrap. Runs on the
  * VESC poll task (registered with vesc_rt_data_register_aux_loop) because it
  * blocks on a reply; no-op unless the link is up and the answer isn't known
- * yet. */
+ * yet. Forgets the answer when the link drops (each connection is asked
+ * afresh) and, once it knows, re-issues the config menu's FW_VERSION probe
+ * that the boot-time attempt lost to a link that was not up yet. */
 void vesc_ble_link_probe_loop(void);
 
 /* Settings → VESC link → Addressing changed: forget what the probe found so

@@ -76,6 +76,11 @@ void ble_vesc_reconnect(void);
  * reach the adapter and its answer would come back. */
 bool ble_vesc_is_ready(void);
 
+/* Link drops since boot (the same counter ble_vesc_get reports). Cheap —
+ * touches no NimBLE state — so a poller can compare it every pass to notice
+ * a drop-and-reconnect that happened between two of its passes. */
+uint32_t ble_vesc_drops(void);
+
 /* Write one framed VESC packet, chunked to the negotiated MTU. Blocks only on
  * the controller's buffers (never on a reply). Returns 0 on success, or a
  * NimBLE error. MUST NOT be called from the NimBLE host task. */
