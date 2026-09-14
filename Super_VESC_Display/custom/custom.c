@@ -326,10 +326,19 @@ static void settings_tabs_build(lv_obj_t *screen)
     settings_tab_show(SETTINGS_TAB_CONNECTION);
 }
 
-/* Start a new group of rows on the given page. */
+/* Switch the row builder to another page.
+ *
+ * Each page keeps its OWN vertical cursor, because the blocks below are still
+ * in their original source order and a page is therefore visited more than
+ * once — Connection is opened for the VESC link row, left for Display, and
+ * returned to for the phone rows. Resetting y_pos on every switch (the first
+ * version of this) restarted each page from the top, and the second and third
+ * visits drew straight on top of the first: three settings in one row. */
 #define SETTINGS_GROUP(tab)  do {                                   \
-        parent = s_settings_pages[(tab)];                           \
-        y_pos  = SETTINGS_PAGE_TOP_PAD;                             \
+        s_page_y[s_page_cur] = y_pos;                               \
+        s_page_cur = (tab);                                         \
+        parent     = s_settings_pages[s_page_cur];                  \
+        y_pos      = s_page_y[s_page_cur];                          \
     } while (0)
 
 // Settings UI objects (dynamically created)
@@ -2263,6 +2272,61 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
                      200, 0, false);
 }
 
+#ifdef LV_REALDEVICE
+/* "Previous firmware" — boot the other OTA slot.
+ *
+ * Two taps, because it reboots: the first arms the button and relabels it, the
+ * second writes otadata and restarts. Armed state is dropped when the button
+ * goes away (the Settings screen is rebuilt on every entry), which is what the
+ * DELETE handler is for — a timer left pointing at a freed label is a much
+ * worse bug than a button that stays armed. */
+static lv_obj_t   *s_fw_slot_lbl;
+static lv_timer_t *s_fw_slot_timer;
+static bool        s_fw_slot_armed;
+
+static void fw_slot_disarm(void)
+{
+    s_fw_slot_armed = false;
+    if (s_fw_slot_timer) { lv_timer_del(s_fw_slot_timer); s_fw_slot_timer = NULL; }
+    if (s_fw_slot_lbl)   lv_label_set_text(s_fw_slot_lbl, "Switch");
+}
+
+static void fw_slot_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    fw_slot_disarm();
+}
+
+static void fw_slot_deleted_cb(lv_event_t *e)
+{
+    (void)e;
+    s_fw_slot_lbl = NULL;
+    s_fw_slot_armed = false;
+    if (s_fw_slot_timer) { lv_timer_del(s_fw_slot_timer); s_fw_slot_timer = NULL; }
+}
+
+static void fw_slot_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_fw_slot_armed) {
+        s_fw_slot_armed = true;
+        if (s_fw_slot_lbl) lv_label_set_text(s_fw_slot_lbl, "Tap to reboot");
+        if (s_fw_slot_timer) lv_timer_del(s_fw_slot_timer);
+        s_fw_slot_timer = lv_timer_create(fw_slot_timer_cb, 5000, NULL);
+        return;
+    }
+    if (fw_slots_boot_other() == ESP_OK) {
+        settings_wrapper_apply_restart();     /* does not return on device */
+    } else {
+        fw_slot_disarm();
+        if (settings_info_label) {
+            lv_label_set_text(settings_info_label,
+                              "Other slot holds no bootable firmware");
+        }
+    }
+}
+#endif /* LV_REALDEVICE */
+
 // Event handler for "Reset trip" — zero trip / Ah without touching settings.
 // Sometimes the trip doesn't auto-reset on battery swap, so a manual button.
 static void reset_trip_button_event_cb(lv_event_t *e) {
@@ -2462,8 +2526,11 @@ void settings_ui_init(lv_ui *ui) {
     }
 
     settings_tabs_build(ui->settings);
-    lv_obj_t *parent = s_settings_pages[SETTINGS_TAB_CONNECTION];
-    int y_pos = SETTINGS_PAGE_TOP_PAD;
+    int s_page_y[SETTINGS_TAB_COUNT];
+    for (int i = 0; i < SETTINGS_TAB_COUNT; i++) s_page_y[i] = SETTINGS_PAGE_TOP_PAD;
+    int s_page_cur = SETTINGS_TAB_CONNECTION;
+    lv_obj_t *parent = s_settings_pages[s_page_cur];
+    int y_pos = s_page_y[s_page_cur];
 
     SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
 
@@ -2995,6 +3062,33 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_text_font(settings_vesc_emulator_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
+
+#ifdef LV_REALDEVICE
+    // ========== Previous firmware (the other OTA slot) ==========
+    {
+        char prev[FW_INFO_MAX + 8];
+        char caption[64];
+        bool have = fw_slots_other_label(prev, sizeof prev);
+        if (have) snprintf(caption, sizeof caption, "Previous firmware: %s", prev);
+        else      snprintf(caption, sizeof caption, "Previous firmware: none yet");
+        settings_heading_create(parent, y_pos, caption);
+
+        if (have) {
+            lv_obj_t *b = lv_btn_create(parent);
+            lv_obj_set_pos(b, SETTINGS_OPEN_X, y_pos + 8);
+            lv_obj_set_size(b, SETTINGS_OPEN_W, 44);
+            lv_obj_set_style_bg_color(b, lv_color_hex(0xffa500), 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            s_fw_slot_lbl = lv_label_create(b);
+            lv_label_set_text(s_fw_slot_lbl, "Switch");
+            lv_obj_center(s_fw_slot_lbl);
+            s_fw_slot_armed = false;
+            lv_obj_add_event_cb(b, fw_slot_btn_event_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_event_cb(b, fw_slot_deleted_cb, LV_EVENT_DELETE, NULL);
+        }
+    }
+    y_pos += SETTINGS_ROW_H;
+#endif /* LV_REALDEVICE */
 
     SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
 

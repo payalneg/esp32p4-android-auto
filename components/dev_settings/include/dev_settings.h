@@ -1,7 +1,10 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -187,6 +190,19 @@ void        fw_info_set_c6(const char *version);
 const char *fw_info_get_p4(void);
 const char *fw_info_get_bt(void);
 const char *fw_info_get_c6(void);
+
+/* The other OTA slot — the firmware this one replaced.
+ *
+ * An update always writes the slot that is not running, so the previous image
+ * is still in flash and still bootable; these two let the user go back to it
+ * from the device itself, which is the only route left when the new firmware
+ * is what broke the screen. See components/dev_settings/fw_slots.c.
+ *
+ * fw_slots_other_label() fills `buf` with that image's version and returns
+ * false when the slot is empty (a device that has never been updated).
+ * fw_slots_boot_other() only points otadata at it — the caller reboots. */
+bool        fw_slots_other_label(char *buf, size_t n);
+esp_err_t   fw_slots_boot_other(void);
 
 #ifdef __cplusplus
 }
