@@ -12,6 +12,7 @@
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_can/vesc_datatypes.h"
+#include "vesc_can/vesc_link.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -109,12 +110,13 @@ static void send_request(uint8_t msg, uint8_t ctrl_id, float value,
     buf[ind++] = VLP_MAGIC0;
     buf[ind++] = VLP_MAGIC1;
     buf[ind++] = msg;
-    buf[ind++] = comm_can_get_local_id();   /* reply_can_id */
+    buf[ind++] = vesc_link_reply_id();      /* reply_can_id */
     if (has_action) {
         buf[ind++] = ctrl_id;
         buffer_append_float32(buf, value, VLP_SCALE, &ind);
     }
-    comm_can_send_buffer_sync(s_target_vesc_id, buf, (unsigned int)ind, 0, 60);
+    vesc_link_send_sync(s_target_vesc_id, buf, (unsigned int)ind, 0,
+                        vesc_link_sync_timeout_ms());
 }
 
 void vesc_lisp_panel_request_ui(void)
@@ -141,18 +143,19 @@ void vesc_lisp_panel_send_action(uint8_t ctrl_id, float value)
 
 static void send_pas(float amps)
 {
-    /* Fire-and-forget: send=3 (no reply expected) so the CAN task never blocks
-     * waiting for a reassembled reply. The LISP event-data-rx handler just
-     * stores the value; it does not reply. */
+    /* Fire-and-forget: send=3 (no reply expected) so the poll task never
+     * blocks waiting for a reply. The LISP event-data-rx handler just stores
+     * the value; it does not reply. Over BLE send=3 has no wire meaning — it
+     * survives only as "do not wait for an answer", which is what we want. */
     uint8_t buf[12];
     int32_t ind = 0;
     buf[ind++] = COMM_CUSTOM_APP_DATA;
     buf[ind++] = VLP_MAGIC0;
     buf[ind++] = VLP_MAGIC1;
     buf[ind++] = VLP_MSG_PAS_SET;
-    buf[ind++] = comm_can_get_local_id();   /* reply_can_id (unused by PAS) */
+    buf[ind++] = vesc_link_reply_id();      /* reply_can_id (unused by PAS) */
     buffer_append_float32(buf, amps, VLP_SCALE, &ind);
-    comm_can_send_buffer(s_target_vesc_id, buf, (unsigned int)ind, 3);
+    vesc_link_send(s_target_vesc_id, buf, (unsigned int)ind, 3);
 }
 
 void vesc_lisp_panel_set_pas(float amps)
@@ -233,7 +236,7 @@ void vesc_lisp_panel_poll_loop(void)
     }
 
     uint32_t now = millis_now();
-    if (now - s_last_poll_ms < VLP_POLL_INTERVAL_MS) return;
+    if (now - s_last_poll_ms < vesc_link_scale_ms(VLP_POLL_INTERVAL_MS)) return;
     s_last_poll_ms = now;
 
     /* Keep nudging for the UI descriptor until it lands, then poll live state. */
@@ -258,7 +261,7 @@ void vesc_lisp_panel_dash_loop(void)
      * transfer, which is driven from BLE/CAN callbacks; hence the pause gate. */
     if (s_polls_paused) return;
     uint32_t now = millis_now();
-    if (now - s_dash_last_ms < VLP_DASH_INTERVAL_MS) return;
+    if (now - s_dash_last_ms < vesc_link_scale_ms(VLP_DASH_INTERVAL_MS)) return;
     s_dash_last_ms = now;
     vesc_lisp_panel_request_dash();
 }

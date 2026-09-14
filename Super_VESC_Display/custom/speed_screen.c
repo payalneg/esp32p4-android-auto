@@ -85,10 +85,20 @@ static lv_obj_t    *s_scan_list;
 
 /* ---- widget builders (same shapes as pas_screen.c) ---- */
 
+/* A settings row is a caption on the left and one control on the right, and
+ * the two have to share a width that is 800 px on the head units and 480 on
+ * the ESP32-S3 board. Fixed pixels for the control plus a free-running caption
+ * worked at 800 and collapsed at 480: the caption simply carried on under the
+ * control, which — being created later — drew over it. The caption gets a
+ * bounded share of the row; the control takes what is measured to be left. */
+#define ROW_NAME_PCT  46
+#define ROW_CTRL_PCT  50
+
 /* Width for a right-aligned editor in a row: what the row has left after its
  * own caption, never more than `want`. A 320 px dropdown and a caption like
  * "Dashboard speed from" both fit an 800-wide row and together overrun a
- * 480-wide one, and the dropdown, drawn later, lands on top of the text. */
+ * 480-wide one, and the dropdown, drawn later, lands on top of the text.
+ * Measured, not a fixed percentage: the caption's real width is what counts. */
 static lv_coord_t fit_editor_w(lv_obj_t *row, lv_coord_t want)
 {
     lv_obj_update_layout(row);                 /* the row is lv_pct(100) wide */
@@ -115,6 +125,8 @@ static lv_obj_t *row_base(lv_obj_t *list, const char *name, int h)
     if (name) {
         lv_obj_t *n = lv_label_create(row);
         lv_label_set_text(n, name);
+        lv_obj_set_width(n, lv_pct(ROW_NAME_PCT));
+        lv_label_set_long_mode(n, LV_LABEL_LONG_DOT);
         lv_obj_align(n, LV_ALIGN_LEFT_MID, 4, 0);
         lv_obj_set_style_text_color(n, lv_color_hex(COL_TEXT), 0);
     }

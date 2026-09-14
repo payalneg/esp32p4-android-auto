@@ -20,6 +20,7 @@
 #include "ble_cadence_client.h"
 #include "ble_central_arb.h"
 #include "ble_speed_client.h"
+#include "ble_vesc_client.h"
 #include "ble_nus.h"
 #include "notif_bridge.h"
 
@@ -33,12 +34,12 @@ static const char *TAG = "ble_host";
 
 #define DEVICE_NAME "SuperVESCDisplay"
 
-/* Peripheral (adv-initiated) links only — the sensor central links (cadence
- * + wheel speed) have their own GAP callbacks in ble_cadence_client /
- * ble_speed_client (shared connect-initiator via ble_central_arb) and never
- * land here. Two peers can be up at once (phone app + VESC Tool); the other
- * two NimBLE conn slots (CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4) stay reserved
- * for the sensors. */
+/* Peripheral (adv-initiated) links only — the central links (cadence sensor,
+ * wheel speed, and the VESC Express adapter in BLE link mode) have their own
+ * GAP callbacks in ble_cadence_client / ble_speed_client / ble_vesc_client
+ * (shared connect-initiator via ble_central_arb) and never land here. Two
+ * peers can be up at once (phone app + VESC Tool); the remaining NimBLE conn
+ * slots (CONFIG_BT_NIMBLE_MAX_CONNECTIONS) stay reserved for those three. */
 #define MAX_PERIPH_LINKS 2
 
 static uint8_t       s_own_addr_type;
@@ -62,6 +63,55 @@ static void gatts_register_dispatcher(struct ble_gatt_register_ctxt *ctxt,
     notif_bridge_gatts_register_cb(ctxt, arg);
 }
 
+/* How many phones (or VESC Tools) are actually connected to us.
+ *
+ * Counted by asking the stack rather than by adding and subtracting on
+ * events: one missed disconnect used to leave the count permanently high,
+ * and since it decides whether to keep advertising, the head unit then
+ * quietly stopped being findable. */
+static uint8_t count_periph_links(void)
+{
+    uint8_t n = 0;
+    for (uint16_t h = 0; h < CONFIG_BT_NIMBLE_MAX_CONNECTIONS; h++) {
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(h, &d) != 0) continue;
+        if (d.role == BLE_GAP_ROLE_SLAVE) n++;
+    }
+    return n;
+}
+
+/* One phone, one link.
+ *
+ * A phone can end up asking twice — Android's autoConnect queue and an
+ * explicit connect racing each other — and then two links from the same
+ * address are up at once. Both subscribe, both write, and the bridge binding
+ * flips between them: on the bench that showed up as a panel that never got
+ * a single position while the app was sure it was connected. The older link
+ * is the stale one by definition, so it goes.
+ *
+ * Peripheral links only: a sensor we dialled out to as a central is a
+ * different matter entirely. */
+static void drop_older_link_from_same_peer(uint16_t fresh)
+{
+    struct ble_gap_conn_desc now;
+    if (ble_gap_conn_find(fresh, &now) != 0) return;
+    if (now.role != BLE_GAP_ROLE_SLAVE) return;
+
+    for (uint16_t h = 0; h < CONFIG_BT_NIMBLE_MAX_CONNECTIONS; h++) {
+        if (h == fresh) continue;
+        struct ble_gap_conn_desc other;
+        if (ble_gap_conn_find(h, &other) != 0) continue;
+        if (other.role != BLE_GAP_ROLE_SLAVE) continue;
+        if (memcmp(&other.peer_id_addr, &now.peer_id_addr,
+                   sizeof(other.peer_id_addr)) != 0) {
+            continue;
+        }
+        ESP_LOGW(TAG, "same phone on conn=%u and conn=%u — dropping the older",
+                 (unsigned)h, (unsigned)fresh);
+        ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -72,10 +122,30 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
 #endif
         if (event->connect.status == 0) {
-            s_periph_links++;
-            ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u)",
-                     (unsigned)event->connect.conn_handle,
-                     (unsigned)s_periph_links);
+            drop_older_link_from_same_peer(event->connect.conn_handle);
+            s_periph_links = count_periph_links();
+            struct ble_gap_conn_desc who;
+            if (ble_gap_conn_find(event->connect.conn_handle, &who) == 0) {
+                /* The address too: two links from one phone look like two
+                 * different peers when Android rotates its private address,
+                 * and that is worth seeing in the log rather than guessing. */
+                ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u) peer=%02x:%02x:"
+                              "%02x:%02x:%02x:%02x type=%u id=%02x:%02x:%02x:"
+                              "%02x:%02x:%02x",
+                         (unsigned)event->connect.conn_handle,
+                         (unsigned)s_periph_links,
+                         who.peer_ota_addr.val[5], who.peer_ota_addr.val[4],
+                         who.peer_ota_addr.val[3], who.peer_ota_addr.val[2],
+                         who.peer_ota_addr.val[1], who.peer_ota_addr.val[0],
+                         (unsigned)who.peer_ota_addr.type,
+                         who.peer_id_addr.val[5], who.peer_id_addr.val[4],
+                         who.peer_id_addr.val[3], who.peer_id_addr.val[2],
+                         who.peer_id_addr.val[1], who.peer_id_addr.val[0]);
+            } else {
+                ESP_LOGI(TAG, "GAP connect, conn=%u (links=%u)",
+                         (unsigned)event->connect.conn_handle,
+                         (unsigned)s_periph_links);
+            }
             s_connected = true;
             ble_nus_on_connect(event->connect.conn_handle);
             notif_bridge_on_connect(event->connect.conn_handle);
@@ -91,7 +161,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        if (s_periph_links) s_periph_links--;
+        s_periph_links = count_periph_links();
         ESP_LOGI(TAG, "GAP disconnect, conn=%u reason=%d (links=%u)",
                  (unsigned)event->disconnect.conn.conn_handle,
                  event->disconnect.reason, (unsigned)s_periph_links);
@@ -238,6 +308,7 @@ static void on_sync_cb(void)
     ble_arb_on_sync(s_own_addr_type);
     ble_cadence_on_ble_sync(s_own_addr_type);
     ble_speed_on_ble_sync(s_own_addr_type);
+    ble_vesc_on_ble_sync(s_own_addr_type);
 }
 
 static void host_task(void *arg)
@@ -300,6 +371,7 @@ esp_err_t ble_host_init(void)
     ble_arb_init();
     ble_cadence_client_init();
     ble_speed_client_init();
+    ble_vesc_client_init();
 
     const struct ble_gatt_svc_def *nus_svcs   = ble_nus_get_svcs();
     const struct ble_gatt_svc_def *bridge_svcs = notif_bridge_get_svcs();

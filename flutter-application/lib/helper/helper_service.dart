@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import 'helper_protocol.dart';
+import '../log/app_log.dart';
 
 enum HelperConnState { idle, scanning, connecting, connected }
 
@@ -97,7 +98,7 @@ class HelperService {
   int get _mtu => max(23, _device?.mtuNow ?? 23);
 
   void _emit(String line) {
-    debugPrint('[helper] $line');
+    AppLog.d('help', line);
     if (!_log.isClosed) _log.add(line);
   }
 

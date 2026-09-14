@@ -6,12 +6,14 @@ idf_component_register(
         "vesc_trip_persist.c"
         "vesc_head2.c"
         "app_fs.c"
+        "fw_slots.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         nvs_flash
     PRIV_REQUIRES
         esp_timer
+        app_update
         joltwallet__littlefs
         freertos
         vesc_can

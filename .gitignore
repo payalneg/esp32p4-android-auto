@@ -84,3 +84,14 @@ Super_VESC_Display/lvgl-simulator/buildsim480/
 # tracked; these are multi-MB binary duplicates of it.
 Super_VESC_Display/*.guiguider.*.bak
 main/aa_selftest.h264
+
+# mapgen: скачанные выгрузки OSM и собранные данные карты (генерируются)
+scripts/mapgen/data
+scripts/mapgen/vtiles
+scripts/mapgen/tiles
+
+# Simulator build output — `make` in Super_VESC_Display*/lvgl-simulator writes
+# these (bin/, object/). The plain `build/` rule above misses the per-size
+# variants (build480, buildshot480), which is how 17 MB of .o files ended up
+# staring at `git status`.
+Super_VESC_Display*/lvgl-simulator/build*/

@@ -1,8 +1,11 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../ble/ble_host.dart' show startBleTask;
+import '../log/app_log.dart';
 
 /// Keeps the app process alive while a BLE link to the head unit is wanted.
 ///
@@ -45,6 +48,18 @@ class ForegroundBridge {
 
   Future<void> start() async {
     if (!Platform.isAndroid) return;
+    // The service declares the location type — that is what keeps the
+    // navigator's fixes coming with the app in a pocket — and Android 14
+    // throws SecurityException out of startForeground() when the permission
+    // is not held by then. That throw happens inside the service and takes
+    // the process with it, so it cannot be caught in Dart: a phone where
+    // location was refused gets no background service rather than a crash
+    // loop. (A grant revoked after the fact still bites on the next boot,
+    // where autoRunOnBoot starts the service with no Dart of ours involved.)
+    if (!await Permission.locationWhenInUse.isGranted) {
+      AppLog.w('svc', 'foreground service not started: no location permission');
+      return;
+    }
     _ensureInit();
     if (await FlutterForegroundTask.isRunningService) return;
     // `callback` runs in the service's background isolate — it owns the BLE

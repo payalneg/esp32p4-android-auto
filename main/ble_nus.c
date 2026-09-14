@@ -15,6 +15,7 @@
 #include "os/os_mbuf.h"
 
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/packet_parser.h"
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/vesc_io_data.h"
@@ -189,15 +190,20 @@ static void rx_packet_complete(const uint8_t *payload, uint16_t len)
      * issues bursts of these on every screen open. Demoted to DEBUG so the
      * default INFO log stays readable. */
     ESP_LOGD(TAG, "BLE→CAN cmd 0x%02X len=%u", payload[0], (unsigned)len);
-    /* send=0 — VESC controller replies via CAN; comm_can's RX task wraps
-     * the response into PROCESS_RX_BUFFER and the handler in main.c
-     * fans it back to ble_nus_forward_response.
+    /* send=0 — the VESC replies back to us and the handler in main.c fans the
+     * reassembled packet to ble_nus_forward_response. On CAN that is comm_can's
+     * RX task unwrapping PROCESS_RX_BUFFER; on BLE it is the adapter link's RX
+     * task, which makes this a NUS-to-NUS relay.
      *
      * Target = the runtime-configured primary VESC (Settings → Target VESC
      * ID, NVS-backed), NOT the compile-time Kconfig default — otherwise the
      * bridge keeps talking to a node that may not exist on the user's bus
-     * while the dashboard (which reads the same setting) works fine. */
-    comm_can_send_buffer(settings_get_target_vesc_id(), payload, len, 0);
+     * while the dashboard (which reads the same setting) works fine.
+     *
+     * Never blocks: this runs on the NimBLE host task, and in BLE mode the
+     * reply arrives on that same task — waiting for it here would deadlock.
+     * vesc_link_send() is enqueue-and-return on both transports. */
+    vesc_link_send(settings_get_target_vesc_id(), payload, len, 0);
 }
 
 static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,

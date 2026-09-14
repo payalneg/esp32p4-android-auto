@@ -45,6 +45,9 @@ static struct {
     uint8_t dashboard_theme;
     uint8_t splash_loops;
     bool display_flip;
+    uint8_t phone_screen;
+    bool vesc_link_ble;
+    uint8_t vesc_ble_route;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -58,6 +61,8 @@ static struct {
     .power_max_kw = 4.5f,
     .clock_offset_secs = 0,
     .aa_autoconnect = true,
+    .vesc_link_ble = false,
+    .vesc_ble_route = 0,   /* auto */
     .use_imperial = false,
     .use_fahrenheit = false,
     .second_head_enabled = false,
@@ -66,6 +71,7 @@ static struct {
     .dashboard_theme = 0,
     .splash_loops = 1,
     .display_flip = false,
+    .phone_screen = 0,
 };
 #endif
 
@@ -282,6 +288,38 @@ void settings_wrapper_set_vesc_emulator(bool on) {
     (void)on;
 #else
     settings_set_vesc_emulator(on);
+#endif
+}
+
+bool settings_wrapper_get_vesc_link_ble(void) {
+#if SIMULATOR_MODE
+    return sim_settings.vesc_link_ble;
+#else
+    return settings_get_vesc_link_ble();
+#endif
+}
+
+void settings_wrapper_set_vesc_link_ble(bool on) {
+#if SIMULATOR_MODE
+    sim_settings.vesc_link_ble = on;
+#else
+    settings_set_vesc_link_ble(on);
+#endif
+}
+
+uint8_t settings_wrapper_get_vesc_ble_route(void) {
+#if SIMULATOR_MODE
+    return sim_settings.vesc_ble_route;
+#else
+    return (uint8_t)settings_get_vesc_ble_route();
+#endif
+}
+
+void settings_wrapper_set_vesc_ble_route(uint8_t route) {
+#if SIMULATOR_MODE
+    sim_settings.vesc_ble_route = route;
+#else
+    settings_set_vesc_ble_route((vesc_ble_route_t)route);
 #endif
 }
 
@@ -506,6 +544,22 @@ void settings_wrapper_set_display_flip(bool on) {
     sim_settings.display_flip = on;
 #else
     settings_set_display_flip(on);
+#endif
+}
+
+uint8_t settings_wrapper_get_phone_screen(void) {
+#if SIMULATOR_MODE
+    return sim_settings.phone_screen;
+#else
+    return settings_get_phone_screen();
+#endif
+}
+
+void settings_wrapper_set_phone_screen(uint8_t which) {
+#if SIMULATOR_MODE
+    sim_settings.phone_screen = which;
+#else
+    settings_set_phone_screen(which);
 #endif
 }
 

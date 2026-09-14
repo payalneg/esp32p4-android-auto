@@ -24,6 +24,7 @@ import 'ai_client.dart';
 import 'ai_models.dart';
 import 'cancel_token.dart';
 import 'lisp_device.dart';
+import '../log/app_log.dart';
 
 enum AgentRunState {
   idle,
@@ -516,7 +517,7 @@ class AgentSession {
       await p.setString(_prefKey, text);
     } catch (e) {
       // Persistence is a convenience — never let it break a running session.
-      debugPrint('[agent] session save failed: $e');
+      AppLog.w('agent', 'session save failed: $e');
     }
   }
 
@@ -550,7 +551,7 @@ class AgentSession {
       _publishProgress();
       return _events.isNotEmpty;
     } catch (e) {
-      debugPrint('[agent] session restore failed: $e');
+      AppLog.w('agent', 'session restore failed: $e');
       return false;
     }
   }

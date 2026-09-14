@@ -58,7 +58,8 @@ extern lv_ui guider_ui;
 #define EDITOR_CLUSTER_W  224
 
 /* Parameter-name column. Unchanged on the wide panels; on a 480 one it gets
- * whatever the editor cluster leaves, and wraps. */
+ * whatever the editor cluster leaves, and wraps. Anything that hugs the right
+ * edge is written as a distance from it, so the gap stays the gap. */
 #define NAME_W        ((lv_coord_t)(UI_W >= 700 ? UI_SX(470) \
                                                 : ROW_CONTENT - EDITOR_CLUSTER_W - 10))
 
@@ -563,7 +564,7 @@ static void build_bitfield_row(vt_row_t *r, const vc_param_t *p)
     /* switches laid out under the name label, wrapping */
     lv_obj_t *holder = lv_obj_create(row);
     lv_obj_set_pos(holder, 0, 28);
-    lv_obj_set_size(holder, 740, LV_SIZE_CONTENT);   /* fit within row content width */
+    lv_obj_set_size(holder, UI_W - 60, LV_SIZE_CONTENT);   /* fit within row content width */
     lv_obj_set_style_bg_opa(holder, 0, 0);
     lv_obj_set_style_border_width(holder, 0, 0);
     lv_obj_set_style_pad_all(holder, 2, 0);
@@ -1081,7 +1082,7 @@ static void detect_cb(lv_event_t *e)
 
     lv_obj_t *dlg = lv_obj_create(s_screen);
     s_detect_dlg = dlg;
-    lv_obj_set_size(dlg, 760, 462);
+    lv_obj_set_size(dlg, UI_W - 40, UI_H - 18);
     lv_obj_center(dlg);
     lv_obj_set_style_bg_color(dlg, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_color(dlg, lv_color_hex(COL_ORANGE), 0);
@@ -1508,7 +1509,7 @@ static void fs_show_format_modal(void)
     lv_obj_clear_flag(s_fmt_modal, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *l = lv_label_create(s_fmt_modal);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(l, 720);
+    lv_obj_set_width(l, UI_W - 80);
     lv_label_set_text(l, "Formatting backup storage...\n"
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");

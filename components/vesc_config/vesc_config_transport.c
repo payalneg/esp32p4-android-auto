@@ -13,6 +13,7 @@
 #include "vesc_config/vesc_config_transport.h"
 
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/buffer.h"
 #include "dev_settings.h"
@@ -29,7 +30,9 @@ static const char *TAG = "vesc_cfg_tx";
 /* A correct reply (~489 B ≈ 80 CAN frames) normally lands in well under 200 ms.
  * 1.5 s cleanly distinguishes "lost a fragment" from "slow", so retries (UI
  * layer) kick in fast without false positives even at 125 kbps. */
-#define VCT_TIMEOUT_US   (1500 * 1000)
+/* One round trip to the VESC and back. Scaled for the live transport —
+ * see vct_timeout_us(). */
+#define VCT_TIMEOUT_MS   1500
 #define VCT_MAX_TX       520             /* COMM-id byte + serialized blob (<= 489) */
 
 typedef enum { REQ_NONE = 0, REQ_GET, REQ_SET, REQ_FW, REQ_DETECT, REQ_RAW } req_kind_t;
@@ -55,6 +58,11 @@ static uint8_t s_txbuf[VCT_MAX_TX];
  * target_vesc_id (the primary head); non-zero = configure that controller_id
  * instead. Set from the VESC config menu's "Head 1 / Head 2" selector. */
 static uint8_t s_target_override = 0;
+
+static inline uint64_t vct_timeout_us(void)
+{
+    return (uint64_t)vesc_link_scale_ms(VCT_TIMEOUT_MS) * 1000u;
+}
 
 static inline uint8_t cfg_target(void)
 {
@@ -174,11 +182,11 @@ vc_result_t vct_get(const vc_table_t *t, bool defaults, vc_value_t *vals_out,
                     vct_cb_t cb, void *user)
 {
     uint8_t cmd = get_cmd(t, defaults);
-    if (!begin(REQ_GET, cmd, t, vals_out, cb, NULL, NULL, NULL, user, VCT_TIMEOUT_US)) {
+    if (!begin(REQ_GET, cmd, t, vals_out, cb, NULL, NULL, NULL, user, vct_timeout_us())) {
         return VC_ERR_BUSY;
     }
     uint8_t buf = cmd;
-    comm_can_send_buffer(cfg_target(), &buf, 1, 0);
+    vesc_link_send(cfg_target(), &buf, 1, 0);
     ESP_LOGI(TAG, "GET %s%s sent", t->kind ? "appconf" : "mcconf",
              defaults ? " (default)" : "");
     return VC_OK;
@@ -194,10 +202,10 @@ vc_result_t vct_set(const vc_table_t *t, const vc_value_t *vals,
         ESP_LOGE(TAG, "serialize overflow");
         return VC_ERR_INTERNAL;
     }
-    if (!begin(REQ_SET, cmd, t, NULL, cb, NULL, NULL, NULL, user, VCT_TIMEOUT_US)) {
+    if (!begin(REQ_SET, cmd, t, NULL, cb, NULL, NULL, NULL, user, vct_timeout_us())) {
         return VC_ERR_BUSY;
     }
-    comm_can_send_buffer(cfg_target(), s_txbuf, (unsigned)(n + 1), 0);
+    vesc_link_send(cfg_target(), s_txbuf, (unsigned)(n + 1), 0);
     ESP_LOGI(TAG, "SET %s sent (%u B)", t->kind ? "appconf" : "mcconf",
              (unsigned)(n + 1));
     return VC_OK;
@@ -205,11 +213,11 @@ vc_result_t vct_set(const vc_table_t *t, const vc_value_t *vals,
 
 vc_result_t vct_probe_fw(vct_fw_cb_t cb, void *user)
 {
-    if (!begin(REQ_FW, COMM_FW_VERSION, NULL, NULL, NULL, cb, NULL, NULL, user, VCT_TIMEOUT_US)) {
+    if (!begin(REQ_FW, COMM_FW_VERSION, NULL, NULL, NULL, cb, NULL, NULL, user, vct_timeout_us())) {
         return VC_ERR_BUSY;
     }
     uint8_t buf = COMM_FW_VERSION;
-    comm_can_send_buffer(cfg_target(), &buf, 1, 0);
+    vesc_link_send(cfg_target(), &buf, 1, 0);
     ESP_LOGI(TAG, "FW_VERSION probe sent to id %u", cfg_target());
     return VC_OK;
 }
@@ -231,7 +239,7 @@ vc_result_t vct_detect_foc(bool detect_can, double max_power_loss, double min_cu
                cb, NULL, user, 120000u * 1000u)) {
         return VC_ERR_BUSY;
     }
-    comm_can_send_buffer(cfg_target(), s_txbuf, (unsigned)ind, 0);
+    vesc_link_send(cfg_target(), s_txbuf, (unsigned)ind, 0);
     ESP_LOGW(TAG, "DETECT_APPLY_ALL_FOC sent (max_loss=%.0f W) — motor will spin",
              max_power_loss);
     return VC_OK;
@@ -251,7 +259,7 @@ vc_result_t vct_request_raw(uint8_t cmd, const uint8_t *body, unsigned int body_
                (uint32_t)timeout_ms * 1000u)) {
         return VC_ERR_BUSY;
     }
-    comm_can_send_buffer(cfg_target(), s_txbuf, 1u + body_len, 0);
+    vesc_link_send(cfg_target(), s_txbuf, 1u + body_len, 0);
     ESP_LOGW(TAG, "raw detect cmd %u sent (%u B) — motor may spin", cmd, 1u + body_len);
     return VC_OK;
 }

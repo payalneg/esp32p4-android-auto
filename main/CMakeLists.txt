@@ -20,6 +20,9 @@ set(MAIN_SRCS
     "ble_cadence_client.c"
     "ble_central_arb.c"
     "ble_speed_client.c"
+    "ble_vesc_client.c"
+    "vesc_ble_link.c"
+    "ble_link_boost.c"
     "ble_nus.c"
     "notif_bridge.c"
     "pas.c"
@@ -99,7 +102,12 @@ else()
         "c6_ota.c"
         "mic_capture.c"
         "aa_overclock.c"
-        "vbat_routing.c")
+        "vbat_routing.c"
+        "ble_nav.c"
+        "nav_screen.c"
+        "nav_tiles.c"
+        "nav_map.c"
+        "nav_route.c")
     list(APPEND MAIN_REQUIRES
         esp_hosted
         esp_driver_ppa
@@ -107,7 +115,8 @@ else()
         c6_ota_partition
         bt_agent_fw
         esp32_p4_wifi6_touch_lcd_4_3
-        espressif__esp_h264)
+        espressif__esp_h264
+        espressif__libpng)
 endif()
 
 idf_component_register(

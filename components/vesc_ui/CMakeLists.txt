@@ -72,8 +72,11 @@ file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
 # and the names to COCKPIT_FONT_NAMES.
 list(FILTER SVD_FONTS EXCLUDE REGEX "/lv_font_(Antonio_Regular|DSEG7Classic_Regular|DSEG14Classic_Regular)_[0-9]+\\.c$")
 
+# Antonio@100 went with the Lamborghini / Supermoto concept screens — they were
+# its only users. Same route back as the DSEG fonts above: a job in
+# regen_cockpit_fonts.py plus the name here.
 set(COCKPIT_FONT_NAMES
-    lv_font_Antonio_Regular_200 lv_font_Antonio_Regular_100
+    lv_font_Antonio_Regular_200
     lv_font_Antonio_Regular_50  lv_font_Antonio_Regular_40
     lv_font_Antonio_Regular_22  lv_font_Antonio_Regular_64
     lv_font_Antonio_Regular_32)

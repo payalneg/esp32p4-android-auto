@@ -158,7 +158,13 @@ Transport is `COMM_CUSTOM_APP_DATA` (id 36): the firmware delivers inbound
 frames to the `event-data-rx` event, and we answer with
 `(send-data buf 2 reply-can-id)` — interface `2` is CAN, `reply-can-id` is the
 P4's own controller id, which it puts in every request (needs VESC FW **6.05+**
-for the explicit-interface form of `send-data`). The C side is
+for the explicit-interface form of `send-data`).
+
+A reply-id of **255** means the request did not arrive over CAN at all: the
+head unit is connected through a VESC Express BLE adapter and has no CAN id of
+its own. The script then answers with plain `(send-data buf)` — the interface
+the request came in on — and the reply rides back up the adapter's BLE link.
+255 is the CAN broadcast address, so no real node can ever claim it. The C side is
 `components/vesc_can/vesc_lisp_panel.{c,h}`; everything below is its mirror.
 
 ### Conventions
@@ -200,7 +206,8 @@ it (the whole buffer goes on the wire every reply, so don't over-grow it).
 | `ACTION`    `0x02` | `… [2]=0x02 [3]=reply-id [4]=ctrl-id [5..8]=i32 value*1000`  |
 | `REQ_STATE` `0x03` | `… [2]=0x03 [3]=reply-id`                                    |
 
-**Outbound — what we send back** (`send-data pbuf 2 reply-id`):
+**Outbound — what we send back** (`send-data pbuf 2 reply-id`, or plain
+`send-data pbuf` when reply-id is 255 — see above):
 
 ```
 UI_DESC (0x81):  0x56 0x50 0x81  <ver=1> <count>   then <count> controls

@@ -15,6 +15,7 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_cache.h"
 #include "esp_rom_crc.h"
 #include "linenoise/linenoise.h"
 #include "mbedtls/base64.h"
@@ -24,10 +25,23 @@
 
 #include "lvgl.h"
 #include "bsp/esp-bsp.h"
+#include "esp_timer.h"
 #include "img_jpeg.h"
+#include "notif_bridge.h"
 #include "touch_input.h"
+#include "ui_mode.h"
 #if CONFIG_AA_MIC_ENABLE
 #include "mic_capture.h"
+#endif
+/* The navigator screen (phone map tiles over BLE) is built for the 800x480
+ * P4 head units — its framebuffers, JPEG path and mode switch all live behind
+ * CONFIG_AA_ENABLE, and so do the console commands that poke at it. */
+#if CONFIG_AA_ENABLE
+#include "ble_nav.h"
+#include "nav_map.h"
+#include "nav_screen.h"
+#include "nav_route.h"
+#include "nav_tiles.h"
 #endif
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
@@ -409,7 +423,7 @@ static int cmd_mic(int argc, char **argv)
         uint32_t n = st.samples;
         int32_t  peak = st.peak;
         st.sq = 0; st.samples = 0; st.peak = 0;
-        unsigned rms = n ? (unsigned)sqrt((double)sq / n) : 0;
+        unsigned rms = n ? (unsigned)sqrtf((float)sq / (float)n) : 0;
         printf("t=%2ds chunks=%u rms=%u peak=%d%s\n", s, (unsigned)st.chunks, rms, (int)peak,
                n == 0 ? "  <-- no data from the codec" : "");
     }
@@ -419,6 +433,178 @@ static int cmd_mic(int argc, char **argv)
     return 0;
 }
 #endif /* CONFIG_AA_MIC_ENABLE */
+
+/* The 3-finger hold can't be injected through the touch override (it needs
+ * three simultaneous contacts the GT911 shim doesn't fake), so the bridge gets
+ * its own way into every full-screen mode. */
+static int cmd_uimode(int argc, char **argv)
+{
+    if (argc > 1) {
+        if      (strcmp(argv[1], "vesc") == 0)   ui_mode_set(UI_MODE_VESC);
+        else if (strcmp(argv[1], "aa") == 0)     ui_mode_set(UI_MODE_AA);
+        else if (strcmp(argv[1], "nav") == 0)    ui_mode_set(UI_MODE_NAV);
+        else if (strcmp(argv[1], "toggle") == 0) ui_mode_toggle();
+        else { printf("ERR: expected vesc|aa|nav|toggle\n"); return 1; }
+    }
+    printf("mode=%s\n", ui_mode_name(ui_mode_get()));
+    return 0;
+}
+
+#if CONFIG_AA_ENABLE
+/* What a heading-up map would cost.
+ *
+ * The panel has no hardware for an arbitrary-angle rotation (the PPA turns in
+ * 90-degree steps only), so track-up means warping every one of the 384000
+ * pixels from one PSRAM buffer into another each frame. This measures exactly
+ * that, in the block size a real implementation would use, so the decision is
+ * a number rather than an opinion: `navwarp [angle] [block]`.
+ */
+static int cmd_navwarp(int argc, char **argv)
+{
+    const int deg = (argc > 1) ? clampi(atoi(argv[1]), 0, 359) : 30;
+    const int blk = (argc > 2) ? clampi(atoi(argv[2]), 1, 64) : 8;
+    uint16_t *dst = nav_screen_back_buffer();
+    if (!dst) {
+        printf("ERR: no back buffer (navigator screen not up?)\n");
+        return 1;
+    }
+    /* Source is the same buffer read at a rotated offset — the access pattern
+     * is what costs, and it is identical to a real source buffer. */
+    const uint16_t *src = dst;
+    const int w = NAV_SCREEN_W, h = NAV_SCREEN_H;
+    const float rad = (float)deg * 0.0174532925f;
+    const int32_t cos_q = (int32_t)lroundf(cosf(rad) * 65536.0f);
+    const int32_t sin_q = (int32_t)lroundf(sinf(rad) * 65536.0f);
+    const int64_t t0 = esp_timer_get_time();
+    for (int by = 0; by < h; by += blk) {
+        for (int bx = 0; bx < w; bx += blk) {
+            /* Source position of this block's corner, stepped per pixel. */
+            const int dx0 = bx - w / 2, dy0 = by - h / 2;
+            int32_t sx = (int32_t)(w / 2 * 65536) + dx0 * cos_q - dy0 * sin_q;
+            int32_t sy = (int32_t)(h / 2 * 65536) + dx0 * sin_q + dy0 * cos_q;
+            for (int y = 0; y < blk && by + y < h; y++) {
+                int32_t px = sx, py = sy;
+                uint16_t *drow = dst + (size_t)(by + y) * w;
+                for (int x = 0; x < blk && bx + x < w; x++) {
+                    const int ix = px >> 16, iy = py >> 16;
+                    if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+                        drow[bx + x] = src[(size_t)iy * w + ix];
+                    }
+                    px += cos_q;
+                    py += sin_q;
+                }
+                sx -= sin_q;
+                sy += cos_q;
+            }
+        }
+    }
+    const int64_t us = esp_timer_get_time() - t0;
+    printf("warp %d deg, %dx%d block: %lld us (%lld ms) for %d px\n",
+           deg, blk, blk, (long long)us, (long long)(us / 1000), w * h);
+    return 0;
+}
+
+static int cmd_navstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    ble_nav_stats_t st;
+    ble_nav_get_stats(&st);
+    const int64_t last = nav_screen_last_frame_us();
+    const int64_t age_ms = last ? (esp_timer_get_time() - last) / 1000 : -1;
+    printf("mode=%s live=%d streaming=%d\n", ui_mode_name(ui_mode_get()),
+           nav_screen_active() ? 1 : 0, st.streaming ? 1 : 0);
+    printf("frames ok=%u failed=%u shown=%u last_shown=%lld ms ago\n",
+           (unsigned)st.frames_ok, (unsigned)st.frames_failed,
+           (unsigned)nav_screen_frames_shown(), (long long)age_ms);
+    printf("last frame %ux%u %u B decode=%u ms ack=%u\n",
+           st.last_w, st.last_h, (unsigned)st.last_bytes,
+           (unsigned)st.last_decode_ms, st.last_ack);
+    nav_tiles_stats_t ts;
+    nav_tiles_get_stats(&ts);
+    nav_map_view_t v;
+    nav_map_get_view(&v);
+    printf("worker stack free=%u B | nimble_host free=%u words\n",
+           (unsigned)st.stack_free,
+           (unsigned)notif_bridge_host_stack_free());
+    printf("tiles ok=%u failed=%u stored=%u/%u evicted=%u last=%u B in %u ms\n",
+           (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
+           (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
+           (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("frame: compose %u us + cache flush %u us\n",
+           (unsigned)st.compose_us, (unsigned)st.msync_us);
+    printf("route %u points, last draw %u us\n",
+           (unsigned)nav_route_count(), (unsigned)nav_map_last_route_us());
+    printf("view %s %s%ld.%07ld,%s%ld.%07ld z%u hdg=%u | views=%u renders=%u "
+           "last=%u ms tiles %d/%d\n",
+           v.valid ? "set" : "unset",
+           v.lat_e7 < 0 ? "-" : "", (long)labs(v.lat_e7) / 10000000,
+           (long)labs(v.lat_e7) % 10000000,
+           v.lon_e7 < 0 ? "-" : "", (long)labs(v.lon_e7) / 10000000,
+           (long)labs(v.lon_e7) % 10000000,
+           (unsigned)v.zoom,
+           (unsigned)v.heading_deg, (unsigned)st.views, (unsigned)st.renders,
+           (unsigned)st.render_last_ms, st.last_have, st.last_wanted);
+    return 0;
+}
+
+/* Draw a test picture, encode it exactly the way the phone app does, and push
+ * it through the navigator's decode + scale + display path. Verifies the whole
+ * picture chain — colour order, the 2x upscale, the framebuffer swap — without
+ * a phone in the room. */
+static int cmd_navtest(int argc, char **argv)
+{
+    const int w = (argc > 1) ? clampi(atoi(argv[1]), 16, 800) : 400;
+    const int h = w * 480 / 800;
+    if ((w % 16) != 0 || (h % 16) != 0) {
+        printf("ERR: width must be a multiple of 16 and keep 5:3\n");
+        return 1;
+    }
+    const size_t raw_len = (size_t)w * h * 2;
+    uint16_t *raw = heap_caps_aligned_calloc(64, 1, raw_len,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    uint8_t *jpg = heap_caps_aligned_calloc(64, 1, 96 * 1024,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!raw || !jpg) {
+        printf("ERR: no PSRAM\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    /* Colour bars with a white diagonal: bars catch a red/blue swap, the
+     * diagonal catches a wrong stride or a bad scale factor. */
+    static const uint16_t bars[8] = {
+        0xFFFF, 0xFFE0, 0x07FF, 0x07E0, 0xF81F, 0xF800, 0x001F, 0x0000,
+    };
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint16_t px = bars[(x * 8) / w];
+            if (abs(y - (x * h) / w) < 3) px = 0xFFFF;
+            raw[y * w + x] = px;
+        }
+    }
+    esp_cache_msync(raw, raw_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    /* Same encoder the screenshot path uses (img_jpeg: the P4's hardware
+     * engine, 4:2:0 subsampling — the head unit's decoder only understands
+     * 4:2:0, the same rule the phone app follows). */
+    size_t jlen = 0;
+    if (!img_jpeg_encode_rgb565((const uint8_t *)raw, (uint16_t)w, (uint16_t)h, 80,
+                                jpg, 96 * 1024, &jlen) || jlen == 0) {
+        printf("ERR: jpeg encode failed\n");
+        heap_caps_free(raw);
+        heap_caps_free(jpg);
+        return 1;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const uint8_t ack = ble_nav_debug_present(jpg, jlen, (uint16_t)w, (uint16_t)h);
+    const int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    printf("navtest %dx%d jpeg=%u B ack=%u in %lld ms\n", w, h,
+           (unsigned)jlen, ack, (long long)ms);
+    heap_caps_free(raw);
+    heap_caps_free(jpg);
+    return ack == 0 ? 0 : 1;
+}
+#endif /* CONFIG_AA_ENABLE — navigator console commands */
 
 static void register_cmds(void)
 {
@@ -443,6 +629,22 @@ static void register_cmds(void)
         { .command = "tasks",
           .help = "Per-task CPU%% over a 1 s window + prio/core/stack HWM",
           .hint = NULL, .func = cmd_tasks },
+        { .command = "uimode",
+          .help = "Show or set the full-screen mode: vesc|aa|nav|toggle",
+          .hint = NULL, .func = cmd_uimode },
+#if CONFIG_AA_ENABLE
+        { .command = "navtest",
+          .help = "Show a locally-made test frame on the navigator screen "
+                  "[width, default 400]",
+          .hint = NULL, .func = cmd_navtest },
+        { .command = "navwarp",
+          .help = "Time a full-screen rotated copy, as a heading-up map would "
+                  "need every frame [degrees] [block]",
+          .hint = NULL, .func = cmd_navwarp },
+        { .command = "navstat",
+          .help = "Navigator frame stream: mode, frames, last frame size/time",
+          .hint = NULL, .func = cmd_navstat },
+#endif
 #if CONFIG_AA_MIC_ENABLE
         { .command = "mic",
           .help = "Capture the AA microphone for [seconds] (default 5) without a "
@@ -465,10 +667,12 @@ esp_err_t debug_uart_bridge_init(void)
     repl_cfg.task_stack_size = 8192;   /* room for base64 line + handlers */
     repl_cfg.max_cmdline_length = 256;
 
-    /* Whichever console this board has. The P4 head units talk over UART0
-     * (a bridge chip on the USB port); the S3 board's USB-C is the chip's own
-     * USB peripheral, so its console is USB-Serial-JTAG and scripts/uart_debug.py
-     * opens /dev/cu.usbmodem* instead of a USB-serial adapter. */
+    /* Whichever console this board has. The Waveshare P4 talks over UART0
+     * (a bridge chip on the USB port); the Guition JC4880 brings out no UART0
+     * header and the S3 board's USB-C is the chip's own USB peripheral, so on
+     * both of those the console is USB-Serial-JTAG — the only way a host
+     * script can reach them — and scripts/uart_debug.py opens
+     * /dev/cu.usbmodem* instead of a USB-serial adapter. */
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     esp_console_dev_usb_serial_jtag_config_t dev_cfg =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();

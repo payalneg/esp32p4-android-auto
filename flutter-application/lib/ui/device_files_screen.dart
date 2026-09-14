@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../ble/ble_proxy.dart';
 import '../ble/file_ops.dart';
 import '../i18n/strings.dart';
+import '../log/app_log.dart';
 
 /// Browse + manage the head unit's filesystem (/vescfs + /sdcard) over BLE.
 class DeviceFilesScreen extends StatefulWidget {
@@ -56,7 +57,7 @@ class _DeviceFilesScreenState extends State<DeviceFilesScreen> {
         _error = t(context, e.key);
       });
     } catch (e, st) {
-      debugPrint('[files] listDir("$_cwd") FAILED: $e');
+      AppLog.e('files', 'listDir("$_cwd") failed: $e');
       debugPrint('[files] $st');
       if (!mounted) return;
       setState(() {

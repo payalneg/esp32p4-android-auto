@@ -30,6 +30,11 @@ static struct {
     uint8_t              motor_poles;
     float                power_max_kw;
     bool                 vesc_emulator;
+    /* Which transport talks to the motor controller: false = the CAN bus,
+     * true = BLE to a VESC Express adapter. */
+    bool                 vesc_link_ble;
+    /* In BLE mode: how requests are addressed — see vesc_ble_route_t. */
+    vesc_ble_route_t     vesc_ble_route;
     bool                 aa_autoconnect;
     bool                 use_imperial;
     bool                 use_fahrenheit;
@@ -39,13 +44,20 @@ static struct {
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
     bool                 display_flip;     /* 180° flip for upside-down mount */
+    uint8_t              phone_screen;     /* 0 = Android Auto, 1 = Navigator */
 } s_cache;
+
+/* The BLE backend lives in main/ and re-runs its adapter probe when the route
+ * setting changes. Weak so the simulator and anything that links dev_settings
+ * without the backend still resolve. */
+__attribute__((weak)) void vesc_ble_link_route_changed(void) {}
 
 static settings_can_speed_cb_t     s_can_speed_cb;
 static settings_brightness_cb_t    s_brightness_cb;
 static settings_target_id_cb_t     s_target_id_cb;
 static settings_controller_id_cb_t s_controller_id_cb;
 static settings_aa_autoconnect_cb_t s_aa_autoconnect_cb;
+static settings_vesc_link_cb_t     s_vesc_link_cb;
 
 /* Validate a kbps value (read from NVS / passed by callers). Bad values
  * fall back to the Kconfig default. The UI dropdown can only produce one
@@ -85,6 +97,14 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "batt_calc",   &u8 ) == ESP_OK) s_cache.battery_calc_mode = (battery_calc_mode_t)u8;
     if (nvs_get_u8 (h, "show_fps",    &u8 ) == ESP_OK) s_cache.show_fps          = (u8 != 0);
     if (nvs_get_u8 (h, "vesc_sim",    &u8 ) == ESP_OK) s_cache.vesc_emulator     = (u8 != 0);
+    if (nvs_get_u8 (h, "link_ble",    &u8 ) == ESP_OK) s_cache.vesc_link_ble     = (u8 != 0);
+    /* The pre-AUTO key "ble_fwd" is deliberately not read. It was a guess the
+     * user had to make about hardware they could not inspect, and the wrong
+     * half of it is the failure this whole mechanism exists to remove — so a
+     * device carrying it starts over at AUTO rather than inheriting it. The
+     * manual modes are still there for anything AUTO reads wrong. */
+    if (nvs_get_u8 (h, "ble_route",   &u8 ) == ESP_OK && u8 <= VESC_BLE_ROUTE_CAN)
+        s_cache.vesc_ble_route = (vesc_ble_route_t)u8;
     if (nvs_get_u8 (h, "aa_autocon",  &u8 ) == ESP_OK) s_cache.aa_autoconnect    = (u8 != 0);
     if (nvs_get_u8 (h, "use_imp",     &u8 ) == ESP_OK) s_cache.use_imperial      = (u8 != 0);
     if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
@@ -94,6 +114,7 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
     if (nvs_get_u8 (h, "disp_flip",   &u8 ) == ESP_OK) s_cache.display_flip      = (u8 != 0);
+    if (nvs_get_u8 (h, "phone_scr",   &u8 ) == ESP_OK) s_cache.phone_screen     = (u8 > 1) ? 0 : u8;
     if (nvs_get_u16(h, "wheel_mm",    &u16) == ESP_OK) s_cache.wheel_diameter_mm = u16;
     if (nvs_get_u8 (h, "motor_poles", &u8 ) == ESP_OK) s_cache.motor_poles       = u8;
 
@@ -141,6 +162,15 @@ void settings_init(void) {
     s_cache.motor_poles       = 7;
     s_cache.power_max_kw      = 4.5f;
     s_cache.vesc_emulator     = false;
+#ifdef CONFIG_VESC_LINK_DEFAULT_BLE
+    s_cache.vesc_link_ble     = true;
+#else
+    s_cache.vesc_link_ble     = false;
+#endif
+    /* Let the link work out whether it is attached to the controller or to an
+     * adapter in front of it. Guessing wrong costs a dashboard that connects
+     * and then shows nothing, which is exactly what a default should not do. */
+    s_cache.vesc_ble_route    = VESC_BLE_ROUTE_AUTO;
     s_cache.aa_autoconnect    = true;
     s_cache.use_imperial      = false;
     s_cache.use_fahrenheit    = false;
@@ -150,6 +180,7 @@ void settings_init(void) {
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
     s_cache.display_flip      = false;
+    s_cache.phone_screen      = 0;   /* the 3-finger gesture shows Android Auto */
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -171,6 +202,8 @@ uint16_t            settings_get_wheel_diameter_mm(void) { return s_cache.wheel_
 uint8_t             settings_get_motor_poles(void)       { return s_cache.motor_poles; }
 float               settings_get_power_max_kw(void)      { return s_cache.power_max_kw; }
 bool                settings_get_vesc_emulator(void)     { return s_cache.vesc_emulator; }
+bool                settings_get_vesc_link_ble(void)     { return s_cache.vesc_link_ble; }
+vesc_ble_route_t    settings_get_vesc_ble_route(void)    { return s_cache.vesc_ble_route; }
 bool                settings_get_aa_autoconnect(void)    { return s_cache.aa_autoconnect; }
 bool                settings_get_use_imperial(void)      { return s_cache.use_imperial; }
 bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
@@ -180,6 +213,7 @@ uint8_t             settings_get_second_head_id(void)    { return s_cache.second
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
 bool                settings_get_display_flip(void)       { return s_cache.display_flip; }
+uint8_t             settings_get_phone_screen(void)       { return s_cache.phone_screen; }
 
 /* ---------------- setters ---------------- */
 
@@ -322,6 +356,16 @@ void settings_set_splash_loops(uint8_t loops) {
     commit(h);
 }
 
+void settings_set_phone_screen(uint8_t which) {
+    if (which > 1) which = 0;
+    if (s_cache.phone_screen == which) return;
+    s_cache.phone_screen = which;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "phone_scr", which);
+    commit(h);
+}
+
 void settings_set_display_flip(bool on) {
     if (s_cache.display_flip == on) return;
     s_cache.display_flip = on;
@@ -379,6 +423,31 @@ void settings_set_vesc_emulator(bool on) {
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "vesc_sim", on ? 1 : 0);
     commit(h);
+}
+
+void settings_set_vesc_link_ble(bool on) {
+    if (s_cache.vesc_link_ble == on) return;
+    s_cache.vesc_link_ble = on;
+    nvs_handle_t h;
+    if (open_rw(&h) == ESP_OK) { nvs_set_u8(h, "link_ble", on ? 1 : 0); commit(h); }
+    /* Hot-apply: main.c tears one transport down and brings the other up. */
+    if (s_vesc_link_cb) s_vesc_link_cb(on);
+}
+
+void settings_set_vesc_ble_route(vesc_ble_route_t route) {
+    if (route > VESC_BLE_ROUTE_CAN) return;
+    if (s_cache.vesc_ble_route == route) return;
+    s_cache.vesc_ble_route = route;
+    nvs_handle_t h;
+    if (open_rw(&h) == ESP_OK) {
+        nvs_set_u8(h, "ble_route", (uint8_t)route);
+        /* Drop the pre-AUTO key so it can't override the new one on the next
+         * boot (load_from_nvs reads it first, by design, for devices that
+         * never touched this screen). */
+        nvs_erase_key(h, "ble_fwd");
+        commit(h);
+    }
+    vesc_ble_link_route_changed();
 }
 
 void settings_set_aa_autoconnect(bool on) {
@@ -525,6 +594,7 @@ void settings_register_brightness_cb(settings_brightness_cb_t cb)       { s_brig
 void settings_register_target_id_cb(settings_target_id_cb_t cb)         { s_target_id_cb     = cb; }
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb) { s_controller_id_cb = cb; }
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb) { s_aa_autoconnect_cb = cb; }
+void settings_register_vesc_link_cb(settings_vesc_link_cb_t cb)           { s_vesc_link_cb = cb; }
 
 /* ---------------- firmware-version info ----------------
  * Pure RAM, no NVS. Race-tolerant in practice: setters fire once at boot

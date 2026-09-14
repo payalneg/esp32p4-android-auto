@@ -9,7 +9,8 @@
 
 static const char *TAG = "ble_arb";
 
-#define ARB_MAX_SLOTS 2
+/* cadence sensor, wheel-speed sensor, VESC Express adapter. */
+#define ARB_MAX_SLOTS 3
 /* Connect window when BOTH sensors are bound and waiting. NimBLE cancels the
  * attempt itself on expiry and reports a failed CONNECT to the owner, which
  * re-requests; the arbiter then hands the initiator to the other slot. */

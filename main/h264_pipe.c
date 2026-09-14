@@ -231,9 +231,10 @@ static void decoder_task(void *arg)
         } else if (it.ack_cb) {
             /* Nothing reached the display (SPS/PPS-only message, or the
              * VESC dashboard owns the panel and the frame was dropped). */
-            /* VESC dashboard active → pace acks to 5 fps so phone backs
-             * off via max_unacked. See VESC_ACK_INTERVAL_US comment above. */
-            if (ui_mode_get() == UI_MODE_VESC) {
+            /* LVGL owns the panel (dashboard or navigator) → pace acks to
+             * 5 fps so phone backs off via max_unacked. See the
+             * VESC_ACK_INTERVAL_US comment above. */
+            if (ui_mode_get() != UI_MODE_AA) {
                 int64_t now    = esp_timer_get_time();
                 int64_t target = last_ack_us + VESC_ACK_INTERVAL_US;
                 if (now < target) {

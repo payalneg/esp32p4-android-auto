@@ -32,7 +32,8 @@
 
 /* Drawer width: 300 px of a 800-wide screen is comfortable, but the same
  * 300 px covers nearly two thirds of the square 480x480 panel — cap it at
- * 45% of the screen there. */
+ * 45% of the screen there. The drawer covers the live panel, whatever size
+ * it is (ui_geom.h). */
 #define DRAWER_W      (UI_W >= 700 ? 300 : (lv_coord_t)((UI_W * 45) / 100))
 #define SCREEN_W      UI_W
 #define SCREEN_H      UI_H

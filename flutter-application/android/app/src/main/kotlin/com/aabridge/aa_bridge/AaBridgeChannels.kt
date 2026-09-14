@@ -1,8 +1,10 @@
 package com.aabridge.aa_bridge
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -58,6 +60,27 @@ object AaBridgeChannels {
                     "control" -> {
                         MediaListener.control(appCtx, call.argument<String>("cmd") ?: "")
                         result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Navigator: keep the display on while guiding. Needs the activity
+        // window, so on the background engine (Application context) it just
+        // reports that it could not.
+        MethodChannel(messenger, "aabridge/screen.cmd")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "keepOn" -> {
+                        val window = (context as? Activity)?.window
+                        if (window == null) {
+                            result.success(false)
+                        } else {
+                            val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                            if (call.argument<Boolean>("on") == true) window.addFlags(flag)
+                            else window.clearFlags(flag)
+                            result.success(true)
+                        }
                     }
                     else -> result.notImplemented()
                 }

@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "vesc_battery_calc.h"
 
 static const char *TAG = "charge_prompt";
@@ -96,7 +97,7 @@ static void on_charge_detected(float prev_v, float now_v, float change_pct)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *box = lv_obj_create(s_modal);
-    lv_obj_set_size(box, 560, 260);
+    lv_obj_set_size(box, UI_SX(560), 260);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(box, 0, 0);

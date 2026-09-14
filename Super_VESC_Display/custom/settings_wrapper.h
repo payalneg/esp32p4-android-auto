@@ -64,6 +64,16 @@ void  settings_wrapper_set_power_max_kw(float power_max_kw);
 bool  settings_wrapper_get_vesc_emulator(void);
 void  settings_wrapper_set_vesc_emulator(bool on);
 
+/* Which transport carries the VESC protocol: false = CAN bus, true = BLE to a
+ * VESC Express adapter. Applied immediately on the device. */
+bool  settings_wrapper_get_vesc_link_ble(void);
+void  settings_wrapper_set_vesc_link_ble(bool on);
+/* BLE mode: how a request is addressed. 0 = auto (ask the link who it is
+ * attached to and route per target), 1 = always direct, 2 = always through
+ * COMM_FORWARD_CAN. Matches vesc_ble_route_t on the device. */
+uint8_t settings_wrapper_get_vesc_ble_route(void);
+void    settings_wrapper_set_vesc_ble_route(uint8_t route);
+
 bool  settings_wrapper_get_aa_autoconnect(void);
 void  settings_wrapper_set_aa_autoconnect(bool on);
 
@@ -114,6 +124,12 @@ void    settings_wrapper_set_splash_loops(uint8_t loops);
  * (panel scan direction + touch inversion); no-op in the simulator. */
 bool settings_wrapper_get_display_flip(void);
 void settings_wrapper_set_display_flip(bool on);
+
+/* What the 3-finger gesture brings up from the dashboard: 0 = Android Auto,
+ * 1 = Navigator (the map the phone app streams over BLE). Only one of them
+ * can own the panel. */
+uint8_t settings_wrapper_get_phone_screen(void);
+void    settings_wrapper_set_phone_screen(uint8_t which);
 
 uint32_t settings_wrapper_get_clock_secs_of_day(void);
 void     settings_wrapper_set_clock_secs_of_day(uint32_t secs_of_day);

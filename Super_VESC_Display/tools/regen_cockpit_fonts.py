@@ -70,7 +70,6 @@ JOBS = [
     # keep minus too since it is one cheap glyph.
     ("lv_font_Antonio_Regular_200", 200, "0x2D,0x30-0x39", TTF),
     # dashboard_Lambo / dashboard_Moto hero speed readouts — digits only.
-    ("lv_font_Antonio_Regular_100", 100, "0x2D,0x30-0x39", TTF),
     # dashboard_Speed_cc_text (cruise target) — "%d" (may be negative) + "--".
     ("lv_font_Antonio_Regular_50",   50, "0x2D,0x30-0x39", TTF),
     # TRIP "%0.1f" / odo "%05d" / temp "%d" (negative) / voltage "%.1f"

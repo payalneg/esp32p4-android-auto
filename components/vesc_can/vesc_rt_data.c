@@ -7,6 +7,7 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/vesc_lisp_poll.h"
 #include "vesc_can/vesc_io_data.h"
 #include "vesc_can/vesc_lisp_panel.h"
@@ -112,8 +113,11 @@ void vesc_rt_data_request(void)
 
     /* send=0: VESC will reply over CAN (PROCESS_*_BUFFER). Synced so this
      * reply can't interleave with the LISP-stats / IO-decode polls' replies
-     * in the shared per-id reassembly buffer. */
-    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
+     * in the shared per-id reassembly buffer. Over BLE the reassembler is not
+     * the reason — there the link itself carries one request at a time — but
+     * the discipline and this call are the same. */
+    vesc_link_send_sync(s_target_vesc_id, send_buffer, ind, 0,
+                        vesc_link_sync_timeout_ms());
 }
 
 void vesc_rt_data_process_response(const uint8_t *data, unsigned int len)
@@ -244,10 +248,22 @@ void vesc_rt_data_loop(void)
 {
     if (!s_active) return;
     uint32_t now = millis_now();
-    if (now - s_last_request_ms >= s_request_interval_ms) {
+    if (now - s_last_request_ms >= vesc_link_scale_ms(s_request_interval_ms)) {
         vesc_rt_data_request();
         s_last_request_ms = now;
     }
+}
+
+static vesc_rt_aux_loop_t s_aux_loops[VESC_RT_AUX_LOOPS];
+
+void vesc_rt_data_register_aux_loop(vesc_rt_aux_loop_t fn)
+{
+    if (!fn) return;
+    for (int i = 0; i < VESC_RT_AUX_LOOPS; i++) {
+        if (s_aux_loops[i] == fn) return;          /* idempotent */
+        if (!s_aux_loops[i]) { s_aux_loops[i] = fn; return; }
+    }
+    ESP_LOGW(TAG, "no free aux poll slot");
 }
 
 /* Single CAN-polling task: drives both RT data (~100 ms cycle) and the
@@ -265,11 +281,23 @@ static void rt_task(void *arg)
      * requests; when it loses, it reports "no data from vesc" and pedal assist
      * never commands current. This used to work only by accident — the boot
      * splash delayed our CAN bring-up — so the quiet window is explicit now.
-     * See CONFIG_VESC_CAN_POLL_START_DELAY_MS. */
+     * See CONFIG_VESC_CAN_POLL_START_DELAY_MS. The whole race is a shared-bus
+     * problem, so it does not exist on a point-to-point BLE link — there the
+     * link-up gate below is what holds the pollers back. */
 #if CONFIG_VESC_CAN_POLL_START_DELAY_MS > 0
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_VESC_CAN_POLL_START_DELAY_MS));
+    if (vesc_link_get_mode() == VESC_LINK_MODE_CAN) {
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_VESC_CAN_POLL_START_DELAY_MS));
+    }
 #endif
     for (;;) {
+        /* Nothing to poll until the transport can carry a request. Without
+         * this a down BLE link would burn its full reply timeout on every
+         * poll in the body below, several times per 20 ms tick. On CAN the
+         * driver is up by the time we get here, so this costs nothing. */
+        if (!vesc_link_is_up()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         vesc_rt_data_loop();
 #if CONFIG_VESC_CAN_LISP_POLL_ENABLE
         /* COMM_LISP_GET_STATS — no longer feeds the dashboard (its 18-var cap
@@ -293,6 +321,12 @@ static void rt_task(void *arg)
          * Re-sends the pedal-assist current to the LISP arbiter at ~20 Hz and
          * sends 0 once if the setpoint goes stale (sensor dropped). */
         vesc_lisp_panel_pas_loop();
+        /* Registered extras — today the second head's temperature poll, which
+         * only has work to do on a BLE link (on CAN those temps arrive as
+         * broadcasts). */
+        for (int i = 0; i < VESC_RT_AUX_LOOPS; i++) {
+            if (s_aux_loops[i]) s_aux_loops[i]();
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

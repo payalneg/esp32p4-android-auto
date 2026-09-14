@@ -7,6 +7,7 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/vesc_lisp_code.h"   /* busy-gate for the one-shot request */
 
@@ -53,7 +54,8 @@ static void send_stats_request(void)
     int32_t ind = 0;
     send_buffer[ind++] = COMM_LISP_GET_STATS;
     send_buffer[ind++] = 1; /* poll_all */
-    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, ind, 0, 60);
+    vesc_link_send_sync(s_target_vesc_id, send_buffer, ind, 0,
+                        vesc_link_sync_timeout_ms());
 }
 
 void vesc_lisp_poll_loop(void)

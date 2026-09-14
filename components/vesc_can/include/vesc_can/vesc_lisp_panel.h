@@ -17,6 +17,13 @@
         [magic 'V'(0x56) 'P'(0x50)] [msg_type] [payload...]
 
     P4 -> LISP  (msg_type, then always [u8 reply_can_id]):
+        reply_can_id is this display's own CAN node id, which the script uses
+        to address its answer back over CAN. Over a BLE adapter link we have
+        no CAN id, so we send 255 (the CAN broadcast address, which no node
+        can own) and the script answers on the interface the request arrived
+        on instead — see vesc_link_reply_id() and panel-send-ui in
+        lisp/main.lisp.
+
         REQ_UI    0x01  []
         ACTION    0x02  [u8 ctrl_id][i32 value*1000]
         REQ_STATE 0x03  []

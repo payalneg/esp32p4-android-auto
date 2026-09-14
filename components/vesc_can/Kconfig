@@ -83,4 +83,49 @@ menu "VESC CAN"
 
             0 disables it.
 
+    config VESC_LINK_DEFAULT_BLE
+        bool "Default VESC link is BLE (VESC Express) instead of CAN"
+        default n
+        help
+            Which transport the head unit talks to the motor controller over
+            on a factory-fresh device. The user can switch at runtime in
+            Settings; this is only the value used before anything is stored
+            in NVS.
+
+            CAN is the wired TWAI bus. BLE makes the head unit a GATT central
+            that connects to a VESC Express adapter over the Nordic UART
+            Service, exactly like VESC Tool does, and needs no CAN wiring.
+
+    config VESC_BLE_SYNC_TIMEOUT_MS
+        int "Reply timeout for a polled request over BLE (ms)"
+        default 300
+        range 100 2000
+        help
+            A CAN round trip is a few milliseconds, so the polls wait 60 ms
+            for their answer. Over BLE one round trip is two connection
+            intervals plus the adapter's own CAN hop to the controller, so
+            the same budget would time out on every single poll.
+
+    config VESC_BLE_INTERVAL_PCT
+        int "Poll interval multiplier in BLE mode (percent)"
+        default 200
+        range 100 500
+        help
+            Every periodic poll (RT data, dashboard stats, the quick-action
+            panel, the ADC/PPM viewer) is tuned for CAN. In BLE mode its
+            interval is multiplied by this percentage, so 200 means the
+            dashboard is refreshed half as often — which is what the link can
+            actually carry once each request costs a couple of connection
+            intervals.
+
+    config VESC_BLE_CONN_ITVL_MS
+        int "Requested BLE connection interval (ms)"
+        default 15
+        range 8 50
+        help
+            Requested from the adapter right after the link comes up. Every
+            request/reply costs two of these, so it sets the ceiling on how
+            fast the dashboard can be polled. Lower is faster but leaves the
+            radio less room for the phone links and the sensors.
+
 endmenu

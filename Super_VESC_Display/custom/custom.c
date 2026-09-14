@@ -50,6 +50,7 @@ static int s_units_epoch = 0;
 #include "vesc_head2.h"
 #include "app_fs.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #endif
 
 int cruise_active = 0;
@@ -83,9 +84,6 @@ typedef struct num_field {
     void (*on_change)(struct num_field *f);
 } num_field_t;
 
-static num_field_t s_target_id_field;
-static num_field_t s_second_head_id_field;
-static num_field_t s_controller_id_field;
 static num_field_t s_battery_capacity_field;
 static num_field_t s_power_max_field;
 static num_field_t s_clock_hour_field;
@@ -144,13 +142,13 @@ static int step_btn_steps(lv_event_t *e) {
 }
 
 /* Compact settings layout: one row per setting, heading on the left,
- * controls clustered on the right edge. */
-/* Column anchors for the Settings rows, scaled from the 800-wide layout they
- * were measured in (see ui_geom.h) so the same code lays out on the square
- * 480x480 panel. The value field and its +/- buttons keep their pixel size —
- * they hold a number in a fixed font — while their x positions move in. */
-/* Wide controls (dropdowns, full-width buttons) hang off the right margin,
- * so they follow the screen width instead of the 800 they were measured in. */
+ * controls clustered on the right edge.
+ *
+ * Column anchors were measured against the 800-wide panel. The same code also
+ * lays out the square 480x480 board (see ui_geom.h), where a literal 730 is
+ * simply off the screen — so anything that hangs off the right margin is
+ * expressed as a distance from it. The value field and its +/- buttons keep
+ * their pixel size (they hold a number in a fixed font); only their x moves. */
 #define SETTINGS_MARGIN       20
 #define SETTINGS_WIDE_X       UI_SX(400)
 #define SETTINGS_WIDE_W       (UI_W - SETTINGS_WIDE_X - 10)
@@ -163,6 +161,16 @@ static int step_btn_steps(lv_event_t *e) {
 #define SETTINGS_PLUS_X       (UI_W - SETTINGS_BTN_W - 10)
 #define SETTINGS_VAL_X        (SETTINGS_PLUS_X - SETTINGS_VAL_W - 10)
 #define SETTINGS_MINUS_X      (SETTINGS_VAL_X - SETTINGS_BTN_W - 10)
+
+/* "Open" buttons on the rows that lead to a sub-screen. */
+#define SETTINGS_OPEN_W       190
+#define SETTINGS_OPEN_X       (UI_W - SETTINGS_OPEN_W - 10)
+
+/* The three-across row at the bottom (Logs / QR / Reset, and Reset trip +
+ * Files above it). */
+#define SETTINGS_TRI_GAP      16
+#define SETTINGS_TRI_W        ((SETTINGS_FULL_W - 2 * SETTINGS_TRI_GAP) / 3)
+#define SETTINGS_TRI_X(i)     (SETTINGS_MARGIN + (i) * (SETTINGS_TRI_W + SETTINGS_TRI_GAP))
 
 static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
                                           const char *glyph, uint32_t bg_color,
@@ -223,19 +231,42 @@ static void settings_dropdown_fit_font(lv_obj_t *dd)
     lv_obj_set_style_text_font(dd, font, 0);
 }
 
+/* A grey note that shares a row with the switch on the right. Positioned by
+ * where it sat on the 800-wide panel and then bounded, because "Off = km/km/h,
+ * On = miles/mph" is wider than the gap that is left at 480. */
+static void settings_hint_place(lv_obj_t *lbl, int x_at_design, int y)
+{
+    lv_coord_t x = UI_SX(x_at_design);
+    lv_obj_set_pos(lbl, x, y);
+    lv_obj_set_width(lbl, SETTINGS_SWITCH_X - x - 8);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+}
+
+/* The caption of a settings row.
+ *
+ * Bounded, and measured: at 800 px there is room for "Battery Calculation:"
+ * in montserrat 24 before the dropdown starts, and at 480 there is not — the
+ * caption used to carry on underneath the control, which is drawn later and
+ * therefore wins. The font steps down (24 → 20 → 16) until the text actually
+ * fits the room the row leaves it — "Battery Capacity (Ah):" needs 239 px at
+ * 24 and 217 at 20, while a 480-wide panel has 204 before the minus button —
+ * and whatever still does not fit at 16 is dotted, which at least reads as
+ * truncation rather than as a bug. */
 static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *text) {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
-    lv_obj_set_pos(lbl, 20, y + 15);
+    lv_obj_set_pos(lbl, SETTINGS_MARGIN, y + 15);
+    /* The leftmost thing any row puts on the right: a wide dropdown, or the
+     * "-" of a value stepper, whichever starts sooner. */
+    lv_coord_t stop = SETTINGS_WIDE_X < SETTINGS_MINUS_X ? SETTINGS_WIDE_X
+                                                         : SETTINGS_MINUS_X;
+    const lv_coord_t avail = stop - SETTINGS_MARGIN - 8;
+    lv_obj_set_width(lbl, avail);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-    /* Step the caption down until it clears the row's editor —
-     * "Battery Capacity (Ah):" needs 239 px at font 24 and 217 at font 20,
-     * while a 480-wide panel has 204 before the minus button. A caption two
-     * sizes smaller still reads; one running under a button does not. */
     static const lv_font_t *const sizes[] = {
         &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
     };
-    const lv_coord_t avail = SETTINGS_MINUS_X - 20 - 6;
     const lv_font_t *font = sizes[sizeof sizes / sizeof sizes[0] - 1];
     for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
         lv_point_t need;
@@ -246,28 +277,117 @@ static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *te
     return lbl;
 }
 
+/* ---- Settings tabs ----
+ *
+ * The settings used to be one 2000-pixel scroll: CAN ids, then the theme, then
+ * the battery, then wheel size, then the file browser. Finding anything meant
+ * remembering roughly how far down it was. Four pages instead, each a short
+ * scroll of related rows, with a strip of tab buttons under the exit button.
+ *
+ * Deliberately cheap: the rows below are still absolutely positioned the way
+ * they were, they are just parented to a page instead of to the screen, and
+ * y_pos restarts per page. Switching a tab only flips the HIDDEN flag - every
+ * page is built once, when the screen is. */
+typedef enum {
+    SETTINGS_TAB_CONNECTION = 0,   /* VESC link, phone */
+    SETTINGS_TAB_DISPLAY,          /* theme, brightness, units, orientation */
+    SETTINGS_TAB_BIKE,             /* battery, wheel, poles, assist */
+    SETTINGS_TAB_SYSTEM,           /* clock, files, logs, reset, versions */
+    SETTINGS_TAB_COUNT,
+} settings_tab_t;
+
+#define SETTINGS_PAGE_TOP_PAD  10
+#define SETTINGS_TABBAR_Y      62
+#define SETTINGS_TABBAR_H      44
+#define SETTINGS_PAGE_Y        (SETTINGS_TABBAR_Y + SETTINGS_TABBAR_H + 6)
+
+static lv_obj_t *s_settings_pages[SETTINGS_TAB_COUNT];
+static lv_obj_t *s_settings_tabs[SETTINGS_TAB_COUNT];
+
+static void settings_tab_show(int which)
+{
+    for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
+        if (!s_settings_pages[i]) continue;
+        if (i == which) lv_obj_clear_flag(s_settings_pages[i], LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(s_settings_pages[i], LV_OBJ_FLAG_HIDDEN);
+        if (!s_settings_tabs[i]) continue;
+        lv_obj_set_style_bg_color(s_settings_tabs[i],
+                                  lv_color_hex(i == which ? 0x00a9ff : 0x2a3440), 0);
+    }
+}
+
+static void settings_tab_event_cb(lv_event_t *e)
+{
+    settings_tab_show((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void settings_tabs_build(lv_obj_t *screen)
+{
+    static const char *names[SETTINGS_TAB_COUNT] = {
+        "Connection", "Display", "Bike", "System",
+    };
+    /* Four across whatever width there is, lined up with the exit button above
+     * (188 px each at 800). The caption drops a size on a narrow panel rather
+     * than being cut in half. */
+    const int gap = 6, x0 = 17;
+    const int w = (UI_W - 2 * x0 - (SETTINGS_TAB_COUNT - 1) * gap) / SETTINGS_TAB_COUNT;
+    const lv_font_t *tab_font = (w < 140) ? &lv_font_montserrat_16
+                                          : &lv_font_montserrat_20;
+
+    for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
+        lv_obj_t *b = lv_btn_create(screen);
+        lv_obj_set_pos(b, x0 + i * (w + gap), SETTINGS_TABBAR_Y);
+        lv_obj_set_size(b, w, SETTINGS_TABBAR_H);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, names[i]);
+        lv_obj_set_style_text_font(l, tab_font, 0);
+        lv_obj_center(l);
+        lv_obj_add_event_cb(b, settings_tab_event_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        s_settings_tabs[i] = b;
+
+        lv_obj_t *pg = lv_obj_create(screen);
+        lv_obj_set_pos(pg, 0, SETTINGS_PAGE_Y);
+        lv_obj_set_size(pg, UI_W, UI_H - SETTINGS_PAGE_Y);
+        lv_obj_set_style_bg_opa(pg, 0, 0);
+        lv_obj_set_style_border_width(pg, 0, 0);
+        lv_obj_set_style_pad_all(pg, 0, 0);
+        lv_obj_set_scroll_dir(pg, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(pg, LV_SCROLLBAR_MODE_AUTO);
+        s_settings_pages[i] = pg;
+    }
+    settings_tab_show(SETTINGS_TAB_CONNECTION);
+}
+
+/* Switch the row builder to another page.
+ *
+ * Each page keeps its OWN vertical cursor, because the blocks below are still
+ * in their original source order and a page is therefore visited more than
+ * once — Connection is opened for the VESC link row, left for Display, and
+ * returned to for the phone rows. Resetting y_pos on every switch (the first
+ * version of this) restarted each page from the top, and the second and third
+ * visits drew straight on top of the first: three settings in one row. */
+#define SETTINGS_GROUP(tab)  do {                                   \
+        s_page_y[s_page_cur] = y_pos;                               \
+        s_page_cur = (tab);                                         \
+        parent     = s_settings_pages[s_page_cur];                  \
+        y_pos      = s_page_y[s_page_cur];                          \
+    } while (0)
+
 // Settings UI objects (dynamically created)
-static lv_obj_t *settings_target_id_label = NULL;
-static lv_obj_t *settings_target_id_plus_btn = NULL;
-static lv_obj_t *settings_target_id_minus_btn = NULL;
-static lv_obj_t *settings_second_head_label = NULL;
-static lv_obj_t *settings_second_head_switch = NULL;
-static lv_obj_t *settings_second_head_id_label = NULL;
-static lv_obj_t *settings_second_head_id_plus_btn = NULL;
-static lv_obj_t *settings_second_head_id_minus_btn = NULL;
-static lv_obj_t *settings_can_speed_dropdown = NULL;
-static lv_obj_t *settings_can_speed_label = NULL;
 static lv_obj_t *settings_theme_dropdown = NULL;
 static lv_obj_t *settings_theme_label = NULL;
 static lv_obj_t *settings_splash_loops_dropdown = NULL;
 static lv_obj_t *settings_splash_loops_label = NULL;
+static lv_obj_t *settings_phone_screen_dropdown = NULL;
+static lv_obj_t *settings_phone_screen_label = NULL;
 static lv_obj_t *settings_display_flip_switch = NULL;
 static lv_obj_t *settings_display_flip_label = NULL;
 static lv_obj_t *settings_brightness_slider = NULL;
 static lv_obj_t *settings_brightness_label = NULL;
-static lv_obj_t *settings_controller_id_label = NULL;
-static lv_obj_t *settings_controller_id_plus_btn = NULL;
-static lv_obj_t *settings_controller_id_minus_btn = NULL;
 static lv_obj_t *settings_battery_capacity_label = NULL;
 static lv_obj_t *settings_battery_capacity_plus_btn = NULL;
 static lv_obj_t *settings_battery_capacity_minus_btn = NULL;
@@ -486,7 +606,7 @@ static void fmt_overlay_show(void)
 
     lv_obj_t *l = lv_label_create(s_fmt_overlay);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(l, 720);
+    lv_obj_set_width(l, UI_W - 80);
     lv_label_set_text(l, "Formatting backup storage...\n"
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");
@@ -1309,70 +1429,15 @@ static void debounced_commit_schedule(debounced_commit_t *d,
     }
 }
 
-static debounced_commit_t s_target_id_commit;
-static debounced_commit_t s_second_head_id_commit;
 static debounced_commit_t s_brightness_commit;
 /* Separate from s_brightness_commit on purpose: debounced_commit_schedule()
  * overwrites the pending persist fn, so sharing one slot between the
  * brightness VALUE and the gesture FLAG would drop whichever write was armed
  * first. */
 static debounced_commit_t s_brightness_gesture_commit;
-static debounced_commit_t s_controller_id_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
 static debounced_commit_t s_theme_commit;
-
-// Target VESC ID — value-change callback (volatile + debounced NVS commit)
-static void target_id_on_change(num_field_t *f) {
-    settings_wrapper_set_target_vesc_id_volatile((uint8_t)f->value);
-    debounced_commit_schedule(&s_target_id_commit,
-                              settings_wrapper_persist_target_vesc_id);
-}
-
-static void target_id_plus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_target_id_field);
-}
-
-static void target_id_minus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_target_id_field);
-}
-
-// Second head enable toggle — single click, persist immediately (like AA).
-static void second_head_switch_event_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-    bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_wrapper_set_second_head_enabled(checked);
-}
-
-// Second head CAN ID — value-change callback (volatile + debounced NVS commit)
-static void second_head_id_on_change(num_field_t *f) {
-    settings_wrapper_set_second_head_id_volatile((uint8_t)f->value);
-    debounced_commit_schedule(&s_second_head_id_commit,
-                              settings_wrapper_persist_second_head_id);
-}
-
-static void second_head_id_plus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_second_head_id_field);
-}
-
-static void second_head_id_minus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_second_head_id_field);
-}
-
-// Event handler for CAN speed dropdown
-static void can_speed_dropdown_event_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_VALUE_CHANGED) {
-        lv_obj_t *dropdown = lv_event_get_target(e);
-        uint16_t selected = lv_dropdown_get_selected(dropdown);
-        
-        // Save to settings
-        settings_wrapper_set_can_speed_index((uint8_t)selected);
-        
-        // Update info label
-        lv_label_set_text(settings_info_label, "CAN speed requires restart!");
-    }
-}
 
 /* Dashboard theme dropdown. Live-switches the dashboard (no restart) and
  * debounces the NVS write — same volatile-cache + deferred-persist pattern as
@@ -1406,6 +1471,21 @@ static void splash_loops_dropdown_event_cb(lv_event_t *e) {
     uint16_t sel = lv_dropdown_get_selected(lv_event_get_target(e));
     if (sel >= SPLASH_LOOP_OPT_COUNT) sel = 1;
     settings_wrapper_set_splash_loops(s_splash_loop_opts[sel]);
+}
+
+/* Which full-screen source the 3-finger gesture brings up from the dashboard:
+ * Android Auto (the phone projecting over Wi-Fi) or the Navigator picture the
+ * companion app streams over BLE. Only one of them can own the panel. Read by
+ * ui_mode_toggle, so the choice applies on the next gesture. */
+static void phone_screen_dropdown_event_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    uint16_t sel = lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_wrapper_set_phone_screen(sel > 1 ? 0 : (uint8_t)sel);
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label,
+                          sel == 1 ? "3-finger hold shows the Navigator"
+                                   : "3-finger hold shows Android Auto");
+    }
 }
 
 // Event handler for the display-flip switch. ON = 180° flip for upside-down
@@ -1448,23 +1528,6 @@ static void brightness_slider_event_cb(lv_event_t *e) {
     settings_wrapper_set_brightness_volatile((uint8_t)value);
     debounced_commit_schedule(&s_brightness_commit,
                               settings_wrapper_persist_brightness);
-}
-
-// Display CAN ID (this head unit's own node id) — value-change callback.
-// The volatile setter fires on_controller_id_changed (main.c), which re-arms
-// TWAI under the new ID right away; only the NVS commit is debounced.
-static void controller_id_on_change(num_field_t *f) {
-    settings_wrapper_set_controller_id_volatile((uint8_t)f->value);
-    debounced_commit_schedule(&s_controller_id_commit,
-                              settings_wrapper_persist_controller_id);
-}
-
-static void controller_id_plus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_controller_id_field);
-}
-
-static void controller_id_minus_btn_event_cb(lv_event_t *e) {
-    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_controller_id_field);
 }
 
 // Battery Capacity — stored as int with 0.1 Ah step (e.g., 150 → 15.0 Ah)
@@ -2045,7 +2108,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
     /* Back button — matches the "Back to dashboard" style on settings. */
     lv_obj_t *back_btn = lv_btn_create(s_logs_screen);
     lv_obj_set_pos(back_btn, 17, 14);
-    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_size(back_btn, SETTINGS_FULL_W, 40);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 5, 0);
@@ -2062,7 +2125,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
      * the log content, leaving the Back button pinned at the top. */
     lv_obj_t *cont = lv_obj_create(s_logs_screen);
     lv_obj_set_pos(cont, 10, 64);
-    lv_obj_set_size(cont, 780, 410);
+    lv_obj_set_size(cont, UI_W - 20, UI_H - 70);
     lv_obj_set_style_bg_color(cont, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(cont, 0, 0);
     lv_obj_set_style_pad_all(cont, 8, 0);
@@ -2195,7 +2258,7 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
     /* Back button — same style as the logs screen. */
     lv_obj_t *back_btn = lv_btn_create(s_qr_screen);
     lv_obj_set_pos(back_btn, 17, 14);
-    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_size(back_btn, SETTINGS_FULL_W, 40);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 5, 0);
@@ -2245,6 +2308,61 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
                      200, 0, false);
 }
 
+#ifdef LV_REALDEVICE
+/* "Previous firmware" — boot the other OTA slot.
+ *
+ * Two taps, because it reboots: the first arms the button and relabels it, the
+ * second writes otadata and restarts. Armed state is dropped when the button
+ * goes away (the Settings screen is rebuilt on every entry), which is what the
+ * DELETE handler is for — a timer left pointing at a freed label is a much
+ * worse bug than a button that stays armed. */
+static lv_obj_t   *s_fw_slot_lbl;
+static lv_timer_t *s_fw_slot_timer;
+static bool        s_fw_slot_armed;
+
+static void fw_slot_disarm(void)
+{
+    s_fw_slot_armed = false;
+    if (s_fw_slot_timer) { lv_timer_del(s_fw_slot_timer); s_fw_slot_timer = NULL; }
+    if (s_fw_slot_lbl)   lv_label_set_text(s_fw_slot_lbl, "Switch");
+}
+
+static void fw_slot_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    fw_slot_disarm();
+}
+
+static void fw_slot_deleted_cb(lv_event_t *e)
+{
+    (void)e;
+    s_fw_slot_lbl = NULL;
+    s_fw_slot_armed = false;
+    if (s_fw_slot_timer) { lv_timer_del(s_fw_slot_timer); s_fw_slot_timer = NULL; }
+}
+
+static void fw_slot_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_fw_slot_armed) {
+        s_fw_slot_armed = true;
+        if (s_fw_slot_lbl) lv_label_set_text(s_fw_slot_lbl, "Tap to reboot");
+        if (s_fw_slot_timer) lv_timer_del(s_fw_slot_timer);
+        s_fw_slot_timer = lv_timer_create(fw_slot_timer_cb, 5000, NULL);
+        return;
+    }
+    if (fw_slots_boot_other() == ESP_OK) {
+        settings_wrapper_apply_restart();     /* does not return on device */
+    } else {
+        fw_slot_disarm();
+        if (settings_info_label) {
+            lv_label_set_text(settings_info_label,
+                              "Other slot holds no bootable firmware");
+        }
+    }
+}
+#endif /* LV_REALDEVICE */
+
 // Event handler for "Reset trip" — zero trip / Ah without touching settings.
 // Sometimes the trip doesn't auto-reset on battery swap, so a manual button.
 static void reset_trip_button_event_cb(lv_event_t *e) {
@@ -2279,22 +2397,21 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_dashboard_theme(0); // Cockpit
         settings_wrapper_set_splash_loops(1);     // play boot splash once
         settings_wrapper_set_display_flip(false); // normal orientation
+        settings_wrapper_set_phone_screen(0);     // 3-finger gesture shows AA
         settings_wrapper_set_brightness_gesture_enabled(true);
 
-        // Update UI elements
-        if (s_target_id_field.label)        num_field_set(&s_target_id_field, 10);
-        if (s_second_head_id_field.label)   num_field_set(&s_second_head_id_field, 11);
-        if (settings_second_head_switch) {
-            lv_obj_clear_state(settings_second_head_switch, LV_STATE_CHECKED);
-        }
-        if (settings_can_speed_dropdown) {
-            lv_dropdown_set_selected(settings_can_speed_dropdown, 3);
-        }
+        /* Update UI elements. Target VESC ID, the second head, the display's
+         * own CAN id and the bus speed live on the VESC link screen now — it
+         * is rebuilt from the store every time it opens, so the writes above
+         * are all they need. */
         if (settings_theme_dropdown) {
             lv_dropdown_set_selected(settings_theme_dropdown, 0);
         }
         if (settings_splash_loops_dropdown) {
             lv_dropdown_set_selected(settings_splash_loops_dropdown, splash_loops_to_index(1));
+        }
+        if (settings_phone_screen_dropdown) {
+            lv_dropdown_set_selected(settings_phone_screen_dropdown, 0);
         }
         if (settings_display_flip_switch) {
             lv_obj_clear_state(settings_display_flip_switch, LV_STATE_CHECKED);
@@ -2309,7 +2426,6 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_brightness_slider) {
             lv_slider_set_value(settings_brightness_slider, 80, LV_ANIM_ON);
         }
-        if (s_controller_id_field.label)    num_field_set(&s_controller_id_field, 2);
         if (s_battery_capacity_field.label) num_field_set(&s_battery_capacity_field, 150); // 15.0 Ah
         if (settings_battery_calc_mode_dropdown) {
             lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, 0);
@@ -2357,6 +2473,12 @@ static void pas_open_btn_event_cb(lv_event_t *e) {
     show_pas_settings();   /* opens the on-device PAS screen (custom/pas_screen.c) */
 }
 
+static void vesc_link_open_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    show_vesc_link_settings();
+}
+
 static void speed_open_btn_event_cb(lv_event_t *e) {
     (void)e;
     show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
@@ -2372,31 +2494,20 @@ static void speed_open_btn_event_cb(lv_event_t *e) {
 static lv_obj_t   *settings_can_health_label = NULL;
 static lv_timer_t *s_can_health_tmr = NULL;
 /* Dedup cache — set_text invalidates unconditionally, so skip no-op rewrites.
- * Reset to the sentinel whenever the label is (re)created (settings_ui_init),
- * otherwise a rebuilt screen would keep an empty label until the count moves. */
-static uint32_t s_can_health_last_err = UINT32_MAX;
-static uint32_t s_can_health_last_rec = UINT32_MAX;
+ * Cleared whenever the label is (re)created (settings_ui_init), otherwise a
+ * rebuilt screen would keep an empty label until the text happens to change.
+ * The text itself comes from whichever transport is live (CAN error counters
+ * or the BLE link state), so the dedup is on the string, not on counters. */
+static char s_can_health_last[80] = "";
 
 static void settings_can_health_refresh(void)
 {
     if (!settings_can_health_label) return;
 
-    uint32_t err = 0, rec = 0;
-    char buf[64];
-    if (comm_can_get_bus_health(&err, &rec)) {
-        if (err == s_can_health_last_err && rec == s_can_health_last_rec) return;
-        s_can_health_last_err = err; s_can_health_last_rec = rec;
-        if (rec) {
-            snprintf(buf, sizeof(buf), "CAN errors: %lu\nBus-off recoveries: %lu",
-                     (unsigned long)err, (unsigned long)rec);
-        } else {
-            snprintf(buf, sizeof(buf), "CAN errors: %lu", (unsigned long)err);
-        }
-    } else {
-        if (s_can_health_last_err == 0 && s_can_health_last_rec == 0) return;
-        s_can_health_last_err = 0; s_can_health_last_rec = 0;
-        snprintf(buf, sizeof(buf), "CAN errors: (bus down)");
-    }
+    char buf[80];
+    if (!vesc_link_health_text(buf, sizeof(buf))) return;
+    if (strcmp(buf, s_can_health_last) == 0) return;
+    snprintf(s_can_health_last, sizeof(s_can_health_last), "%s", buf);
     lv_label_set_text(settings_can_health_label, buf);
 }
 
@@ -2423,8 +2534,8 @@ void settings_ui_init(lv_ui *ui) {
      * pointers still reference orphaned widgets on the old screen. Without
      * the parent check the early-return would leave only the generated
      * "Back to dashboard" button visible. */
-    if (s_target_id_field.label != NULL &&
-        lv_obj_get_parent(s_target_id_field.label) == ui->settings) {
+    if (s_settings_pages[0] != NULL &&
+        lv_obj_get_parent(s_settings_pages[0]) == ui->settings) {
         return;
     }
     
@@ -2436,95 +2547,54 @@ void settings_ui_init(lv_ui *ui) {
     vesc_limits_init();
 #endif
     
-    // Get current settings
-    uint8_t target_id = settings_wrapper_get_target_vesc_id();
-    uint8_t can_speed_idx = settings_wrapper_get_can_speed_index();
+    /* Get current settings. Everything about reaching the controller - target
+     * id, second head, this display's own CAN id, bus speed - lives on the
+     * VESC link screen now (custom/vesc_link_screen.c): one screen per
+     * decision beats five unrelated numbers scattered down a list. */
     uint8_t brightness = settings_wrapper_get_brightness();
-    uint8_t controller_id = settings_wrapper_get_controller_id();
     float battery_capacity = settings_wrapper_get_battery_capacity();
     uint8_t battery_calc_mode = settings_wrapper_get_battery_calc_mode();
-    
-    int y_pos = 70; // Start below "Back to dashboard" button
 
-    // ========== Target VESC ID ==========
-    settings_target_id_label = settings_heading_create(ui->settings, y_pos, "Target VESC ID:");
-    s_target_id_field = (num_field_t){
-        .value = target_id, .min = 1, .max = 254, .step = 1, .decimals = 0,
-        .on_change = target_id_on_change,
-    };
-    settings_target_id_minus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, target_id_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_target_id_field, y_pos + 5, 0x00a9ff);
-    settings_target_id_plus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, target_id_plus_btn_event_cb);
-    y_pos += SETTINGS_ROW_H;
-
-    // ========== Second head (dual-motor board) ==========
-    // Enable when the controller is a dual (two VESC nodes on one CAN bus).
-    // The second head's temps/liveness are read passively from its CAN STATUS,
-    // so the user must enable "Send status over CAN" (1-5 @ 50 Hz) on it.
-    settings_second_head_label = settings_heading_create(ui->settings, y_pos, "Second head:");
-    settings_second_head_switch = lv_switch_create(ui->settings);
-    lv_obj_set_pos(settings_second_head_switch, SETTINGS_SWITCH_X, y_pos + 15);
-    lv_obj_set_size(settings_second_head_switch, 60, 30);
-    if (settings_wrapper_get_second_head_enabled()) {
-        lv_obj_add_state(settings_second_head_switch, LV_STATE_CHECKED);
+    /* setup_scr_settings authors this at the 800-wide size; re-fit it rather
+     * than editing the generated file, which "Generate Code" would overwrite. */
+    if (ui->settings_exit_button) {
+        lv_obj_set_size(ui->settings_exit_button, SETTINGS_FULL_W, 40);
     }
-    lv_obj_set_style_bg_color(settings_second_head_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(settings_second_head_switch, lv_color_hex(0x00a9ff),
-                              LV_PART_INDICATOR | LV_STATE_CHECKED);
-    lv_obj_add_event_cb(settings_second_head_switch, second_head_switch_event_cb,
-                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    settings_tabs_build(ui->settings);
+    int s_page_y[SETTINGS_TAB_COUNT];
+    for (int i = 0; i < SETTINGS_TAB_COUNT; i++) s_page_y[i] = SETTINGS_PAGE_TOP_PAD;
+    int s_page_cur = SETTINGS_TAB_CONNECTION;
+    lv_obj_t *parent = s_settings_pages[s_page_cur];
+    int y_pos = s_page_y[s_page_cur];
+
+    SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
+
+    // ========== VESC link (CAN vs Bluetooth) ==========
+    // Opens the dedicated link screen: transport selector, VESC Express
+    // pairing and the live link state. The paired adapter lives in its own
+    // "vescble" NVS namespace, so it survives the settings Reset button the
+    // same way the sensors do.
+    settings_heading_create(parent, y_pos, "VESC link");
+    {
+        lv_obj_t *lnk_btn = lv_btn_create(parent);
+        lv_obj_set_pos(lnk_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(lnk_btn, SETTINGS_OPEN_W, 44);
+        lv_obj_set_style_bg_color(lnk_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(lnk_btn, 8, 0);
+        lv_obj_t *lnk_lbl = lv_label_create(lnk_btn);
+        lv_label_set_text(lnk_lbl, "Open");
+        lv_obj_center(lnk_lbl);
+        lv_obj_add_event_cb(lnk_btn, vesc_link_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
     y_pos += SETTINGS_ROW_H;
 
-    // ========== Second head CAN ID ==========
-    settings_second_head_id_label = settings_heading_create(ui->settings, y_pos, "Second head ID:");
-    s_second_head_id_field = (num_field_t){
-        .value = settings_wrapper_get_second_head_id(), .min = 1, .max = 254,
-        .step = 1, .decimals = 0, .on_change = second_head_id_on_change,
-    };
-    settings_second_head_id_minus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, second_head_id_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_second_head_id_field, y_pos + 5, 0x00a9ff);
-    settings_second_head_id_plus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, second_head_id_plus_btn_event_cb);
-    y_pos += SETTINGS_ROW_H;
-
-    // ========== Display CAN ID (this head unit's node on the bus) ==========
-    settings_controller_id_label = settings_heading_create(ui->settings, y_pos, "Display CAN ID:");
-    s_controller_id_field = (num_field_t){
-        .value = controller_id, .min = 1, .max = 254, .step = 1, .decimals = 0,
-        .on_change = controller_id_on_change,
-    };
-    settings_controller_id_minus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, controller_id_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_controller_id_field, y_pos + 5, 0x00a9ff);
-    settings_controller_id_plus_btn = settings_step_btn_create(ui->settings,
-        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, controller_id_plus_btn_event_cb);
-    y_pos += SETTINGS_ROW_H;
-
-    // ========== CAN Speed Dropdown ==========
-    settings_can_speed_label = settings_heading_create(ui->settings, y_pos, "CAN Speed (kbps)");
-
-    settings_can_speed_dropdown = lv_dropdown_create(ui->settings);
-    lv_dropdown_set_options(settings_can_speed_dropdown, "125 kbps\n250 kbps\n500 kbps\n1000 kbps");
-    lv_dropdown_set_selected(settings_can_speed_dropdown, can_speed_idx);
-    lv_obj_set_pos(settings_can_speed_dropdown, SETTINGS_WIDE_X, y_pos + 5);
-    lv_obj_set_size(settings_can_speed_dropdown, SETTINGS_WIDE_W, 50);
-    lv_obj_set_style_bg_color(settings_can_speed_dropdown, lv_color_hex(0x2a3440), 0);
-    lv_obj_set_style_text_color(settings_can_speed_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_can_speed_dropdown, &lv_font_montserrat_24, 0);
-    settings_dropdown_fit_font(settings_can_speed_dropdown);
-    lv_obj_set_style_border_width(settings_can_speed_dropdown, 0, 0);
-    lv_obj_set_style_radius(settings_can_speed_dropdown, 8, 0);
-    lv_obj_add_event_cb(settings_can_speed_dropdown, can_speed_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    y_pos += SETTINGS_ROW_H;
+    SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
 
     // ========== Dashboard Theme Dropdown ==========
     // Options are built from the dashboard-theme registry, so any theme added
     // (via theme_*_register in custom_init_once) shows up here automatically.
-    settings_theme_label = settings_heading_create(ui->settings, y_pos, "Dashboard theme:");
+    settings_theme_label = settings_heading_create(parent, y_pos, "Dashboard theme:");
 
     char theme_opts[192];
     size_t theme_off = 0;
@@ -2536,7 +2606,7 @@ void settings_ui_init(lv_ui *ui) {
     }
     if (theme_n == 0) snprintf(theme_opts, sizeof(theme_opts), "Cockpit");
 
-    settings_theme_dropdown = lv_dropdown_create(ui->settings);
+    settings_theme_dropdown = lv_dropdown_create(parent);
     lv_dropdown_set_options(settings_theme_dropdown, theme_opts);
     int active_theme = dashboard_theme_active_index();
     lv_dropdown_set_selected(settings_theme_dropdown, active_theme < 0 ? 0 : active_theme);
@@ -2553,9 +2623,9 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += SETTINGS_ROW_H;
 
     // ========== Boot Splash Repeats ==========
-    settings_splash_loops_label = settings_heading_create(ui->settings, y_pos, "Boot splash repeats:");
+    settings_splash_loops_label = settings_heading_create(parent, y_pos, "Boot splash repeats:");
 
-    settings_splash_loops_dropdown = lv_dropdown_create(ui->settings);
+    settings_splash_loops_dropdown = lv_dropdown_create(parent);
     lv_dropdown_set_options(settings_splash_loops_dropdown, "Off\n1\n2\n3\n5");
     lv_dropdown_set_selected(settings_splash_loops_dropdown,
                              splash_loops_to_index(settings_wrapper_get_splash_loops()));
@@ -2571,9 +2641,32 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += SETTINGS_ROW_H;
 
+    SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
+
+    // ========== Phone screen (what the 3-finger gesture shows) ==========
+    settings_phone_screen_label = settings_heading_create(parent, y_pos, "Phone screen (3-finger):");
+
+    settings_phone_screen_dropdown = lv_dropdown_create(parent);
+    lv_dropdown_set_options(settings_phone_screen_dropdown, "Android Auto\nNavigator");
+    lv_dropdown_set_selected(settings_phone_screen_dropdown,
+                             settings_wrapper_get_phone_screen() == 1 ? 1 : 0);
+    lv_obj_set_pos(settings_phone_screen_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_phone_screen_dropdown, SETTINGS_WIDE_W, 50);
+    lv_obj_set_style_bg_color(settings_phone_screen_dropdown, lv_color_hex(0x2a3440), 0);
+    lv_obj_set_style_text_color(settings_phone_screen_dropdown, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(settings_phone_screen_dropdown, &lv_font_montserrat_24, 0);
+    settings_dropdown_fit_font(settings_phone_screen_dropdown);
+    lv_obj_set_style_border_width(settings_phone_screen_dropdown, 0, 0);
+    lv_obj_set_style_radius(settings_phone_screen_dropdown, 8, 0);
+    lv_obj_add_event_cb(settings_phone_screen_dropdown, phone_screen_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
+
+    SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
+
     // ========== Flip screen 180 (upside-down mounting) ==========
-    settings_display_flip_label = settings_heading_create(ui->settings, y_pos, "Flip screen 180 (reboot):");
-    settings_display_flip_switch = lv_switch_create(ui->settings);
+    settings_display_flip_label = settings_heading_create(parent, y_pos, "Flip screen 180 (reboot):");
+    settings_display_flip_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_display_flip_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_display_flip_switch, 60, 30);
     if (settings_wrapper_get_display_flip()) {
@@ -2586,24 +2679,26 @@ void settings_ui_init(lv_ui *ui) {
                         LV_EVENT_VALUE_CHANGED, NULL);
     y_pos += SETTINGS_ROW_H;
 
+    SETTINGS_GROUP(SETTINGS_TAB_BIKE);
+
     // ========== Battery Capacity ==========
-    settings_battery_capacity_label = settings_heading_create(ui->settings, y_pos, "Battery Capacity (Ah):");
+    settings_battery_capacity_label = settings_heading_create(parent, y_pos, "Battery Capacity (Ah):");
     s_battery_capacity_field = (num_field_t){
         .value = (int)(battery_capacity * 10.0f),
         .min = 10, .max = 2000, .step = 1, .decimals = 1,
         .on_change = battery_capacity_on_change,
     };
-    settings_battery_capacity_minus_btn = settings_step_btn_create(ui->settings,
+    settings_battery_capacity_minus_btn = settings_step_btn_create(parent,
         SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, battery_capacity_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_battery_capacity_field, y_pos + 5, 0xffa500);
-    settings_battery_capacity_plus_btn = settings_step_btn_create(ui->settings,
+    settings_value_label_init(parent, &s_battery_capacity_field, y_pos + 5, 0xffa500);
+    settings_battery_capacity_plus_btn = settings_step_btn_create(parent,
         SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, battery_capacity_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
     
     // ========== Battery Calculation Mode Dropdown ==========
-    settings_battery_calc_mode_label = settings_heading_create(ui->settings, y_pos, "Battery Calculation:");
+    settings_battery_calc_mode_label = settings_heading_create(parent, y_pos, "Battery Calculation:");
 
-    settings_battery_calc_mode_dropdown = lv_dropdown_create(ui->settings);
+    settings_battery_calc_mode_dropdown = lv_dropdown_create(parent);
     lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
     lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
     lv_obj_set_pos(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_X, y_pos + 5);
@@ -2618,25 +2713,29 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += SETTINGS_ROW_H;
 
+    SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
+
     // ========== Power Max (kW) ==========
     // Full-scale value for the cockpit power bar — drives both bar fill ratio
     // and the "X.X KW" label next to it.
     float power_max_kw = settings_wrapper_get_power_max_kw();
 
-    settings_power_max_label = settings_heading_create(ui->settings, y_pos, "Power Max (kW):");
+    settings_power_max_label = settings_heading_create(parent, y_pos, "Power Max (kW):");
     s_power_max_field = (num_field_t){
         .value = (int)(power_max_kw * 10.0f + 0.5f),
         .min = 1, .max = 1000, .step = 1, .decimals = 1,
         .on_change = power_max_on_change,
     };
-    settings_power_max_minus_btn = settings_step_btn_create(ui->settings,
+    settings_power_max_minus_btn = settings_step_btn_create(parent,
         SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, power_max_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_power_max_field, y_pos + 5, 0xffa500);
-    settings_power_max_plus_btn = settings_step_btn_create(ui->settings,
+    settings_value_label_init(parent, &s_power_max_field, y_pos + 5, 0xffa500);
+    settings_power_max_plus_btn = settings_step_btn_create(parent,
         SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, power_max_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
 
 #if !defined(ENABLE_WALL_CLOCK) || ENABLE_WALL_CLOCK
+    SETTINGS_GROUP(SETTINGS_TAB_SYSTEM);
+
     // ========== Wall clock (Time of day) ==========
     uint32_t clock_now = settings_wrapper_get_clock_secs_of_day();
     int      clock_h_now = (int)(clock_now / 3600u);
@@ -2644,17 +2743,19 @@ void settings_ui_init(lv_ui *ui) {
     /* Hours cluster — placed in the gap between heading and the minutes
      * cluster on the right. Mirrors the SETTINGS_*_X spacing pattern but
      * shifted ~250 px to the left so the row fits in 800 px. */
-    const lv_coord_t CLK_H_MINUS_X = UI_SX(300);
-    const lv_coord_t CLK_H_VAL_X    = UI_SX(370);
-    const lv_coord_t CLK_H_PLUS_X   = UI_SX(470);
-    settings_clock_heading_label = settings_heading_create(ui->settings, y_pos, "Time:");
+    /* Scaled like every other column anchor here (ui_geom.h): at 480 the
+     * literal 470 would land on top of the minutes cluster, which starts at
+     * SETTINGS_MINUS_X. */
+    const int CLK_H_MINUS_X = UI_SX(300), CLK_H_VAL_X = UI_SX(370),
+              CLK_H_PLUS_X  = UI_SX(470);
+    settings_clock_heading_label = settings_heading_create(parent, y_pos, "Time:");
     s_clock_hour_field = (num_field_t){
         .value = clock_h_now, .min = 0, .max = 23, .step = 1, .decimals = 0,
         .on_change = clock_hour_on_change,
     };
-    settings_clock_h_minus_btn = settings_step_btn_create(ui->settings,
+    settings_clock_h_minus_btn = settings_step_btn_create(parent,
         CLK_H_MINUS_X, y_pos + 5, "-", 0xff4444, clock_h_minus_btn_event_cb);
-    s_clock_hour_field.label = lv_label_create(ui->settings);
+    s_clock_hour_field.label = lv_label_create(parent);
     lv_obj_set_pos(s_clock_hour_field.label, CLK_H_VAL_X, y_pos + 5);
     lv_obj_set_size(s_clock_hour_field.label, SETTINGS_VAL_W, 50);
     lv_obj_set_style_text_color(s_clock_hour_field.label, lv_color_hex(0xB6FF2E), 0);
@@ -2662,11 +2763,11 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_text_align(s_clock_hour_field.label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_top(s_clock_hour_field.label, 11, 0);
     num_field_refresh(&s_clock_hour_field);
-    settings_clock_h_plus_btn = settings_step_btn_create(ui->settings,
+    settings_clock_h_plus_btn = settings_step_btn_create(parent,
         CLK_H_PLUS_X, y_pos + 5, "+", 0x00a9ff, clock_h_plus_btn_event_cb);
 
     /* ':' separator between H and M clusters. */
-    settings_clock_colon_label = lv_label_create(ui->settings);
+    settings_clock_colon_label = lv_label_create(parent);
     lv_label_set_text(settings_clock_colon_label, ":");
     lv_obj_set_pos(settings_clock_colon_label, UI_SX(537), y_pos + 16);
     lv_obj_set_style_text_color(settings_clock_colon_label, lv_color_hex(0xB6FF2E), 0);
@@ -2677,10 +2778,10 @@ void settings_ui_init(lv_ui *ui) {
         .value = clock_m_now, .min = 0, .max = 59, .step = 1, .decimals = 0,
         .on_change = clock_min_on_change,
     };
-    settings_clock_m_minus_btn = settings_step_btn_create(ui->settings,
+    settings_clock_m_minus_btn = settings_step_btn_create(parent,
         SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, clock_m_minus_btn_event_cb);
-    settings_value_label_init(ui->settings, &s_clock_min_field, y_pos + 5, 0xB6FF2E);
-    settings_clock_m_plus_btn = settings_step_btn_create(ui->settings,
+    settings_value_label_init(parent, &s_clock_min_field, y_pos + 5, 0xB6FF2E);
+    settings_clock_m_plus_btn = settings_step_btn_create(parent,
         SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, clock_m_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
 #endif  /* ENABLE_WALL_CLOCK */
@@ -2688,7 +2789,7 @@ void settings_ui_init(lv_ui *ui) {
     /*
     // ========== VESC LIMITS SECTION ==========
     // Title
-    settings_limits_title_label = lv_label_create(ui->settings);
+    settings_limits_title_label = lv_label_create(parent);
     lv_label_set_text(settings_limits_title_label, "=== VESC Motor Limits ===");
     lv_obj_set_pos(settings_limits_title_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_limits_title_label, lv_color_hex(0xffa500), 0);
@@ -2697,7 +2798,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += 35;
     
     // Read Limits Button
-    settings_read_limits_btn = lv_btn_create(ui->settings);
+    settings_read_limits_btn = lv_btn_create(parent);
     lv_obj_t *read_limits_label = lv_label_create(settings_read_limits_btn);
     lv_label_set_text(read_limits_label, "Read Limits from VESC");
     lv_obj_align(read_limits_label, LV_ALIGN_CENTER, 0, 0);
@@ -2713,14 +2814,14 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += 70;
     
     // Motor Current Max Spinbox
-    settings_motor_current_label = lv_label_create(ui->settings);
+    settings_motor_current_label = lv_label_create(parent);
     lv_label_set_text(settings_motor_current_label, "Motor Current Max (A):");
     lv_obj_set_pos(settings_motor_current_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_motor_current_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_motor_current_label, &lv_font_montserrat_24, 0);
     
     // Minus button
-    settings_motor_current_minus_btn = lv_btn_create(ui->settings);
+    settings_motor_current_minus_btn = lv_btn_create(parent);
     lv_obj_t *motor_curr_minus_label = lv_label_create(settings_motor_current_minus_btn);
     lv_label_set_text(motor_curr_minus_label, "-");
     lv_obj_align(motor_curr_minus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2734,7 +2835,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_motor_current_minus_btn, motor_current_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     // Spinbox
-    settings_motor_current_spinbox = lv_spinbox_create(ui->settings);
+    settings_motor_current_spinbox = lv_spinbox_create(parent);
     lv_spinbox_set_range(settings_motor_current_spinbox, 50, 2000); // 5.0 to 200.0 A
     lv_spinbox_set_digit_format(settings_motor_current_spinbox, 4, 3); // Format: "60.0"
     lv_spinbox_set_value(settings_motor_current_spinbox, 600); // Default 60.0A
@@ -2749,7 +2850,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_motor_current_spinbox, 8, LV_PART_MAIN);
     
     // Plus button
-    settings_motor_current_plus_btn = lv_btn_create(ui->settings);
+    settings_motor_current_plus_btn = lv_btn_create(parent);
     lv_obj_t *motor_curr_plus_label = lv_label_create(settings_motor_current_plus_btn);
     lv_label_set_text(motor_curr_plus_label, "+");
     lv_obj_align(motor_curr_plus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2765,14 +2866,14 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     
     // Battery Current Max Spinbox
-    settings_battery_current_label = lv_label_create(ui->settings);
+    settings_battery_current_label = lv_label_create(parent);
     lv_label_set_text(settings_battery_current_label, "Battery Current Max (A):");
     lv_obj_set_pos(settings_battery_current_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_battery_current_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_current_label, &lv_font_montserrat_24, 0);
     
     // Minus button
-    settings_battery_current_minus_btn = lv_btn_create(ui->settings);
+    settings_battery_current_minus_btn = lv_btn_create(parent);
     lv_obj_t *batt_curr_minus_label = lv_label_create(settings_battery_current_minus_btn);
     lv_label_set_text(batt_curr_minus_label, "-");
     lv_obj_align(batt_curr_minus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2786,7 +2887,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_battery_current_minus_btn, battery_current_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     // Spinbox
-    settings_battery_current_spinbox = lv_spinbox_create(ui->settings);
+    settings_battery_current_spinbox = lv_spinbox_create(parent);
     lv_spinbox_set_range(settings_battery_current_spinbox, 50, 2000); // 5.0 to 200.0 A
     lv_spinbox_set_digit_format(settings_battery_current_spinbox, 4, 3); // Format: "45.0"
     lv_spinbox_set_value(settings_battery_current_spinbox, 450); // Default 45.0A
@@ -2801,7 +2902,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_battery_current_spinbox, 8, LV_PART_MAIN);
     
     // Plus button
-    settings_battery_current_plus_btn = lv_btn_create(ui->settings);
+    settings_battery_current_plus_btn = lv_btn_create(parent);
     lv_obj_t *batt_curr_plus_label = lv_label_create(settings_battery_current_plus_btn);
     lv_label_set_text(batt_curr_plus_label, "+");
     lv_obj_align(batt_curr_plus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2817,14 +2918,14 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     
     // ERPM Max Spinbox
-    settings_erpm_max_label = lv_label_create(ui->settings);
+    settings_erpm_max_label = lv_label_create(parent);
     lv_label_set_text(settings_erpm_max_label, "ERPM Max (x1000):");
     lv_obj_set_pos(settings_erpm_max_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_erpm_max_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_erpm_max_label, &lv_font_montserrat_24, 0);
     
     // Minus button
-    settings_erpm_max_minus_btn = lv_btn_create(ui->settings);
+    settings_erpm_max_minus_btn = lv_btn_create(parent);
     lv_obj_t *erpm_minus_label = lv_label_create(settings_erpm_max_minus_btn);
     lv_label_set_text(erpm_minus_label, "-");
     lv_obj_align(erpm_minus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2838,7 +2939,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_erpm_max_minus_btn, erpm_max_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     // Spinbox  
-    settings_erpm_max_spinbox = lv_spinbox_create(ui->settings);
+    settings_erpm_max_spinbox = lv_spinbox_create(parent);
     lv_spinbox_set_range(settings_erpm_max_spinbox, 10, 200); // 10k to 200k ERPM
     lv_spinbox_set_digit_format(settings_erpm_max_spinbox, 3, 0); // Format: "60" (means 60k)
     lv_spinbox_set_value(settings_erpm_max_spinbox, 60); // Default 60k ERPM
@@ -2853,7 +2954,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_erpm_max_spinbox, 8, LV_PART_MAIN);
     
     // Plus button
-    settings_erpm_max_plus_btn = lv_btn_create(ui->settings);
+    settings_erpm_max_plus_btn = lv_btn_create(parent);
     lv_obj_t *erpm_plus_label = lv_label_create(settings_erpm_max_plus_btn);
     lv_label_set_text(erpm_plus_label, "+");
     lv_obj_align(erpm_plus_label, LV_ALIGN_CENTER, 0, 0);
@@ -2869,7 +2970,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     
     // Apply Limits Button
-    settings_apply_limits_btn = lv_btn_create(ui->settings);
+    settings_apply_limits_btn = lv_btn_create(parent);
     lv_obj_t *apply_limits_label = lv_label_create(settings_apply_limits_btn);
     lv_label_set_text(apply_limits_label, "Apply Limits to VESC");
     lv_obj_align(apply_limits_label, LV_ALIGN_CENTER, 0, 0);
@@ -2885,7 +2986,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += 70;
     
     // Limits Status Label
-    settings_limits_status_label = lv_label_create(ui->settings);
+    settings_limits_status_label = lv_label_create(parent);
     lv_label_set_text(settings_limits_status_label, "Press 'Read Limits' to load VESC values");
     lv_obj_set_pos(settings_limits_status_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_limits_status_label, lv_color_hex(0xaaaaaa), 0);
@@ -2895,18 +2996,18 @@ void settings_ui_init(lv_ui *ui) {
     */
     /*
     // ========== Brightness Slider ==========
-    settings_brightness_label = lv_label_create(ui->settings);
+    settings_brightness_label = lv_label_create(parent);
     sprintf(buf, "Brightness: %d%%", brightness);
     lv_label_set_text(settings_brightness_label, buf);
     lv_obj_set_pos(settings_brightness_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_brightness_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_brightness_label, &lv_font_montserrat_24, 0);
     
-    settings_brightness_slider = lv_slider_create(ui->settings);
+    settings_brightness_slider = lv_slider_create(parent);
     lv_slider_set_range(settings_brightness_slider, 10, 100);
     lv_slider_set_value(settings_brightness_slider, brightness, LV_ANIM_OFF);
     lv_obj_set_pos(settings_brightness_slider, 20, y_pos + 35);
-    lv_obj_set_size(settings_brightness_slider, 770, 20); // Slightly thicker for better touch
+    lv_obj_set_size(settings_brightness_slider, SETTINGS_FULL_W, 20); // Slightly thicker for better touch
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0x2a3440), LV_PART_MAIN);
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0xffa500), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0xffffff), LV_PART_KNOB);
@@ -2920,13 +3021,13 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Show FPS Switch ==========
     bool show_fps = settings_wrapper_get_show_fps();
 
-    settings_show_fps_label = lv_label_create(ui->settings);
+    settings_show_fps_label = lv_label_create(parent);
     lv_label_set_text(settings_show_fps_label, "Show FPS Counter");
     lv_obj_set_pos(settings_show_fps_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_show_fps_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_show_fps_label, &lv_font_montserrat_24, 0);
 
-    settings_show_fps_switch = lv_switch_create(ui->settings);
+    settings_show_fps_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_show_fps_switch, 380, y_pos - 5);
     lv_obj_set_size(settings_show_fps_switch, 60, 30);
 
@@ -2944,11 +3045,13 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += spacing;
     */
 
+    SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
+
     // ========== Brightness Gesture Switch ==========
     settings_brightness_gesture_label =
-        settings_heading_create(ui->settings, y_pos, "Brightness gesture");
+        settings_heading_create(parent, y_pos, "Brightness gesture");
 
-    settings_brightness_gesture_switch = lv_switch_create(ui->settings);
+    settings_brightness_gesture_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_brightness_gesture_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_brightness_gesture_switch, 60, 30);
     if (settings_wrapper_get_brightness_gesture_enabled()) {
@@ -2960,10 +3063,12 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += SETTINGS_ROW_H;
 
-    // ========== Demo Mode Switch ==========
-    settings_demo_mode_label = settings_heading_create(ui->settings, y_pos, "Demo mode");
+    SETTINGS_GROUP(SETTINGS_TAB_SYSTEM);
 
-    settings_demo_mode_switch = lv_switch_create(ui->settings);
+    // ========== Demo Mode Switch ==========
+    settings_demo_mode_label = settings_heading_create(parent, y_pos, "Demo mode");
+
+    settings_demo_mode_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_demo_mode_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_demo_mode_switch, 60, 30);
     if (dashboard_demo_is_active()) {
@@ -2976,9 +3081,9 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += SETTINGS_ROW_H;
 
     // ========== VESC Emulator Switch ==========
-    settings_vesc_emulator_label = settings_heading_create(ui->settings, y_pos, "VESC Emulator");
+    settings_vesc_emulator_label = settings_heading_create(parent, y_pos, "VESC Emulator");
 
-    settings_vesc_emulator_switch = lv_switch_create(ui->settings);
+    settings_vesc_emulator_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_vesc_emulator_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_vesc_emulator_switch, 60, 30);
     if (settings_wrapper_get_vesc_emulator()) {
@@ -2990,22 +3095,51 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_vesc_emulator_switch, vesc_emulator_switch_event_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
-    settings_vesc_emulator_hint = lv_label_create(ui->settings);
+    settings_vesc_emulator_hint = lv_label_create(parent);
     lv_label_set_text(settings_vesc_emulator_hint, "Restart required");
-    lv_obj_set_pos(settings_vesc_emulator_hint, 220, y_pos + 22);
+    settings_hint_place(settings_vesc_emulator_hint, 220, y_pos + 22);
     lv_obj_set_style_text_color(settings_vesc_emulator_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_vesc_emulator_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
+
+#ifdef LV_REALDEVICE
+    // ========== Previous firmware (the other OTA slot) ==========
+    {
+        char prev[FW_INFO_MAX + 8];
+        char caption[64];
+        bool have = fw_slots_other_label(prev, sizeof prev);
+        if (have) snprintf(caption, sizeof caption, "Previous firmware: %s", prev);
+        else      snprintf(caption, sizeof caption, "Previous firmware: none yet");
+        settings_heading_create(parent, y_pos, caption);
+
+        if (have) {
+            lv_obj_t *b = lv_btn_create(parent);
+            lv_obj_set_pos(b, SETTINGS_OPEN_X, y_pos + 8);
+            lv_obj_set_size(b, SETTINGS_OPEN_W, 44);
+            lv_obj_set_style_bg_color(b, lv_color_hex(0xffa500), 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            s_fw_slot_lbl = lv_label_create(b);
+            lv_label_set_text(s_fw_slot_lbl, "Switch");
+            lv_obj_center(s_fw_slot_lbl);
+            s_fw_slot_armed = false;
+            lv_obj_add_event_cb(b, fw_slot_btn_event_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_event_cb(b, fw_slot_deleted_cb, LV_EVENT_DELETE, NULL);
+        }
+    }
+    y_pos += SETTINGS_ROW_H;
+#endif /* LV_REALDEVICE */
+
+    SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
 
     // ========== AA Auto-Connect Switch ==========
     // Controls the BT agent's auto-reconnect-on-boot loop (it HFP-pages the
     // last paired phone until ACL comes up). When off, the agent stays quiet
     // and the user must initiate BT from the phone side.
     settings_aa_autoconnect_label =
-        settings_heading_create(ui->settings, y_pos, "AA Auto-Connect");
+        settings_heading_create(parent, y_pos, "AA Auto-Connect");
 
-    settings_aa_autoconnect_switch = lv_switch_create(ui->settings);
+    settings_aa_autoconnect_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_aa_autoconnect_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_aa_autoconnect_switch, 60, 30);
     if (settings_wrapper_get_aa_autoconnect()) {
@@ -3017,20 +3151,22 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_aa_autoconnect_switch, aa_autoconnect_switch_event_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
-    settings_aa_autoconnect_hint = lv_label_create(ui->settings);
+    settings_aa_autoconnect_hint = lv_label_create(parent);
     lv_label_set_text(settings_aa_autoconnect_hint, "Reconnect to last phone on power-on");
-    lv_obj_set_pos(settings_aa_autoconnect_hint, 250, y_pos + 22);
+    settings_hint_place(settings_aa_autoconnect_hint, 250, y_pos + 22);
     lv_obj_set_style_text_color(settings_aa_autoconnect_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_aa_autoconnect_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
 
+    SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
+
     // ========== Units Switch ==========
     // OFF = metric (km, km/h), ON = imperial (miles, mph). Applies live across
     // the dashboard, AA HUD overlay and trip statistics.
-    settings_units_label = settings_heading_create(ui->settings, y_pos, "Units (miles)");
+    settings_units_label = settings_heading_create(parent, y_pos, "Units (miles)");
 
-    settings_units_switch = lv_switch_create(ui->settings);
+    settings_units_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_units_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_units_switch, 60, 30);
     if (settings_wrapper_get_use_imperial()) {
@@ -3042,9 +3178,9 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_units_switch, units_switch_event_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
-    settings_units_hint = lv_label_create(ui->settings);
+    settings_units_hint = lv_label_create(parent);
     lv_label_set_text(settings_units_hint, "Off = km / km/h, On = miles / mph");
-    lv_obj_set_pos(settings_units_hint, 230, y_pos + 22);
+    settings_hint_place(settings_units_hint, 230, y_pos + 22);
     lv_obj_set_style_text_color(settings_units_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_units_hint, &lv_font_montserrat_14, 0);
 
@@ -3053,9 +3189,9 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Temperature Units Switch ==========
     // OFF = Celsius, ON = Fahrenheit. Applies live to the dashboard motor /
     // controller temperatures and the trip-statistics temperature chart.
-    settings_temp_unit_label = settings_heading_create(ui->settings, y_pos, "Temperature (F)");
+    settings_temp_unit_label = settings_heading_create(parent, y_pos, "Temperature (F)");
 
-    settings_temp_unit_switch = lv_switch_create(ui->settings);
+    settings_temp_unit_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_temp_unit_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_temp_unit_switch, 60, 30);
     if (settings_wrapper_get_use_fahrenheit()) {
@@ -3067,22 +3203,24 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_temp_unit_switch, temp_unit_switch_event_cb,
                         LV_EVENT_VALUE_CHANGED, NULL);
 
-    settings_temp_unit_hint = lv_label_create(ui->settings);
+    settings_temp_unit_hint = lv_label_create(parent);
     lv_label_set_text(settings_temp_unit_hint, "Off = Celsius, On = Fahrenheit");
-    lv_obj_set_pos(settings_temp_unit_hint, 230, y_pos + 22);
+    settings_hint_place(settings_temp_unit_hint, 230, y_pos + 22);
     lv_obj_set_style_text_color(settings_temp_unit_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_temp_unit_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
 
+    SETTINGS_GROUP(SETTINGS_TAB_BIKE);
+
     // ========== Pedal Assist (PAS) ==========
     // Opens the dedicated on-device PAS screen (sensor pairing, live cadence,
     // assist tuning). The head unit owns the whole feature — no phone.
-    settings_heading_create(ui->settings, y_pos, "Pedal assist (PAS)");
+    settings_heading_create(parent, y_pos, "Pedal assist (PAS)");
     {
-        lv_obj_t *pas_btn = lv_btn_create(ui->settings);
-        lv_obj_set_pos(pas_btn, 600, y_pos + 8);
-        lv_obj_set_size(pas_btn, 190, 44);
+        lv_obj_t *pas_btn = lv_btn_create(parent);
+        lv_obj_set_pos(pas_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(pas_btn, SETTINGS_OPEN_W, 44);
         lv_obj_set_style_bg_color(pas_btn, lv_color_hex(0x00a9ff), 0);
         lv_obj_set_style_radius(pas_btn, 8, 0);
         lv_obj_t *pas_lbl = lv_label_create(pas_btn);
@@ -3098,11 +3236,11 @@ void settings_ui_init(lv_ui *ui) {
     // sensor binding and odometer live in the "spdsns" NVS namespace and
     // deliberately survive the settings Reset button (PAS precedent; the
     // odometer must never be resettable). wheel_mm is reset there already.
-    settings_heading_create(ui->settings, y_pos, "Speed sensor");
+    settings_heading_create(parent, y_pos, "Speed sensor");
     {
-        lv_obj_t *spd_btn = lv_btn_create(ui->settings);
-        lv_obj_set_pos(spd_btn, 600, y_pos + 8);
-        lv_obj_set_size(spd_btn, 190, 44);
+        lv_obj_t *spd_btn = lv_btn_create(parent);
+        lv_obj_set_pos(spd_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(spd_btn, SETTINGS_OPEN_W, 44);
         lv_obj_set_style_bg_color(spd_btn, lv_color_hex(0x00a9ff), 0);
         lv_obj_set_style_radius(spd_btn, 8, 0);
         lv_obj_t *spd_lbl = lv_label_create(spd_btn);
@@ -3111,18 +3249,19 @@ void settings_ui_init(lv_ui *ui) {
         lv_obj_add_event_cb(spd_btn, speed_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
     }
     y_pos += SETTINGS_ROW_H;
+
     /*
     // ========== Wheel Diameter Spinbox ==========
     uint16_t wheel_diameter = settings_wrapper_get_wheel_diameter_mm();
     
-    settings_wheel_diameter_label = lv_label_create(ui->settings);
+    settings_wheel_diameter_label = lv_label_create(parent);
     lv_label_set_text(settings_wheel_diameter_label, "Wheel Diameter (mm):");
     lv_obj_set_pos(settings_wheel_diameter_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_wheel_diameter_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_wheel_diameter_label, &lv_font_montserrat_24, 0);
     
     // Minus button
-    settings_wheel_diameter_minus_btn = lv_btn_create(ui->settings);
+    settings_wheel_diameter_minus_btn = lv_btn_create(parent);
     lv_obj_t *wheel_diam_minus_label = lv_label_create(settings_wheel_diameter_minus_btn);
     lv_label_set_text(wheel_diam_minus_label, "-");
     lv_obj_align(wheel_diam_minus_label, LV_ALIGN_CENTER, 0, 0);
@@ -3136,7 +3275,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_wheel_diameter_minus_btn, wheel_diameter_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     // Spinbox
-    settings_wheel_diameter_spinbox = lv_spinbox_create(ui->settings);
+    settings_wheel_diameter_spinbox = lv_spinbox_create(parent);
     lv_spinbox_set_range(settings_wheel_diameter_spinbox, 0, 2000);
     lv_spinbox_set_digit_format(settings_wheel_diameter_spinbox, 3, 0); // 3 digits, 0 decimal places
     lv_spinbox_set_value(settings_wheel_diameter_spinbox, wheel_diameter);
@@ -3155,7 +3294,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_wheel_diameter_spinbox, wheel_diameter_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     
     // Plus button
-    settings_wheel_diameter_plus_btn = lv_btn_create(ui->settings);
+    settings_wheel_diameter_plus_btn = lv_btn_create(parent);
     lv_obj_t *wheel_diam_plus_label = lv_label_create(settings_wheel_diameter_plus_btn);
     lv_label_set_text(wheel_diam_plus_label, "+");
     lv_obj_align(wheel_diam_plus_label, LV_ALIGN_CENTER, 0, 0);
@@ -3173,14 +3312,14 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Motor Poles Spinbox ==========
     uint8_t motor_poles = settings_wrapper_get_motor_poles();
 
-    settings_motor_poles_label = lv_label_create(ui->settings);
+    settings_motor_poles_label = lv_label_create(parent);
     lv_label_set_text(settings_motor_poles_label, "Motor Poles:");
     lv_obj_set_pos(settings_motor_poles_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_motor_poles_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_motor_poles_label, &lv_font_montserrat_24, 0);
 
     // Minus button
-    settings_motor_poles_minus_btn = lv_btn_create(ui->settings);
+    settings_motor_poles_minus_btn = lv_btn_create(parent);
     lv_obj_t *motor_poles_minus_label = lv_label_create(settings_motor_poles_minus_btn);
     lv_label_set_text(motor_poles_minus_label, "-");
     lv_obj_align(motor_poles_minus_label, LV_ALIGN_CENTER, 0, 0);
@@ -3194,7 +3333,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_motor_poles_minus_btn, motor_poles_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     // Spinbox
-    settings_motor_poles_spinbox = lv_spinbox_create(ui->settings);
+    settings_motor_poles_spinbox = lv_spinbox_create(parent);
     lv_spinbox_set_range(settings_motor_poles_spinbox, 0, 50);
     lv_spinbox_set_digit_format(settings_motor_poles_spinbox, 2, 0); // 2 digits, 0 decimal places
     lv_spinbox_set_value(settings_motor_poles_spinbox, motor_poles);
@@ -3213,7 +3352,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_motor_poles_spinbox, motor_poles_spinbox_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // Plus button
-    settings_motor_poles_plus_btn = lv_btn_create(ui->settings);
+    settings_motor_poles_plus_btn = lv_btn_create(parent);
     lv_obj_t *motor_poles_plus_label = lv_label_create(settings_motor_poles_plus_btn);
     lv_label_set_text(motor_poles_plus_label, "+");
     lv_obj_align(motor_poles_plus_label, LV_ALIGN_CENTER, 0, 0);
@@ -3228,18 +3367,20 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += spacing;
 */
+    SETTINGS_GROUP(SETTINGS_TAB_SYSTEM);
+
     // ========== Reset trip (own row) ===================================
     // Sometimes the trip doesn't auto-reset on battery swap — manual button.
     // Orange (caution) and physically separated from the destructive "Reset"
     // (all settings) below.
     y_pos += 10;
 
-    settings_reset_trip_button = lv_btn_create(ui->settings);
+    settings_reset_trip_button = lv_btn_create(parent);
     lv_obj_t *reset_trip_label = lv_label_create(settings_reset_trip_button);
     lv_label_set_text(reset_trip_label, "Reset trip");
     lv_obj_align(reset_trip_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_reset_trip_button, 20, y_pos);
-    lv_obj_set_size(settings_reset_trip_button, 245, 50);
+    lv_obj_set_size(settings_reset_trip_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_trip_button, lv_color_hex(0xff8800), 0);
     lv_obj_set_style_text_color(settings_reset_trip_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_trip_button, &lv_font_montserrat_24, 0);
@@ -3249,12 +3390,12 @@ void settings_ui_init(lv_ui *ui) {
                         LV_EVENT_CLICKED, NULL);
 
     // ========== Files browser (same row as Reset trip, second slot) =====
-    lv_obj_t *files_btn = lv_btn_create(ui->settings);
+    lv_obj_t *files_btn = lv_btn_create(parent);
     lv_obj_t *files_lbl = lv_label_create(files_btn);
     lv_label_set_text(files_lbl, "Files");
     lv_obj_align(files_lbl, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(files_btn, 281, y_pos);
-    lv_obj_set_size(files_btn, 245, 50);
+    lv_obj_set_pos(files_btn, SETTINGS_TRI_X(1), y_pos);
+    lv_obj_set_size(files_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(files_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(files_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(files_btn, &lv_font_montserrat_24, 0);
@@ -3268,12 +3409,12 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Logs + QR codes + Reset (three buttons in one row) =====
     y_pos += 10; // small visual break before the destructive action
 
-    lv_obj_t *logs_btn = lv_btn_create(ui->settings);
+    lv_obj_t *logs_btn = lv_btn_create(parent);
     lv_obj_t *logs_lbl = lv_label_create(logs_btn);
     lv_label_set_text(logs_lbl, "Logs");
     lv_obj_align(logs_lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(logs_btn, 20, y_pos);
-    lv_obj_set_size(logs_btn, 245, 50);
+    lv_obj_set_size(logs_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(logs_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(logs_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(logs_btn, &lv_font_montserrat_24, 0);
@@ -3282,12 +3423,12 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(logs_btn, logs_open_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *qr_btn = lv_btn_create(ui->settings);
+    lv_obj_t *qr_btn = lv_btn_create(parent);
     lv_obj_t *qr_lbl = lv_label_create(qr_btn);
     lv_label_set_text(qr_lbl, "QR codes");
     lv_obj_align(qr_lbl, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(qr_btn, 281, y_pos);
-    lv_obj_set_size(qr_btn, 245, 50);
+    lv_obj_set_pos(qr_btn, SETTINGS_TRI_X(1), y_pos);
+    lv_obj_set_size(qr_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(qr_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(qr_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(qr_btn, &lv_font_montserrat_24, 0);
@@ -3296,12 +3437,12 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(qr_btn, qr_open_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
 
-    settings_reset_button = lv_btn_create(ui->settings);
+    settings_reset_button = lv_btn_create(parent);
     lv_obj_t *reset_label = lv_label_create(settings_reset_button);
     lv_label_set_text(reset_label, "Reset");
     lv_obj_align(reset_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_reset_button, 542, y_pos);
-    lv_obj_set_size(settings_reset_button, 245, 50);
+    lv_obj_set_pos(settings_reset_button, SETTINGS_TRI_X(2), y_pos);
+    lv_obj_set_size(settings_reset_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);
@@ -3312,7 +3453,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += SETTINGS_ROW_H;
 
     // ========== Info Label ==========
-    settings_info_label = lv_label_create(ui->settings);
+    settings_info_label = lv_label_create(parent);
     lv_label_set_text(settings_info_label, "Settings saved automatically");
     lv_obj_set_pos(settings_info_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_info_label, lv_color_hex(0x00ff00), 0);
@@ -3345,7 +3486,7 @@ void settings_ui_init(lv_ui *ui) {
              "  BT agent : %s\n"
              "  C6 slave : %s",
              p4_v, bt_v, c6_v);
-    lv_obj_t *fw_label = lv_label_create(ui->settings);
+    lv_obj_t *fw_label = lv_label_create(parent);
     lv_label_set_text(fw_label, fw_buf);
     lv_obj_set_pos(fw_label, 20, y_pos);
     lv_obj_set_style_text_color(fw_label, lv_color_hex(0xB6FF2E), 0);
@@ -3355,12 +3496,11 @@ void settings_ui_init(lv_ui *ui) {
     /* CAN bus health, next to the version block. Refreshed live by
      * settings_can_health_timer_cb while Settings is the active screen —
      * the counter is exactly what you watch when hunting bus trouble. */
-    settings_can_health_label = lv_label_create(ui->settings);
-    lv_obj_set_pos(settings_can_health_label, 380, y_pos);
+    settings_can_health_label = lv_label_create(parent);
+    lv_obj_set_pos(settings_can_health_label, UI_SX(380), y_pos);
     lv_obj_set_style_text_color(settings_can_health_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_can_health_label, &lv_font_montserrat_20, 0);
-    s_can_health_last_err = UINT32_MAX;   /* fresh label — force first paint */
-    s_can_health_last_rec = UINT32_MAX;
+    s_can_health_last[0] = '\0';          /* fresh label — force first paint */
     settings_can_health_refresh();
     if (!s_can_health_tmr) {
         s_can_health_tmr = lv_timer_create(settings_can_health_timer_cb, 1000, NULL);

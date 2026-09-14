@@ -37,6 +37,7 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/vesc_datatypes.h"
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_lisp_poll.h"
@@ -59,6 +60,9 @@ static const char *TAG = "vesc_lisp_code";
 #define LISP_CHUNK      256           /* payload bytes per WRITE/READ packet */
 #define LISP_MAX        (120 * 1024)  /* VESC's LISP flash area (STM32F405)  */
 #define BLOB_HDR        6             /* u32 size + u16 crc before packed    */
+/* Per-round-trip budget. Scaled for the live transport at each call site
+ * (vesc_link_scale_ms) — a BLE round trip is a couple of connection
+ * intervals plus the adapter's CAN hop, so 1.5 s is tight there. */
 #define STEP_TIMEOUT_MS  1500
 /* Erasing the LISP flash sector(s) blocks the VESC comm thread for up to a
  * few seconds; the ack only comes when it's done. A short timeout would
@@ -99,7 +103,7 @@ static void send_set_running(bool run)
     uint8_t b[2];
     b[0] = COMM_LISP_SET_RUNNING;
     b[1] = run ? 1 : 0;
-    comm_can_send_buffer(s_target, b, 2, 0);
+    vesc_link_send(s_target, b, 2, 0);
 }
 
 static void drain_ack(void) { xSemaphoreTake(s_ack_sem, 0); }
@@ -121,7 +125,7 @@ static bool step_erase(uint32_t size)
         b[ind++] = COMM_LISP_ERASE_CODE;
         buffer_append_int32(b, (int32_t)size, &ind);
         drain_ack();
-        comm_can_send_buffer(s_target, b, ind, 0);
+        vesc_link_send(s_target, b, ind, 0);
         if (wait_ack(COMM_LISP_ERASE_CODE, ERASE_TIMEOUT_MS) && s_ack_ok) {
             return true;
         }
@@ -140,8 +144,8 @@ static bool step_write(uint32_t offset, const uint8_t *data, uint32_t n)
         memcpy(b + ind, data, n);
         ind += (int32_t)n;
         drain_ack();
-        comm_can_send_buffer(s_target, b, ind, 0);
-        if (wait_ack(COMM_LISP_WRITE_CODE, STEP_TIMEOUT_MS) && s_ack_ok &&
+        vesc_link_send(s_target, b, ind, 0);
+        if (wait_ack(COMM_LISP_WRITE_CODE, vesc_link_scale_ms(STEP_TIMEOUT_MS)) && s_ack_ok &&
             s_ack_off == offset) {
             return true;
         }
@@ -162,8 +166,8 @@ static bool step_read(uint32_t offset, uint32_t n)
         buffer_append_int32(b, (int32_t)n, &ind);
         buffer_append_int32(b, (int32_t)offset, &ind);
         drain_ack();
-        comm_can_send_buffer(s_target, b, ind, 0);
-        bool got = wait_ack(COMM_LISP_READ_CODE, STEP_TIMEOUT_MS);
+        vesc_link_send(s_target, b, ind, 0);
+        bool got = wait_ack(COMM_LISP_READ_CODE, vesc_link_scale_ms(STEP_TIMEOUT_MS));
         if (got && s_ack_off == offset) {
             return true;
         }
@@ -205,7 +209,7 @@ static void do_upload(void)
 
     send_set_running(false);
     drain_ack();
-    wait_ack(COMM_LISP_SET_RUNNING, 500);  /* best-effort stop */
+    wait_ack(COMM_LISP_SET_RUNNING, vesc_link_scale_ms(500));  /* best-effort stop */
 
     /* +100 slack like VESC Tool — erase rounds up to whole flash sectors. */
     if (!step_erase(s_total + 100)) { res = VLC_ERR_TIMEOUT; goto done; }
@@ -221,7 +225,7 @@ static void do_upload(void)
     if (s_run_after) {
         send_set_running(true);
         drain_ack();
-        wait_ack(COMM_LISP_SET_RUNNING, 500);  /* best-effort start */
+        wait_ack(COMM_LISP_SET_RUNNING, vesc_link_scale_ms(500));  /* best-effort start */
     }
 
 done:
@@ -388,7 +392,7 @@ bool vesc_lisp_code_repl(const char *expr, uint32_t len)
     b[0] = COMM_LISP_REPL_CMD;
     memcpy(b + 1, expr, len);
     b[1 + len] = '\0';
-    comm_can_send_buffer(s_target, b, len + 2, 0);
+    vesc_link_send(s_target, b, len + 2, 0);
     return true;
 }
 

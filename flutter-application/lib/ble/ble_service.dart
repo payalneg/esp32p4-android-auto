@@ -18,6 +18,7 @@ import '../bridge/foreground_bridge.dart';
 import '../firmware/ble_ota.dart';
 import '../firmware/ota_info.dart';
 import 'messages.dart';
+import 'nav_stream.dart';
 import 'protocol.dart';
 import 'uuids.dart';
 
@@ -53,6 +54,12 @@ class BleService {
   // Present together; drive the device file browser (see FileManager).
   BluetoothCharacteristic? _fileCtrl;
   BluetoothCharacteristic? _fileData;
+  // Optional — null when the firmware predates the navigator screen
+  // (...000b/...000c). Present together; carry the map picture the phone
+  // renders (see nav_stream.dart).
+  BluetoothCharacteristic? _navCtrl;
+  BluetoothCharacteristic? _navData;
+  NavStream? _nav;
   // Optional — the head unit's separate Nordic UART Service (VESC-Tool bridge).
   // Present together; drive the LISP editor (see lib/ble/vesc/). Absent on
   // firmware without the bridge.
@@ -78,6 +85,20 @@ class BleService {
   int _reconnectAttempt = 0;
   Timer? _reconnectTimer;
 
+  /// Keeps asking while a paired head unit is away.
+  ///
+  /// The OS-level autoConnect request is supposed to survive a remote
+  /// disconnect, and mostly does — but not after we cancel it ourselves, and
+  /// not, on this Samsung, after the head unit reboots: the head unit came
+  /// back advertising and nothing connected to it for minutes (its log showed
+  /// no GAP connect at all) until the app was force-stopped. A head unit
+  /// reboots on every firmware flash and every power cycle of the bike, so
+  /// "the OS will handle it" is not good enough.
+  Timer? _linkWatchdog;
+  Timer? _helloRetry;
+  int _idleTicks = 0;
+  static const Duration _watchdogPeriod = Duration(seconds: 20);
+
   Stream<BleConnState> get state => _stateCtrl.stream;
   Stream<InboundCommand> get commands => _cmdCtrl.stream;
   BleConnState get currentState => _state;
@@ -93,16 +114,50 @@ class BleService {
     // Use `unawaited` semantics — boot path mustn't block on a BLE scan.
     // flutter_blue_plus's autoConnect:true returns immediately and lets
     // the OS hold the connection request.
-    _attachKnownDevice(_savedRemoteId!);
+    unawaited(_attachKnownDevice(_savedRemoteId!));
   }
 
-  void _attachKnownDevice(String remoteId) {
+  /// Guards against two attaches overlapping.
+  ///
+  /// Each one cancels the queued request and asks again; two of them racing
+  /// (the boot-time resume and the watchdog, say) left TWO links up to the
+  /// same head unit, 130 ms apart. Both subscribed, both wrote, and the head
+  /// unit's bridge binding flipped between them — the panel got nothing while
+  /// the app was sure it was connected.
+  bool _attaching = false;
+
+  Future<void> _attachKnownDevice(String remoteId) async {
+    if (_attaching) return;
+    _attaching = true;
+    try {
+      await _attachOnce(remoteId);
+    } finally {
+      _attaching = false;
+    }
+  }
+
+  Future<void> _attachOnce(String remoteId) async {
     final dev = BluetoothDevice.fromId(remoteId);
     _device = dev;
     _userInitiatedDisconnect = false;
     _connSub?.cancel();
     _connSub = dev.connectionState.listen(_onConnectionStateChanged);
     _setState(BleConnState.connecting);
+    // Cancel whatever is already queued for this device before asking again.
+    // With autoConnect the request lives in the OS, and asking twice without
+    // cancelling opens a second link: a Samsung held two connections to the
+    // head unit at once, both writing, and the head unit's bridge binding
+    // flipped between them several times a second — half the map tiles were
+    // acknowledged on the wrong link and never arrived.
+    //
+    // Awaited, not fired off: a cancellation that lands after the new request
+    // cancels that one instead, and nothing reconnects at all.
+    try {
+      await dev.disconnect();
+    } on Object {
+      // Nothing was queued. That is the normal first attach.
+    }
+    if (_userInitiatedDisconnect) return;
     // autoConnect:true → Android queues the GATT connect; the OS wakes
     // when the peripheral advertises. iOS handles the equivalent through
     // CoreBluetooth's stored-peripheral mechanism, but only if the user
@@ -110,6 +165,7 @@ class BleService {
     // mtu MUST be null with autoConnect — the package's default is 512
     // and the assertion `(mtu == null) || !autoConnect` would trip.
     dev.connect(autoConnect: true, mtu: null).catchError((_) {});
+    _armLinkWatchdog();
   }
 
   /// The head unit's adv packet carries the NUS UUID (legacy, for VESC
@@ -164,6 +220,7 @@ class BleService {
     // With autoConnect:true this returns immediately; the link comes up
     // asynchronously through the connectionState stream.
     await device.connect(autoConnect: true, mtu: null);
+    _armLinkWatchdog();
 
     // Wait for connectionState→connected→_completeHandshake to succeed.
     // First-attempt timeout: 20 s covers a slow GATT discovery on real
@@ -234,6 +291,8 @@ class BleService {
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;
+    _navCtrl = null;
+    _navData = null;
     for (final c in svc.characteristics) {
       final u = c.uuid.toString().toLowerCase();
       if (u == NotifBridgeUuids.charTime) _time = c;
@@ -242,6 +301,8 @@ class BleService {
       if (u == NotifBridgeUuids.charOtaData) _otaData = c;
       if (u == NotifBridgeUuids.charFileCtrl) _fileCtrl = c;
       if (u == NotifBridgeUuids.charFileData) _fileData = c;
+      if (u == NotifBridgeUuids.charNavCtrl) _navCtrl = c;
+      if (u == NotifBridgeUuids.charNavData) _navData = c;
     }
     // Separate NUS service (VESC-Tool bridge) for the LISP editor — optional.
     _nusRx = null;
@@ -257,6 +318,7 @@ class BleService {
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
     _outSub = _outbound!.onValueReceived.listen(_onOutbound);
+    await _startNavStream();
     _setState(BleConnState.connected);
     _startClock();
   }
@@ -450,10 +512,17 @@ class BleService {
       _handleLinkUp(_device!);
     } else if (s == BluetoothConnectionState.disconnected) {
       _setState(BleConnState.disconnected);
-      // autoConnect:true keeps the OS-level reconnect queue active by itself;
-      // nothing to retry here. The foreground service stays up regardless (it
-      // hosts this whole BLE isolate — see ble_host.dart) so the link can come
-      // back, or the user can re-pair, without relaunching the app.
+      // Deliberately NOT re-arming here. With autoConnect:true this event
+      // fires as a matter of course — once when the request is queued, and
+      // again on transients while the link is perfectly alive — and cycling
+      // the link on each one tore down a working connection every few
+      // seconds (tiles crawled to one every twenty seconds, and
+      // flutter_blue_plus started logging its 2 s disconnect gap). The
+      // watchdog below is the one that re-arms, and only after the link has
+      // been genuinely absent for a while.
+      // The foreground service stays up regardless (it hosts this whole BLE
+      // isolate — see ble_host.dart), so the link can come back without the
+      // app being relaunched.
     }
   }
 
@@ -510,6 +579,28 @@ class BleService {
   /// stack can otherwise hand back stale attribute handles and every write
   /// lands nowhere (link up, no data). Capped backoff covers a head unit
   /// that's still booting.
+  /// Re-ask for the link once it has been missing for two ticks in a row.
+  ///
+  /// Two, not one: a single [_watchdogPeriod] of "not connected" is normal
+  /// while a connection is being made, and re-arming through that window
+  /// cancels the attempt it is waiting for.
+  void _armLinkWatchdog() {
+    _linkWatchdog?.cancel();
+    _idleTicks = 0;
+    _linkWatchdog = Timer.periodic(_watchdogPeriod, (_) {
+      if (_userInitiatedDisconnect || _savedRemoteId == null) return;
+      if (_state == BleConnState.connected) {
+        _idleTicks = 0;
+        return;
+      }
+      if (_handshaking) return;
+      if (_reconnectTimer?.isActive ?? false) return;
+      if (++_idleTicks < 2) return;
+      _idleTicks = 0;
+      _scheduleForceReconnect();
+    });
+  }
+
   void _scheduleForceReconnect() {
     if (_userInitiatedDisconnect || _savedRemoteId == null) return;
     _reconnectAttempt++;
@@ -527,7 +618,7 @@ class BleService {
         await dev?.disconnect();
       } catch (_) {}
       if (_userInitiatedDisconnect || _savedRemoteId == null) return;
-      _attachKnownDevice(_savedRemoteId!);
+      unawaited(_attachKnownDevice(_savedRemoteId!));
     });
   }
 
@@ -573,10 +664,12 @@ class BleService {
     } catch (_) {}
     // Let the OS tear the ACL link fully down before re-arming autoConnect.
     await Future.delayed(const Duration(milliseconds: 500));
-    _attachKnownDevice(id);
+    unawaited(_attachKnownDevice(id));
   }
 
   Future<void> _teardown() async {
+    _linkWatchdog?.cancel();
+    _linkWatchdog = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempt = 0;
@@ -601,6 +694,7 @@ class BleService {
     _fileData = null;
     _nusRx = null;
     _nusTx = null;
+    await _stopNavStream();
     _setState(BleConnState.idle);
   }
 
@@ -609,6 +703,81 @@ class BleService {
 
   /// Whether the connected head unit exposes the NUS bridge (LISP editor).
   bool get supportsLisp => _nusRx != null && _nusTx != null;
+
+  /// Whether the connected head unit can show the navigator picture we render
+  /// (...000b/...000c). Absent on older firmware; the app hides the feature.
+  bool get supportsNavStream => _nav != null;
+
+  /// The frame sender, or null when the head unit has no navigator screen.
+  NavStream? get navStream => _nav;
+
+  /// Bring the frame channel up on a fresh link: subscribe to its
+  /// notifications and ask for the head unit's screen state right away, so
+  /// the UI knows whether to start rendering before the first frame is due.
+  Future<void> _startNavStream() async {
+    await _stopNavStream();
+    final ctrl = _navCtrl;
+    final data = _navData;
+    if (ctrl == null || data == null) return;
+    try {
+      await ctrl.setNotifyValue(true);
+    } catch (_) {
+      // No notifications means no acknowledgements and no screen state, which
+      // the protocol is built on. Leave the feature off rather than
+      // half-wired; the next reconnect tries again.
+      await _stopNavStream();
+      return;
+    }
+    final nav = NavStream(_FbpNavChannel(ctrl, data, () => _device));
+    _nav = nav;
+    // Greet on every fresh link, and keep greeting while the answer says the
+    // navigator screen is not the live one. Being told "not live" once is not
+    // the end of the story: a second phone can take the head unit's bridge
+    // binding while we are quiet, and then the head unit's next state change
+    // never reaches us at all. Asking costs three bytes.
+    _armHelloRetry();
+    try {
+      await nav.hello();
+    } catch (_) {
+      // A refused greeting is not an old firmware. The head unit answers
+      // anyone who is not the bound writer with INSUFFICIENT_AUTHOR, so a
+      // second phone in the room — or one of our own stale links — makes the
+      // first hello fail. Tearing the channel down here is what put "Display
+      // firmware is too old" on the screen and left the navigator dead until
+      // the app was restarted. Keep it and keep greeting: the binding frees
+      // after five seconds of the owner's silence.
+      _armHelloRetry();
+    }
+  }
+
+  /// Greet the head unit again every few seconds until it answers with its
+  /// screen state, which is what tells the app the channel really works.
+  void _armHelloRetry() {
+    if (_helloRetry?.isActive ?? false) return;
+    _helloRetry?.cancel();
+    _helloRetry = Timer.periodic(const Duration(seconds: 5), (t) {
+      final nav = _nav;
+      if (nav == null || _state != BleConnState.connected) {
+        t.cancel();
+        _helloRetry = null;
+        return;
+      }
+      if (nav.state.visible) {
+        t.cancel();          // the panel is ours; it will tell us if it stops
+        _helloRetry = null;
+        return;
+      }
+      unawaited(nav.hello().catchError((_) {}));
+    });
+  }
+
+  Future<void> _stopNavStream() async {
+    _helloRetry?.cancel();
+    _helloRetry = null;
+    final nav = _nav;
+    _nav = null;
+    if (nav != null) await nav.dispose();
+  }
 
   /// File-manager characteristics + link facts for FileManager. Null/false
   /// when not connected or unsupported.
@@ -719,4 +888,28 @@ class BleService {
     };
     _fg.setStatus(connected: connected, subtitle: subtitle).catchError((_) {});
   }
+}
+
+
+/// [NavChannel] over the real flutter_blue_plus characteristics.
+class _FbpNavChannel implements NavChannel {
+  _FbpNavChannel(this._ctrl, this._data, this._device);
+
+  final BluetoothCharacteristic _ctrl;
+  final BluetoothCharacteristic _data;
+  final BluetoothDevice? Function() _device;
+
+  @override
+  Future<void> writeCtrl(Uint8List value) =>
+      _ctrl.write(value, withoutResponse: false);
+
+  @override
+  Future<void> writeData(Uint8List value, {required bool withoutResponse}) =>
+      _data.write(value, withoutResponse: withoutResponse);
+
+  @override
+  Stream<List<int>> get notifications => _ctrl.onValueReceived;
+
+  @override
+  int? get mtu => _device()?.mtuNow;
 }

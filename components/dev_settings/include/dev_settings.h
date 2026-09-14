@@ -1,7 +1,10 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +24,24 @@ typedef enum {
     BATTERY_CALC_MODE_SMART  = 1,
 } battery_calc_mode_t;
 
+/* How a request is addressed on a BLE link.
+ *
+ * The device on the other end of the NUS link can be either the controller
+ * itself (a BLE module hanging off the VESC's UART, or a VESC with built-in
+ * BLE) or a separate adapter sitting on the CAN bus (a VESC Express). In the
+ * first case the payload goes out as-is; in the second it has to be wrapped in
+ * COMM_FORWARD_CAN so the adapter relays it to the right node — and the wrong
+ * choice is silent: the request is accepted and simply never answered.
+ *
+ * AUTO asks the link who it is talking to (see vesc_ble_link.c) and then
+ * decides per request: unwrapped for the node we are physically attached to,
+ * wrapped for any other id (the second head, for instance). */
+typedef enum {
+    VESC_BLE_ROUTE_AUTO   = 0,
+    VESC_BLE_ROUTE_DIRECT = 1,   /* never wrap */
+    VESC_BLE_ROUTE_CAN    = 2,   /* always wrap in COMM_FORWARD_CAN */
+} vesc_ble_route_t;
+
 /* Loads cache from NVS. Idempotent — settings_ui_init() also calls this
  * via settings_wrapper_init(), so order between main and UI doesn't matter. */
 void settings_init(void);
@@ -36,6 +57,12 @@ uint16_t             settings_get_wheel_diameter_mm(void);
 uint8_t              settings_get_motor_poles(void);
 float                settings_get_power_max_kw(void);
 bool                 settings_get_vesc_emulator(void);
+/* Which transport carries the VESC protocol: false = the CAN bus (TWAI),
+ * true = BLE, as a GATT central to a VESC Express adapter. Takes effect
+ * immediately via the hot-apply callback below. */
+bool                 settings_get_vesc_link_ble(void);
+/* BLE mode only: how requests are addressed — see vesc_ble_route_t. */
+vesc_ble_route_t     settings_get_vesc_ble_route(void);
 bool                 settings_get_aa_autoconnect(void);
 bool                 settings_get_use_imperial(void);
 bool                 settings_get_use_fahrenheit(void);
@@ -62,6 +89,13 @@ uint8_t              settings_get_splash_loops(void);
  * rotation cannot change at runtime. */
 bool                 settings_get_display_flip(void);
 
+/* Which full-screen source the 3-finger gesture brings up from the dashboard:
+ * 0 = Android Auto (the phone projecting over Wi-Fi), 1 = Navigator (the map
+ * picture the companion app streams over BLE, see main/nav_screen.c). Default
+ * 0. Only one of them can own the panel, so this is a plain choice, not a
+ * pair of switches. */
+uint8_t              settings_get_phone_screen(void);
+
 /* Wall-clock API. RTC-only — relies on the vbat_experiment poke in
  * main.c to keep LP domain alive on USB-unplug via the CR2032 on H8.
  * If that experiment doesn't pan out on this silicon, time(NULL)
@@ -80,6 +114,8 @@ void settings_set_wheel_diameter_mm(uint16_t diameter_mm);
 void settings_set_motor_poles(uint8_t poles);
 void settings_set_power_max_kw(float power_max_kw);
 void settings_set_vesc_emulator(bool on);
+void settings_set_vesc_link_ble(bool on);
+void settings_set_vesc_ble_route(vesc_ble_route_t route);
 void settings_set_aa_autoconnect(bool on);
 void settings_set_use_imperial(bool on);
 void settings_set_use_fahrenheit(bool on);
@@ -89,6 +125,7 @@ void settings_set_brightness_gesture_enabled(bool on);
 void settings_set_dashboard_theme(uint8_t theme);
 void settings_set_splash_loops(uint8_t loops);
 void settings_set_display_flip(bool on);
+void settings_set_phone_screen(uint8_t which);
 
 /* Debounced setters — update the RAM cache and fire any hot-apply callback
  * immediately, but DO NOT touch NVS. The UI pairs them with the matching
@@ -126,12 +163,14 @@ typedef void (*settings_can_speed_cb_t)(int new_kbps);
 typedef void (*settings_brightness_cb_t)(uint8_t new_pct);
 typedef void (*settings_target_id_cb_t)(uint8_t new_id);
 typedef void (*settings_controller_id_cb_t)(uint8_t new_id);
+typedef void (*settings_vesc_link_cb_t)(bool ble);
 typedef void (*settings_aa_autoconnect_cb_t)(bool on);
 
 void settings_register_can_speed_cb(settings_can_speed_cb_t cb);
 void settings_register_brightness_cb(settings_brightness_cb_t cb);
 void settings_register_target_id_cb(settings_target_id_cb_t cb);
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb);
+void settings_register_vesc_link_cb(settings_vesc_link_cb_t cb);
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb);
 
 /* Firmware-version strings shown on the Settings screen.
@@ -151,6 +190,19 @@ void        fw_info_set_c6(const char *version);
 const char *fw_info_get_p4(void);
 const char *fw_info_get_bt(void);
 const char *fw_info_get_c6(void);
+
+/* The other OTA slot — the firmware this one replaced.
+ *
+ * An update always writes the slot that is not running, so the previous image
+ * is still in flash and still bootable; these two let the user go back to it
+ * from the device itself, which is the only route left when the new firmware
+ * is what broke the screen. See components/dev_settings/fw_slots.c.
+ *
+ * fw_slots_other_label() fills `buf` with that image's version and returns
+ * false when the slot is empty (a device that has never been updated).
+ * fw_slots_boot_other() only points otadata at it — the caller reboots. */
+bool        fw_slots_other_label(char *buf, size_t n);
+esp_err_t   fw_slots_boot_other(void);
 
 #ifdef __cplusplus
 }

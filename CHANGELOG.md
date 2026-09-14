@@ -9,6 +9,557 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.23 / app 0.3.23 — 2026-09-12
+
+### Three things the first ride with the new map screen showed
+
+- **The recentre button was an empty box.** It asked for LVGL's GPS symbol,
+  and the panel's font carries Latin, Cyrillic and punctuation — no symbols at
+  all. It says GPS in plain letters now, like the zoom glyphs and FIND beside
+  it.
+- **The map moved in hops.** Between the phone's twice-a-second position
+  messages the head unit carries the view forward itself, and that step was
+  only taken when nothing else had arrived — which, while tiles are streaming
+  in, is never. The map sat still and then jumped. The step keeps its own
+  clock now, ten times a second, whatever else is going on.
+- **Search wanted the street spelled exactly.** A hit had to be one unbroken
+  run of characters, so "grota roweckiego" found nothing: the street is
+  Stefana Grota-Roweckiego, and both the missing first word and the hyphen
+  broke the run. Words are matched one by one now, in any order, each having
+  to start a word in the name — and a house number is just another word, so
+  "grota 12" finds the address without writing the street out in full first.
+
+## v1.3.22 / app 0.3.22 — 2026-09-12
+
+### The position keeps coming with the phone in a pocket
+
+- Guidance stopped the moment the app was put away, and the head unit's map
+  stopped with it. Not a permission the rider had missed: Android gives a
+  backgrounded app a location fix a few times an hour, and nothing in the app
+  lifted it out of that. The manifest said so in a comment — "guidance is
+  foreground-only" — which is a fair description of a navigator that only
+  works while you are looking at it.
+- The foreground service that already holds the BLE link now declares the
+  location type, and an app with such a service running counts as in use for
+  as long as it does. While-in-use permission is enough with that in place, so
+  there is no "allow all the time" trip to Settings.
+- Location is asked for at startup rather than when the navigator first wants
+  a fix, because Android 14 refuses to start a service of that type without
+  it. A phone where it is refused gets no background service — the app still
+  works while open — instead of a crash.
+
+## v1.3.21 / app 0.3.21 — 2026-09-12
+
+### The head unit's map can be dragged
+
+- Tapping the map offered the spot as a destination, which is in the way of
+  the thing a map is for, and a pocket or a bump could trigger it. The tap is
+  gone — somewhere to go is typed on the panel's keyboard — and the touch
+  belongs to the map: drag it and the view moves. A button under the zoom pair
+  puts it back on the rider, and is only there while it is away.
+- The view was centred on the rider by construction, so the rider's marker was
+  simply drawn in the middle. Dragged away from them it is placed like the
+  route line is, and allowed off the screen — which is the honest answer when
+  the rider is no longer in view.
+- The phone follows what the head unit is looking at. It sends tiles for the
+  ground around the rider, so a dragged view would otherwise stop at the edge
+  of whatever had already arrived; a new message says where the map has been
+  moved to and the phone keeps that covered instead. Where the rider actually
+  is still travels as before, because that is what draws their marker.
+- One message per drag, when the finger lifts: tiles begin arriving a moment
+  after the gesture rather than during it.
+
+### Guidance that starts with the phone away
+
+- Yesterday's battery fix decided once, on the way into the background,
+  whether the receiver was still needed, and never looked again. Picking a
+  destination on the head unit with the phone already in a pocket therefore
+  began a route that never got a position. The question is asked again now
+  whenever the answer can change, and a connected head unit keeps the receiver
+  on whatever it happens to be showing at that moment.
+
+## v1.3.20 / app 0.3.20 — 2026-09-12
+
+### The app stops working when there is nothing to work on
+
+- **A core, spinning.** The loop that feeds the head unit waits "until the
+  next position is due" between passes, and that is "now" until a first
+  position has actually gone out — exactly the state of a phone with no head
+  unit connected. So it ran as fast as the event loop would carry it for as
+  long as the navigator screen existed, and a phone with the app merely open
+  was spending a core on it. It now recognises having nothing to do and waits
+  a couple of seconds before looking again.
+- **A receiver that never switched off.** The navigator asked for positions at
+  the best accuracy the phone can manage and nothing ever cancelled that:
+  leaving the app running in the background kept the GNSS chip on until the
+  screen left the stack, which for a rider who opened the navigator once is
+  the rest of the day. It is released when the app goes away and taken again
+  on return — unless the fix is genuinely needed while hidden, which is two
+  cases and only two: guiding a route with the phone in a pocket, and feeding
+  a head unit that is showing the map.
+
+### Searching for a village finds the village
+
+- Typing "tyniec" offered every house on Tyniecka and never Tyniec itself.
+  The index held addresses and named POIs; a settlement is neither — OSM tags
+  it `place=village` — so it was drawn on the map and absent from search, and
+  every hit came from the street named after it. Places are indexed now.
+- Ranking had to follow: a name is a prefix of every street named after it,
+  so the village sat behind a hundred addresses, and the panel then sorts by
+  distance, where somewhere a few kilometres out loses to a doorstep two
+  blocks away. What was typed in full comes first and stays first.
+- **An index built before this has no places in it.** Download the region
+  again to rebuild it.
+
+### Saving the map says which tile it is on
+
+- The card counted tiles and bytes, and a count that stops moving says nothing
+  about why. It now names the tile the request is out for, so a slow tile
+  looks different from a job that has quietly died.
+
+## v1.3.19 / app 0.3.19 — 2026-09-12
+
+### Two things the first ride with the navigator showed
+
+- **Blank squares on the map while panning.** The tiles were there — decoded
+  and waiting in the store — but their squares stayed empty. Composing a view
+  needs the back buffer, and that buffer is held from the moment a frame is
+  committed until the screen has shown it, 50 to 100 ms. Tiles arrive faster
+  than that, so most of them asked for a redraw that was quietly dropped, and
+  nothing asked again: the sweep that would have caught it only runs after
+  120 ms of silence, which a stream of tiles never gives. A dropped redraw is
+  now remembered and taken as soon as the buffer frees.
+- **The stop button sat on top of the distance left.** The buttons were pinned
+  a fixed distance off the bottom of the phone screen and the info bar grew up
+  to meet them — with a download button in it, or a longer sentence, the two
+  overlapped. They are one bottom-anchored column now, so neither has to guess
+  how tall the other is.
+
+## v1.3.18 / app 0.3.18 — 2026-09-12
+
+### The controller can be reached over Bluetooth instead of CAN
+
+- The head unit now talks to the VESC over Bluetooth as well as over the CAN
+  bus: it connects as a GATT central to a **VESC Express** adapter over the
+  Nordic UART Service — the same link VESC Tool uses — so a display can be
+  fitted with no CAN wiring at all. Pick the transport in **Settings -> VESC
+  link**; it applies immediately, no reboot. The adapter is paired by scanning
+  from that same screen, and its address lives in its own NVS namespace, so it
+  survives the settings Reset button the way the sensors do.
+- Nothing above the transport changed. The dashboard, the quick-action drawer,
+  pedal assist, the LISP editor, the config menu and VESC Tool bridged from the
+  phone all go through one new seam (`vesc_link`), and replies from either
+  transport land in the same dispatcher they always did.
+- A VESC Express sits on the CAN bus next to the controller, so requests are
+  wrapped in `COMM_FORWARD_CAN` addressed to Target VESC ID — that is what
+  VESC Tool's "scan CAN bus" does. The switch on the link screen turns it off
+  for a setup where the adapter itself is the target.
+- Pedal assist keeps its 20 Hz setpoint stream, with one rule the CAN path
+  never needed: a setpoint older than 100 ms is dropped rather than sent. A
+  stalled link would otherwise flush a burst of currents the rider asked for a
+  second ago; dropping them lets the script's own 0.4 s window coast the motor,
+  which is what a lost CAN frame did anyway. The count is on the link screen —
+  if it climbs while riding, the link is not keeping up.
+- The LISP script gains a reply-id sentinel: 255 means the request did not
+  arrive over CAN, and the script answers on the interface it came in on. The
+  CAN path is byte-identical. **An older script on the controller still works
+  over CAN, but over Bluetooth it will not answer the drawer or the
+  cruise/profile readout** — reflash `lisp/main.lisp` when switching.
+- Two things Bluetooth cannot do: the head unit no longer shows up in VESC
+  Tool's CAN scan (it is not on the bus), and a VESC Express holds one link at
+  a time, so VESC Tool on the phone must disconnect first. Second-head
+  temperatures, broadcast on CAN, are polled once a second instead.
+- Not yet verified on hardware.
+
+### Navigator picture from the phone
+
+- The head unit can now show the companion app's navigator: the phone renders
+  the map — it has the route, the graph and the tiles — and streams what to
+  show as small JPEG frames over the existing Bluetooth link. Two new
+  characteristics on the NotifBridge service (`...000B` control, `...000C`
+  data) carry one frame at a time; the P4 decodes with its hardware JPEG
+  engine, scales to 800x480 with the PPA and shows the picture through a
+  single `lv_img`. The head unit draws no map of its own.
+- New on-device setting, **Settings -> Phone screen**: what the 3-finger hold
+  brings up from the dashboard, Android Auto (default) or Navigator. Only one
+  of them can own the panel, so it is one choice rather than two switches. An
+  Android Auto session is untouched in Navigator mode — its video is dropped
+  the same way it already is while the dashboard is up.
+- The phone is told when the navigator screen is and is not the live screen,
+  and sends nothing while it is not — a parked bike or a rider looking at the
+  dashboard costs no air time. Unchanged pictures are not re-sent either.
+### The head unit draws the map itself
+
+- Sending a whole picture for every few pixels of movement was always going
+  to be a slideshow: a frame is 20 KB, the link carries 13-15 KB a second, and
+  it stops entirely when the phone's screen goes dark. The head unit now keeps
+  the map tiles the phone has already downloaded — each one crosses the link
+  once — and the phone says only where the rider is, twelve bytes at a time.
+  The map is redrawn on the head unit from memory, so it moves as often as the
+  position arrives and keeps moving with the phone in a pocket.
+- New messages on the same characteristics: TILE_BEGIN/TILE_END carry one
+  tile (PNG or JPEG, the format travels with it), VIEW carries the rider's
+  position, zoom and heading. The picture path is untouched and still works.
+- Tiles are decoded on arrival and held as RGB565 in PSRAM, up to 96 of them
+  (12 MB of the 25 MB free), least-recently-used first out. PNG is decoded by
+  libpng, which the LVGL image decoder already brings in; JPEG goes through
+  the hardware decoder.
+- Measured on real tiles across three zooms: PNG as OpenStreetMap serves it
+  averages 24 KB, JPEG q80 averages 18 KB. PNG is kept anyway — the phone
+  forwards what it already holds without transcoding, and coloured labels stay
+  crisp. A screenful is 15-20 tiles, so about 30 seconds on first arrival;
+  keeping up at riding speed costs around 1 KB/s.
+- Verified on a Guition JC4880 with a phone: a screenful of 30 tiles (the
+  panel plus a ring) lands in about a minute at 13 KB/s, a PNG decodes in
+  30-35 ms, and composing the whole 800x480 view from what is held takes
+  17-19 ms — so the map redraws on every position update with room to spare.
+- Four things the bench turned up, all fixed: the head unit's screen state
+  could be announced before the app had subscribed, leaving it convinced the
+  display was showing something else; tiles were chosen in square rings while
+  the panel is a wide rectangle, so off-screen corners went over before the
+  ground either side of the rider; an acknowledgement sent right after sixty
+  chunk writes could be dropped by a congested host, and the phone then sent
+  the whole tile again; and the bridge re-bound to whichever connection wrote
+  last, which with two links from one phone flipped the owner several times a
+  second. The binding is now sticky until its owner goes quiet for five
+  seconds, and the app cancels a queued connection before asking for another
+  so the second link stops happening in the first place.
+
+### Picking where to go on the head unit
+
+- Tap the navigator map on the head unit and it offers that spot as a
+  destination; confirm and the phone routes there and starts guiding. The
+  head unit composed the view, so it already knows which patch of ground
+  every pixel is — the tap becomes a coordinate without asking the phone
+  anything. It travels back as a nine-byte notification on the same
+  characteristic the tiles use.
+- Groundwork for entering an address there too: this is the reverse channel
+  that was missing, and the search will use it.
+
+### A map that never goes bare, and moves
+
+- The rider's speed and battery charge now sit over the navigator map, in the
+  same typeface Android Auto gets (Antonio), read from the same place, with
+  the cruise indicator lighting up beside the speed when cruise is engaged.
+- Two blurred fallback layers under the detail tiles, three and six zoom
+  levels out. One tile of the widest is twenty kilometres across, so a couple
+  of them blanket a whole region: move faster than 25 KB tiles can arrive —
+  or jump somewhere nothing was cached — and the map goes chunky rather than
+  empty. The phone sends them before anything sharp, and the ring around the
+  panel last of all.
+- The map now moves between position updates instead of stepping twice a
+  second: the phone includes its speed, and the head unit carries the view
+  forward at the last heading and redraws about seven times a second.
+- Composing a frame costs 26 ms, down from 155 ms when the layers were first
+  added. Three things got it there: blitting per tile rather than per screen
+  pixel, writing one row of a scaled band and copying it down the rest, and
+  drawing the blurred layers only in the gaps the detail tiles leave — with
+  the map caught up, the coarse passes cost nothing at all.
+- Tiles no longer wait on position updates while the map is filling: a
+  screenful lands in about 8 seconds rather than 15, and the whole ring in 21
+  rather than 41. A tile that is neither cached nor reachable is skipped
+  within the pass instead of costing one.
+- Both ends now ask the radio for the fastest link they can (a 251-byte
+  link-layer packet and the 2M PHY). Both are accepted, and neither changed
+  anything: 25 KB takes 49 writes and 780 ms, which is one ATT write per
+  connection interval. The phone's stack sends one and waits, so the round
+  trip is the limit and air time never was.
+
+### The line, the turn, and a dot that stays put
+
+- The route now travels to the head unit as a polyline (up to 2000 points,
+  a tenth of a micro-degree each) and is drawn there under the rider — a blue
+  line inside a white casing, the way a map draws a road, so it reads over
+  both the sharp tiles and the blurred fallback.
+- The manoeuvre is drawn as well: a plate in the top-left corner with the
+  arrow for the turn ahead (eleven kinds, from a slight bend to a U-turn and
+  the finish flag), how far it is in metres or kilometres, and underneath it
+  what is left of the whole route as "3.2 km | 11 min". Off route, the plate
+  turns red and says so. The arrows are drawn as a single polyline with the
+  head retraced, because LVGL draws one line at a time and a separate
+  arrowhead came out detached.
+- The rider's dot no longer jumps. Dead reckoning between updates always
+  drifts from where the phone says the rider is, and snapping back on every
+  arrival was visible twice a second; the view now eases a quarter of the way
+  towards the reported position on each redraw and only jumps when the two
+  disagree by more than a couple of hundred metres. Frames are also spaced by
+  the timer alone — a position arriving mid-frame used to trigger an extra
+  redraw and the motion came in pairs.
+- Drawing the line cost 40 ms of the frame at first: a Mercator projection is
+  a logarithm and a tangent in double precision, this chip has no
+  double-precision hardware, and every point was being projected twice.
+  Points outside a screen-and-a-margin box are now discarded on latitude and
+  longitude alone, the rest are projected once, and a segment that runs off
+  the panel is clipped before it is walked pixel by pixel. `navstat` times the
+  line on its own, which is how the numbers below are known rather than
+  guessed: **composing the map is 18-26 ms and the line adds 5-15 ms** of
+  scattered writes on top, a little more with a long route on screen. It is
+  cache misses, not arithmetic — the same line drawn as bars, as squares or
+  swept along rows costs much the same.
+- When the head unit has to drop a tile to make room it now tells the phone,
+  which sends that tile again next time it is needed. Without it an eviction
+  left ground that stayed blurred for the rest of the ride. The store holds 64
+  tiles (8 MB), down from 96 — a screenful plus its ring is 30, and the spare
+  PSRAM is worth more than the extra history.
+
+### No double precision left on the frame path
+
+- This chip has hardware for single precision and emulates double in
+  software, and the navigator kept learning that the hard way — 40 ms a frame
+  for the route projection, 28 ms for the heading arrow. So the doubles are
+  gone from everything that runs per frame or per point.
+- Positions are now tenths of a micro-degree in `int32_t` — the unit the wire
+  already uses, about eleven millimetres — all the way through the view, the
+  dead reckoning, the destination taps and the search results. Integers also
+  fix the accumulation: the easing towards each reported position is now an
+  exact quarter of an exact difference, eight times a second, with no drift
+  of its own.
+- Tiles are addressed in `int64` arithmetic, exactly. The one logarithm left
+  on the frame path is the view centre's own latitude, in single precision;
+  everything else — the route's points, the tap that becomes a destination —
+  is placed relative to that centre with two multiplies, which is both exact
+  and free.
+- `scripts/nav_proj_check.c` holds the formulas next to the double versions
+  they replaced and prints the disagreement: **under a pixel for the view
+  centre up to zoom 17 (1.8 px at 18, where a float can no longer hold 67
+  million pixels), and exactly zero for everything placed relative to it.**
+  It earned its keep immediately — the first run found a constant ten times
+  too large, which would have put the latitude past a right angle and the
+  whole map at NaN.
+- Composing a frame is **26-27 ms** now, from 33-40 before.
+
+### A bug hunt around the edges
+
+Five things the probing turned up, all fixed:
+
+- **A quiet moment could park the navigator for good.** The head unit sent its
+  screen state only to the link holding the bridge binding. Switch the panel
+  to the dashboard and back, and in that silence a second phone's
+  notification took the binding — so the phone the rider was navigating with
+  never heard that the screen was live again, and since it only writes when
+  it believes the screen is live, it never wrote again either. State and
+  "my tile store is empty" now go to every subscribed link, because they are
+  facts about the panel rather than answers to anyone in particular; and the
+  phone greets the head unit every five seconds while it is told the screen
+  is not its own.
+- **"Looking..." could hang for ever** when no answer came back. Seven seconds
+  and the panel says "No answer from the phone".
+- **A stale verdict stayed under a shrinking query**: deleting back to one or
+  two letters left "Nothing found" on screen. It returns to the prompt.
+- **Coordinates could not be typed at all.** LVGL's letters layer has a
+  decimal point but no digits, and its symbol layer has digits but no point.
+  A "123" button switches to the number pad, which has both — and a house
+  number in a street search was equally impossible before. "50.06 19.93" on
+  the panel now comes back as a place to go to.
+- **The keyboard remembered the number pad.** Look up one pair of
+  coordinates, and every search after it typed digits into a box expecting a
+  street name — three characters never accumulated, so nothing was ever sent
+  and the panel simply sat there. Found by a soak, which stopped getting
+  answers after its first coordinate round. It opens on letters now.
+- **A coordinate between -1 and 0 lost its minus** in the log and in
+  `navstat`: the integer part of -0.5 is zero, and printing that as a number
+  drops the sign. The sign is printed on its own now.
+
+### Two phones, one panel
+
+- A spare phone with the app installed is enough to break the navigator, and
+  on the bench it did. It held both of the head unit's peripheral slots (its
+  older app opened two links at once), kept the notification bridge bound by
+  sending a steady trickle of notifications, and the phone the rider was
+  actually navigating with could not write a single byte: its greeting came
+  back refused, and the app — told nothing else — reported "Display firmware
+  is too old" and switched the navigator off.
+- Three fixes, one per link in that chain. A navigator write now takes the
+  bridge binding on the spot rather than waiting for the owner to go quiet:
+  whoever is drawing the panel outranks whoever is sending notifications. A
+  refused greeting no longer means "no support" — the app keeps the channel
+  and greets again every five seconds until the head unit answers. And the
+  app cannot open two links any more, which is what filled both slots.
+- The head unit also stopped trusting its own link count: it was kept by
+  adding and subtracting on events, one missed disconnect left it
+  permanently high, and since it decides whether to keep advertising, the
+  head unit then quietly stopped being findable. It asks the stack now.
+
+### Which way the rider is pointing — and why the map stays north-up
+
+- The marker is an arrow along the course now, with a white casing, and falls
+  back to the plain dot when the rider is standing still (a parked bike
+  pointing somewhere definite is a lie).
+- Heading-up was measured before being decided against. The panel has no
+  hardware for an arbitrary-angle rotation — the PPA turns in 90-degree steps
+  — so track-up means warping all 384000 pixels between two PSRAM buffers
+  every frame. A new bench command, `navwarp [degrees] [block]`, does exactly
+  that and times it: **38 ms at 30 degrees and 118 ms at 90**, against a frame
+  that composes in 33-40 ms and an LVGL flush that already costs 57 ms on the
+  same core. So the map stays north-up and the marker carries the heading.
+- The arrow itself cost 28 ms a frame at first, which is the same lesson as
+  the route line: its three edge tests per pixel were in double, and this chip
+  has no double-precision hardware. Vertices in double (three a frame), fill
+  in integers — and `navstat` now splits the frame into composing and the
+  cache flush, which is how the 28 ms was found rather than guessed at.
+
+### Typing an address on the head unit
+
+- A **FIND** button on the navigator screen opens a keyboard on the panel.
+  Type a street, a place or a pair of coordinates; the phone looks it up in
+  the offline index that came with its map — so this works with no signal at
+  all — and sends back up to six answers, nearest to the rider first, each
+  with how far away it is. Tap one and the phone routes there, the same path a
+  tap on the map already took.
+- Two new messages: `0x16 SEARCH` carries the typed text up (the only
+  head-to-phone message with text in it), and `0x0B FOUND_BEGIN` carries the
+  answers down — count, byte length, then one entry per result. A count of
+  zero is a valid answer and the panel says "Nothing found".
+- Names are cut to what the panel can hold without splitting a UTF-8
+  character in half — both halves of that matter, a dangling continuation
+  byte and a lead byte whose tail was cut are equally broken, and either draws
+  as a box.
+- The keyboard gets Montserrat rather than our subsetted font: its backspace,
+  enter and hide keys are FontAwesome glyphs, and without them the bottom row
+  was four empty boxes (the same trap as the zoom buttons).
+
+### A head unit that rebooted got no tiles at all
+
+- Found while testing the search: reboot the head unit with its navigator
+  screen up, and the phone reconnected, sent positions — and not one tile,
+  for ever. Its visibility never changed, and the only signal that a store is
+  gone was a visibility change.
+- The head unit now says so itself: alongside STATE it sends `0x17 EMPTY`
+  whenever its tile store is empty, and the phone forgets everything it
+  thinks it has sent. Verified: `reboot` on the panel, hands off the phone,
+  39 tiles and a full screen within half a minute.
+
+### Telling the head unit a ride is over
+
+- Alexey, watching the panel: "а куда делась синяя линия". The line had gone
+  off screen and the plate above it read "0.0 km | 0 min" in arrival red —
+  because the phone had no way to say that the ride was finished. It sends
+  a route when there is one and nothing when there is not, so the head unit
+  kept drawing the last one.
+- A route of zero points now means "forget it": the line and the manoeuvre
+  plate come off, and the panel is a plain map again. The phone sends it
+  whenever the route it was drawing goes away — arrival, a cleared route, a
+  cancelled ride.
+
+### Zoom, on both screens
+
+- Two buttons on the head unit's map, `+` and `-`, from z14 to z18, with the
+  level shown between them. The rider is the one looking at that screen, so
+  the panel changes level immediately and the phone is told afterwards — it is
+  the only end that can fetch tiles. A new notice on the same characteristic
+  (`0x15 ZOOM`) carries the level; the phone switches everything it sends,
+  detail tiles, fallback layers and position, to it.
+- Nothing goes bare in between. The composer now also tries the level either
+  side of the one it is drawing — one out gets doubled, one in gets halved —
+  so the two seconds before new tiles arrive show a coarser or softer map
+  instead of an empty slate. Verified on hardware: z17 to z18 drew from the
+  tiles already held, and z16 filled the whole panel from 3 real tiles plus
+  halved z17 ground.
+- The phone's own map gets the same pair of buttons, above the follow control.
+  Pinch still works; two thumb-sized buttons are what works one-handed.
+- The translucent plates behind the readouts sit a little taller: Antonio's
+  digits reach the top of their line box, and a two-pixel pad made the grey
+  look cut off.
+
+### Two wires that were never connected
+
+- The head unit's eviction notices and its destination taps both stopped at
+  the phone's background isolate: the subscriptions were declared, cancelled
+  on disconnect — and never actually made. The eviction one is what made a
+  long ride go blank. The head unit holds 64 tiles, a ride outgrows that in a
+  few kilometres, and the feed never sends the same tile twice; with the
+  notices lost, the panel dropped ground it still needed and the phone
+  believed it had already been sent. The symptom was a map that stopped
+  filling while the position kept updating — `tiles 0/12` in `navstat` with 64
+  tiles in the store. Both are wired now, and a 3 km simulated ride holds
+  12/12 with 154 evictions behind it.
+- A tile the phone cannot get is no longer written off for the session. Two
+  failures used to retire it permanently, which is fine for a tile the head
+  unit refuses and wrong for the far more common case — not cached, no signal
+  yet. It now waits thirty seconds and is asked for again.
+
+### The mirror in the app is gone
+
+- The navigator screen no longer carries a thumbnail of a second, smaller map
+  rendered for the head unit. The head unit draws its own map from the tiles,
+  so the picture path had nothing left to do: the frame streamer, the JPEG
+  encoder and that second map are all deleted from the phone. What is left in
+  its place is a one-line badge, and only when something is actually wrong —
+  a firmware too old to speak the tile protocol, or a display showing another
+  screen.
+- That also takes out one cause of repainting: the screen rebuilt its whole
+  widget tree on every feed status change — once per tile sent — the
+  thumbnail's own map included. Nothing subscribes to the feed's counters any
+  more.
+- And the blink itself, which turned out to be something else: while a region
+  downloaded, the map asked its tile layer to reload every hundred tiles. A
+  reload drops and re-creates *every* tile on screen, so for one frame the map
+  was bare — caught on a screen recording as a single frame at luminance 16
+  against 160 either side, several times per download. Nothing resets the
+  layer now; instead a tile that fails retries itself three times over
+  twenty seconds, re-reading the cache each time in case the bulk download has
+  landed it. Same recording after the change: 250 tiles downloaded, no frame
+  below 145.
+- The head unit still accepts pictures (`FRAME_*` and `navtest` are
+  untouched), so the path is retired on the phone rather than removed from
+  the protocol.
+
+### After a head-unit reboot the phone waited for ever
+
+- A head unit reboots on every firmware flash and every power cycle of the
+  bike. It came back advertising and the phone did not reconnect — its log
+  showed no connection attempt at all, for minutes, until the app was
+  force-stopped. The code trusted Android's own autoConnect queue to survive
+  a remote disconnect; it does not always, and certainly not after we cancel
+  it ourselves to avoid a second link.
+- A watchdog now re-asks for the link once it has been missing for two
+  twenty-second ticks. Two, not one, and not on the disconnect event itself:
+  with autoConnect that event fires as a matter of course, and re-arming on
+  each one tore down a healthy link every few seconds — tiles slowed to one
+  per twenty seconds and flutter_blue_plus began logging its two-second
+  disconnect gap. Measured on the bench: `reboot` on the head unit, hands off
+  the phone, connected again eight seconds after it finished booting with the
+  tile feed running; 60 tiles in the following half minute and no link
+  cycling at all.
+- The tile store is back to 96 tiles (12 MB). Sixty-four looked like enough
+  and was not: at zoom 18 a screenful plus its ring covers four times the
+  ground, and a 1.6 km ride evicted 890 tiles — every eviction is reported to
+  the phone, and a tile still wanted comes straight back, so the link spent
+  the ride re-sending ground it had already sent.
+
+### Reboots under a phone: the Bluetooth host ran out of stack
+
+- The head unit restarted every few minutes with the navigator up. The panic
+  text — captured by leaving a logger on the console rather than guessing —
+  named the `nimble_host` task and a stack-protection fault, which is the
+  hardware stack guard rather than a corrupted heap.
+- Cause: every GATT write on the NotifBridge service is parsed on that task,
+  and each branch of the callback declared its own flatten buffer — a
+  notification chunk, an OTA chunk, a file chunk, a tile chunk. The compiler
+  laid them out side by side, so about 1.5 KB of the task's 4 KB stack went on
+  buffers that are never live at the same time. Adding the tile channel was
+  what pushed a notification arriving mid-stream over the edge.
+  All four branches now share one static buffer (the task is single and each
+  callee copies what it keeps), and the task itself gets 6 KB. `navstat`
+  reports its worst-case margin so the next squeeze is visible before it is a
+  reboot.
+
+- Debug bridge: `uimode [vesc|aa|nav|toggle]` reaches every full-screen mode
+  without the 3-finger hold, `navstat` reports the frame and tile streams (mode, tiles
+  accepted and rejected, decode and compose times, and which tiles the view
+  is still missing), and `navtest` puts
+  a locally-made frame through the decode-and-scale path so the picture chain
+  can be checked without a phone. The bridge's console now follows the board:
+  on one whose console is the USB-Serial-JTAG port (the Guition JC4880 brings
+  out no UART0 header) the REPL binds there instead of UART0.
+- Verified end to end on a Guition JC4880 and a phone: frames arrive within
+  a second of the navigator screen coming up, decode and scale to the full
+  panel in 7-9 ms, and land at 10-26 KB each. Panning the map continuously
+  moves about 0.6 frames a second; a map that is not moving sends nothing at
+  all. Switching the head unit to the dashboard stops the phone (it captions
+  the preview "Display is on another screen"), switching back resumes within
+  a second, and a head-unit reboot reconnects on its own.
+
 ## v1.3.17 / app 0.3.17 — 2026-09-09
 
 ### Waveshare microphone actually works

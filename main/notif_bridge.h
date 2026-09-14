@@ -99,6 +99,12 @@ bool notif_bridge_get_phone_time(int *hour, int *minute);
  * notif_bridge_send_cmd(NOTIF_OP_REQUEST_ICON, hash) to fetch it. */
 const uint8_t *notif_bridge_get_icon(uint32_t hash, size_t *out_len);
 
+/* Words still free on the nimble_host task's stack at its worst moment, or 0
+ * before that task has served a write. Every GATT write on this service is
+ * handled on it, so a deep parse there is what a stack-guard panic looks
+ * like. */
+size_t notif_bridge_host_stack_free(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -28,6 +28,7 @@ import '../ble_service.dart';
 import '../lisp_models.dart';
 import '../uuids.dart';
 import 'vesc_errors.dart';
+import '../../log/app_log.dart';
 
 abstract class NusTransport {
   /// Identity of the current physical binding. [VescLink] re-subscribes and
@@ -232,7 +233,7 @@ class DirectNusTransport implements NusTransport {
       _setState(VescLinkState.failed);
       rethrow;
     } catch (e) {
-      debugPrint('[vesc] direct connect failed: $e');
+      AppLog.e('vesc', 'direct connect failed: $e');
       _setState(VescLinkState.failed);
       throw const VescLispException('lisp.err.connect');
     } finally {

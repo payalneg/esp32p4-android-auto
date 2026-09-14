@@ -15,6 +15,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "ui_geom.h"
 
 #include "app_fs.h"   /* app_fs_base()/app_fs_ready()/app_fs_state()/app_fs_ensure() */
 
@@ -281,7 +282,7 @@ static void on_row_delete(lv_event_t *e)
 static void add_row(int kind, const char *name, uint64_t size, int y)
 {
     lv_obj_t *btn = lv_btn_create(s_st.list);
-    lv_obj_set_size(btn, 760, 44);
+    lv_obj_set_size(btn, UI_W - 40, 44);
     lv_obj_set_pos(btn, 0, y);
     lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
     lv_obj_set_style_bg_color(btn,
@@ -310,7 +311,7 @@ static void add_row(int kind, const char *name, uint64_t size, int y)
              (kind == 0) ? "Up one level" : name);
     lv_label_set_text(name_lbl, display);
     lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(name_lbl, 550);
+    lv_obj_set_width(name_lbl, UI_SX(550));
     lv_obj_set_pos(name_lbl, 12, 10);
     lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
 
@@ -373,7 +374,7 @@ static void list_dir_render(void)
             ? "Preparing storage (first-time format, ~1 min)..."
             : "Storage is mounting...");
         lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(msg, 720);
+        lv_obj_set_width(msg, UI_W - 80);
         lv_obj_set_style_text_color(msg, lv_color_hex(0xe0c060), 0);
         lv_obj_set_pos(msg, 12, 60);
         return;
@@ -573,7 +574,7 @@ static void open_action_sheet(void)
     basename_of(s_st.selected_path, base, sizeof base);
     lv_label_set_text(title, base);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(title, 480);
+    lv_obj_set_width(title, UI_SX(480));
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(title, 20, 14);
@@ -629,7 +630,7 @@ static void open_info_modal(void)
         s_st.selected_path, szbuf,
         (unsigned long long)s_st.selected_size);
     lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(info, 600);
+    lv_obj_set_width(info, UI_SX(600));
     lv_obj_set_style_text_color(info, lv_color_hex(0xd0d0d0), 0);
     lv_obj_set_pos(info, 20, 68);
 }
@@ -692,7 +693,7 @@ static void open_rename_modal(void)
     basename_of(s_st.selected_path, base, sizeof base);
 
     lv_obj_t *ta = lv_textarea_create(m);
-    lv_obj_set_size(ta, 760, 50);
+    lv_obj_set_size(ta, UI_W - 40, 50);
     lv_obj_set_pos(ta, 20, 60);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_text(ta, base);
@@ -770,7 +771,7 @@ static void open_text_view_modal(void)
     basename_of(s_st.selected_path, base, sizeof base);
     lv_label_set_text(title, base);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(title, 600);
+    lv_obj_set_width(title, UI_SX(600));
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(title, 20, 14);
@@ -828,7 +829,7 @@ static void open_text_view_modal(void)
     free(raw);
 
     lv_obj_t *ta = lv_textarea_create(m);
-    lv_obj_set_size(ta, 740, 350);
+    lv_obj_set_size(ta, UI_W - 60, 350);
     lv_obj_set_pos(ta, 20, 60);
     lv_textarea_set_one_line(ta, false);
     lv_obj_add_state(ta, LV_STATE_DISABLED);  /* read-only display */
@@ -894,7 +895,7 @@ static void open_image_view_modal(void)
     lv_obj_t *title = lv_label_create(m);
     lv_label_set_text(title, title_buf);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(title, 600);
+    lv_obj_set_width(title, UI_SX(600));
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(title, 20, 14);
@@ -959,7 +960,7 @@ static void open_delete_confirm(void)
     basename_of(s_st.selected_path, base, sizeof base);
     lv_label_set_text_fmt(info, "Permanently delete:\n  %s", base);
     lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(info, 520);
+    lv_obj_set_width(info, UI_SX(520));
     lv_obj_set_style_text_color(info, lv_color_hex(0xd0d0d0), 0);
     lv_obj_set_pos(info, 20, 60);
 
@@ -1104,7 +1105,7 @@ void files_screen_show(void)
 
     s_st.btn_move_here = lv_btn_create(s_st.screen);
     lv_obj_set_size(s_st.btn_move_here, 160, 40);
-    lv_obj_set_pos(s_st.btn_move_here, 460, 8);
+    lv_obj_set_pos(s_st.btn_move_here, UI_SX(460), 8);
     lv_obj_set_style_bg_color(s_st.btn_move_here,
                               lv_color_hex(0x2e7d32), 0);
     lv_obj_add_event_cb(s_st.btn_move_here, on_move_here,
@@ -1119,7 +1120,7 @@ void files_screen_show(void)
 
     s_st.btn_close = lv_btn_create(s_st.screen);
     lv_obj_set_size(s_st.btn_close, 110, 40);
-    lv_obj_set_pos(s_st.btn_close, 670, 8);
+    lv_obj_set_pos(s_st.btn_close, UI_W - 130, 8);
     lv_obj_set_style_bg_color(s_st.btn_close, lv_color_hex(0x424242), 0);
     lv_obj_add_event_cb(s_st.btn_close, on_close, LV_EVENT_CLICKED, NULL);
     {
@@ -1136,7 +1137,7 @@ void files_screen_show(void)
     lv_label_set_text(s_st.path_lbl, s_st.cwd);
     lv_obj_set_style_text_color(s_st.path_lbl, lv_color_hex(0x9fc4ff), 0);
     lv_label_set_long_mode(s_st.path_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_st.path_lbl, 760);
+    lv_obj_set_width(s_st.path_lbl, UI_W - 40);
     lv_obj_set_pos(s_st.path_lbl, 20, 56);
 
     /* List container: scrollable, vertical. Row spacing is 48 px; rows

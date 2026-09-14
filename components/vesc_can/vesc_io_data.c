@@ -6,6 +6,7 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_link.h"
 #include "vesc_can/vesc_datatypes.h"
 
 #include "esp_log.h"
@@ -52,14 +53,15 @@ static void send_cmd(uint8_t cmd)
     /* send=0: VESC replies over CAN (PROCESS_*_BUFFER). Synced so the two
      * back-to-back ADC/PPM polls (and the RT/LISP polls) don't race each
      * other's reply into the shared per-id reassembly buffer. */
-    comm_can_send_buffer_sync(s_target_vesc_id, send_buffer, 1, 0, 60);
+    vesc_link_send_sync(s_target_vesc_id, send_buffer, 1, 0,
+                        vesc_link_sync_timeout_ms());
 }
 
 void vesc_io_data_loop(void)
 {
     if (!s_active) return;
     uint32_t now = millis_now();
-    if (now - s_last_poll_ms < s_poll_interval_ms) return;
+    if (now - s_last_poll_ms < vesc_link_scale_ms(s_poll_interval_ms)) return;
     s_last_poll_ms = now;
 
     send_cmd(COMM_GET_DECODED_ADC);

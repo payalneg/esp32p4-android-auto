@@ -5,7 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'ble/ble_proxy.dart';
 import 'i18n/strings.dart';
-import 'ui/home_screen.dart';
+import 'ui/navigator_screen.dart';
 
 class AaBridgeApp extends StatefulWidget {
   const AaBridgeApp({super.key});
@@ -58,7 +58,7 @@ class _AaBridgeAppState extends State<AaBridgeApp> {
           brightness: Brightness.dark,
         ),
       ),
-      home: const HomeScreen(),
+      home: const NavigatorScreen(),
     );
   }
 }
