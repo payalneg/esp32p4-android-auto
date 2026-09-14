@@ -686,6 +686,14 @@ static void cockpit_screen_init(lv_ui *ui)
     /* Disable screen panning — dashboard is a static layout. */
     lv_obj_clear_flag(ui->dashboard_Classic, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Widen the touch targets of VESC / STAT / SET. This belongs here rather
+     * than in cockpit_create(): Cockpit is theme 0 and therefore already
+     * active at boot, so dashboard_theme_set() returns early and create()
+     * never runs for it — but every build of the screen comes through here. */
+    dashboard_nav_widen_touch(ui->dashboard_Classic_status_vesc,
+                              ui->dashboard_Classic_statistics_button,
+                              ui->dashboard_Classic_Settings_text);
+
     // BLE status is shown via dashboard_status_bt text — the
     // ble_connected_img icon has been removed from the project.
     // Setup_scr_dashboard paints "BT" in bright accent by default;

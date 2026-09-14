@@ -101,7 +101,12 @@ typedef struct {
     lv_obj_t *status_bt;
     /* Dead-VESC banner + the STATISTICS label it overlaps (both optional). */
     lv_obj_t *esc_warn_text;
+    /* The three labels along the top that are the way off the dashboard:
+     * VESC config, statistics, settings. Optional — a theme may leave any of
+     * them out. */
     lv_obj_t *statistics_button;
+    lv_obj_t *nav_vesc;
+    lv_obj_t *nav_settings;
     lv_obj_t *batt_seg[14];
     int       batt_seg_n;
     lv_obj_t *power_seg[14];
@@ -131,6 +136,13 @@ extern const dashboard_theme_ops_t dashboard_generic_ops;
  * single active pointer is enough. [w] must outlive the active period (the
  * generator uses a file-static per screen). Pass NULL to detach. */
 void dashboard_generic_set_active(const dashboard_widgets_t *w);
+
+/* Grow the touch target of the three navigation labels along the top of a
+ * dashboard, without moving or resizing anything that is drawn. Any of the
+ * three may be NULL. No-op on the 800-wide panels, where they are wide
+ * already. Also called by the hand-written Cockpit theme, which builds its
+ * screen itself and so never passes through set_active. */
+void dashboard_nav_widen_touch(lv_obj_t *vesc, lv_obj_t *stat, lv_obj_t *set);
 
 /* Implemented by the generated dashboard_themes_auto.c (firmware build only);
  * registers a generic theme for every discovered dashboard_* screen. Declared

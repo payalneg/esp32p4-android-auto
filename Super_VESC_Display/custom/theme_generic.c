@@ -18,6 +18,7 @@
 
 #include "theme_generic.h"
 #include "settings_wrapper.h"
+#include "ui_geom.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -57,9 +58,29 @@ static bool      s_warn_connected;
 static bool      s_warn_shown;
 static uint32_t  s_warn_blink_ms;
 
+/* The way off the dashboard is three labels along the top: VESC, STAT, SET.
+ * They were drawn at 800 px, where STAT is 164 px wide and SET is 137; the
+ * 480 project scales x by 0.6 and they come out 42 and 33 px against a 30 px
+ * height. A 33 px target is not something a thumb hits on a moving bike — and
+ * missing it is not a near miss, it is a dashboard that appears to have no way
+ * out. Widening the labels would re-flow the status bar they share with the
+ * clock and the BT indicator, so grow only what the touch layer sees: LVGL
+ * takes the extended area into account for hit-testing and draws nothing
+ * differently. 12 px each way turns SET into 57x53. The gaps between the three
+ * are wider than that, so the areas do not overlap each other. */
+void dashboard_nav_widen_touch(lv_obj_t *vesc, lv_obj_t *stat, lv_obj_t *set)
+{
+    if (UI_W >= 640) return;              /* the 800 panel has room already */
+    lv_obj_t *const nav[] = { vesc, stat, set };
+    for (unsigned i = 0; i < sizeof nav / sizeof nav[0]; i++) {
+        if (nav[i]) lv_obj_set_ext_click_area(nav[i], 12);
+    }
+}
+
 void dashboard_generic_set_active(const dashboard_widgets_t *w)
 {
     s_w = w;
+    dashboard_nav_widen_touch(w->nav_vesc, w->statistics_button, w->nav_settings);
     s_last_current_a = 0.0f;
     s_last_voltage_v = 0.0f;
     /* Every screen brings its own widgets: drop the captured geometry and the

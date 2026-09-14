@@ -54,6 +54,10 @@ SCALARS = [
     # runtime instead (see theme_generic.c).
     ("esc_warn_text",     "esc_not_connected_text"),
     ("statistics_button", "statistics_button"),
+    # The other two labels of the top navigation, so their touch target can be
+    # widened on the square panel (see dashboard_generic_set_active).
+    ("nav_vesc",          "status_vesc"),
+    ("nav_settings",      "Settings_text"),
     # "°C" labels next to the temperatures — only so a dual-head reading
     # ("34/37") can push them aside. Two naming variants in the wild.
     ("temp_fet_unit",   "temp_esc_unit"),
