@@ -225,7 +225,7 @@ static void numrow_add(lv_obj_t *list, const char *name, numrow_t *r,
         lv_obj_set_user_data(btn[i], (void *)(intptr_t)dx[i]);
         lv_obj_t *l = lv_label_create(btn[i]);
         lv_label_set_text(l, gl[i]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
         lv_obj_center(l);
         lv_obj_add_event_cb(btn[i], numrow_step, LV_EVENT_CLICKED, r);
     }
@@ -235,7 +235,7 @@ static void numrow_add(lv_obj_t *list, const char *name, numrow_t *r,
     r->val = lv_label_create(row);
     lv_obj_align(r->val, LV_ALIGN_RIGHT_MID, -76, 0);
     lv_obj_set_style_text_color(r->val, lv_color_hex(COL_CYAN), 0);
-    lv_obj_set_style_text_font(r->val, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(r->val, UI_FONT_MENU, 0);
     numrow_refresh(r);
 }
 
@@ -521,7 +521,7 @@ void show_vesc_link_settings(void)
     lv_label_set_text(title, "VESC Link");
     lv_obj_set_pos(title, 110, 16);
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
     /* scrollable content */
     lv_obj_t *list = lv_obj_create(s_screen);

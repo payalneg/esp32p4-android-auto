@@ -183,7 +183,7 @@ static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
     lv_obj_set_size(btn, SETTINGS_BTN_W, 50);
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg_color), 0);
     lv_obj_set_style_text_color(btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_border_width(btn, 0, 0);
     /* SHORT_CLICKED + LONG_PRESSED_REPEAT (not CLICKED: it also fires on
@@ -201,7 +201,7 @@ static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
     lv_obj_set_pos(f->label, SETTINGS_VAL_X, y);
     lv_obj_set_size(f->label, SETTINGS_VAL_W, 50);
     lv_obj_set_style_text_color(f->label, lv_color_hex(text_color), 0);
-    lv_obj_set_style_text_font(f->label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(f->label, UI_FONT_MENU, 0);
     lv_obj_set_style_text_align(f->label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_top(f->label, 11, 0);
     num_field_refresh(f);
@@ -215,8 +215,12 @@ static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
  * exactly the option list. */
 static void settings_dropdown_fit_font(lv_obj_t *dd)
 {
-    static const lv_font_t *const sizes[] = {
-        &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
+    /* Not static: UI_FONT_MENU asks the display how wide it is, so the ladder
+     * is built per call. On the narrow panel its first rung is already the
+     * 20 px face, which makes the first two rungs the same size — harmless,
+     * the loop simply settles on it one step sooner. */
+    const lv_font_t *const sizes[] = {
+        UI_FONT_MENU, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
     };
     const char *opts = lv_dropdown_get_options(dd);
     if (!opts) return;
@@ -264,8 +268,12 @@ static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *te
     lv_obj_set_width(lbl, avail);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-    static const lv_font_t *const sizes[] = {
-        &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
+    /* Not static: UI_FONT_MENU asks the display how wide it is, so the ladder
+     * is built per call. On the narrow panel its first rung is already the
+     * 20 px face, which makes the first two rungs the same size — harmless,
+     * the loop simply settles on it one step sooner. */
+    const lv_font_t *const sizes[] = {
+        UI_FONT_MENU, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
     };
     const lv_font_t *font = sizes[sizeof sizes / sizeof sizes[0] - 1];
     for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
@@ -611,7 +619,7 @@ static void fmt_overlay_show(void)
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");
     lv_obj_set_style_text_color(l, lv_color_hex(0xFFB02E), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(l);
     lv_refr_now(NULL);   /* draw + flush before the format freezes rendering */
@@ -2115,7 +2123,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
     lv_obj_t *back_lbl = lv_label_create(back_btn);
     lv_label_set_text(back_lbl, "Back to settings");
     lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(back_lbl, UI_FONT_MENU, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back_btn, logs_back_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
@@ -2219,7 +2227,7 @@ static void qr_tile_create(lv_obj_t *parent, int x, int y,
     lv_obj_t *cap = lv_label_create(box);
     lv_label_set_text(cap, caption);
     lv_obj_set_style_text_color(cap, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(cap, UI_FONT_MENU, 0);
     lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
 
     /* 260 px QR — fits the box with room for caption + footer. Dark on
@@ -2265,7 +2273,7 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
     lv_obj_t *back_lbl = lv_label_create(back_btn);
     lv_label_set_text(back_lbl, "Back to settings");
     lv_obj_set_style_text_color(back_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(back_lbl, UI_FONT_MENU, 0);
     lv_obj_center(back_lbl);
     lv_obj_add_event_cb(back_btn, qr_back_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
@@ -2614,7 +2622,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_theme_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_theme_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_theme_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_theme_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_theme_dropdown, UI_FONT_MENU, 0);
     settings_dropdown_fit_font(settings_theme_dropdown);
     lv_obj_set_style_border_width(settings_theme_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_theme_dropdown, 8, 0);
@@ -2633,7 +2641,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_splash_loops_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_splash_loops_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_splash_loops_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_splash_loops_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_splash_loops_dropdown, UI_FONT_MENU, 0);
     settings_dropdown_fit_font(settings_splash_loops_dropdown);
     lv_obj_set_style_border_width(settings_splash_loops_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_splash_loops_dropdown, 8, 0);
@@ -2654,7 +2662,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_phone_screen_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_phone_screen_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_phone_screen_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_phone_screen_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_phone_screen_dropdown, UI_FONT_MENU, 0);
     settings_dropdown_fit_font(settings_phone_screen_dropdown);
     lv_obj_set_style_border_width(settings_phone_screen_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_phone_screen_dropdown, 8, 0);
@@ -2705,7 +2713,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, UI_FONT_MENU, 0);
     settings_dropdown_fit_font(settings_battery_calc_mode_dropdown);
     lv_obj_set_style_border_width(settings_battery_calc_mode_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
@@ -2759,7 +2767,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_pos(s_clock_hour_field.label, CLK_H_VAL_X, y_pos + 5);
     lv_obj_set_size(s_clock_hour_field.label, SETTINGS_VAL_W, 50);
     lv_obj_set_style_text_color(s_clock_hour_field.label, lv_color_hex(0xB6FF2E), 0);
-    lv_obj_set_style_text_font(s_clock_hour_field.label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_clock_hour_field.label, UI_FONT_MENU, 0);
     lv_obj_set_style_text_align(s_clock_hour_field.label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_top(s_clock_hour_field.label, 11, 0);
     num_field_refresh(&s_clock_hour_field);
@@ -2771,7 +2779,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_clock_colon_label, ":");
     lv_obj_set_pos(settings_clock_colon_label, UI_SX(537), y_pos + 16);
     lv_obj_set_style_text_color(settings_clock_colon_label, lv_color_hex(0xB6FF2E), 0);
-    lv_obj_set_style_text_font(settings_clock_colon_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_clock_colon_label, UI_FONT_MENU, 0);
 
     /* Minutes cluster — same right-edge anchors used by the other rows. */
     s_clock_min_field = (num_field_t){
@@ -2793,7 +2801,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_limits_title_label, "=== VESC Motor Limits ===");
     lv_obj_set_pos(settings_limits_title_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_limits_title_label, lv_color_hex(0xffa500), 0);
-    lv_obj_set_style_text_font(settings_limits_title_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_limits_title_label, UI_FONT_MENU, 0);
     
     y_pos += 35;
     
@@ -2806,7 +2814,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_read_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_read_limits_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_read_limits_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_read_limits_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_read_limits_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_read_limits_btn, 8, 0);
     lv_obj_set_style_border_width(settings_read_limits_btn, 0, 0);
     lv_obj_add_event_cb(settings_read_limits_btn, read_limits_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2818,7 +2826,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_motor_current_label, "Motor Current Max (A):");
     lv_obj_set_pos(settings_motor_current_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_motor_current_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_current_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_current_label, UI_FONT_MENU, 0);
     
     // Minus button
     settings_motor_current_minus_btn = lv_btn_create(parent);
@@ -2829,7 +2837,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_motor_current_minus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_motor_current_minus_btn, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_motor_current_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_current_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_current_minus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_motor_current_minus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_motor_current_minus_btn, 0, 0);
     lv_obj_add_event_cb(settings_motor_current_minus_btn, motor_current_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2844,7 +2852,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_motor_current_spinbox, 130, 50);
     lv_obj_set_style_bg_color(settings_motor_current_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
     lv_obj_set_style_text_color(settings_motor_current_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_motor_current_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_motor_current_spinbox, UI_FONT_MENU, LV_PART_MAIN);
     lv_obj_set_style_border_width(settings_motor_current_spinbox, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(settings_motor_current_spinbox, lv_color_hex(0xff6600), LV_PART_MAIN);
     lv_obj_set_style_radius(settings_motor_current_spinbox, 8, LV_PART_MAIN);
@@ -2858,7 +2866,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_motor_current_plus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_motor_current_plus_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_motor_current_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_current_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_current_plus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_motor_current_plus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_motor_current_plus_btn, 0, 0);
     lv_obj_add_event_cb(settings_motor_current_plus_btn, motor_current_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2870,7 +2878,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_battery_current_label, "Battery Current Max (A):");
     lv_obj_set_pos(settings_battery_current_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_battery_current_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_current_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_battery_current_label, UI_FONT_MENU, 0);
     
     // Minus button
     settings_battery_current_minus_btn = lv_btn_create(parent);
@@ -2881,7 +2889,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_battery_current_minus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_battery_current_minus_btn, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_battery_current_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_current_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_battery_current_minus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_battery_current_minus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_battery_current_minus_btn, 0, 0);
     lv_obj_add_event_cb(settings_battery_current_minus_btn, battery_current_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2896,7 +2904,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_battery_current_spinbox, 130, 50);
     lv_obj_set_style_bg_color(settings_battery_current_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
     lv_obj_set_style_text_color(settings_battery_current_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_battery_current_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_battery_current_spinbox, UI_FONT_MENU, LV_PART_MAIN);
     lv_obj_set_style_border_width(settings_battery_current_spinbox, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(settings_battery_current_spinbox, lv_color_hex(0xffaa00), LV_PART_MAIN);
     lv_obj_set_style_radius(settings_battery_current_spinbox, 8, LV_PART_MAIN);
@@ -2910,7 +2918,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_battery_current_plus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_battery_current_plus_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_battery_current_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_battery_current_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_battery_current_plus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_battery_current_plus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_battery_current_plus_btn, 0, 0);
     lv_obj_add_event_cb(settings_battery_current_plus_btn, battery_current_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2922,7 +2930,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_erpm_max_label, "ERPM Max (x1000):");
     lv_obj_set_pos(settings_erpm_max_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_erpm_max_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_erpm_max_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_erpm_max_label, UI_FONT_MENU, 0);
     
     // Minus button
     settings_erpm_max_minus_btn = lv_btn_create(parent);
@@ -2933,7 +2941,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_erpm_max_minus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_erpm_max_minus_btn, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_erpm_max_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_erpm_max_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_erpm_max_minus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_erpm_max_minus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_erpm_max_minus_btn, 0, 0);
     lv_obj_add_event_cb(settings_erpm_max_minus_btn, erpm_max_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2948,7 +2956,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_erpm_max_spinbox, 130, 50);
     lv_obj_set_style_bg_color(settings_erpm_max_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
     lv_obj_set_style_text_color(settings_erpm_max_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_erpm_max_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_erpm_max_spinbox, UI_FONT_MENU, LV_PART_MAIN);
     lv_obj_set_style_border_width(settings_erpm_max_spinbox, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(settings_erpm_max_spinbox, lv_color_hex(0x00ff00), LV_PART_MAIN);
     lv_obj_set_style_radius(settings_erpm_max_spinbox, 8, LV_PART_MAIN);
@@ -2962,7 +2970,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_erpm_max_plus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_erpm_max_plus_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_erpm_max_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_erpm_max_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_erpm_max_plus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_erpm_max_plus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_erpm_max_plus_btn, 0, 0);
     lv_obj_add_event_cb(settings_erpm_max_plus_btn, erpm_max_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2978,7 +2986,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_apply_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_apply_limits_btn, lv_color_hex(0xff6600), 0);
     lv_obj_set_style_text_color(settings_apply_limits_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_apply_limits_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_apply_limits_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_apply_limits_btn, 8, 0);
     lv_obj_set_style_border_width(settings_apply_limits_btn, 0, 0);
     lv_obj_add_event_cb(settings_apply_limits_btn, apply_limits_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -2990,7 +2998,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_limits_status_label, "Press 'Read Limits' to load VESC values");
     lv_obj_set_pos(settings_limits_status_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_limits_status_label, lv_color_hex(0xaaaaaa), 0);
-    lv_obj_set_style_text_font(settings_limits_status_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_limits_status_label, UI_FONT_MENU, 0);
     
     y_pos += spacing;
     */
@@ -3001,7 +3009,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_brightness_label, buf);
     lv_obj_set_pos(settings_brightness_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_brightness_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_brightness_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_brightness_label, UI_FONT_MENU, 0);
     
     settings_brightness_slider = lv_slider_create(parent);
     lv_slider_set_range(settings_brightness_slider, 10, 100);
@@ -3025,7 +3033,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_show_fps_label, "Show FPS Counter");
     lv_obj_set_pos(settings_show_fps_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_show_fps_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_show_fps_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_show_fps_label, UI_FONT_MENU, 0);
 
     settings_show_fps_switch = lv_switch_create(parent);
     lv_obj_set_pos(settings_show_fps_switch, 380, y_pos - 5);
@@ -3258,7 +3266,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_wheel_diameter_label, "Wheel Diameter (mm):");
     lv_obj_set_pos(settings_wheel_diameter_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_wheel_diameter_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_wheel_diameter_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_wheel_diameter_label, UI_FONT_MENU, 0);
     
     // Minus button
     settings_wheel_diameter_minus_btn = lv_btn_create(parent);
@@ -3269,7 +3277,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_wheel_diameter_minus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_wheel_diameter_minus_btn, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_wheel_diameter_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_wheel_diameter_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_wheel_diameter_minus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_wheel_diameter_minus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_wheel_diameter_minus_btn, 0, 0);
     lv_obj_add_event_cb(settings_wheel_diameter_minus_btn, wheel_diameter_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -3286,7 +3294,7 @@ void settings_ui_init(lv_ui *ui) {
     // Style the spinbox
     lv_obj_set_style_bg_color(settings_wheel_diameter_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
     lv_obj_set_style_text_color(settings_wheel_diameter_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_wheel_diameter_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_wheel_diameter_spinbox, UI_FONT_MENU, LV_PART_MAIN);
     lv_obj_set_style_border_width(settings_wheel_diameter_spinbox, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(settings_wheel_diameter_spinbox, lv_color_hex(0x00a9ff), LV_PART_MAIN);
     lv_obj_set_style_radius(settings_wheel_diameter_spinbox, 8, LV_PART_MAIN);
@@ -3302,7 +3310,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_wheel_diameter_plus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_wheel_diameter_plus_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_wheel_diameter_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_wheel_diameter_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_wheel_diameter_plus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_wheel_diameter_plus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_wheel_diameter_plus_btn, 0, 0);
     lv_obj_add_event_cb(settings_wheel_diameter_plus_btn, wheel_diameter_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -3316,7 +3324,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_motor_poles_label, "Motor Poles:");
     lv_obj_set_pos(settings_motor_poles_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_motor_poles_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_poles_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_poles_label, UI_FONT_MENU, 0);
 
     // Minus button
     settings_motor_poles_minus_btn = lv_btn_create(parent);
@@ -3327,7 +3335,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_motor_poles_minus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_motor_poles_minus_btn, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_motor_poles_minus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_poles_minus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_poles_minus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_motor_poles_minus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_motor_poles_minus_btn, 0, 0);
     lv_obj_add_event_cb(settings_motor_poles_minus_btn, motor_poles_minus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -3344,7 +3352,7 @@ void settings_ui_init(lv_ui *ui) {
     // Style the spinbox
     lv_obj_set_style_bg_color(settings_motor_poles_spinbox, lv_color_hex(0x1f1f1f), LV_PART_MAIN);
     lv_obj_set_style_text_color(settings_motor_poles_spinbox, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_text_font(settings_motor_poles_spinbox, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(settings_motor_poles_spinbox, UI_FONT_MENU, LV_PART_MAIN);
     lv_obj_set_style_border_width(settings_motor_poles_spinbox, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(settings_motor_poles_spinbox, lv_color_hex(0x00a9ff), LV_PART_MAIN);
     lv_obj_set_style_radius(settings_motor_poles_spinbox, 8, LV_PART_MAIN);
@@ -3360,7 +3368,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_motor_poles_plus_btn, 130, 50);
     lv_obj_set_style_bg_color(settings_motor_poles_plus_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_motor_poles_plus_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_motor_poles_plus_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_motor_poles_plus_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_motor_poles_plus_btn, 8, 0);
     lv_obj_set_style_border_width(settings_motor_poles_plus_btn, 0, 0);
     lv_obj_add_event_cb(settings_motor_poles_plus_btn, motor_poles_plus_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -3383,7 +3391,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_reset_trip_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_trip_button, lv_color_hex(0xff8800), 0);
     lv_obj_set_style_text_color(settings_reset_trip_button, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_reset_trip_button, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_reset_trip_button, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_reset_trip_button, 8, 0);
     lv_obj_set_style_border_width(settings_reset_trip_button, 0, 0);
     lv_obj_add_event_cb(settings_reset_trip_button, reset_trip_button_event_cb,
@@ -3398,7 +3406,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(files_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(files_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(files_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(files_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(files_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(files_btn, 8, 0);
     lv_obj_set_style_border_width(files_btn, 0, 0);
     lv_obj_add_event_cb(files_btn, settings_files_button_event_cb,
@@ -3417,7 +3425,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(logs_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(logs_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(logs_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(logs_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(logs_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(logs_btn, 8, 0);
     lv_obj_set_style_border_width(logs_btn, 0, 0);
     lv_obj_add_event_cb(logs_btn, logs_open_btn_event_cb,
@@ -3431,7 +3439,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(qr_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(qr_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(qr_btn, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(qr_btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(qr_btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(qr_btn, 8, 0);
     lv_obj_set_style_border_width(qr_btn, 0, 0);
     lv_obj_add_event_cb(qr_btn, qr_open_btn_event_cb,
@@ -3445,7 +3453,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_size(settings_reset_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_reset_button, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(settings_reset_button, 8, 0);
     lv_obj_set_style_border_width(settings_reset_button, 0, 0);
     lv_obj_add_event_cb(settings_reset_button, reset_button_event_cb, LV_EVENT_CLICKED, NULL);
@@ -3457,7 +3465,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(settings_info_label, "Settings saved automatically");
     lv_obj_set_pos(settings_info_label, 20, y_pos);
     lv_obj_set_style_text_color(settings_info_label, lv_color_hex(0x00ff00), 0);
-    lv_obj_set_style_text_font(settings_info_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_info_label, UI_FONT_MENU, 0);
 
     y_pos += 40;
 

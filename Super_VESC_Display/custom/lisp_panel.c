@@ -140,7 +140,7 @@ static lv_obj_t *step_btn(lv_obj_t *parent, const char *glyph, lv_event_cb_t cb,
     lv_obj_set_style_border_width(btn, 0, 0);
     lv_obj_t *l = lv_label_create(btn);
     lv_label_set_text(l, glyph);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_center(l);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_LONG_PRESSED_REPEAT, ud);
@@ -213,7 +213,7 @@ static void build_number(row_t *r, const vlp_ctrl_t *c)
     lv_obj_set_flex_grow(v, 1);
     lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(v, lv_color_hex(COL_ACCENT), 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(v, UI_FONT_MENU, 0);
     char b[32];
     fmt_num(b, sizeof b, c->value, c->vstep, c->suffix);
     lv_label_set_text(v, b);
@@ -414,7 +414,7 @@ static void do_open(void)
     lv_label_set_text(title, "Quick actions");
     lv_obj_set_pos(title, 4, 4);
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
     s_status = lv_label_create(s_drawer);
     lv_label_set_text(s_status, "Loading...");

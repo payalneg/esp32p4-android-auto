@@ -163,7 +163,7 @@ static void show_spinner(const char *text)
     lv_obj_t *l = lv_label_create(s_spinner_modal);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, 50);
 }
 
@@ -535,15 +535,15 @@ static void show_confirm_delete(void)
     lv_obj_t *l = lv_label_create(box);
     lv_label_set_text_fmt(l, "Delete trip #%u?", (unsigned)s_detail_trip_id);
     lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 16);
 
     lv_obj_t *yes = make_btn(box, 0, 0, 180, 60, 8, COL_RED, "Delete",
-                             &lv_font_montserrat_24, confirm_yes_cb, NULL);
+                             UI_FONT_MENU, confirm_yes_cb, NULL);
     lv_obj_align(yes, LV_ALIGN_BOTTOM_LEFT, 6, -6);
 
     lv_obj_t *no = make_btn(box, 0, 0, 180, 60, 8, COL_BTN, "Cancel",
-                            &lv_font_montserrat_24, confirm_no_cb, NULL);
+                            UI_FONT_MENU, confirm_no_cb, NULL);
     lv_obj_align(no, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
 }
 
@@ -571,10 +571,10 @@ static void build_screen(void)
     lv_label_set_text(s_title, "Trip Statistics");
     lv_obj_set_pos(s_title, 16, 14);
     lv_obj_set_style_text_color(s_title, lv_color_hex(COL_ACCENT), 0);
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_title, UI_FONT_MENU, 0);
 
     s_back_btn = make_btn(s_screen, UI_W - 104, 8, 92, 40, 6, COL_BTN, "Back",
-                          &lv_font_montserrat_24, back_cb, NULL);
+                          UI_FONT_MENU, back_cb, NULL);
 
     /* ---- list view ---- */
     s_list_view = lv_obj_create(s_screen);
@@ -621,7 +621,7 @@ static void build_screen(void)
     s_empty_lbl = lv_label_create(s_list_view);
     lv_label_set_text(s_empty_lbl, "No trips recorded yet.");
     lv_obj_set_style_text_color(s_empty_lbl, lv_color_hex(COL_DIM), 0);
-    lv_obj_set_style_text_font(s_empty_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_empty_lbl, UI_FONT_MENU, 0);
     lv_obj_align(s_empty_lbl, LV_ALIGN_CENTER, 0, -40);
     lv_obj_add_flag(s_empty_lbl, LV_OBJ_FLAG_HIDDEN);
 
@@ -644,7 +644,7 @@ static void build_screen(void)
     /* Delete-trip button — top-right of the detail view, clear of the summary
      * text on the left. Hidden for the live trip (see open_detail). */
     s_delete_btn = make_btn(s_detail_view, UI_W - 176, 4, 160, 40, 6, COL_RED, "Delete",
-                            &lv_font_montserrat_24, delete_btn_cb, NULL);
+                            UI_FONT_MENU, delete_btn_cb, NULL);
 
     /* metric selector — explicit buttons (a btnmatrix renders as thin strips
      * under this theme), selected one filled lime with dark text. A 6th button

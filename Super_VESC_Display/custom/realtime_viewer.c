@@ -161,7 +161,7 @@ void show_realtime_viewer(void)
     lv_label_set_text(title, "Realtime");
     lv_obj_set_pos(title, 110, 16);
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
     /* scrollable value list */
     lv_obj_t *list = lv_obj_create(s_screen);

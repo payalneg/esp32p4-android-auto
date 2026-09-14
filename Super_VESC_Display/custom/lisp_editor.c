@@ -394,7 +394,7 @@ void show_lisp_editor(void)
     lv_label_set_text(title, "LISP");
     lv_obj_set_pos(title, 110, 12);
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
     /* Toolbar: file picker + actions + filename field. Seven widgets need
      * ~790 px, so a 480-wide panel gets two rows and the editor starts lower.

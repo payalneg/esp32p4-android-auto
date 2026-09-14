@@ -36,4 +36,19 @@
  * narrower columns. */
 #define UI_IS_SQUARE  (UI_W == UI_H)
 
+/* The text size of a menu row.
+ *
+ * The hand-written screens were drawn with 24 px labels, which suits the
+ * 800-wide panel: a caption, its value and a stepper sit in one row with room
+ * between them. The same 24 px on the 480-wide board leaves nothing over — the
+ * captions run into the controls, and the ones that don't get shortened or
+ * clipped instead. Stepping the whole menu down one size buys back ~17 % of
+ * every row's width, which is most of what the narrow panel is short of.
+ *
+ * Both faces are LVGL built-ins already compiled in (lv_conf.h enables the
+ * whole Montserrat range), so this costs no flash. Screens that fit their own
+ * font to the space they have — settings_dropdown_fit_font, the wide captions
+ * — start from this size and step down from there. */
+#define UI_FONT_MENU  (UI_W < 640 ? &lv_font_montserrat_18 : &lv_font_montserrat_24)
+
 #endif /* UI_GEOM_H */

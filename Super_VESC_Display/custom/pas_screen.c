@@ -173,7 +173,7 @@ static lv_obj_t *step_btn(lv_obj_t *parent, const char *glyph, uint32_t col)
     lv_obj_set_style_radius(b, 6, 0);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, glyph);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_center(l);
     return b;
 }
@@ -227,7 +227,7 @@ static spin_t *add_spinner(lv_obj_t *list, const char *name, int val, int vmin,
     lv_obj_align(s->lbl, LV_ALIGN_RIGHT_MID, -66, 0);
     lv_obj_set_style_text_align(s->lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s->lbl, lv_color_hex(COL_CYAN), 0);
-    lv_obj_set_style_text_font(s->lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s->lbl, UI_FONT_MENU, 0);
 
     lv_obj_t *plus = step_btn(row, "+", COL_CYAN);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -8, 0);
@@ -429,7 +429,7 @@ void show_pas_settings(void)
     lv_label_set_text(title, "Pedal Assist");
     lv_obj_set_pos(title, 110, 16);
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
     /* scrollable content */
     lv_obj_t *list = lv_obj_create(s_screen);

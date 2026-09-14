@@ -103,9 +103,17 @@ DEPPATH += --dep-path $(makefile_path)/
 VPATH += :$(makefile_path)/
 CFLAGS += "-I$(makefile_path)/"
 
+# Header dependencies. `-include $(DEPS)` below expects a .d beside every .o,
+# and these two flags are what write them — but they used to sit inside the
+# Windows branch, so on macOS and Linux nothing tracked headers. Editing
+# ui_geom.h or a shim header then rebuilt nothing at all: make saw only the
+# unchanged .c files, the audit re-measured the previous binary, and the
+# screenshots came out byte-identical to the run before the edit.
+CFLAGS += -MMD -MP
+
 ifeq ($(OS),Windows_NT)
 #SDL2
-CFLAGS += "-ISDL2\i686-w64-mingw32\include" -MMD -MP
+CFLAGS += "-ISDL2\i686-w64-mingw32\include"
 endif
 
 OBJEXT := .o

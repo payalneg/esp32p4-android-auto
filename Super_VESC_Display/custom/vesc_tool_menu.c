@@ -141,7 +141,7 @@ static void style_btn(lv_obj_t *btn, uint32_t bg)
 {
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg), 0);
     lv_obj_set_style_text_color(btn, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(btn, UI_FONT_MENU, 0);
     lv_obj_set_style_radius(btn, 6, 0);
     lv_obj_set_style_border_width(btn, 0, 0);
 }
@@ -209,7 +209,7 @@ static void vt_show_spinner(const char *text)
     lv_obj_t *lbl = lv_label_create(s_spinner_modal);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(lbl, UI_FONT_MENU, 0);
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 50);
 }
 
@@ -620,7 +620,7 @@ static void build_separator(const char *label)
     lv_obj_set_width(sep, lv_pct(100));
     lv_label_set_text(sep, label);
     lv_obj_set_style_text_color(sep, lv_color_hex(COL_ACCENT), 0);
-    lv_obj_set_style_text_font(sep, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(sep, UI_FONT_MENU, 0);
     lv_obj_set_style_pad_top(sep, 8, 0);
     lv_obj_set_style_pad_bottom(sep, 2, 0);
 }
@@ -1095,7 +1095,7 @@ static void detect_cb(lv_event_t *e)
     lv_label_set_text(t, "FOC Detection - motor will SPIN");
     lv_obj_set_pos(t, 12, 6);
     lv_obj_set_style_text_color(t, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(t, UI_FONT_MENU, 0);
 
     s_foc_result_lbl = lv_label_create(dlg);
     lv_obj_set_pos(s_foc_result_lbl, 12, 44);
@@ -1191,7 +1191,7 @@ static void restore_cb(lv_event_t *e)
                                              : "Restore App backup");
     lv_obj_set_pos(t, 12, 8);
     lv_obj_set_style_text_color(t, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(t, UI_FONT_MENU, 0);
 
     /* scrollable list of backups, newest first */
     lv_obj_t *list = lv_obj_create(dlg);
@@ -1322,7 +1322,7 @@ static void vt_build_screen(void)
     lv_label_set_text(s_title, "VESC Config");
     lv_obj_set_pos(s_title, narrow ? 96 : 110, 16);
     lv_obj_set_style_text_color(s_title, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_title, UI_FONT_MENU, 0);
 
     s_emu_banner = lv_label_create(s_screen);
     lv_label_set_text(s_emu_banner, "");
@@ -1514,7 +1514,7 @@ static void fs_show_format_modal(void)
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");
     lv_obj_set_style_text_color(l, lv_color_hex(COL_ORANGE), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, UI_FONT_MENU, 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(l);
     /* Force-draw now: the format that follows starves rendering (flash erase,
