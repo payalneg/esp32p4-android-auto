@@ -81,3 +81,14 @@ CONFIG_VESC_CAN_RX_GPIO=0
 # ui_mode guard landed that was a boot loop. Tell them apart on the live bus:
 # 0x24 = V4.0, 0x20 = V3.0, touch answers at 0x5D either way.
 CONFIG_BSP_S3T4_HW_V3=y
+
+# Keep the WiFi hot paths in flash, not IRAM. The stock options pull ~32 KB of
+# WiFi code into DIRAM, and on this board DIRAM is the scarce resource: 341 KB
+# total, of which the dashboard's statics, the BLE controller and the IRAM-
+# resident code already claim two thirds. What was left ran out inside
+# tcpip_init — lwIP could not build the tcpip_thread mailbox (it must come from
+# internal memory) and the board boot-looped on that assert every two seconds.
+# The cost is WiFi throughput, which here carries the web UI and OTA rather
+# than a projected video stream.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n

@@ -672,7 +672,19 @@ void app_main(void)
 
     /* WiFi comes up on every board. On the AA head units it is the network
      * the phone joins for projection; everywhere it is how the on-device web
-     * UI (/ota, /files, /lisp) and the Settings QR code are reachable. */
+     * UI (/ota, /files, /lisp) and the Settings QR code are reachable.
+     *
+     * The probe is here because this is the tightest moment in the boot: lwIP
+     * builds its mailboxes from INTERNAL memory (a FreeRTOS queue can be
+     * touched from an ISR, so PSRAM is not an option), and it does so after
+     * the UI, the BLE stack and every driver have taken their share. On the
+     * S3, where DIRAM is 341 KB and the dashboard's statics alone are ~95 KB,
+     * running dry here asserts inside tcpip_init and the board boot-loops with
+     * "failed to create tcpip_thread mbox" — the number below is what tells
+     * you how close the next feature puts you to that wall. */
+    ESP_LOGI(TAG, "HEAP_PROBE: pre-wifi INTERNAL+8BIT free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     ESP_ERROR_CHECK(wifi_manager_start());
     if (wifi_manager_wait_ready(30000) != ESP_OK) {
         ESP_LOGE(TAG, "wifi setup failed, halting");
