@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 100 px
  * Bpp: 4
- * Opts: --font /Users/alexey/work/esp32p4-android-auto/Super_VESC_Display/import/font/Antonio-Regular.ttf --size 100 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x2D,0x30-0x39 -o /Users/alexey/work/esp32p4-android-auto/Super_VESC_Display/generated/guider_fonts/lv_font_Antonio_Regular_100.c
+ * Opts: --font /Users/alexey/work/esp32p4-android-auto/.claude/worktrees/s3sim/Super_VESC_Display/import/font/Antonio-Regular.ttf --size 100 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x2D,0x30-0x39 -o /Users/alexey/work/esp32p4-android-auto/.claude/worktrees/s3sim/Super_VESC_Display/generated/guider_fonts/lv_font_Antonio_Regular_100.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

@@ -327,27 +327,59 @@
 
 /*Montserrat fonts with ASCII range and some symbols using bpp = 4
  *https://fonts.google.com/specimen/Montserrat*/
+#ifndef LV_FONT_MONTSERRAT_8
 #define LV_FONT_MONTSERRAT_8 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_10
 #define LV_FONT_MONTSERRAT_10 0
+#endif
 #define LV_FONT_MONTSERRAT_12 1
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
+#ifndef LV_FONT_MONTSERRAT_18
 #define LV_FONT_MONTSERRAT_18 0
+#endif
 #define LV_FONT_MONTSERRAT_20 1
+#ifndef LV_FONT_MONTSERRAT_22
 #define LV_FONT_MONTSERRAT_22 0
+#endif
 #define LV_FONT_MONTSERRAT_24 1
+#ifndef LV_FONT_MONTSERRAT_26
 #define LV_FONT_MONTSERRAT_26 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_28
 #define LV_FONT_MONTSERRAT_28 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_30
 #define LV_FONT_MONTSERRAT_30 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_32
 #define LV_FONT_MONTSERRAT_32 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_34
 #define LV_FONT_MONTSERRAT_34 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_36
 #define LV_FONT_MONTSERRAT_36 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_38
 #define LV_FONT_MONTSERRAT_38 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_40
 #define LV_FONT_MONTSERRAT_40 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_42
 #define LV_FONT_MONTSERRAT_42 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_44
 #define LV_FONT_MONTSERRAT_44 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_46
 #define LV_FONT_MONTSERRAT_46 0
+#endif
+#ifndef LV_FONT_MONTSERRAT_48
 #define LV_FONT_MONTSERRAT_48 0
+#endif
 
 /*Demonstrate special features*/
 #define LV_FONT_MONTSERRAT_12_SUBPX 0
@@ -517,7 +549,11 @@
 
 #define LV_USE_IMGBTN 1
 
+/* Overridable: SIM_SHIM=1 compiles the on-device screens, and the LISP
+ * editor puts a keyboard on screen. */
+#ifndef LV_USE_KEYBOARD
 #define LV_USE_KEYBOARD 0
+#endif
 
 #define LV_USE_LED 1
 

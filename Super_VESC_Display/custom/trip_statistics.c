@@ -525,7 +525,7 @@ static void show_confirm_delete(void)
     s_confirm_modal = make_modal(LV_OPA_70);
 
     lv_obj_t *box = lv_obj_create(s_confirm_modal);
-    lv_obj_set_size(box, 460, 200);
+    lv_obj_set_size(box, LV_MIN(460, UI_W - 20), 200);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(box, 0, 0);
@@ -573,7 +573,7 @@ static void build_screen(void)
     lv_obj_set_style_text_color(s_title, lv_color_hex(COL_ACCENT), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
 
-    s_back_btn = make_btn(s_screen, 696, 8, 92, 40, 6, COL_BTN, "Back",
+    s_back_btn = make_btn(s_screen, UI_W - 104, 8, 92, 40, 6, COL_BTN, "Back",
                           &lv_font_montserrat_24, back_cb, NULL);
 
     /* ---- list view ---- */
@@ -587,13 +587,16 @@ static void build_screen(void)
 
     s_table = lv_table_create(s_list_view);
     lv_obj_set_pos(s_table, 8, 0);
-    lv_obj_set_size(s_table, 784, 384);
+    lv_obj_set_size(s_table, UI_W - 16, UI_H - 96);
     lv_table_set_col_cnt(s_table, 5);
-    lv_table_set_col_width(s_table, 0, 90);
-    lv_table_set_col_width(s_table, 1, 180);
-    lv_table_set_col_width(s_table, 2, 160);
-    lv_table_set_col_width(s_table, 3, 150);
-    lv_table_set_col_width(s_table, 4, 170);
+    /* Scaled, not fixed: 750 px of columns fit an 800-wide panel and leave the
+     * last two off a 480-wide one, where the table scrolls sideways and nobody
+     * thinks to try it. UI_SX keeps the wide panel pixel-identical. */
+    lv_table_set_col_width(s_table, 0, UI_SX(90));
+    lv_table_set_col_width(s_table, 1, UI_SX(180));
+    lv_table_set_col_width(s_table, 2, UI_SX(160));
+    lv_table_set_col_width(s_table, 3, UI_SX(150));
+    lv_table_set_col_width(s_table, 4, UI_SX(170));
     lv_obj_set_style_bg_color(s_table, lv_color_hex(COL_PANEL), LV_PART_ITEMS);
     lv_obj_set_style_text_color(s_table, lv_color_hex(COL_TEXT), LV_PART_ITEMS);
     lv_obj_set_style_text_font(s_table, &lv_font_montserratMedium_16, LV_PART_ITEMS);
@@ -640,7 +643,7 @@ static void build_screen(void)
 
     /* Delete-trip button — top-right of the detail view, clear of the summary
      * text on the left. Hidden for the live trip (see open_detail). */
-    s_delete_btn = make_btn(s_detail_view, 624, 4, 160, 40, 6, COL_RED, "Delete",
+    s_delete_btn = make_btn(s_detail_view, UI_W - 176, 4, 160, 40, 6, COL_RED, "Delete",
                             &lv_font_montserrat_24, delete_btn_cb, NULL);
 
     /* metric selector — explicit buttons (a btnmatrix renders as thin strips
@@ -648,7 +651,7 @@ static void build_screen(void)
      * ("Temp2", 2nd-head temps) appears only on dual-head setups; the row then
      * packs tighter so all buttons stay on screen. */
     s_metric_count = settings_wrapper_get_second_head_enabled() ? 6 : 5;
-    int step = 792 / s_metric_count;   /* span 4..796 */
+    int step = (UI_W - 8) / s_metric_count;   /* span 4..UI_W-4 */
     int bw   = step - 8;
     for (int i = 0; i < s_metric_count; i++) {
         lv_obj_t *b = make_btn(s_detail_view, 4 + i * step, 92, bw, 40, 6, COL_BTN,
@@ -666,7 +669,7 @@ static void build_screen(void)
 
     s_chart = lv_chart_create(s_detail_view);
     lv_obj_set_pos(s_chart, 48, 176);    /* shifted right → room for Y labels on the left */
-    lv_obj_set_size(s_chart, 736, 224);
+    lv_obj_set_size(s_chart, UI_W - 64, 224);
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_div_line_count(s_chart, 3, 6);
     /* The built-in chart axis labels overflow the panel in this LVGL build, so
@@ -704,7 +707,7 @@ static void build_screen(void)
     for (int i = 0; i < 5; i++) {
         lv_obj_t *xl = lv_label_create(s_detail_view);
         lv_obj_set_width(xl, 52);
-        lv_obj_set_pos(xl, 56 + (718 * i) / 4 - 26, 403);
+        lv_obj_set_pos(xl, 56 + ((UI_W - 82) * i) / 4 - 26, 403);
         lv_obj_set_style_text_align(xl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(xl, lv_color_hex(COL_DIM), 0);
         lv_obj_set_style_text_font(xl, &lv_font_montserratMedium_16, 0);
@@ -718,9 +721,9 @@ static void build_screen(void)
     lv_obj_add_event_cb(s_chart, chart_press_cb, LV_EVENT_PRESSING, NULL);
 
     /* X (time) zoom buttons (top-right, on the chart-title row). */
-    s_btn_xm = make_btn(s_detail_view, 686, 140, 48, 30, 6, COL_BTN, "X-",
+    s_btn_xm = make_btn(s_detail_view, UI_W - 114, 140, 48, 30, 6, COL_BTN, "X-",
                         NULL, xzoom_cb, (void *)(intptr_t)-1);
-    s_btn_xp = make_btn(s_detail_view, 738, 140, 48, 30, 6, COL_BTN, "X+",
+    s_btn_xp = make_btn(s_detail_view, UI_W - 62, 140, 48, 30, 6, COL_BTN, "X+",
                         NULL, xzoom_cb, (void *)(intptr_t)1);
 
     lv_obj_add_event_cb(s_screen, screen_unloaded_cb, LV_EVENT_SCREEN_UNLOADED, NULL);

@@ -79,7 +79,14 @@ CFLAGS := "-I$(SCREENS_DIR)/generated" $(CFLAGS)
 endif
 -include $(PRJ_DIR)/custom/custom.mk
 
+# Real device screens on the host, with a fake backend (see sim_backend.mk).
+ifeq ($(SIM_SHIM),1)
+-include $(makefile_path)/sim_backend/sim_backend.mk
+endif
+
 CSRCS += main.c
+# Headless driver: screenshots, synthetic touch, layout audit.
+CSRCS += sim_drive.c
 
 # Auto-registered dashboard themes. scripts/gen_dashboard_themes.py turns every
 # convention-named dashboard_* screen in generated/gui_guider.h into a generic
@@ -117,7 +124,7 @@ OBJS = $(AOBJS) $(COBJS)
 GEN_SRCS = $(GEN_ASRCS) $(GEN_CSRCS)
 GEN_OBJS = $(GEN_AOBJS) $(GEN_COBJS)
 
-.PHONY: all env clean default cp_lib clean_gen run regen_fonts dash480 shots shots480
+.PHONY: all env clean default cp_lib clean_gen run regen_fonts dash480 shots shots480 menus menus480 sim480
 ifeq ($(OS),Windows_NT)
 all: env regen_fonts default cp_lib
 else
@@ -176,6 +183,43 @@ shots480:
 	@mkdir -p buildshot480/shots
 	@SDL_VIDEODRIVER=dummy SVD_SHOT='$(SHOT)' \
 	    SVD_SHOT_DIR=buildshot480/shots ./buildshot480/bin/$(SIMULATOR_EXE)
+
+# Walk every menu on the square panel and report what does not fit. Builds the
+# REAL device screens on the host (SIM_SHIM=1: the firmware's own sources plus
+# sim_backend/, see sim_backend.mk) instead of the "available on the device
+# build" placeholders, then runs the driver's `tour`: load each screen, write a
+# BMP, and print a layout audit (off-screen widgets, clipped or wrapped text,
+# overlapping labels).
+#   make menus480   -> buildmenu480/shots/*.bmp + a report on stdout
+#   make menus      -> the same for the 800x480 head units
+# RUN='<script>' drives it by hand instead — see sim_drive.c for the commands:
+#   make menus480 RUN='menu vesc; tap "Motor"; shot mc; audit mc'
+RUN ?= tour
+
+menus:
+	@$(MAKE) -f $(makefile_name) SIM_SHIM=1 BUILD_DIR=buildmenu/ \
+	    EXTRA_CFLAGS='-DLV_USE_SNAPSHOT=1 -DLV_MEM_SIZE=$(SHOT_LV_MEM)'
+	@mkdir -p buildmenu/shots
+	@SDL_VIDEODRIVER=dummy SVD_RUN='$(RUN)' \
+	    SVD_SHOT_DIR=buildmenu/shots ./buildmenu/bin/$(SIMULATOR_EXE)
+
+menus480:
+	@$(MAKE) -f $(makefile_name) SIM_SHIM=1 \
+	    SCREENS_DIR=$(PRJ_DIR)/../Super_VESC_Display_480 \
+	    BUILD_DIR=buildmenu480/ \
+	    EXTRA_CFLAGS='-DLV_HOR_RES_MAX=480 -DLV_VER_RES_MAX=480 -DLV_USE_SNAPSHOT=1 -DLV_MEM_SIZE=$(SHOT_LV_MEM)'
+	@mkdir -p buildmenu480/shots
+	@SDL_VIDEODRIVER=dummy SVD_RUN='$(RUN)' \
+	    SVD_SHOT_DIR=buildmenu480/shots ./buildmenu480/bin/$(SIMULATOR_EXE)
+
+# Windowed simulator with the device screens available (same shim as `menus`),
+# for clicking through them by hand:
+#   make sim480 && ./buildsim480/bin/simulator
+sim480:
+	@$(MAKE) -f $(makefile_name) SIM_SHIM=1 \
+	    SCREENS_DIR=$(PRJ_DIR)/../Super_VESC_Display_480 \
+	    BUILD_DIR=buildsim480/ \
+	    EXTRA_CFLAGS='-DLV_HOR_RES_MAX=480 -DLV_VER_RES_MAX=480'
 
 # Build the square 480x480 dashboard instead of the 800x480 one: the ESP32-S3
 # board's screens, in a window the same shape as its panel. Separate build dir

@@ -23,7 +23,7 @@
 
 extern lv_ui guider_ui;
 
-#ifdef LV_REALDEVICE
+#if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
 
 #include "vesc_config/vesc_config.h"
 
@@ -47,7 +47,20 @@ extern lv_ui guider_ui;
 #define VT_MAX_BITS   16
 
 #define ROW_H         54
-#define NAME_W        UI_SX(470)   /* parameter-name column */
+
+/* Row content width: the list is UI_W-16 wide, minus the list's 6 px padding
+ * and the row's 4 px padding on each side. 764 on the 800x480 head units. */
+#define ROW_CONTENT   ((lv_coord_t)(UI_W - 36))
+
+/* The editor cluster on the right of a row (stepper, value, stepper) is 218 px
+ * plus a 6 px margin, whatever the panel width — a narrower screen has to take
+ * the room out of the parameter name, not out of the editor. */
+#define EDITOR_CLUSTER_W  224
+
+/* Parameter-name column. Unchanged on the wide panels; on a 480 one it gets
+ * whatever the editor cluster leaves, and wraps. */
+#define NAME_W        ((lv_coord_t)(UI_W >= 700 ? UI_SX(470) \
+                                                : ROW_CONTENT - EDITOR_CLUSTER_W - 10))
 
 typedef struct {
     int       param_idx;
@@ -72,6 +85,7 @@ static lv_obj_t *s_emu_banner;
 static lv_obj_t *s_status;
 static lv_obj_t *s_btn_motor, *s_btn_app;
 static lv_obj_t *s_dd_group, *s_dd_sub;
+static bool      s_head_dd_shown;   /* dual-head selector is on screen */
 static lv_obj_t *s_list;
 static lv_obj_t *s_spinner_modal;
 static lv_obj_t *s_write_btn, *s_default_btn, *s_detect_btn, *s_restore_btn;
@@ -469,18 +483,20 @@ static void build_numeric_row(vt_row_t *r, const vc_param_t *p)
     lv_obj_t *row = row_container();
     row_name_label(r, row, vesc_config_pool(s_kind, p->longname_off));
 
-    /* Row content width is ~764 px (list 784 - 2*6 pad, row - 2*4 pad); keep the
-     * cluster left of ~760 so it clears the right edge and the scrollbar.
-     * minus 540..594, value 600..700, plus 704..758. */
-    small_step_btn(row, 540, "-", COL_RED, num_dec_cb, r);
+    /* Anchored to the right edge of the row rather than to x=540/600/704: the
+     * same pixels on a 800-wide panel, and still on screen on a 480 one.
+     * minus | value | plus, 218 px of cluster ending 6 px from the edge. */
+    lv_obj_t *minus = small_step_btn(row, 0, "-", COL_RED, num_dec_cb, r);
+    lv_obj_align(minus, LV_ALIGN_TOP_RIGHT, -170, 0);
     lv_obj_t *val = lv_label_create(row);
-    lv_obj_set_pos(val, 600, 10);
     lv_obj_set_width(val, 100);
+    lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -64, 10);
     lv_obj_set_style_text_color(val, lv_color_hex(COL_CYAN), 0);
     lv_obj_set_style_text_font(val, &lv_font_montserratMedium_16, 0);
     lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
     r->value_lbl = val;
-    small_step_btn(row, 704, "+", COL_CYAN, num_inc_cb, r);
+    lv_obj_t *plus = small_step_btn(row, 0, "+", COL_CYAN, num_inc_cb, r);
+    lv_obj_align(plus, LV_ALIGN_TOP_RIGHT, -6, 0);
 
     numeric_refresh(r);
 }
@@ -506,8 +522,10 @@ static void build_enum_row(vt_row_t *r, const vc_param_t *p)
     }
     lv_obj_t *dd = lv_dropdown_create(row);
     lv_dropdown_set_options(dd, opts);
-    lv_obj_set_width(dd, 240);
-    lv_obj_set_pos(dd, 510, 0);   /* 510..750, clear of the right edge */
+    lv_coord_t dd_w = ROW_CONTENT - NAME_W - 24;
+    if (dd_w > 240) dd_w = 240;                  /* 240 on the wide panels */
+    lv_obj_set_width(dd, dd_w);
+    lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, -14, 0);
     style_dropdown(dd);
     int sel = vesc_config_get_int(s_kind, r->param_idx);
     if (sel < 0) sel = 0;
@@ -525,7 +543,7 @@ static void build_bool_row(vt_row_t *r, const vc_param_t *p)
 
     lv_obj_t *sw = lv_switch_create(row);
     lv_obj_set_size(sw, 60, 30);
-    lv_obj_set_pos(sw, 690, 6);   /* 690..750, clear of the right edge */
+    lv_obj_align(sw, LV_ALIGN_TOP_RIGHT, -14, 6);
     lv_obj_set_style_bg_color(sw, lv_color_hex(COL_BTN), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sw, lv_color_hex(COL_CYAN),
                               LV_PART_INDICATOR | LV_STATE_CHECKED);
@@ -1257,6 +1275,7 @@ static void screen_unloaded_cb(lv_event_t *e)
     s_detect_pl_lbl = NULL;
     s_restore_dlg = NULL;
     s_list = NULL;
+    s_head_dd_shown = false;
     s_req_in_flight = false;
 }
 
@@ -1289,19 +1308,26 @@ static void vt_build_screen(void)
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Two layouts. On a 800-wide panel everything above the list fits in two
+     * rows; on a 480-wide one it does not — the tool buttons, the group and the
+     * subgroup dropdown each want most of the width — so the subgroup dropdown
+     * gets a row of its own and the list gives up 48 px. */
+    const bool narrow = UI_W < 700;
+
     /* header: back, title, emulator banner */
-    make_header_btn("Back", 8, 90, back_cb);
+    make_header_btn("Back", 8, narrow ? 80 : 90, back_cb);
 
     s_title = lv_label_create(s_screen);
     lv_label_set_text(s_title, "VESC Config");
-    lv_obj_set_pos(s_title, 110, 16);
+    lv_obj_set_pos(s_title, narrow ? 96 : 110, 16);
     lv_obj_set_style_text_color(s_title, lv_color_hex(COL_TEXT), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_24, 0);
 
     s_emu_banner = lv_label_create(s_screen);
     lv_label_set_text(s_emu_banner, "");
-    lv_obj_set_pos(s_emu_banner, 300, 18);
-    lv_obj_set_width(s_emu_banner, 270);   /* shrunk to clear the tool buttons */
+    /* Above the footer on the square panel: the header row has no spare width. */
+    lv_obj_set_pos(s_emu_banner, narrow ? 8 : 300, narrow ? UI_H - 84 : 18);
+    lv_obj_set_width(s_emu_banner, narrow ? UI_W - 16 : 270);
     lv_obj_set_style_text_color(s_emu_banner, lv_color_hex(COL_ORANGE), 0);
     lv_obj_set_style_text_font(s_emu_banner, &lv_font_montserratMedium_16, 0);
     lv_obj_set_style_text_align(s_emu_banner, LV_TEXT_ALIGN_RIGHT, 0);
@@ -1315,22 +1341,34 @@ static void vt_build_screen(void)
         lv_obj_t *dd_head = lv_dropdown_create(s_screen);
         lv_dropdown_set_options(dd_head, "Head 1\nHead 2");
         lv_dropdown_set_selected(dd_head, 0);
-        lv_obj_set_pos(dd_head, 352, 13);
-        lv_obj_set_size(dd_head, 110, 40);
+        /* Square panel: beside the subgroup dropdown on the third row, where
+         * there is room; wide panel: in the title bar as before. */
+        lv_obj_set_pos(dd_head, narrow ? UI_W - 128 : 352, narrow ? 104 : 13);
+        lv_obj_set_size(dd_head, narrow ? 120 : 110, 40);
         style_dropdown(dd_head);
         lv_obj_add_event_cb(dd_head, head_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_set_pos(s_emu_banner, 468, 18);
-        lv_obj_set_width(s_emu_banner, 102);
+        if (!narrow) {
+            lv_obj_set_pos(s_emu_banner, 468, 18);
+            lv_obj_set_width(s_emu_banner, 102);
+        }
+        s_head_dd_shown = true;
     }
 
     /* tool buttons: LISP editor + realtime viewer (top-right) */
-    make_header_btn("LISP", 576, 100, lisp_open_cb);
-    make_header_btn("Realtime", 680, 110, rt_open_cb);
+    if (narrow) {
+        /* "Realtime" at font 24 needs ~100 px, which the square header cannot
+         * spare next to the title; "RT" is the same button. */
+        make_header_btn("LISP", UI_W - 8 - 72 - 6 - 56, 72, lisp_open_cb);
+        make_header_btn("RT",   UI_W - 8 - 56, 56, rt_open_cb);
+    } else {
+        make_header_btn("LISP", 576, 100, lisp_open_cb);
+        make_header_btn("Realtime", 680, 110, rt_open_cb);
+    }
 
     /* selector row */
     s_btn_motor = lv_btn_create(s_screen);
     lv_obj_set_pos(s_btn_motor, 8, 56);
-    lv_obj_set_size(s_btn_motor, 90, 40);
+    lv_obj_set_size(s_btn_motor, narrow ? 80 : 90, 40);
     style_btn(s_btn_motor, COL_ACCENT);
     lv_obj_t *lm = lv_label_create(s_btn_motor);
     lv_label_set_text(lm, "Motor");
@@ -1338,8 +1376,8 @@ static void vt_build_screen(void)
     lv_obj_add_event_cb(s_btn_motor, kind_motor_cb, LV_EVENT_CLICKED, NULL);
 
     s_btn_app = lv_btn_create(s_screen);
-    lv_obj_set_pos(s_btn_app, 104, 56);
-    lv_obj_set_size(s_btn_app, 90, 40);
+    lv_obj_set_pos(s_btn_app, narrow ? 92 : 104, 56);
+    lv_obj_set_size(s_btn_app, narrow ? 80 : 90, 40);
     style_btn(s_btn_app, COL_BTN);
     lv_obj_t *la = lv_label_create(s_btn_app);
     lv_label_set_text(la, "App");
@@ -1347,21 +1385,28 @@ static void vt_build_screen(void)
     lv_obj_add_event_cb(s_btn_app, kind_app_cb, LV_EVENT_CLICKED, NULL);
 
     s_dd_group = lv_dropdown_create(s_screen);
-    lv_obj_set_pos(s_dd_group, 204, 56);
-    lv_obj_set_size(s_dd_group, 270, 40);
+    lv_obj_set_pos(s_dd_group, narrow ? 180 : 204, 56);
+    lv_obj_set_size(s_dd_group, narrow ? UI_W - 188 : 270, 40);
     style_dropdown(s_dd_group);
     lv_obj_add_event_cb(s_dd_group, group_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     s_dd_sub = lv_dropdown_create(s_screen);
-    lv_obj_set_pos(s_dd_sub, 484, 56);
-    lv_obj_set_size(s_dd_sub, 300, 40);   /* 484..784, clear of the right edge */
+    if (narrow) {
+        /* Third row, full width — minus the head selector when it is shown. */
+        lv_obj_set_pos(s_dd_sub, 8, 104);
+        lv_obj_set_size(s_dd_sub, s_head_dd_shown ? UI_W - 144 : UI_W - 16, 40);
+    } else {
+        lv_obj_set_pos(s_dd_sub, 484, 56);
+        lv_obj_set_size(s_dd_sub, 300, 40);   /* 484..784, clear of the right edge */
+    }
     style_dropdown(s_dd_sub);
     lv_obj_add_event_cb(s_dd_sub, sub_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     /* parameter list */
     s_list = lv_obj_create(s_screen);
-    lv_obj_set_pos(s_list, 8, 104);
-    lv_obj_set_size(s_list, 784, 304);
+    const lv_coord_t list_y = narrow ? 152 : 104;
+    lv_obj_set_pos(s_list, 8, list_y);
+    lv_obj_set_size(s_list, UI_W - 16, UI_H - list_y - (narrow ? 108 : 176));
     lv_obj_set_style_bg_color(s_list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_radius(s_list, 6, 0);
@@ -1370,18 +1415,28 @@ static void vt_build_screen(void)
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
 
-    /* footer: Read | Write | Defaults | Detect | Restore */
-    make_footer_btn("Read", 8, 86, COL_BTN, read_cb);
-    s_write_btn = make_footer_btn("Write", 98, 86, COL_CYAN, write_cb);
+    /* footer: Read | Write | Defaults | Detect | Restore. On a wide panel the
+     * five buttons and the status line share the bottom row; on a square one
+     * the buttons take the whole width and the status moves above them. */
+    if (narrow) {
+        make_footer_btn("Read", 8, 78, COL_BTN, read_cb);
+        s_write_btn   = make_footer_btn("Write", 90, 78, COL_CYAN, write_cb);
+        s_default_btn = make_footer_btn("Defaults", 172, 90, COL_BTN, default_cb);
+        s_detect_btn  = make_footer_btn("Detect", 266, 84, COL_BTN, detect_cb);
+        s_restore_btn = make_footer_btn("Restore", 354, 90, COL_BTN, restore_cb);
+    } else {
+        make_footer_btn("Read", 8, 86, COL_BTN, read_cb);
+        s_write_btn   = make_footer_btn("Write", 98, 86, COL_CYAN, write_cb);
+        s_default_btn = make_footer_btn("Defaults", 188, 92, COL_BTN, default_cb);
+        s_detect_btn  = make_footer_btn("Detect", 284, 92, COL_BTN, detect_cb);
+        s_restore_btn = make_footer_btn("Restore", 380, 100, COL_BTN, restore_cb);
+    }
     lv_obj_add_state(s_write_btn, LV_STATE_DISABLED);  /* enabled only after a read-back */
-    s_default_btn = make_footer_btn("Defaults", 188, 92, COL_BTN, default_cb);
-    s_detect_btn  = make_footer_btn("Detect", 284, 92, COL_BTN, detect_cb);
-    s_restore_btn = make_footer_btn("Restore", 380, 100, COL_BTN, restore_cb);
     lv_obj_add_state(s_restore_btn, LV_STATE_DISABLED);
 
     s_status = lv_label_create(s_screen);
-    lv_obj_set_pos(s_status, 488, 428);
-    lv_obj_set_width(s_status, 304);
+    lv_obj_set_pos(s_status, narrow ? 8 : 488, narrow ? UI_H - 106 : 428);
+    lv_obj_set_width(s_status, narrow ? UI_W - 16 : 304);
     lv_label_set_text(s_status, "");
     lv_obj_set_style_text_color(s_status, lv_color_hex(COL_DIM), 0);
     lv_obj_set_style_text_font(s_status, &lv_font_montserratMedium_16, 0);
@@ -1532,7 +1587,7 @@ void run_vesc_tool_menu(void)
 static lv_obj_t *make_footer_btn(const char *txt, int x, int w, uint32_t bg, lv_event_cb_t cb)
 {
     lv_obj_t *btn = lv_btn_create(s_screen);
-    lv_obj_set_pos(btn, x, 416);
+    lv_obj_set_pos(btn, x, UI_H - 64);
     lv_obj_set_size(btn, w, 50);
     style_btn(btn, bg);
     lv_obj_set_style_text_font(btn, &lv_font_montserratMedium_16, 0);  /* 5 buttons → narrower */

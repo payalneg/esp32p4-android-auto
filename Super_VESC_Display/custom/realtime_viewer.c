@@ -17,7 +17,7 @@
 
 extern lv_ui guider_ui;
 
-#ifdef LV_REALDEVICE
+#if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
 
 #include "vesc_can/vesc_rt_data.h"
 #include "vesc_can/vesc_io_data.h"
@@ -166,7 +166,7 @@ void show_realtime_viewer(void)
     /* scrollable value list */
     lv_obj_t *list = lv_obj_create(s_screen);
     lv_obj_set_pos(list, 8, 56);
-    lv_obj_set_size(list, 784, 416);
+    lv_obj_set_size(list, UI_W - 16, UI_H - 64);
     lv_obj_set_style_bg_color(list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 6, 0);

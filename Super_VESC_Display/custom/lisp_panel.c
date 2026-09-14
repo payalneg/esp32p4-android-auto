@@ -35,12 +35,12 @@
  * 45% of the screen there. */
 #define DRAWER_W      (UI_W >= 700 ? 300 : (lv_coord_t)((UI_W * 45) / 100))
 #define SCREEN_W      UI_W
-#define SCREEN_H      480
+#define SCREEN_H      UI_H
 #define SLIDE_MS      220
 #define DRAWER_ON_X   0
 #define DRAWER_OFF_X  (-DRAWER_W)
 
-#ifdef LV_REALDEVICE
+#if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
 
 #include "vesc_can/vesc_lisp_panel.h"
 #include "vesc_ui.h"

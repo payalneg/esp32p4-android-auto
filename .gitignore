@@ -75,6 +75,9 @@ Super_VESC_Display_480/*.guiguider.*.bak
 Super_VESC_Display/lvgl-simulator/build480/
 Super_VESC_Display/lvgl-simulator/buildshot/
 Super_VESC_Display/lvgl-simulator/buildshot480/
+Super_VESC_Display/lvgl-simulator/buildmenu/
+Super_VESC_Display/lvgl-simulator/buildmenu480/
+Super_VESC_Display/lvgl-simulator/buildsim480/
 
 # GUI Guider's own backup copies of the project file — hand-made snapshots
 # taken before big layout edits. The live Super_VESC_Display.guiguider IS

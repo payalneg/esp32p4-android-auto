@@ -53,15 +53,15 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_led_tt_cruise_lbl = lv_led_create(ui->dashboard_Supermoto);
     lv_led_set_brightness(ui->dashboard_Supermoto_led_tt_cruise_lbl, 255);
     lv_led_set_color(ui->dashboard_Supermoto_led_tt_cruise_lbl, lv_color_hex(0x4ADE80));
-    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_cruise_lbl, 7, 12);
+    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_cruise_lbl, 6, 12);
     lv_obj_set_size(ui->dashboard_Supermoto_led_tt_cruise_lbl, 14, 14);
 
     //Write codes dashboard_Supermoto_tt_cruise_lbl
     ui->dashboard_Supermoto_tt_cruise_lbl = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_tt_cruise_lbl, "CRZ");
     lv_label_set_long_mode(ui->dashboard_Supermoto_tt_cruise_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_tt_cruise_lbl, 20, 13);
-    lv_obj_set_size(ui->dashboard_Supermoto_tt_cruise_lbl, 29, 13);
+    lv_obj_set_pos(ui->dashboard_Supermoto_tt_cruise_lbl, 23, 13);
+    lv_obj_set_size(ui->dashboard_Supermoto_tt_cruise_lbl, LV_SIZE_CONTENT, 13);
 
     //Write style for dashboard_Supermoto_tt_cruise_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_tt_cruise_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -83,15 +83,15 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_led_status_bt = lv_led_create(ui->dashboard_Supermoto);
     lv_led_set_brightness(ui->dashboard_Supermoto_led_status_bt, 255);
     lv_led_set_color(ui->dashboard_Supermoto_led_status_bt, lv_color_hex(0x38BDF8));
-    lv_obj_set_pos(ui->dashboard_Supermoto_led_status_bt, 42, 12);
+    lv_obj_set_pos(ui->dashboard_Supermoto_led_status_bt, 50, 12);
     lv_obj_set_size(ui->dashboard_Supermoto_led_status_bt, 14, 14);
 
     //Write codes dashboard_Supermoto_status_bt
     ui->dashboard_Supermoto_status_bt = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_status_bt, "BT");
     lv_label_set_long_mode(ui->dashboard_Supermoto_status_bt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_status_bt, 55, 13);
-    lv_obj_set_size(ui->dashboard_Supermoto_status_bt, 22, 13);
+    lv_obj_set_pos(ui->dashboard_Supermoto_status_bt, 67, 13);
+    lv_obj_set_size(ui->dashboard_Supermoto_status_bt, LV_SIZE_CONTENT, 13);
 
     //Write style for dashboard_Supermoto_status_bt, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_status_bt, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -113,15 +113,15 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_led_tt_fault_lbl = lv_led_create(ui->dashboard_Supermoto);
     lv_led_set_brightness(ui->dashboard_Supermoto_led_tt_fault_lbl, 40);
     lv_led_set_color(ui->dashboard_Supermoto_led_tt_fault_lbl, lv_color_hex(0xEF4444));
-    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_fault_lbl, 76, 12);
+    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_fault_lbl, 88, 12);
     lv_obj_set_size(ui->dashboard_Supermoto_led_tt_fault_lbl, 14, 14);
 
     //Write codes dashboard_Supermoto_tt_fault_lbl
     ui->dashboard_Supermoto_tt_fault_lbl = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_tt_fault_lbl, "FLT");
     lv_label_set_long_mode(ui->dashboard_Supermoto_tt_fault_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_tt_fault_lbl, 90, 13);
-    lv_obj_set_size(ui->dashboard_Supermoto_tt_fault_lbl, 27, 13);
+    lv_obj_set_pos(ui->dashboard_Supermoto_tt_fault_lbl, 105, 13);
+    lv_obj_set_size(ui->dashboard_Supermoto_tt_fault_lbl, LV_SIZE_CONTENT, 13);
 
     //Write style for dashboard_Supermoto_tt_fault_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_tt_fault_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -143,15 +143,15 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_led_tt_cfg_lbl = lv_led_create(ui->dashboard_Supermoto);
     lv_led_set_brightness(ui->dashboard_Supermoto_led_tt_cfg_lbl, 40);
     lv_led_set_color(ui->dashboard_Supermoto_led_tt_cfg_lbl, lv_color_hex(0xF5A623));
-    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_cfg_lbl, 111, 12);
+    lv_obj_set_pos(ui->dashboard_Supermoto_led_tt_cfg_lbl, 130, 12);
     lv_obj_set_size(ui->dashboard_Supermoto_led_tt_cfg_lbl, 14, 14);
 
     //Write codes dashboard_Supermoto_tt_cfg_lbl
     ui->dashboard_Supermoto_tt_cfg_lbl = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_tt_cfg_lbl, "CFG");
     lv_label_set_long_mode(ui->dashboard_Supermoto_tt_cfg_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_tt_cfg_lbl, 125, 13);
-    lv_obj_set_size(ui->dashboard_Supermoto_tt_cfg_lbl, 28, 13);
+    lv_obj_set_pos(ui->dashboard_Supermoto_tt_cfg_lbl, 147, 13);
+    lv_obj_set_size(ui->dashboard_Supermoto_tt_cfg_lbl, LV_SIZE_CONTENT, 13);
 
     //Write style for dashboard_Supermoto_tt_cfg_lbl, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
     lv_obj_set_style_border_width(ui->dashboard_Supermoto_tt_cfg_lbl, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
@@ -173,7 +173,7 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_rail_info = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_rail_info, "VESC / CAN 500K / ID 2");
     lv_label_set_long_mode(ui->dashboard_Supermoto_rail_info, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_rail_info, 168, 12);
+    lv_obj_set_pos(ui->dashboard_Supermoto_rail_info, 180, 12);
     lv_obj_set_size(ui->dashboard_Supermoto_rail_info, 180, 16);
 
     //Write style for dashboard_Supermoto_rail_info, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -283,7 +283,7 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_tach_max = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_tach_max, "MAX 46");
     lv_label_set_long_mode(ui->dashboard_Supermoto_tach_max, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_tach_max, 19, 152);
+    lv_obj_set_pos(ui->dashboard_Supermoto_tach_max, 19, 124);
     lv_obj_set_size(ui->dashboard_Supermoto_tach_max, 180, 14);
 
     //Write style for dashboard_Supermoto_tach_max, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -329,7 +329,7 @@ void setup_scr_dashboard_Supermoto(lv_ui *ui)
     ui->dashboard_Supermoto_speed_unit = lv_label_create(ui->dashboard_Supermoto);
     lv_label_set_text(ui->dashboard_Supermoto_speed_unit, "KM/H");
     lv_label_set_long_mode(ui->dashboard_Supermoto_speed_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Supermoto_speed_unit, 19, 268);
+    lv_obj_set_pos(ui->dashboard_Supermoto_speed_unit, 19, 206);
     lv_obj_set_size(ui->dashboard_Supermoto_speed_unit, 180, 22);
 
     //Write style for dashboard_Supermoto_speed_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

@@ -631,7 +631,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_temp_mot_unit = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_temp_mot_unit, "°");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_temp_mot_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_temp_mot_unit, 456, 98);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_temp_mot_unit, 461, 98);
     lv_obj_set_size(ui->dashboard_Lamborghini_temp_mot_unit, 16, 36);
 
     //Write style for dashboard_Lamborghini_temp_mot_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -700,7 +700,7 @@ void setup_scr_dashboard_Lamborghini(lv_ui *ui)
     ui->dashboard_Lamborghini_temp_esc_unit = lv_label_create(ui->dashboard_Lamborghini);
     lv_label_set_text(ui->dashboard_Lamborghini_temp_esc_unit, "°");
     lv_label_set_long_mode(ui->dashboard_Lamborghini_temp_esc_unit, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(ui->dashboard_Lamborghini_temp_esc_unit, 456, 175);
+    lv_obj_set_pos(ui->dashboard_Lamborghini_temp_esc_unit, 461, 175);
     lv_obj_set_size(ui->dashboard_Lamborghini_temp_esc_unit, 16, 36);
 
     //Write style for dashboard_Lamborghini_temp_esc_unit, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

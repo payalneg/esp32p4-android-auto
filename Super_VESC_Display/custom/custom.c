@@ -199,12 +199,50 @@ static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
     num_field_refresh(f);
 }
 
+/* Pick the largest font whose widest option still fits the closed dropdown.
+ * "Direct from Controller" needs ~250 px at font 24, and on a 480-wide panel
+ * the value column is 230 — LVGL then clips the text mid-word, inside the
+ * widget, where neither an overflow check nor a glance at the row notices it.
+ * lv_txt_get_size measures the longest line of a multi-line string, which is
+ * exactly the option list. */
+static void settings_dropdown_fit_font(lv_obj_t *dd)
+{
+    static const lv_font_t *const sizes[] = {
+        &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
+    };
+    const char *opts = lv_dropdown_get_options(dd);
+    if (!opts) return;
+    /* Room for the arrow symbol and the widget's own padding. */
+    const lv_coord_t avail = lv_obj_get_width(dd) - 44;
+    const lv_font_t *font = sizes[sizeof sizes / sizeof sizes[0] - 1];
+    for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        lv_point_t need;
+        lv_txt_get_size(&need, opts, sizes[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (need.x <= avail) { font = sizes[i]; break; }
+    }
+    lv_obj_set_style_text_font(dd, font, 0);
+}
+
 static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *text) {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
     lv_obj_set_pos(lbl, 20, y + 15);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    /* Step the caption down until it clears the row's editor —
+     * "Battery Capacity (Ah):" needs 239 px at font 24 and 217 at font 20,
+     * while a 480-wide panel has 204 before the minus button. A caption two
+     * sizes smaller still reads; one running under a button does not. */
+    static const lv_font_t *const sizes[] = {
+        &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
+    };
+    const lv_coord_t avail = SETTINGS_MINUS_X - 20 - 6;
+    const lv_font_t *font = sizes[sizeof sizes / sizeof sizes[0] - 1];
+    for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        lv_point_t need;
+        lv_txt_get_size(&need, text, sizes[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (need.x <= avail) { font = sizes[i]; break; }
+    }
+    lv_obj_set_style_text_font(lbl, font, 0);
     return lbl;
 }
 
@@ -2476,6 +2514,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_can_speed_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_can_speed_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_can_speed_dropdown, &lv_font_montserrat_24, 0);
+    settings_dropdown_fit_font(settings_can_speed_dropdown);
     lv_obj_set_style_border_width(settings_can_speed_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_can_speed_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_can_speed_dropdown, can_speed_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2506,6 +2545,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_theme_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_theme_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_theme_dropdown, &lv_font_montserrat_24, 0);
+    settings_dropdown_fit_font(settings_theme_dropdown);
     lv_obj_set_style_border_width(settings_theme_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_theme_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_theme_dropdown, theme_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2524,6 +2564,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_splash_loops_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_splash_loops_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_splash_loops_dropdown, &lv_font_montserrat_24, 0);
+    settings_dropdown_fit_font(settings_splash_loops_dropdown);
     lv_obj_set_style_border_width(settings_splash_loops_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_splash_loops_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_splash_loops_dropdown, splash_loops_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2570,6 +2611,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, &lv_font_montserrat_24, 0);
+    settings_dropdown_fit_font(settings_battery_calc_mode_dropdown);
     lv_obj_set_style_border_width(settings_battery_calc_mode_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);

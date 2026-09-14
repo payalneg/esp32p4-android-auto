@@ -27,7 +27,7 @@
 
 extern lv_ui guider_ui;
 
-#ifdef LV_REALDEVICE
+#if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
 
 #include "freertos/FreeRTOS.h"
 #include "speed_sensor.h"
@@ -84,6 +84,24 @@ static int          s_built_count;
 static lv_obj_t    *s_scan_list;
 
 /* ---- widget builders (same shapes as pas_screen.c) ---- */
+
+/* Width for a right-aligned editor in a row: what the row has left after its
+ * own caption, never more than `want`. A 320 px dropdown and a caption like
+ * "Dashboard speed from" both fit an 800-wide row and together overrun a
+ * 480-wide one, and the dropdown, drawn later, lands on top of the text. */
+static lv_coord_t fit_editor_w(lv_obj_t *row, lv_coord_t want)
+{
+    lv_obj_update_layout(row);                 /* the row is lv_pct(100) wide */
+    lv_coord_t avail = lv_obj_get_content_width(row);
+    lv_coord_t used  = 0;
+    if (lv_obj_get_child_cnt(row) > 0) {
+        lv_obj_t *first = lv_obj_get_child(row, 0);
+        if (lv_obj_check_type(first, &lv_label_class)) used = lv_obj_get_width(first);
+    }
+    lv_coord_t room = avail - used - 20;       /* 4 px caption inset + 8 px margin + gap */
+    if (room < 90) room = 90;                  /* below this a dropdown is useless anyway */
+    return want > room ? room : want;
+}
 
 static lv_obj_t *row_base(lv_obj_t *list, const char *name, int h)
 {
@@ -374,7 +392,7 @@ void show_speed_settings(void)
     /* scrollable content */
     lv_obj_t *list = lv_obj_create(s_screen);
     lv_obj_set_pos(list, 8, 56);
-    lv_obj_set_size(list, 784, 416);
+    lv_obj_set_size(list, UI_W - 16, UI_H - 64);
     lv_obj_set_style_bg_color(list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 6, 0);
@@ -388,7 +406,7 @@ void show_speed_settings(void)
     lv_obj_t *srcrow = row_base(list, "Dashboard speed from", 50);
     lv_obj_t *dd = lv_dropdown_create(srcrow);
     lv_dropdown_set_options(dd, "VESC (motor)\nBLE wheel sensor");
-    lv_obj_set_width(dd, 320);
+    lv_obj_set_width(dd, fit_editor_w(srcrow, 320));
     lv_obj_align(dd, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_dropdown_set_selected(dd, speed_source_is_ble() ? 1 : 0);
     lv_obj_add_event_cb(dd, source_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);

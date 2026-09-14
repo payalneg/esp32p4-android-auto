@@ -34,11 +34,41 @@ same `import/` for the same reason.
 
 **Look at the layout without hardware or a window.** In `lvgl-simulator/`:
 `make shots` (800×480) and `make shots480` (480×480) build the simulator
-headless (SDL dummy driver + `lv_snapshot`), walk every dashboard theme plus
-Settings and write one BMP each into `buildshot*/shots/`. `SHOT="Cockpit"`
-grabs just one. This is the way to check a layout change — the report from
-make_480_project.py estimates text widths, the screenshots show what actually
-rendered, and the two disagreed the first time.
+headless (SDL dummy driver), walk every dashboard theme plus Settings and write
+one BMP each into `buildshot*/shots/`. `SHOT="Cockpit"` grabs just one. This is
+the way to check a layout change — the report from make_480_project.py
+estimates text widths, the screenshots show what actually rendered, and the two
+disagreed the first time.
+
+**Walk the menus, with the real screens.** `make menus480` (and `make menus`,
+`make sim480` for a window) builds with `SIM_SHIM=1`, which compiles the five
+device-only screens — VESC Config, PAS, Speed, the LISP panel and editor,
+Realtime — on the host against the firmware's own headers plus
+`sim_backend/` (one-page esp_log/esp_err/FreeRTOS shims and fake hardware)
+instead of the "available on the device build" placeholder they used to be. The
+config menu runs on the firmware's real runtime and real parameter tables; the
+CAN boundary is the seven `vct_*` functions.
+
+`sim_drive.c` drives it: a synthetic pointer indev (so taps and swipes are real
+LVGL input — dropdowns open, lists scroll), a frame grab, and a layout audit.
+`RUN=` takes a script:
+
+```bash
+make menus480 RUN='menu vesc; tap "Read"; shot mc; audit mc'
+```
+`screen <theme|settings>`, `menu <trips|vesc|pas|speed|lisp|lispedit|rt>`,
+`tap <x> <y>` / `tap "<text>"`, `swipe`, `wait`, `shot`, `audit`, `tree`, `tour`.
+
+The audit reports off-panel widgets (exempt along an axis an ancestor scrolls),
+clipped and wrapping text, overlapping text, and text under a LED or image. It
+measures the glyphs, not the label box — an Antonio-220 box is far wider than
+its digits, and comparing boxes reported 18 phantom faults on Cockpit alone.
+
+Two traps worth knowing: `lv_snapshot_take(lv_scr_act())` does **not** include
+`lv_layer_top()`, so a screen snapshot of the LISP drawer silently shoots the
+dashboard underneath (read the display's draw buffer with `full_refresh`
+instead); and `show_lisp_panel()` returns without doing anything unless the
+active screen is the dashboard.
 
 ## The #1 rule: `generated/` vs `custom/`
 

@@ -24,7 +24,7 @@
 
 extern lv_ui guider_ui;
 
-#ifdef LV_REALDEVICE
+#if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
 
 #include "vesc_can/vesc_lisp_code.h"
 #include "app_fs.h"
@@ -45,6 +45,14 @@ extern lv_ui guider_ui;
 #define COL_RED       0xFF3B30
 #define COL_TEXT      0xFFFFFF
 #define COL_DIM       0x8A9499
+
+/* The toolbar is one row on a 800-wide panel and two on a 480-wide one, which
+ * is the only thing the editor's vertical geometry depends on. */
+#define TOOLBAR_ROWS   (UI_W < 700 ? 2 : 1)
+#define EDITOR_Y       ((lv_coord_t)(52 + TOOLBAR_ROWS * 44))
+#define EDITOR_H_FULL  ((lv_coord_t)(UI_H - EDITOR_Y - 40))
+/* With the keyboard up: the keyboard takes the bottom half of the screen. */
+#define EDITOR_H_KB    ((lv_coord_t)(UI_H / 2 - EDITOR_Y - 6))
 
 #define LISP_DIR        "/vescfs/lisp"
 #define LISP_MAX_EDIT   16384
@@ -81,13 +89,13 @@ static void show_kb(lv_obj_t *ta)
     lv_keyboard_set_textarea(s_kb, ta);
     lv_obj_move_foreground(s_kb);
     lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(s_ta, 784, 150);   /* shrink editor so it stays visible */
+    lv_obj_set_size(s_ta, UI_W - 16, EDITOR_H_KB);   /* shrink editor so it stays visible */
 }
 
 static void hide_kb(void)
 {
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(s_ta, 784, 344);   /* restore full editor height */
+    lv_obj_set_size(s_ta, UI_W - 16, EDITOR_H_FULL);   /* restore full editor height */
 }
 
 static void ta_focus_cb(lv_event_t *e)
@@ -388,40 +396,52 @@ void show_lisp_editor(void)
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
 
-    /* toolbar: file picker + actions + filename field */
+    /* Toolbar: file picker + actions + filename field. Seven widgets need
+     * ~790 px, so a 480-wide panel gets two rows and the editor starts lower.
+     * EDITOR_Y below is the single place that knows which it is. */
+    const bool narrow = UI_W < 700;
+
     s_dd = lv_dropdown_create(s_screen);
     lv_obj_set_pos(s_dd, 8, 52);
-    lv_obj_set_size(s_dd, 170, 40);
+    lv_obj_set_size(s_dd, narrow ? 130 : 170, 40);
     lv_dropdown_set_text(s_dd, "Open...");
     lv_obj_add_event_cb(s_dd, dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    mk_btn(182, 52, 60,  40, COL_BTN,    "New",        new_cb);
-    mk_btn(246, 52, 60,  40, COL_BTN,    "Save",       save_cb);
-    mk_btn(310, 52, 92,  40, COL_BTN,    "Read VESC",  read_vesc_cb);
-    mk_btn(406, 52, 120, 40, COL_CYAN,   "Upload+Run", upload_cb);
-    mk_btn(530, 52, 60,  40, COL_RED,    "Stop",       stop_cb);
+    if (narrow) {
+        mk_btn(142, 52, 56,  40, COL_BTN,  "New",        new_cb);
+        mk_btn(202, 52, 56,  40, COL_BTN,  "Save",       save_cb);
+        mk_btn(262, 52, 96,  40, COL_BTN,  "Read VESC",  read_vesc_cb);
+        mk_btn(362, 52, 56,  40, COL_RED,  "Stop",       stop_cb);
+        mk_btn(8,   96, 130, 40, COL_CYAN, "Upload+Run", upload_cb);
+    } else {
+        mk_btn(182, 52, 60,  40, COL_BTN,  "New",        new_cb);
+        mk_btn(246, 52, 60,  40, COL_BTN,  "Save",       save_cb);
+        mk_btn(310, 52, 92,  40, COL_BTN,  "Read VESC",  read_vesc_cb);
+        mk_btn(406, 52, 120, 40, COL_CYAN, "Upload+Run", upload_cb);
+        mk_btn(530, 52, 60,  40, COL_RED,  "Stop",       stop_cb);
+    }
 
     s_fname = lv_textarea_create(s_screen);
     lv_textarea_set_one_line(s_fname, true);
     lv_textarea_set_placeholder_text(s_fname, "name.lisp");
-    lv_obj_set_pos(s_fname, 594, 52);
-    lv_obj_set_size(s_fname, 198, 40);
+    lv_obj_set_pos(s_fname, narrow ? 146 : 594, narrow ? 96 : 52);
+    lv_obj_set_size(s_fname, narrow ? UI_W - 154 : 198, 40);
     lv_obj_add_event_cb(s_fname, ta_focus_cb, LV_EVENT_ALL, NULL);
 
     /* code editor */
     s_ta = lv_textarea_create(s_screen);
     lv_textarea_set_one_line(s_ta, false);
     lv_textarea_set_placeholder_text(s_ta, "(print \"hello\")");
-    lv_obj_set_pos(s_ta, 8, 96);
-    lv_obj_set_size(s_ta, 784, 344);
+    lv_obj_set_pos(s_ta, 8, EDITOR_Y);
+    lv_obj_set_size(s_ta, UI_W - 16, EDITOR_H_FULL);
     lv_obj_set_style_bg_color(s_ta, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_text_color(s_ta, lv_color_hex(COL_TEXT), 0);
     lv_obj_add_event_cb(s_ta, ta_focus_cb, LV_EVENT_ALL, NULL);
 
     /* status line (under the editor; hidden behind the keyboard when open) */
     s_status = lv_label_create(s_screen);
-    lv_obj_set_pos(s_status, 10, 448);
-    lv_obj_set_width(s_status, 782);
+    lv_obj_set_pos(s_status, 10, UI_H - 32);
+    lv_obj_set_width(s_status, UI_W - 18);
     lv_label_set_text(s_status, "");
     lv_obj_set_style_text_color(s_status, lv_color_hex(COL_DIM), 0);
     lv_obj_set_style_text_font(s_status, &lv_font_montserratMedium_16, 0);
