@@ -140,6 +140,13 @@ void dashboard_demo_set_active(bool on);
 int cockpit_get_speed_value(void);
 int cockpit_get_battery_proc_value(void);
 
+/* Step a dropdown's font down until its widest option fits the closed widget.
+ * A dropdown that is 320 px wide at 800 is 220 at 480, and LVGL clips the
+ * overflow inside the widget, where it reads as a shorter option rather than
+ * as a layout fault — "Proportional to cadence" arrived as "Proportional to
+ * ca". Call it after the options and the width are set. */
+void ui_dropdown_fit_font(lv_obj_t *dd);
+
 #ifdef __cplusplus
 }
 #endif

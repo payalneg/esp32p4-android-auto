@@ -501,9 +501,20 @@ void show_pas_settings(void)
                                0, 1000, 5, true, " A");
 
     lv_obj_t *moderow = row_base(list, "Mode", 50);
+    /* A row caption keeps ROW_NAME_PCT of the row whether its text needs it or
+     * not, which suits "Throttle / assist enabled" and wastes half the row on
+     * "Mode". On the square panel that left the dropdown 220 px for an option
+     * that wants 246, and LVGL clipped it inside the widget — the rider saw
+     * "Proportional to ca" and nothing anywhere said why. Four characters get
+     * four characters' worth. */
+    {
+        lv_obj_t *cap = lv_obj_get_child(moderow, 0);
+        if (cap) lv_obj_set_width(cap, LV_SIZE_CONTENT);
+    }
     s_dd_mode = lv_dropdown_create(moderow);
     lv_dropdown_set_options(s_dd_mode, "On/off (level)\nProportional to cadence");
     lv_obj_set_width(s_dd_mode, fit_editor_w(moderow, 320));
+    ui_dropdown_fit_font(s_dd_mode);
     lv_obj_align(s_dd_mode, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_dropdown_set_selected(s_dd_mode, cfg.mode);
     lv_obj_add_event_cb(s_dd_mode, dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);

@@ -213,14 +213,19 @@ static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
  * widget, where neither an overflow check nor a glance at the row notices it.
  * lv_txt_get_size measures the longest line of a multi-line string, which is
  * exactly the option list. */
-static void settings_dropdown_fit_font(lv_obj_t *dd)
+void ui_dropdown_fit_font(lv_obj_t *dd)
 {
     /* Not static: UI_FONT_MENU asks the display how wide it is, so the ladder
      * is built per call. On the narrow panel its first rung is already the
      * 20 px face, which makes the first two rungs the same size — harmless,
      * the loop simply settles on it one step sooner. */
+    /* The bottom rung is LVGL's own default face, which is what an unstyled
+     * dropdown was already drawing with: without it, fitting a font could hand
+     * a narrow dropdown the *wider* Medium 16 and clip an option that used to
+     * fit. */
     const lv_font_t *const sizes[] = {
         UI_FONT_MENU, &lv_font_montserrat_20, &lv_font_montserratMedium_16,
+        &lv_font_montserrat_14,
     };
     const char *opts = lv_dropdown_get_options(dd);
     if (!opts) return;
@@ -235,13 +240,31 @@ static void settings_dropdown_fit_font(lv_obj_t *dd)
     lv_obj_set_style_text_font(dd, font, 0);
 }
 
-/* A grey note that shares a row with the switch on the right. Positioned by
- * where it sat on the 800-wide panel and then bounded, because "Off = km/km/h,
- * On = miles/mph" is wider than the gap that is left at 480. */
+/* A grey note explaining what the switch on the right of the row does.
+ *
+ * At 800 px it sits between the caption and the switch, where it was drawn.
+ * At 480 there is no such gap: the caption reaches past the point the note
+ * starts at, and since the note is created later it is drawn on top —
+ * "Restart required" landed across "VESC Emulator", and "Reconnect to last
+ * phone on power-on" across "AA Auto-Connect", both of them legible only as a
+ * smear. Scaling the x down does not help, because what is short of room is
+ * the row, not the note.
+ *
+ * So on a narrow panel the note goes under its caption instead, running the
+ * full width up to the switch. That is more room than it ever had at 800, so
+ * the text arrives whole rather than dotted, and it still clears the next row:
+ * the caption ends around y+37 of a 60 px row and one line of the note runs to
+ * about y+54. */
 static void settings_hint_place(lv_obj_t *lbl, int x_at_design, int y)
 {
-    lv_coord_t x = UI_SX(x_at_design);
-    lv_obj_set_pos(lbl, x, y);
+    lv_coord_t x;
+    if (UI_W < 640) {
+        x = SETTINGS_MARGIN;
+        lv_obj_set_pos(lbl, x, y + 18);
+    } else {
+        x = UI_SX(x_at_design);
+        lv_obj_set_pos(lbl, x, y);
+    }
     lv_obj_set_width(lbl, SETTINGS_SWITCH_X - x - 8);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
 }
@@ -2623,7 +2646,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_theme_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_theme_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_theme_dropdown, UI_FONT_MENU, 0);
-    settings_dropdown_fit_font(settings_theme_dropdown);
+    ui_dropdown_fit_font(settings_theme_dropdown);
     lv_obj_set_style_border_width(settings_theme_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_theme_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_theme_dropdown, theme_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2642,7 +2665,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_splash_loops_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_splash_loops_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_splash_loops_dropdown, UI_FONT_MENU, 0);
-    settings_dropdown_fit_font(settings_splash_loops_dropdown);
+    ui_dropdown_fit_font(settings_splash_loops_dropdown);
     lv_obj_set_style_border_width(settings_splash_loops_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_splash_loops_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_splash_loops_dropdown, splash_loops_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2663,7 +2686,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_phone_screen_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_phone_screen_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_phone_screen_dropdown, UI_FONT_MENU, 0);
-    settings_dropdown_fit_font(settings_phone_screen_dropdown);
+    ui_dropdown_fit_font(settings_phone_screen_dropdown);
     lv_obj_set_style_border_width(settings_phone_screen_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_phone_screen_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_phone_screen_dropdown, phone_screen_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2714,7 +2737,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, UI_FONT_MENU, 0);
-    settings_dropdown_fit_font(settings_battery_calc_mode_dropdown);
+    ui_dropdown_fit_font(settings_battery_calc_mode_dropdown);
     lv_obj_set_style_border_width(settings_battery_calc_mode_dropdown, 0, 0);
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
