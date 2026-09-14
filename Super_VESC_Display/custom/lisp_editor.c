@@ -19,6 +19,7 @@
  * placeholder so the build still links.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 extern lv_ui guider_ui;
@@ -80,13 +81,13 @@ static void show_kb(lv_obj_t *ta)
     lv_keyboard_set_textarea(s_kb, ta);
     lv_obj_move_foreground(s_kb);
     lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(s_ta, 784, 150);   /* shrink editor so it stays visible */
+    lv_obj_set_size(s_ta, UI_W - 16, 150);   /* shrink editor so it stays visible */
 }
 
 static void hide_kb(void)
 {
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_size(s_ta, 784, 344);   /* restore full editor height */
+    lv_obj_set_size(s_ta, UI_W - 16, 344);   /* restore full editor height */
 }
 
 static void ta_focus_cb(lv_event_t *e)
@@ -365,7 +366,7 @@ void show_lisp_editor(void)
     s_op_code   = NULL;
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -403,7 +404,7 @@ void show_lisp_editor(void)
     s_fname = lv_textarea_create(s_screen);
     lv_textarea_set_one_line(s_fname, true);
     lv_textarea_set_placeholder_text(s_fname, "name.lisp");
-    lv_obj_set_pos(s_fname, 594, 52);
+    lv_obj_set_pos(s_fname, UI_SX(594), 52);
     lv_obj_set_size(s_fname, 198, 40);
     lv_obj_add_event_cb(s_fname, ta_focus_cb, LV_EVENT_ALL, NULL);
 
@@ -412,7 +413,7 @@ void show_lisp_editor(void)
     lv_textarea_set_one_line(s_ta, false);
     lv_textarea_set_placeholder_text(s_ta, "(print \"hello\")");
     lv_obj_set_pos(s_ta, 8, 96);
-    lv_obj_set_size(s_ta, 784, 344);
+    lv_obj_set_size(s_ta, UI_W - 16, 344);
     lv_obj_set_style_bg_color(s_ta, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_text_color(s_ta, lv_color_hex(COL_TEXT), 0);
     lv_obj_add_event_cb(s_ta, ta_focus_cb, LV_EVENT_ALL, NULL);
@@ -420,14 +421,14 @@ void show_lisp_editor(void)
     /* status line (under the editor; hidden behind the keyboard when open) */
     s_status = lv_label_create(s_screen);
     lv_obj_set_pos(s_status, 10, 448);
-    lv_obj_set_width(s_status, 782);
+    lv_obj_set_width(s_status, UI_W - 18);
     lv_label_set_text(s_status, "");
     lv_obj_set_style_text_color(s_status, lv_color_hex(COL_DIM), 0);
     lv_obj_set_style_text_font(s_status, &lv_font_montserratMedium_16, 0);
 
     /* keyboard (created last so it draws on top); hidden until a field is focused */
     s_kb = lv_keyboard_create(s_screen);
-    lv_obj_set_size(s_kb, 800, 230);
+    lv_obj_set_size(s_kb, UI_W, 230);
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_ALL, NULL);
@@ -463,7 +464,7 @@ void show_lisp_editor(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);

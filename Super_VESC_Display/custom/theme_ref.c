@@ -20,6 +20,7 @@
 */
 
 #include "theme_ref.h"
+#include "ui_geom.h"
 #include "dashboard_theme.h"
 #include "settings_wrapper.h"
 #include "gui_guider.h"   /* guider_ui, setup_scr_settings, ui_load_scr_animation */
@@ -90,7 +91,7 @@ static lv_obj_t *ref_create(void)
 
     /* Battery bar + percent at the bottom. */
     s_batt_bar = lv_bar_create(scr);
-    lv_obj_set_size(s_batt_bar, 600, 26);
+    lv_obj_set_size(s_batt_bar, UI_SX(600), 26);
     lv_obj_align(s_batt_bar, LV_ALIGN_BOTTOM_MID, 0, -64);
     lv_bar_set_range(s_batt_bar, 0, 100);
     lv_bar_set_value(s_batt_bar, 0, LV_ANIM_OFF);

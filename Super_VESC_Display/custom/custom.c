@@ -17,6 +17,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 #include "settings_wrapper.h"
 #include "dashboard_theme.h"
@@ -141,13 +142,35 @@ static int step_btn_steps(lv_event_t *e) {
 }
 
 /* Compact settings layout: one row per setting, heading on the left,
- * controls clustered on the right edge. */
+ * controls clustered on the right edge.
+ *
+ * Column anchors were measured against the 800-wide panel. The same code also
+ * lays out the square 480x480 board (see ui_geom.h), where a literal 730 is
+ * simply off the screen — so anything that hangs off the right margin is
+ * expressed as a distance from it. The value field and its +/- buttons keep
+ * their pixel size (they hold a number in a fixed font); only their x moves. */
+#define SETTINGS_MARGIN       20
+#define SETTINGS_WIDE_X       UI_SX(400)
+#define SETTINGS_WIDE_W       (UI_W - SETTINGS_WIDE_X - 10)
+#define SETTINGS_FULL_W       (UI_W - 2 * SETTINGS_MARGIN)
+#define SETTINGS_SWITCH_X     (UI_W - 60 - 10)
+
 #define SETTINGS_ROW_H        60
 #define SETTINGS_BTN_W        60
 #define SETTINGS_VAL_W        100
-#define SETTINGS_PLUS_X       730
-#define SETTINGS_VAL_X        620
-#define SETTINGS_MINUS_X      550
+#define SETTINGS_PLUS_X       (UI_W - SETTINGS_BTN_W - 10)
+#define SETTINGS_VAL_X        (SETTINGS_PLUS_X - SETTINGS_VAL_W - 10)
+#define SETTINGS_MINUS_X      (SETTINGS_VAL_X - SETTINGS_BTN_W - 10)
+
+/* "Open" buttons on the rows that lead to a sub-screen. */
+#define SETTINGS_OPEN_W       190
+#define SETTINGS_OPEN_X       (UI_W - SETTINGS_OPEN_W - 10)
+
+/* The three-across row at the bottom (Logs / QR / Reset, and Reset trip +
+ * Files above it). */
+#define SETTINGS_TRI_GAP      16
+#define SETTINGS_TRI_W        ((SETTINGS_FULL_W - 2 * SETTINGS_TRI_GAP) / 3)
+#define SETTINGS_TRI_X(i)     (SETTINGS_MARGIN + (i) * (SETTINGS_TRI_W + SETTINGS_TRI_GAP))
 
 static lv_obj_t *settings_step_btn_create(lv_obj_t *parent, int x, int y,
                                           const char *glyph, uint32_t bg_color,
@@ -184,12 +207,37 @@ static void settings_value_label_init(lv_obj_t *parent, num_field_t *f,
     num_field_refresh(f);
 }
 
+/* A grey note that shares a row with the switch on the right. Positioned by
+ * where it sat on the 800-wide panel and then bounded, because "Off = km/km/h,
+ * On = miles/mph" is wider than the gap that is left at 480. */
+static void settings_hint_place(lv_obj_t *lbl, int x_at_design, int y)
+{
+    lv_coord_t x = UI_SX(x_at_design);
+    lv_obj_set_pos(lbl, x, y);
+    lv_obj_set_width(lbl, SETTINGS_SWITCH_X - x - 8);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+}
+
+/* The caption of a settings row.
+ *
+ * Bounded, and with a smaller face on a narrow panel: at 800 px there is room
+ * for "Battery Calculation:" in montserrat 24 before the dropdown starts, and
+ * at 480 there is not — the caption used to carry on underneath the control,
+ * which is drawn later and therefore wins. Whatever still does not fit is
+ * dotted, which at least reads as truncation rather than as a bug. */
 static lv_obj_t *settings_heading_create(lv_obj_t *parent, int y, const char *text) {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
-    lv_obj_set_pos(lbl, 20, y + 15);
+    lv_obj_set_pos(lbl, SETTINGS_MARGIN, y + 15);
+    /* The leftmost thing any row puts on the right: a wide dropdown, or the
+     * "-" of a value stepper, whichever starts sooner. */
+    lv_coord_t stop = SETTINGS_WIDE_X < SETTINGS_MINUS_X ? SETTINGS_WIDE_X
+                                                         : SETTINGS_MINUS_X;
+    lv_obj_set_width(lbl, stop - SETTINGS_MARGIN - 8);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(lbl, UI_W < UI_DESIGN_W ? &lv_font_montserrat_20
+                                                       : &lv_font_montserrat_24, 0);
     return lbl;
 }
 
@@ -242,8 +290,13 @@ static void settings_tabs_build(lv_obj_t *screen)
     static const char *names[SETTINGS_TAB_COUNT] = {
         "Connection", "Display", "Bike", "System",
     };
-    /* 4 tabs across 770 px with 6 px gutters, matching the exit button above. */
-    const int w = 188, gap = 6, x0 = 17;
+    /* Four across whatever width there is, lined up with the exit button above
+     * (188 px each at 800). The caption drops a size on a narrow panel rather
+     * than being cut in half. */
+    const int gap = 6, x0 = 17;
+    const int w = (UI_W - 2 * x0 - (SETTINGS_TAB_COUNT - 1) * gap) / SETTINGS_TAB_COUNT;
+    const lv_font_t *tab_font = (w < 140) ? &lv_font_montserrat_16
+                                          : &lv_font_montserrat_20;
 
     for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
         lv_obj_t *b = lv_btn_create(screen);
@@ -254,7 +307,7 @@ static void settings_tabs_build(lv_obj_t *screen)
         lv_obj_set_style_shadow_width(b, 0, 0);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, names[i]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(l, tab_font, 0);
         lv_obj_center(l);
         lv_obj_add_event_cb(b, settings_tab_event_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
@@ -262,7 +315,7 @@ static void settings_tabs_build(lv_obj_t *screen)
 
         lv_obj_t *pg = lv_obj_create(screen);
         lv_obj_set_pos(pg, 0, SETTINGS_PAGE_Y);
-        lv_obj_set_size(pg, 800, 480 - SETTINGS_PAGE_Y);
+        lv_obj_set_size(pg, UI_W, UI_H - SETTINGS_PAGE_Y);
         lv_obj_set_style_bg_opa(pg, 0, 0);
         lv_obj_set_style_border_width(pg, 0, 0);
         lv_obj_set_style_pad_all(pg, 0, 0);
@@ -498,7 +551,7 @@ static void fmt_overlay_show(void)
 {
     if (s_fmt_overlay) return;
     s_fmt_overlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_fmt_overlay, 800, 480);
+    lv_obj_set_size(s_fmt_overlay, UI_W, UI_H);
     lv_obj_set_pos(s_fmt_overlay, 0, 0);
     lv_obj_set_style_bg_color(s_fmt_overlay, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_fmt_overlay, LV_OPA_COVER, 0);
@@ -508,7 +561,7 @@ static void fmt_overlay_show(void)
 
     lv_obj_t *l = lv_label_create(s_fmt_overlay);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(l, 720);
+    lv_obj_set_width(l, UI_W - 80);
     lv_label_set_text(l, "Formatting backup storage...\n"
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");
@@ -2002,7 +2055,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
 #endif
 
     s_logs_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_logs_screen, 800, 480);
+    lv_obj_set_size(s_logs_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_logs_screen, lv_color_hex(0x111111), 0);
     lv_obj_set_style_bg_opa(s_logs_screen, 255, 0);
     lv_obj_clear_flag(s_logs_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -2010,7 +2063,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
     /* Back button — matches the "Back to dashboard" style on settings. */
     lv_obj_t *back_btn = lv_btn_create(s_logs_screen);
     lv_obj_set_pos(back_btn, 17, 14);
-    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_size(back_btn, SETTINGS_FULL_W, 40);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 5, 0);
@@ -2027,7 +2080,7 @@ static void logs_open_btn_event_cb(lv_event_t *e) {
      * the log content, leaving the Back button pinned at the top. */
     lv_obj_t *cont = lv_obj_create(s_logs_screen);
     lv_obj_set_pos(cont, 10, 64);
-    lv_obj_set_size(cont, 780, 410);
+    lv_obj_set_size(cont, UI_W - 20, UI_H - 70);
     lv_obj_set_style_bg_color(cont, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(cont, 0, 0);
     lv_obj_set_style_pad_all(cont, 8, 0);
@@ -2152,7 +2205,7 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
     qr_screen_destroy();
 
     s_qr_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_qr_screen, 800, 480);
+    lv_obj_set_size(s_qr_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_qr_screen, lv_color_hex(0x111111), 0);
     lv_obj_set_style_bg_opa(s_qr_screen, 255, 0);
     lv_obj_clear_flag(s_qr_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -2160,7 +2213,7 @@ static void qr_open_btn_event_cb(lv_event_t *e) {
     /* Back button — same style as the logs screen. */
     lv_obj_t *back_btn = lv_btn_create(s_qr_screen);
     lv_obj_set_pos(back_btn, 17, 14);
-    lv_obj_set_size(back_btn, 770, 40);
+    lv_obj_set_size(back_btn, SETTINGS_FULL_W, 40);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 5, 0);
@@ -2402,6 +2455,12 @@ void settings_ui_init(lv_ui *ui) {
     float battery_capacity = settings_wrapper_get_battery_capacity();
     uint8_t battery_calc_mode = settings_wrapper_get_battery_calc_mode();
 
+    /* setup_scr_settings authors this at the 800-wide size; re-fit it rather
+     * than editing the generated file, which "Generate Code" would overwrite. */
+    if (ui->settings_exit_button) {
+        lv_obj_set_size(ui->settings_exit_button, SETTINGS_FULL_W, 40);
+    }
+
     settings_tabs_build(ui->settings);
     lv_obj_t *parent = s_settings_pages[SETTINGS_TAB_CONNECTION];
     int y_pos = SETTINGS_PAGE_TOP_PAD;
@@ -2416,8 +2475,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_heading_create(parent, y_pos, "VESC link");
     {
         lv_obj_t *lnk_btn = lv_btn_create(parent);
-        lv_obj_set_pos(lnk_btn, 600, y_pos + 8);
-        lv_obj_set_size(lnk_btn, 190, 44);
+        lv_obj_set_pos(lnk_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(lnk_btn, SETTINGS_OPEN_W, 44);
         lv_obj_set_style_bg_color(lnk_btn, lv_color_hex(0x00a9ff), 0);
         lv_obj_set_style_radius(lnk_btn, 8, 0);
         lv_obj_t *lnk_lbl = lv_label_create(lnk_btn);
@@ -2448,8 +2507,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_dropdown_set_options(settings_theme_dropdown, theme_opts);
     int active_theme = dashboard_theme_active_index();
     lv_dropdown_set_selected(settings_theme_dropdown, active_theme < 0 ? 0 : active_theme);
-    lv_obj_set_pos(settings_theme_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_theme_dropdown, 390, 50);
+    lv_obj_set_pos(settings_theme_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_theme_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_theme_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_theme_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_theme_dropdown, &lv_font_montserrat_24, 0);
@@ -2466,8 +2525,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_dropdown_set_options(settings_splash_loops_dropdown, "Off\n1\n2\n3\n5");
     lv_dropdown_set_selected(settings_splash_loops_dropdown,
                              splash_loops_to_index(settings_wrapper_get_splash_loops()));
-    lv_obj_set_pos(settings_splash_loops_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_splash_loops_dropdown, 390, 50);
+    lv_obj_set_pos(settings_splash_loops_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_splash_loops_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_splash_loops_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_splash_loops_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_splash_loops_dropdown, &lv_font_montserrat_24, 0);
@@ -2486,8 +2545,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_dropdown_set_options(settings_phone_screen_dropdown, "Android Auto\nNavigator");
     lv_dropdown_set_selected(settings_phone_screen_dropdown,
                              settings_wrapper_get_phone_screen() == 1 ? 1 : 0);
-    lv_obj_set_pos(settings_phone_screen_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_phone_screen_dropdown, 390, 50);
+    lv_obj_set_pos(settings_phone_screen_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_phone_screen_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_phone_screen_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_phone_screen_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_phone_screen_dropdown, &lv_font_montserrat_24, 0);
@@ -2502,7 +2561,7 @@ void settings_ui_init(lv_ui *ui) {
     // ========== Flip screen 180 (upside-down mounting) ==========
     settings_display_flip_label = settings_heading_create(parent, y_pos, "Flip screen 180 (reboot):");
     settings_display_flip_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_display_flip_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_display_flip_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_display_flip_switch, 60, 30);
     if (settings_wrapper_get_display_flip()) {
         lv_obj_add_state(settings_display_flip_switch, LV_STATE_CHECKED);
@@ -2536,8 +2595,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_battery_calc_mode_dropdown = lv_dropdown_create(parent);
     lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
     lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
-    lv_obj_set_pos(settings_battery_calc_mode_dropdown, 400, y_pos + 5);
-    lv_obj_set_size(settings_battery_calc_mode_dropdown, 390, 50);
+    lv_obj_set_pos(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_X, y_pos + 5);
+    lv_obj_set_size(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_W, 50);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(settings_battery_calc_mode_dropdown, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_battery_calc_mode_dropdown, &lv_font_montserrat_24, 0);
@@ -2577,7 +2636,11 @@ void settings_ui_init(lv_ui *ui) {
     /* Hours cluster — placed in the gap between heading and the minutes
      * cluster on the right. Mirrors the SETTINGS_*_X spacing pattern but
      * shifted ~250 px to the left so the row fits in 800 px. */
-    enum { CLK_H_MINUS_X = 300, CLK_H_VAL_X = 370, CLK_H_PLUS_X = 470 };
+    /* Scaled like every other column anchor here (ui_geom.h): at 480 the
+     * literal 470 would land on top of the minutes cluster, which starts at
+     * SETTINGS_MINUS_X. */
+    const int CLK_H_MINUS_X = UI_SX(300), CLK_H_VAL_X = UI_SX(370),
+              CLK_H_PLUS_X  = UI_SX(470);
     settings_clock_heading_label = settings_heading_create(parent, y_pos, "Time:");
     s_clock_hour_field = (num_field_t){
         .value = clock_h_now, .min = 0, .max = 23, .step = 1, .decimals = 0,
@@ -2599,7 +2662,7 @@ void settings_ui_init(lv_ui *ui) {
     /* ':' separator between H and M clusters. */
     settings_clock_colon_label = lv_label_create(parent);
     lv_label_set_text(settings_clock_colon_label, ":");
-    lv_obj_set_pos(settings_clock_colon_label, 537, y_pos + 16);
+    lv_obj_set_pos(settings_clock_colon_label, UI_SX(537), y_pos + 16);
     lv_obj_set_style_text_color(settings_clock_colon_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_clock_colon_label, &lv_font_montserrat_24, 0);
 
@@ -2633,7 +2696,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(read_limits_label, "Read Limits from VESC");
     lv_obj_align(read_limits_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_read_limits_btn, 20, y_pos);
-    lv_obj_set_size(settings_read_limits_btn, 770, 50);
+    lv_obj_set_size(settings_read_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_read_limits_btn, lv_color_hex(0x00a9ff), 0);
     lv_obj_set_style_text_color(settings_read_limits_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_read_limits_btn, &lv_font_montserrat_24, 0);
@@ -2805,7 +2868,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(apply_limits_label, "Apply Limits to VESC");
     lv_obj_align(apply_limits_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_apply_limits_btn, 20, y_pos);
-    lv_obj_set_size(settings_apply_limits_btn, 770, 50);
+    lv_obj_set_size(settings_apply_limits_btn, SETTINGS_FULL_W, 50);
     lv_obj_set_style_bg_color(settings_apply_limits_btn, lv_color_hex(0xff6600), 0);
     lv_obj_set_style_text_color(settings_apply_limits_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_apply_limits_btn, &lv_font_montserrat_24, 0);
@@ -2837,7 +2900,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_slider_set_range(settings_brightness_slider, 10, 100);
     lv_slider_set_value(settings_brightness_slider, brightness, LV_ANIM_OFF);
     lv_obj_set_pos(settings_brightness_slider, 20, y_pos + 35);
-    lv_obj_set_size(settings_brightness_slider, 770, 20); // Slightly thicker for better touch
+    lv_obj_set_size(settings_brightness_slider, SETTINGS_FULL_W, 20); // Slightly thicker for better touch
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0x2a3440), LV_PART_MAIN);
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0xffa500), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(settings_brightness_slider, lv_color_hex(0xffffff), LV_PART_KNOB);
@@ -2882,7 +2945,7 @@ void settings_ui_init(lv_ui *ui) {
         settings_heading_create(parent, y_pos, "Brightness gesture");
 
     settings_brightness_gesture_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_brightness_gesture_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_brightness_gesture_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_brightness_gesture_switch, 60, 30);
     if (settings_wrapper_get_brightness_gesture_enabled()) {
         lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
@@ -2899,7 +2962,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_demo_mode_label = settings_heading_create(parent, y_pos, "Demo mode");
 
     settings_demo_mode_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_demo_mode_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_demo_mode_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_demo_mode_switch, 60, 30);
     if (dashboard_demo_is_active()) {
         lv_obj_add_state(settings_demo_mode_switch, LV_STATE_CHECKED);
@@ -2914,7 +2977,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_vesc_emulator_label = settings_heading_create(parent, y_pos, "VESC Emulator");
 
     settings_vesc_emulator_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_vesc_emulator_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_vesc_emulator_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_vesc_emulator_switch, 60, 30);
     if (settings_wrapper_get_vesc_emulator()) {
         lv_obj_add_state(settings_vesc_emulator_switch, LV_STATE_CHECKED);
@@ -2927,7 +2990,7 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_vesc_emulator_hint = lv_label_create(parent);
     lv_label_set_text(settings_vesc_emulator_hint, "Restart required");
-    lv_obj_set_pos(settings_vesc_emulator_hint, 220, y_pos + 22);
+    settings_hint_place(settings_vesc_emulator_hint, 220, y_pos + 22);
     lv_obj_set_style_text_color(settings_vesc_emulator_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_vesc_emulator_hint, &lv_font_montserrat_14, 0);
 
@@ -2943,7 +3006,7 @@ void settings_ui_init(lv_ui *ui) {
         settings_heading_create(parent, y_pos, "AA Auto-Connect");
 
     settings_aa_autoconnect_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_aa_autoconnect_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_aa_autoconnect_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_aa_autoconnect_switch, 60, 30);
     if (settings_wrapper_get_aa_autoconnect()) {
         lv_obj_add_state(settings_aa_autoconnect_switch, LV_STATE_CHECKED);
@@ -2956,7 +3019,7 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_aa_autoconnect_hint = lv_label_create(parent);
     lv_label_set_text(settings_aa_autoconnect_hint, "Reconnect to last phone on power-on");
-    lv_obj_set_pos(settings_aa_autoconnect_hint, 250, y_pos + 22);
+    settings_hint_place(settings_aa_autoconnect_hint, 250, y_pos + 22);
     lv_obj_set_style_text_color(settings_aa_autoconnect_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_aa_autoconnect_hint, &lv_font_montserrat_14, 0);
 
@@ -2970,7 +3033,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_units_label = settings_heading_create(parent, y_pos, "Units (miles)");
 
     settings_units_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_units_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_units_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_units_switch, 60, 30);
     if (settings_wrapper_get_use_imperial()) {
         lv_obj_add_state(settings_units_switch, LV_STATE_CHECKED);
@@ -2983,7 +3046,7 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_units_hint = lv_label_create(parent);
     lv_label_set_text(settings_units_hint, "Off = km / km/h, On = miles / mph");
-    lv_obj_set_pos(settings_units_hint, 230, y_pos + 22);
+    settings_hint_place(settings_units_hint, 230, y_pos + 22);
     lv_obj_set_style_text_color(settings_units_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_units_hint, &lv_font_montserrat_14, 0);
 
@@ -2995,7 +3058,7 @@ void settings_ui_init(lv_ui *ui) {
     settings_temp_unit_label = settings_heading_create(parent, y_pos, "Temperature (F)");
 
     settings_temp_unit_switch = lv_switch_create(parent);
-    lv_obj_set_pos(settings_temp_unit_switch, 730, y_pos + 15);
+    lv_obj_set_pos(settings_temp_unit_switch, SETTINGS_SWITCH_X, y_pos + 15);
     lv_obj_set_size(settings_temp_unit_switch, 60, 30);
     if (settings_wrapper_get_use_fahrenheit()) {
         lv_obj_add_state(settings_temp_unit_switch, LV_STATE_CHECKED);
@@ -3008,7 +3071,7 @@ void settings_ui_init(lv_ui *ui) {
 
     settings_temp_unit_hint = lv_label_create(parent);
     lv_label_set_text(settings_temp_unit_hint, "Off = Celsius, On = Fahrenheit");
-    lv_obj_set_pos(settings_temp_unit_hint, 230, y_pos + 22);
+    settings_hint_place(settings_temp_unit_hint, 230, y_pos + 22);
     lv_obj_set_style_text_color(settings_temp_unit_hint, lv_color_hex(0x999999), 0);
     lv_obj_set_style_text_font(settings_temp_unit_hint, &lv_font_montserrat_14, 0);
 
@@ -3022,8 +3085,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_heading_create(parent, y_pos, "Pedal assist (PAS)");
     {
         lv_obj_t *pas_btn = lv_btn_create(parent);
-        lv_obj_set_pos(pas_btn, 600, y_pos + 8);
-        lv_obj_set_size(pas_btn, 190, 44);
+        lv_obj_set_pos(pas_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(pas_btn, SETTINGS_OPEN_W, 44);
         lv_obj_set_style_bg_color(pas_btn, lv_color_hex(0x00a9ff), 0);
         lv_obj_set_style_radius(pas_btn, 8, 0);
         lv_obj_t *pas_lbl = lv_label_create(pas_btn);
@@ -3042,8 +3105,8 @@ void settings_ui_init(lv_ui *ui) {
     settings_heading_create(parent, y_pos, "Speed sensor");
     {
         lv_obj_t *spd_btn = lv_btn_create(parent);
-        lv_obj_set_pos(spd_btn, 600, y_pos + 8);
-        lv_obj_set_size(spd_btn, 190, 44);
+        lv_obj_set_pos(spd_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(spd_btn, SETTINGS_OPEN_W, 44);
         lv_obj_set_style_bg_color(spd_btn, lv_color_hex(0x00a9ff), 0);
         lv_obj_set_style_radius(spd_btn, 8, 0);
         lv_obj_t *spd_lbl = lv_label_create(spd_btn);
@@ -3183,7 +3246,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(reset_trip_label, "Reset trip");
     lv_obj_align(reset_trip_label, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(settings_reset_trip_button, 20, y_pos);
-    lv_obj_set_size(settings_reset_trip_button, 245, 50);
+    lv_obj_set_size(settings_reset_trip_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_trip_button, lv_color_hex(0xff8800), 0);
     lv_obj_set_style_text_color(settings_reset_trip_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_trip_button, &lv_font_montserrat_24, 0);
@@ -3197,8 +3260,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_t *files_lbl = lv_label_create(files_btn);
     lv_label_set_text(files_lbl, "Files");
     lv_obj_align(files_lbl, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(files_btn, 281, y_pos);
-    lv_obj_set_size(files_btn, 245, 50);
+    lv_obj_set_pos(files_btn, SETTINGS_TRI_X(1), y_pos);
+    lv_obj_set_size(files_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(files_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(files_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(files_btn, &lv_font_montserrat_24, 0);
@@ -3217,7 +3280,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_label_set_text(logs_lbl, "Logs");
     lv_obj_align(logs_lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_pos(logs_btn, 20, y_pos);
-    lv_obj_set_size(logs_btn, 245, 50);
+    lv_obj_set_size(logs_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(logs_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(logs_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(logs_btn, &lv_font_montserrat_24, 0);
@@ -3230,8 +3293,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_t *qr_lbl = lv_label_create(qr_btn);
     lv_label_set_text(qr_lbl, "QR codes");
     lv_obj_align(qr_lbl, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(qr_btn, 281, y_pos);
-    lv_obj_set_size(qr_btn, 245, 50);
+    lv_obj_set_pos(qr_btn, SETTINGS_TRI_X(1), y_pos);
+    lv_obj_set_size(qr_btn, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(qr_btn, lv_color_hex(0x2a3440), 0);
     lv_obj_set_style_text_color(qr_btn, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(qr_btn, &lv_font_montserrat_24, 0);
@@ -3244,8 +3307,8 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_t *reset_label = lv_label_create(settings_reset_button);
     lv_label_set_text(reset_label, "Reset");
     lv_obj_align(reset_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_pos(settings_reset_button, 542, y_pos);
-    lv_obj_set_size(settings_reset_button, 245, 50);
+    lv_obj_set_pos(settings_reset_button, SETTINGS_TRI_X(2), y_pos);
+    lv_obj_set_size(settings_reset_button, SETTINGS_TRI_W, 50);
     lv_obj_set_style_bg_color(settings_reset_button, lv_color_hex(0xff4444), 0);
     lv_obj_set_style_text_color(settings_reset_button, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(settings_reset_button, &lv_font_montserrat_24, 0);
@@ -3300,7 +3363,7 @@ void settings_ui_init(lv_ui *ui) {
      * settings_can_health_timer_cb while Settings is the active screen —
      * the counter is exactly what you watch when hunting bus trouble. */
     settings_can_health_label = lv_label_create(parent);
-    lv_obj_set_pos(settings_can_health_label, 380, y_pos);
+    lv_obj_set_pos(settings_can_health_label, UI_SX(380), y_pos);
     lv_obj_set_style_text_color(settings_can_health_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_can_health_label, &lv_font_montserrat_20, 0);
     s_can_health_last[0] = '\0';          /* fresh label — force first paint */

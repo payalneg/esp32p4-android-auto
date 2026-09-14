@@ -20,6 +20,7 @@
  * Device-only (needs the PAS backend in main/); the simulator gets a stub.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 extern lv_ui guider_ui;
@@ -107,6 +108,15 @@ static void apply_cfg(void)
 
 /* ---- widget builders ---- */
 
+/* A settings row is a caption on the left and one control on the right, and
+ * the two have to share a width that is 800 px on the head units and 480 on
+ * the ESP32-S3 board. Fixed pixels for the control plus a free-running caption
+ * worked at 800 and collapsed at 480: the caption simply carried on under the
+ * control, which — being created later — drew over it. Two shares that add up
+ * to less than the row, and a caption that knows where it has to stop. */
+#define ROW_NAME_PCT  46
+#define ROW_CTRL_PCT  50
+
 static lv_obj_t *row_base(lv_obj_t *list, const char *name, int h)
 {
     lv_obj_t *row = lv_obj_create(list);
@@ -119,6 +129,8 @@ static lv_obj_t *row_base(lv_obj_t *list, const char *name, int h)
     if (name) {
         lv_obj_t *n = lv_label_create(row);
         lv_label_set_text(n, name);
+        lv_obj_set_width(n, lv_pct(ROW_NAME_PCT));
+        lv_label_set_long_mode(n, LV_LABEL_LONG_DOT);
         lv_obj_align(n, LV_ALIGN_LEFT_MID, 4, 0);
         lv_obj_set_style_text_color(n, lv_color_hex(COL_TEXT), 0);
     }
@@ -378,7 +390,7 @@ void show_pas_settings(void)
     s_level_count = cfg.level_count ? cfg.level_count : 5;
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -403,7 +415,7 @@ void show_pas_settings(void)
     /* scrollable content */
     lv_obj_t *list = lv_obj_create(s_screen);
     lv_obj_set_pos(list, 8, 56);
-    lv_obj_set_size(list, 784, 416);
+    lv_obj_set_size(list, UI_W - 16, UI_H - 64);
     lv_obj_set_style_bg_color(list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 6, 0);
@@ -472,7 +484,7 @@ void show_pas_settings(void)
     lv_obj_t *moderow = row_base(list, "Mode", 50);
     s_dd_mode = lv_dropdown_create(moderow);
     lv_dropdown_set_options(s_dd_mode, "On/off (level)\nProportional to cadence");
-    lv_obj_set_width(s_dd_mode, 320);
+    lv_obj_set_width(s_dd_mode, lv_pct(ROW_CTRL_PCT));
     lv_obj_align(s_dd_mode, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_dropdown_set_selected(s_dd_mode, cfg.mode);
     lv_obj_add_event_cb(s_dd_mode, dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -523,7 +535,7 @@ void show_pas_settings(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);

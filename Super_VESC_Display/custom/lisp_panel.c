@@ -18,6 +18,7 @@
  * placeholder so layout can still be eyeballed there.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 
 /* ---- palette (matches the rest of the UI) ---- */
@@ -30,8 +31,9 @@
 #define COL_DIM       0x8A9499
 
 #define DRAWER_W      300
-#define SCREEN_W      800
-#define SCREEN_H      480
+/* The drawer covers the live panel, whatever size it is (ui_geom.h). */
+#define SCREEN_W      UI_W
+#define SCREEN_H      UI_H
 #define SLIDE_MS      220
 #define DRAWER_ON_X   0
 #define DRAWER_OFF_X  (-DRAWER_W)

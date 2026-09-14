@@ -16,6 +16,7 @@
  * fills the same UI from a synthetic dataset — the window stays demoable.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 #include "settings_wrapper.h"   /* km/miles toggle + unit conversion helpers */
 
@@ -132,7 +133,7 @@ static lv_obj_t *make_btn(lv_obj_t *parent, int x, int y, int w, int h,
 static lv_obj_t *make_modal(lv_opa_t opa)
 {
     lv_obj_t *m = lv_obj_create(s_screen);
-    lv_obj_set_size(m, 800, 480);
+    lv_obj_set_size(m, UI_W, UI_H);
     lv_obj_set_pos(m, 0, 0);
     lv_obj_set_style_bg_color(m, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(m, opa, 0);
@@ -524,7 +525,7 @@ static void show_confirm_delete(void)
     s_confirm_modal = make_modal(LV_OPA_70);
 
     lv_obj_t *box = lv_obj_create(s_confirm_modal);
-    lv_obj_set_size(box, 460, 200);
+    lv_obj_set_size(box, UI_SX(460), 200);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(box, 0, 0);
@@ -560,7 +561,7 @@ static const char *s_metric_names[6] = { "Speed", "Power", "Voltage", "Temp", "B
 static void build_screen(void)
 {
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -578,7 +579,7 @@ static void build_screen(void)
     /* ---- list view ---- */
     s_list_view = lv_obj_create(s_screen);
     lv_obj_set_pos(s_list_view, 0, 58);
-    lv_obj_set_size(s_list_view, 800, 422);
+    lv_obj_set_size(s_list_view, UI_W, UI_H - 58);
     lv_obj_set_style_bg_opa(s_list_view, 0, 0);
     lv_obj_set_style_border_width(s_list_view, 0, 0);
     lv_obj_set_style_pad_all(s_list_view, 0, 0);
@@ -586,7 +587,7 @@ static void build_screen(void)
 
     s_table = lv_table_create(s_list_view);
     lv_obj_set_pos(s_table, 8, 0);
-    lv_obj_set_size(s_table, 784, 384);
+    lv_obj_set_size(s_table, UI_W - 16, UI_H - 96);
     lv_table_set_col_cnt(s_table, 5);
     lv_table_set_col_width(s_table, 0, 90);
     lv_table_set_col_width(s_table, 1, 180);
@@ -624,7 +625,7 @@ static void build_screen(void)
     /* ---- detail view ---- */
     s_detail_view = lv_obj_create(s_screen);
     lv_obj_set_pos(s_detail_view, 0, 58);
-    lv_obj_set_size(s_detail_view, 800, 422);
+    lv_obj_set_size(s_detail_view, UI_W, UI_H - 58);
     lv_obj_set_style_bg_opa(s_detail_view, 0, 0);
     lv_obj_set_style_border_width(s_detail_view, 0, 0);
     lv_obj_set_style_pad_all(s_detail_view, 0, 0);
@@ -665,7 +666,7 @@ static void build_screen(void)
 
     s_chart = lv_chart_create(s_detail_view);
     lv_obj_set_pos(s_chart, 48, 176);    /* shifted right → room for Y labels on the left */
-    lv_obj_set_size(s_chart, 736, 224);
+    lv_obj_set_size(s_chart, UI_W - 64, 224);
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_div_line_count(s_chart, 3, 6);
     /* The built-in chart axis labels overflow the panel in this LVGL build, so
@@ -703,7 +704,7 @@ static void build_screen(void)
     for (int i = 0; i < 5; i++) {
         lv_obj_t *xl = lv_label_create(s_detail_view);
         lv_obj_set_width(xl, 52);
-        lv_obj_set_pos(xl, 56 + (718 * i) / 4 - 26, 403);
+        lv_obj_set_pos(xl, 56 + ((UI_W - 82) * i) / 4 - 26, 403);
         lv_obj_set_style_text_align(xl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(xl, lv_color_hex(COL_DIM), 0);
         lv_obj_set_style_text_font(xl, &lv_font_montserratMedium_16, 0);

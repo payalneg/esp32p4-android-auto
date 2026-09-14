@@ -1,4 +1,5 @@
 #include "nav_screen.h"
+#include "ui_geom.h"
 
 #include "nav_map.h"
 #include "nav_route.h"
@@ -669,7 +670,7 @@ esp_err_t nav_screen_init(void)
 
     /* Placeholder card, centred, drawn over whatever the last picture was. */
     s_status_box = lv_obj_create(s_screen);
-    lv_obj_set_size(s_status_box, 560, 96);
+    lv_obj_set_size(s_status_box, UI_SX(560), 96);
     lv_obj_align(s_status_box, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_status_box, lv_color_hex(0x1c2530), 0);
     lv_obj_set_style_bg_opa(s_status_box, LV_OPA_80, 0);
@@ -726,7 +727,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
 
     s_find_ta = lv_textarea_create(s_find_box);
-    lv_obj_set_size(s_find_ta, 460, 56);
+    lv_obj_set_size(s_find_ta, UI_SX(460), 56);
     lv_obj_align(s_find_ta, LV_ALIGN_TOP_LEFT, 12, 10);
     lv_textarea_set_one_line(s_find_ta, true);
     lv_textarea_set_placeholder_text(s_find_ta, "street, cafe, address");

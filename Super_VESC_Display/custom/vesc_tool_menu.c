@@ -17,6 +17,7 @@
  * desktop simulator gets a small placeholder so the build still links.
  */
 #include "lvgl.h"
+#include "ui_geom.h"
 #include "custom.h"
 #include "settings_wrapper.h"
 
@@ -46,7 +47,10 @@ extern lv_ui guider_ui;
 #define VT_MAX_BITS   16
 
 #define ROW_H         54
-#define NAME_W        470
+/* Column widths were measured on the 800-wide panel; ui_geom.h scales them
+ * for the square 480 board. Anything that hugs the right edge is written as
+ * a distance from it, so the gap stays the gap. */
+#define NAME_W        UI_SX(470)
 
 typedef struct {
     int       param_idx;
@@ -175,7 +179,7 @@ static void vt_show_spinner(const char *text)
 {
     if (s_spinner_modal) return;
     s_spinner_modal = lv_obj_create(s_screen);
-    lv_obj_set_size(s_spinner_modal, 800, 480);
+    lv_obj_set_size(s_spinner_modal, UI_W, UI_H);
     lv_obj_set_pos(s_spinner_modal, 0, 0);
     lv_obj_set_style_bg_color(s_spinner_modal, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_spinner_modal, LV_OPA_60, 0);
@@ -473,7 +477,7 @@ static void build_numeric_row(vt_row_t *r, const vc_param_t *p)
      * minus 540..594, value 600..700, plus 704..758. */
     small_step_btn(row, 540, "-", COL_RED, num_dec_cb, r);
     lv_obj_t *val = lv_label_create(row);
-    lv_obj_set_pos(val, 600, 10);
+    lv_obj_set_pos(val, UI_SX(600), 10);
     lv_obj_set_width(val, 100);
     lv_obj_set_style_text_color(val, lv_color_hex(COL_CYAN), 0);
     lv_obj_set_style_text_font(val, &lv_font_montserratMedium_16, 0);
@@ -505,8 +509,8 @@ static void build_enum_row(vt_row_t *r, const vc_param_t *p)
     }
     lv_obj_t *dd = lv_dropdown_create(row);
     lv_dropdown_set_options(dd, opts);
-    lv_obj_set_width(dd, 240);
-    lv_obj_set_pos(dd, 510, 0);   /* 510..750, clear of the right edge */
+    lv_obj_set_width(dd, UI_SX(240));
+    lv_obj_set_pos(dd, UI_W - 50 - UI_SX(240), 0);   /* ...clear of the right edge */
     style_dropdown(dd);
     int sel = vesc_config_get_int(s_kind, r->param_idx);
     if (sel < 0) sel = 0;
@@ -524,7 +528,7 @@ static void build_bool_row(vt_row_t *r, const vc_param_t *p)
 
     lv_obj_t *sw = lv_switch_create(row);
     lv_obj_set_size(sw, 60, 30);
-    lv_obj_set_pos(sw, 690, 6);   /* 690..750, clear of the right edge */
+    lv_obj_set_pos(sw, UI_W - 110, 6);   /* ...clear of the right edge */
     lv_obj_set_style_bg_color(sw, lv_color_hex(COL_BTN), LV_PART_MAIN);
     lv_obj_set_style_bg_color(sw, lv_color_hex(COL_CYAN),
                               LV_PART_INDICATOR | LV_STATE_CHECKED);
@@ -544,7 +548,7 @@ static void build_bitfield_row(vt_row_t *r, const vc_param_t *p)
     /* switches laid out under the name label, wrapping */
     lv_obj_t *holder = lv_obj_create(row);
     lv_obj_set_pos(holder, 0, 28);
-    lv_obj_set_size(holder, 740, LV_SIZE_CONTENT);   /* fit within row content width */
+    lv_obj_set_size(holder, UI_W - 60, LV_SIZE_CONTENT);   /* fit within row content width */
     lv_obj_set_style_bg_opa(holder, 0, 0);
     lv_obj_set_style_border_width(holder, 0, 0);
     lv_obj_set_style_pad_all(holder, 2, 0);
@@ -1062,7 +1066,7 @@ static void detect_cb(lv_event_t *e)
 
     lv_obj_t *dlg = lv_obj_create(s_screen);
     s_detect_dlg = dlg;
-    lv_obj_set_size(dlg, 760, 462);
+    lv_obj_set_size(dlg, UI_W - 40, UI_H - 18);
     lv_obj_center(dlg);
     lv_obj_set_style_bg_color(dlg, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_color(dlg, lv_color_hex(COL_ORANGE), 0);
@@ -1283,7 +1287,7 @@ static void rt_open_cb(lv_event_t *e)   { (void)e; show_realtime_viewer(); }
 static void vt_build_screen(void)
 {
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_screen, 800, 480);
+    lv_obj_set_size(s_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(s_screen, 255, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -1318,7 +1322,7 @@ static void vt_build_screen(void)
         lv_obj_set_size(dd_head, 110, 40);
         style_dropdown(dd_head);
         lv_obj_add_event_cb(dd_head, head_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_set_pos(s_emu_banner, 468, 18);
+        lv_obj_set_pos(s_emu_banner, UI_SX(468), 18);
         lv_obj_set_width(s_emu_banner, 102);
     }
 
@@ -1352,15 +1356,15 @@ static void vt_build_screen(void)
     lv_obj_add_event_cb(s_dd_group, group_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     s_dd_sub = lv_dropdown_create(s_screen);
-    lv_obj_set_pos(s_dd_sub, 484, 56);
-    lv_obj_set_size(s_dd_sub, 300, 40);   /* 484..784, clear of the right edge */
+    lv_obj_set_pos(s_dd_sub, UI_SX(484), 56);
+    lv_obj_set_size(s_dd_sub, UI_W - UI_SX(484) - 16, 40);   /* ...clear of the right edge */
     style_dropdown(s_dd_sub);
     lv_obj_add_event_cb(s_dd_sub, sub_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     /* parameter list */
     s_list = lv_obj_create(s_screen);
     lv_obj_set_pos(s_list, 8, 104);
-    lv_obj_set_size(s_list, 784, 304);
+    lv_obj_set_size(s_list, UI_W - 16, 304);
     lv_obj_set_style_bg_color(s_list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_radius(s_list, 6, 0);
@@ -1379,7 +1383,7 @@ static void vt_build_screen(void)
     lv_obj_add_state(s_restore_btn, LV_STATE_DISABLED);
 
     s_status = lv_label_create(s_screen);
-    lv_obj_set_pos(s_status, 488, 428);
+    lv_obj_set_pos(s_status, UI_SX(488), 428);
     lv_obj_set_width(s_status, 304);
     lv_label_set_text(s_status, "");
     lv_obj_set_style_text_color(s_status, lv_color_hex(COL_DIM), 0);
@@ -1443,7 +1447,7 @@ static void fs_show_format_modal(void)
 {
     if (s_fmt_modal) return;
     s_fmt_modal = lv_obj_create(s_screen);
-    lv_obj_set_size(s_fmt_modal, 800, 480);
+    lv_obj_set_size(s_fmt_modal, UI_W, UI_H);
     lv_obj_set_pos(s_fmt_modal, 0, 0);
     lv_obj_set_style_bg_color(s_fmt_modal, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_fmt_modal, LV_OPA_COVER, 0);
@@ -1452,7 +1456,7 @@ static void fs_show_format_modal(void)
     lv_obj_clear_flag(s_fmt_modal, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *l = lv_label_create(s_fmt_modal);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(l, 720);
+    lv_obj_set_width(l, UI_W - 80);
     lv_label_set_text(l, "Formatting backup storage...\n"
                          "One-time setup, please wait (up to ~1 min).\n"
                          "Do not power off.");
@@ -1569,7 +1573,7 @@ void run_vesc_tool_menu(void)
 {
     if (s_sim_screen) return;
     s_sim_screen = lv_obj_create(NULL);
-    lv_obj_set_size(s_sim_screen, 800, 480);
+    lv_obj_set_size(s_sim_screen, UI_W, UI_H);
     lv_obj_set_style_bg_color(s_sim_screen, lv_color_hex(0x07090A), 0);
 
     lv_obj_t *btn = lv_btn_create(s_sim_screen);
