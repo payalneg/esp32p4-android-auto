@@ -25,6 +25,17 @@ static lv_obj_t  *s_aa_screen;   /* what lv_scr_act() was before the dashboard *
 esp_err_t ui_mode_init(void)
 {
     if (s_inited) return ESP_OK;
+    /* No panel means no screens to build on. lv_obj_create(NULL) puts the
+     * object on the DEFAULT display and dereferences it, so a BSP that failed
+     * to bring the LCD up turned every boot into a null-pointer panic here —
+     * a reboot loop on a device whose only way out is the screen that just
+     * failed. Refuse instead: main.c already treats a non-OK return as "UI
+     * disabled", and the rest of the firmware (VESC link, logging, OTA) keeps
+     * running and can be reached over the wire. */
+    if (lv_disp_get_default() == NULL) {
+        ESP_LOGE(TAG, "no LVGL display registered — UI disabled");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (bsp_display_lock(1000) != ESP_OK) {
         ESP_LOGE(TAG, "lvgl lock timeout");
         return ESP_FAIL;

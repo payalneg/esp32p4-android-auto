@@ -74,3 +74,10 @@ CONFIG_ESP_WIFI_CACHE_TX_BUFFER_NUM=16
 # VESC CAN — TJA1051 transceiver on the board's external header.
 CONFIG_VESC_CAN_TX_GPIO=6
 CONFIG_VESC_CAN_RX_GPIO=0
+
+# Board revision. Kconfig defaults to V4.0 (CH32V003 helper at 0x24); the board
+# in hand is V3.0 (TCA9554 at 0x20). Guessing wrong is not a cosmetic miss —
+# nothing answers at the other address, the display never starts, and until the
+# ui_mode guard landed that was a boot loop. Tell them apart on the live bus:
+# 0x24 = V4.0, 0x20 = V3.0, touch answers at 0x5D either way.
+CONFIG_BSP_S3T4_HW_V3=y

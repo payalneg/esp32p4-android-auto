@@ -13,7 +13,8 @@
  *
  * Board revisions differ in one place — the I2C helper that holds the LCD and
  * touch resets and the backlight (V4.0: CH32V003 at 0x24 with PWM; V3.0:
- * TCA9554 at 0x20, backlight on/off only). Pick it with the
+ * TCA9554 at 0x20, backlight on/off only — and a different pin numbering,
+ * see the V3 block below). Pick it with the
  * CONFIG_BSP_S3T4_HW_V3 / _V4 Kconfig choice.
  */
 
@@ -93,13 +94,27 @@
 #define BSP_RTC_INT           (IO_EXPANDER_PIN_NUM_7)
 #define BSP_IO_EXPANDER_I2C_ADDRESS  (CUSTOM_IO_EXPANDER_I2C_CH32V003_ADDRESS)
 #else
-/* V3.0: a plain TCA9554 whose first three pins are LCD reset, touch reset and
- * backlight enable — the mapping the board's original Arduino firmware drove
- * by hand (Super_VESC_Display/src/main.cpp). No PWM, so brightness is a
+/* V3.0: a plain TCA9554 at 0x20. The V3.0 schematic names the expander lines
+ * EXIO1..EXIO8 — ONE-based — and they sit on the chip's P0..P7, i.e. on
+ * register bits IO_EXPANDER_PIN_NUM_0..7:
+ *
+ *   EXIO1 = P0  TP_RST        EXIO5 = P4  (BLC)
+ *   EXIO2 = P1  BL_EN         EXIO6 = P5  BEE_EN (buzzer)
+ *   EXIO3 = P2  LCD_RST       EXIO7 = P6  RTC_INT
+ *   EXIO4 = P3  SD_CS         EXIO8 = P7  (IRQ)
+ *
+ * The V4.0 CH32V003 kept the one-based EXIO numbers as its bit positions
+ * (TP_RST bit 1, LCD_RST bit 3, ...), which is why the two revisions look
+ * shifted by one. Getting this wrong is not cosmetic: with LCD_RST and BL_EN
+ * swapped, the "backlight off" that display_init() asks for during bring-up
+ * holds the ST7701 in hardware reset while the whole init sequence is clocked
+ * into it, and the panel comes up lit but black (the "touch reset" release
+ * is what actually turned the backlight on). Leave P3 alone: SD_CS driven low
+ * would drop the card into SPI mode. No PWM here, so brightness is a
  * two-state affair; see bsp_display_brightness_set(). */
-#define BSP_LCD_RST           (IO_EXPANDER_PIN_NUM_0)
-#define BSP_LCD_TOUCH_RST     (IO_EXPANDER_PIN_NUM_1)
-#define BSP_LCD_BL_EN         (IO_EXPANDER_PIN_NUM_2)
+#define BSP_LCD_TOUCH_RST     (IO_EXPANDER_PIN_NUM_0)   /* EXIO1 */
+#define BSP_LCD_BL_EN         (IO_EXPANDER_PIN_NUM_1)   /* EXIO2 */
+#define BSP_LCD_RST           (IO_EXPANDER_PIN_NUM_2)   /* EXIO3 */
 #define BSP_IO_EXPANDER_I2C_ADDRESS  (ESP_IO_EXPANDER_I2C_TCA9554_ADDRESS_000)
 #endif
 

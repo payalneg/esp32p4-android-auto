@@ -193,6 +193,37 @@ esp_io_expander_handle_t bsp_io_expander_init(void)
             ESP_LOGE(TAG, "no IO expander at 0x%02X — wrong CONFIG_BSP_S3T4_HW_V* "
                           "for this board revision?", BSP_IO_EXPANDER_I2C_ADDRESS);
         }
+        else
+        {
+            /* Claim the lines we drive, here rather than in bsp_display_new().
+             *
+             * The very first thing bsp_display_start_with_config() does after
+             * creating the expander is bsp_display_brightness_init(), and on
+             * V3.0 the backlight is a plain expander pin — which is still an
+             * input at that point, so the write is refused ("Pin[n] can't set
+             * level in input mode"), the error propagates, and the display
+             * never starts at all. V4.0 escapes it only because its backlight
+             * goes through a PWM register instead of a pin. Setting the
+             * directions the moment the expander exists makes both revisions
+             * safe no matter who writes first; bsp_display_new() repeats it
+             * harmlessly. */
+#if CONFIG_BSP_S3T4_HW_V4
+            esp_io_expander_set_dir(custom_io_expander,
+                                    BSP_SYS_EN | BSP_BEE_EN | BSP_LCD_RST |
+                                    BSP_LCD_TOUCH_RST, IO_EXPANDER_OUTPUT);
+            esp_io_expander_set_dir(custom_io_expander, BSP_RTC_INT,
+                                    IO_EXPANDER_INPUT);
+#else
+            esp_err_t derr = esp_io_expander_set_dir(
+                custom_io_expander,
+                BSP_LCD_RST | BSP_LCD_TOUCH_RST | BSP_LCD_BL_EN,
+                IO_EXPANDER_OUTPUT);
+            if (derr != ESP_OK)
+            {
+                ESP_LOGE(TAG, "expander set_dir: %s", esp_err_to_name(derr));
+            }
+#endif
+        }
     }
     return custom_io_expander;
 }
@@ -328,6 +359,7 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
     esp_io_expander_set_level(custom_io_expander,
                               BSP_LCD_RST | BSP_LCD_TOUCH_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(150));
+    ESP_LOGI(TAG, "TCA9554: TP_RST(P0) and LCD_RST(P2) pulsed, BL_EN(P1) off");
 #endif
 
     ESP_LOGI(TAG, "Install 3-wire SPI panel IO");
@@ -408,9 +440,11 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
         .vendor_config = &vendor_config,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7701(io_handle, &panel_config, &panel_handle));
-    esp_lcd_panel_reset(panel_handle);
-    esp_lcd_panel_init(panel_handle);
-    esp_lcd_panel_disp_on_off(panel_handle, true);
+    /* The 3-wire SPI link is write-only, so these are the only failure signals
+     * the ST7701 bring-up has — do not throw them away. */
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel_handle), TAG, "ST7701 reset failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel_handle), TAG, "ST7701 init failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel_handle, true), TAG, "ST7701 display-on failed");
 
     if (ret_panel)
     {
