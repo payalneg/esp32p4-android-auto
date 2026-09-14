@@ -23,15 +23,33 @@
  * 1 s avoids flicker if the bus hiccups. */
 #define HEAD2_FRESH_MS 1000u
 
-/* On a BLE link these temperatures are polled once a second instead of
- * arriving as 50 Hz broadcasts, so the CAN window above is the same length as
- * the poll period: every reply expires at almost exactly the moment its
- * successor is asked for, and the answer to "is the second head alive" flips
- * on and off. The dashboard gates ALL of its data on that flag, so what the
- * rider sees is a screen that keeps going blank. Three poll periods is loose
- * enough to ride through a missed reply and still short enough to notice a
- * head that has actually gone. */
-#define HEAD2_FRESH_BLE_MS 3000u
+/* On a BLE link these temperatures are polled instead of arriving as 50 Hz
+ * broadcasts, and the dashboard gates ALL of its data on the second head
+ * being fresh — so the definition of "fresh" here decides whether the screen
+ * stays up.
+ *
+ * A wall-clock window does not work, because the poll period is not a
+ * constant: the poll runs on the single VESC task, whose cycle stretches by up
+ * to the reply timeout (CONFIG_VESC_BLE_SYNC_TIMEOUT_MS, 300 ms) for every
+ * request in it that goes unanswered. A controller without the LISP script
+ * never answers the dashboard's CUSTOM_APP_DATA poll (300 ms, every 400 ms);
+ * the quick-action drawer adds another; the addressing probe blocks the task
+ * for up to 1.2 s a pass while unresolved. Under that load a 1000 ms gate
+ * comes round every 1.4–2.5 s, so a window of "three poll periods" (3 s)
+ * tolerated one lost reply at best and none at all on a scriptless
+ * controller with the drawer open: the flag flipped, and the whole dashboard
+ * went blank with it.
+ *
+ * So freshness is counted in polls, not milliseconds: the head is stale once
+ * HEAD2_MAX_MISSES consecutive polls have gone out without an answer in
+ * between, however long the cycle took — 3.9 s at the nominal 1.3 s spacing,
+ * ~7.5 s at the worst stretched one. A wall-clock ceiling remains only as a
+ * backstop for polls not being sent at all (link down, task stalled); it is
+ * set above anything the miss rule can take so it never pre-empts it, and in
+ * those cases the primary poll's own 5 s window has already pulled the
+ * "ESC NOT CONNECTED" banner anyway. */
+#define HEAD2_MAX_MISSES       3u
+#define HEAD2_FRESH_BLE_MAX_MS 10000u
 
 /* ---- BLE polling ----
  *
@@ -48,6 +66,11 @@ static float   s_polled_fet;
 static float   s_polled_motor;
 static int64_t s_polled_us;          /* 0 = never answered */
 static int64_t s_last_poll_us;
+/* Polls sent since the last answer, minus the one that may still be in
+ * flight: bumped when a poll goes out and the previous one is still
+ * unanswered, cleared by every reply. */
+static volatile uint8_t s_misses;
+static volatile bool    s_pending;   /* a poll is out, no reply yet */
 
 void vesc_head2_poll_loop(void)
 {
@@ -59,6 +82,9 @@ void vesc_head2_poll_loop(void)
         return;
     }
     s_last_poll_us = now;
+
+    if (s_pending && s_misses < 255) s_misses++;
+    s_pending = true;
 
     uint8_t buf[8];
     int32_t ind = 0;
@@ -79,6 +105,8 @@ void vesc_head2_process_response(const uint8_t *data, unsigned int len)
     s_polled_fet   = buffer_get_float16(data, 1e1f, &ind);
     s_polled_motor = buffer_get_float16(data, 1e1f, &ind);
     s_polled_us    = esp_timer_get_time();
+    s_misses       = 0;
+    s_pending      = false;
 }
 
 bool vesc_head2_get_temps(float *temp_fet, float *temp_motor)
@@ -87,7 +115,8 @@ bool vesc_head2_get_temps(float *temp_fet, float *temp_motor)
 
     if (vesc_link_get_mode() == VESC_LINK_MODE_BLE) {
         if (s_polled_us == 0) return false;
-        if ((esp_timer_get_time() - s_polled_us) / 1000 > HEAD2_FRESH_BLE_MS) return false;
+        if (s_misses >= HEAD2_MAX_MISSES) return false;
+        if ((esp_timer_get_time() - s_polled_us) / 1000 > HEAD2_FRESH_BLE_MAX_MS) return false;
         if (temp_fet)   *temp_fet   = s_polled_fet;
         if (temp_motor) *temp_motor = s_polled_motor;
         return true;
