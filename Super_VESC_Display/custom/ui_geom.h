@@ -36,6 +36,9 @@
  * narrower columns. */
 #define UI_IS_SQUARE  (UI_W == UI_H)
 
+/* True on a panel narrower than the layout was drawn for (480 against 800). */
+#define UI_NARROW  (UI_W < UI_DESIGN_W)
+
 /* The text size of a menu row.
  *
  * The hand-written screens were drawn with 24 px labels, which suits the

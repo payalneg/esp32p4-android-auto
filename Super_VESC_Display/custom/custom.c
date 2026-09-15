@@ -1072,27 +1072,86 @@ static bool dashboard_head2_temps(float *fet, float *motor)
 
 static void dashboard_temps_apply_layout(bool dual)
 {
-    /* Derive "already applied?" from the live widget width rather than a static
-     * flag — the dashboard screen can be torn down and rebuilt (widgets reset to
-     * the GUI-Guider single-head coords), and a static would desync from that. */
-    int target_w = dual ? 160 : 100;
-    if (lv_obj_get_width(guider_ui.dashboard_Classic_temp_mot_text) == target_w) return;
+    lv_obj_t *mot = guider_ui.dashboard_Classic_temp_mot_text;
+    lv_obj_t *esc = guider_ui.dashboard_Classic_temp_esc_text;
+    lv_obj_t *mu  = guider_ui.dashboard_Classic_col_mtmp_unit;
+    lv_obj_t *cu  = guider_ui.dashboard_Classic_col_ctmp_unit;
+    if (!mot || !esc || !mu || !cu) return;
+
+    /* Two heads show "34/37" where one shows "34", so the value box has to hold
+     * roughly twice the digits. The 800-wide row has 60 px to spare left of
+     * each temperature, so the box grows leftwards — its right edge, where the
+     * degree sign sits, stays put — and the unit slides 6 px clear.
+     *
+     * The 480 panel has no such room: its bottom row is five columns of 84..108
+     * px with a divider immediately left of each value. There the value steps
+     * down a size instead, where the worst case "999/999" measures 68 px and
+     * fits the 70 px box (it is 96 px at the full size). */
+    const lv_coord_t grow       = UI_NARROW ? 0 : 60;
+    const lv_coord_t unit_shift = UI_NARROW ? 0 : 6;
+
+    /* Single-head geometry is whatever GUI Guider laid out for THIS panel, read
+     * back off the widgets instead of written here as numbers: the 800x480 and
+     * 480x480 projects place this row differently, and the literals that used to
+     * live here (479 / 637 / 582 / 742) pushed the 480 build's temperatures off
+     * the right edge of the screen — the cells came up empty.
+     *
+     * The base is re-read whenever these are not the widgets it was taken from:
+     * the dashboard screen can be torn down and rebuilt, which resets them to
+     * the GUI Guider coordinates, and a static "already applied" flag alone
+     * would desync from that. The pointer compare catches a rebuild that lands
+     * elsewhere in the heap, the geometry compare one that reuses the address. */
+    static lv_obj_t *base_of;
+    static lv_coord_t b_mot_x, b_mot_y, b_mot_w, b_mot_h;
+    static lv_coord_t b_esc_x, b_esc_y, b_esc_w, b_esc_h;
+    static lv_coord_t b_mu_x, b_mu_y, b_cu_x, b_cu_y;
+    static const lv_font_t *b_font;
+    static bool dual_applied;
+
+    bool stale = (base_of != mot);
+    if (!stale) {
+        stale = (lv_obj_get_x(mot) != (dual_applied ? b_mot_x - grow : b_mot_x));
+    }
+    if (stale) {
+        lv_obj_update_layout(mot);
+        b_mot_x = lv_obj_get_x(mot);     b_mot_y = lv_obj_get_y(mot);
+        b_mot_w = lv_obj_get_width(mot); b_mot_h = lv_obj_get_height(mot);
+        b_esc_x = lv_obj_get_x(esc);     b_esc_y = lv_obj_get_y(esc);
+        b_esc_w = lv_obj_get_width(esc); b_esc_h = lv_obj_get_height(esc);
+        b_mu_x  = lv_obj_get_x(mu);      b_mu_y  = lv_obj_get_y(mu);
+        b_cu_x  = lv_obj_get_x(cu);      b_cu_y  = lv_obj_get_y(cu);
+        b_font  = lv_obj_get_style_text_font(mot, LV_PART_MAIN);
+        base_of = mot;
+        dual_applied = false;
+    }
+    else if (dual == dual_applied) {
+        return;
+    }
 
     if (dual) {
-        lv_obj_set_pos (guider_ui.dashboard_Classic_temp_mot_text, 419, 432);
-        lv_obj_set_size(guider_ui.dashboard_Classic_temp_mot_text, 160, 60);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_col_mtmp_unit, 588, 442);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_temp_esc_text, 577, 432);
-        lv_obj_set_size(guider_ui.dashboard_Classic_temp_esc_text, 160, 60);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_col_ctmp_unit, 748, 442);
+        lv_obj_set_pos (mot, b_mot_x - grow, b_mot_y);
+        lv_obj_set_size(mot, b_mot_w + grow, b_mot_h);
+        lv_obj_set_pos (mu,  b_mu_x + unit_shift, b_mu_y);
+        lv_obj_set_pos (esc, b_esc_x - grow, b_esc_y);
+        lv_obj_set_size(esc, b_esc_w + grow, b_esc_h);
+        lv_obj_set_pos (cu,  b_cu_x + unit_shift, b_cu_y);
+        if (UI_NARROW) {
+            lv_obj_set_style_text_font(mot, &lv_font_Antonio_Regular_22, 0);
+            lv_obj_set_style_text_font(esc, &lv_font_Antonio_Regular_22, 0);
+        }
     } else {
-        lv_obj_set_pos (guider_ui.dashboard_Classic_temp_mot_text, 479, 432);
-        lv_obj_set_size(guider_ui.dashboard_Classic_temp_mot_text, 100, 60);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_col_mtmp_unit, 582, 442);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_temp_esc_text, 637, 432);
-        lv_obj_set_size(guider_ui.dashboard_Classic_temp_esc_text, 100, 60);
-        lv_obj_set_pos (guider_ui.dashboard_Classic_col_ctmp_unit, 742, 442);
+        lv_obj_set_pos (mot, b_mot_x, b_mot_y);
+        lv_obj_set_size(mot, b_mot_w, b_mot_h);
+        lv_obj_set_pos (mu,  b_mu_x, b_mu_y);
+        lv_obj_set_pos (esc, b_esc_x, b_esc_y);
+        lv_obj_set_size(esc, b_esc_w, b_esc_h);
+        lv_obj_set_pos (cu,  b_cu_x, b_cu_y);
+        if (UI_NARROW && b_font) {
+            lv_obj_set_style_text_font(mot, b_font, 0);
+            lv_obj_set_style_text_font(esc, b_font, 0);
+        }
     }
+    dual_applied = dual;
 }
 
 static void cockpit_temp_fet(float temp_fet)
@@ -2802,8 +2861,27 @@ void settings_ui_init(lv_ui *ui) {
     /* Scaled like every other column anchor here (ui_geom.h): at 480 the
      * literal 470 would land on top of the minutes cluster, which starts at
      * SETTINGS_MINUS_X. */
-    const int CLK_H_MINUS_X = UI_SX(300), CLK_H_VAL_X = UI_SX(370),
-              CLK_H_PLUS_X  = UI_SX(470);
+    /* Seven controls in one row. Scaling the 800-px anchors (UI_SX) is not
+     * enough on the 480 panel: measured there, the hours cluster lands on the
+     * minutes one and on itself — 7 overlapping pairs, because the clusters
+     * keep their 800-px spans while the row loses 40 % of its width. So on the
+     * narrow panel the whole row is laid out from the right edge leftwards,
+     * with a value field narrow enough ("23" needs ~20 px) to leave gaps. */
+    const int CLK_VAL_W   = SETTINGS_NARROW ? 56 : SETTINGS_VAL_W;
+    const int CLK_GAP     = SETTINGS_NARROW ? 4 : 10;
+    const int CLK_M_PLUS_X  = SETTINGS_PLUS_X;
+    const int CLK_M_VAL_X   = SETTINGS_NARROW ? CLK_M_PLUS_X - CLK_GAP - CLK_VAL_W
+                                              : SETTINGS_VAL_X;
+    const int CLK_M_MINUS_X = SETTINGS_NARROW ? CLK_M_VAL_X - CLK_GAP - SETTINGS_BTN_W
+                                              : SETTINGS_MINUS_X;
+    const int CLK_COLON_X   = SETTINGS_NARROW ? CLK_M_MINUS_X - CLK_GAP - 8
+                                              : UI_SX(537);
+    const int CLK_H_PLUS_X  = SETTINGS_NARROW ? CLK_COLON_X - CLK_GAP - SETTINGS_BTN_W
+                                              : UI_SX(470);
+    const int CLK_H_VAL_X   = SETTINGS_NARROW ? CLK_H_PLUS_X - CLK_GAP - CLK_VAL_W
+                                              : UI_SX(370);
+    const int CLK_H_MINUS_X = SETTINGS_NARROW ? CLK_H_VAL_X - CLK_GAP - SETTINGS_BTN_W
+                                              : UI_SX(300);
     settings_clock_heading_label = settings_heading_create(parent, y_pos, "Time:");
     s_clock_hour_field = (num_field_t){
         .value = clock_h_now, .min = 0, .max = 23, .step = 1, .decimals = 0,
@@ -2813,7 +2891,7 @@ void settings_ui_init(lv_ui *ui) {
         CLK_H_MINUS_X, y_pos + 5, "-", 0xff4444, clock_h_minus_btn_event_cb);
     s_clock_hour_field.label = lv_label_create(parent);
     lv_obj_set_pos(s_clock_hour_field.label, CLK_H_VAL_X, y_pos + 5);
-    lv_obj_set_size(s_clock_hour_field.label, SETTINGS_VAL_W, SETTINGS_CTRL_H);
+    lv_obj_set_size(s_clock_hour_field.label, CLK_VAL_W, SETTINGS_CTRL_H);
     lv_obj_set_style_text_color(s_clock_hour_field.label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(s_clock_hour_field.label, UI_FONT_MENU, 0);
     lv_obj_set_style_text_align(s_clock_hour_field.label, LV_TEXT_ALIGN_CENTER, 0);
@@ -2825,7 +2903,7 @@ void settings_ui_init(lv_ui *ui) {
     /* ':' separator between H and M clusters. */
     settings_clock_colon_label = lv_label_create(parent);
     lv_label_set_text(settings_clock_colon_label, ":");
-    lv_obj_set_pos(settings_clock_colon_label, UI_SX(537), y_pos + 16);
+    lv_obj_set_pos(settings_clock_colon_label, CLK_COLON_X, y_pos + 16);
     lv_obj_set_style_text_color(settings_clock_colon_label, lv_color_hex(0xB6FF2E), 0);
     lv_obj_set_style_text_font(settings_clock_colon_label, UI_FONT_MENU, 0);
 
@@ -2835,10 +2913,14 @@ void settings_ui_init(lv_ui *ui) {
         .on_change = clock_min_on_change,
     };
     settings_clock_m_minus_btn = settings_step_btn_create(parent,
-        SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444, clock_m_minus_btn_event_cb);
+        CLK_M_MINUS_X, y_pos + 5, "-", 0xff4444, clock_m_minus_btn_event_cb);
     settings_value_label_init(parent, &s_clock_min_field, y_pos + 5, 0xB6FF2E);
+    if (SETTINGS_NARROW) {
+        lv_obj_set_pos(s_clock_min_field.label, CLK_M_VAL_X, y_pos + 5);
+        lv_obj_set_width(s_clock_min_field.label, CLK_VAL_W);
+    }
     settings_clock_m_plus_btn = settings_step_btn_create(parent,
-        SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, clock_m_plus_btn_event_cb);
+        CLK_M_PLUS_X, y_pos + 5, "+", 0x00a9ff, clock_m_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
 #endif  /* ENABLE_WALL_CLOCK */
 
