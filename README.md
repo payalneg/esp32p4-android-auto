@@ -18,6 +18,11 @@ controller while the dashboard is running.
 protocol — pair your phone over Bluetooth and Google Maps / Spotify /
 Cycleway projects onto the same screen. No phone app required.
 
+Three boards build from this tree: two 800×480 ESP32-P4 head units
+(Waveshare 4.3" and Guition JC4880P443C) and a square 480×480
+**ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
+[Hardware](#-hardware).
+
 ![VESC dashboard — battery, speed, voltage, odometer, motor / controller temps](docs/images/hero.jpg)
 
 > 🎬 Short ride demo: [`docs/demo.mp4`](docs/demo.mp4) · [`docs/demo-2.mp4`](docs/demo-2.mp4) · [`docs/demo-3.mp4`](docs/demo-3.mp4)
@@ -54,6 +59,16 @@ Cycleway projects onto the same screen. No phone app required.
 
 ![Android Auto Cycleway navigation projected on the same screen](docs/images/aa-bonus.jpg)
 
+### 🧭 Bonus — navigator without Android Auto
+- The companion app pushes **map tiles, position, route and the next
+  manoeuvre over BLE**, and the head unit composes the map itself — so this
+  works on a board with no Android Auto at all, and with the phone in a
+  pocket. Tiles the head unit has already seen are cached in PSRAM and, when
+  a card is fitted, on the microSD.
+- Destination can be picked on the panel — tap the map, or type an address
+  with the on-screen keyboard and let the phone answer from its offline
+  index.
+
 ### 📱 Companion app (optional)
 `aa_bridge` — a small Flutter app ([`flutter-application/`](flutter-application/))
 that talks to the head unit over BLE, independently of Android Auto:
@@ -89,6 +104,8 @@ that talks to the head unit over BLE, independently of Android Auto:
 | Part | Used for | Notes |
 |---|---|---|
 | **Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3** | always | [Shop](https://www.waveshare.com/esp32-p4-wifi6-touch-lcd-4.3.htm). Main brain — ESP32-P4 + on-board ESP32-C6 WiFi, 800×480 ST7701 MIPI-DSI, GT911 touch. |
+| **Guition JC4880P443C** | alternative to the above | Same 800×480 picture on a 16 MB board; pick it with `scripts/build_board.sh jc4880`. Its OTA slot is 5 MB, so watch the image size. |
+| **Waveshare ESP32-S3-Touch-LCD-4** | alternative, dashboard only | Square 480×480 panel on an ESP32-S3: dashboard, VESC, BLE, PAS, trip stats and the navigator, but **no Android Auto** — that needs the P4's video path and the external BT agent. Build with `scripts/build_board.sh s3touch4`; see [`docs/board_s3touch4.md`](docs/board_s3touch4.md). Check the board revision before flashing — the wrong one gives a black screen. |
 | **VESC controller with CAN out** | VESC dashboard | Any rev with CAN. This is the whole point. |
 | **TJA1051 CAN transceiver** (prefer `T/3`) | VESC dashboard | 5V → 3.3V CAN level translation |
 | **DC-DC step-down 12V → 5V** (≥1 A) | VESC dashboard | Power from VESC / vehicle battery |

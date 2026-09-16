@@ -9,6 +9,109 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.30 / app 0.3.38 — 2026-09-16
+
+### The navigator reaches the square board
+
+- The ESP32-S3 dashboard board gets the navigator, which until now compiled only
+  for the P4 head units. It never needed the Android Auto stack: the phone
+  pushes map tiles, position, route and manoeuvre over BLE and the head unit
+  composes the picture itself, so nothing here wants the PPA blitter or the BT
+  agent. It follows its own `NAV_ENABLE` now, and the view size is asked of the
+  display instead of being wired to 800×480 — wired wide, it asked the phone for
+  a screenful and a half more tiles than the square panel shows.
+- **The navigator's worker task was never created there.** Its 8 KB stack comes
+  out of internal RAM, and by the time the BLE bridge registers its services the
+  largest free block on that board is 7.7 KB. `xTaskCreate` failed, nothing
+  checked the result, and "ble_nav ready" was logged anyway — so the phone's
+  greeting went into a queue nobody read and the panel sat on "Waiting for the
+  navigator app" with no error anywhere. The result is checked now and the stack
+  falls back to PSRAM, which is sound on a board that already runs its code from
+  there.
+- **The two navigator characteristics were gated on Android Auto**, so the square
+  board never exposed them — and the app looks them up right after connecting,
+  which made it fail to attach at all.
+- **The phone only streams tiles while it is told the navigator is the live
+  screen.** On the head units the rider's three-finger gesture says so; with no
+  Android Auto to swap with, a phone with the map open greeted a dashboard for
+  ever. The first greeting of a link raises the navigator now; the gesture still
+  toggles back.
+- **Temperatures came back to the 480 dashboard.** They were placed at the wide
+  row's coordinates — off the right edge of a 480 panel — on every temperature
+  update, so the cells emptied moments after the screen was built. The
+  single-head geometry is read off the widgets now; the wide panel's arithmetic
+  reproduces its old numbers exactly.
+- Settings fits the square panel: type stepped down by role, the grey notes moved
+  under their captions instead of across them, and the clock row is laid out from
+  the right edge — measured at 480 it had seven overlapping pairs. The
+  firmware-version block lists only the processors a board carries, instead of
+  permanent "(unknown)" rows for a BT agent and a C6 the S3 does not have.
+- **The tile cache leaves 768 KB of PSRAM alone.** Ninety-six slots is 12 MB of
+  tiles against the 5.7 MB free on that board, and it grew until the allocator
+  refused it — the loser being the notification bridge, whose reassembly buffer
+  is a single 192 KB block. Three hours on the bench logged 275 failures of it in
+  the first four minutes.
+- The BLE link to the VESC answers faster: polls ran at half the CAN rate and
+  every round trip cost two 15 ms connection intervals. 130 % and 10 ms keep some
+  slack for the phone and the sensors while feeling close to CAN.
+
+Known and not fixed: Wi-Fi does not come up on the S3 board — `app_main` sticks
+in `wifi_manager_start` with 3.6 KB of internal RAM left, so the web UI and
+Wi-Fi OTA are unavailable there. USB and BLE OTA work. The jc4880 image is down
+to 14 % of its slot (708 KB) and wants watching.
+
+## v1.3.29 / app 0.3.37 — 2026-09-14
+
+### Settings that stack no more
+
+- **Every tab drew its rows on top of each other.** The blocks are in source
+  order and each names the page it belongs to, so a page is visited several
+  times — Display four, Connection three — and switching pages reset the
+  vertical cursor each time. Every revisit started again at the top and drew over
+  what was there: "VESC link", "Phone screen" and "AA Auto-Connect" all on one
+  line. Each page keeps its own cursor now, and the result was walked
+  statically rather than trusted again.
+- **Settings → System can boot the other OTA slot.** An update always writes the
+  slot that is not running, so the previous firmware is still in flash, complete
+  and bootable — there was simply no way to reach it from the device, which is
+  the wrong answer when the new firmware is what made the screen unusable. The
+  row shows what is in that slot, and the button takes two taps because the
+  second one reboots.
+- The concept dashboards are gone, and captions stop at the controls they label.
+
+## v1.3.28 / app 0.3.36 — 2026-09-14
+
+### A link that asks who it is talking to
+
+- **The BLE link to the VESC connected and then carried nothing.** Every request
+  with a target id was wrapped in `COMM_FORWARD_CAN`, so a display wired straight
+  to the controller — a BLE module on its UART — asked that controller to forward
+  the packet onto CAN addressed to itself. Nothing on the bus answers that: every
+  poll timed out, the dashboard stayed empty, and the log said nothing at all.
+- The setting is three-way now (Automatic / Directly / Through the adapter's CAN)
+  and defaults to Automatic: the link asks the device on the other end which CAN
+  node it is, sends straight to it, and wraps only what is addressed elsewhere —
+  so a second head behind a direct link is still reached the long way round. The
+  VESC link screen reports what it found and how many requests came back, which
+  is the difference between a dead link and a working one nothing was showing.
+- Second-head freshness over BLE was exactly one poll period wide, so the flag
+  flipped on and off and took the dashboard down with it each time. Three periods
+  now.
+- **Settings is four tabs** instead of one 2000-pixel scroll, and everything about
+  reaching the controller — target id, second head, the display's own CAN id, bus
+  speed — moved onto the VESC link screen, where the rest of that decision lives.
+
+## v1.3.24 / app 0.3.24 — 2026-09-12
+
+### A search that finds the house
+
+- FIND answered "nothing" for an address that is in the index. The street is
+  written "Stefana Grota-Roweckiego 51b" and a rider types "grota roweckiego
+  51b" — without the first name, without the hyphen — and the old lookup needed
+  one unbroken run of characters. The word-wise match ships here: checked against
+  the real index, the old code returns no hits for that query and the new one
+  finds the house.
+
 ## v1.3.23 / app 0.3.23 — 2026-09-12
 
 ### Three things the first ride with the new map screen showed
