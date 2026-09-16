@@ -9,6 +9,66 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.32 / app 0.3.40 — 2026-09-16
+
+### The route stops crossing the road for nothing
+
+- **It used to tell you to cross over and then come straight back.** A
+  carriageway, its cycleway and the pavement beside it are parallel lines in
+  OSM, and on a city street they are tied together every 30-50 m — usually by a
+  driveway crossing the pavement, not by a crossing anyone would use. The
+  search priced an edge at length over the profile's speed and nothing else, so
+  hopping between those lines cost a couple of metres and it took the hop
+  whenever the pavement happened to cut a corner. Measured over 68 km of
+  Kraków routes: 1.58 changes of line per kilometre, a third of them
+  excursions shorter than 80 m — off the pavement and back within a block.
+- Changing line group now costs a flat 10 seconds, and stepping onto a
+  crossing another 10. There and back is 20 seconds, so a hop has to save
+  around a hundred metres to be worth taking, and a cycleway with a short gap
+  in it no longer throws the route onto the carriageway. Same 68 km: 0.58
+  changes per kilometre and 0.01 short excursions, for 5-7 % more time. A
+  crossing is transparent to the rule — pavement to crossing to pavement is
+  staying on the pavement, not changing line.
+- **The arrival time was about to start lying.** It was the search's own cost,
+  which until now happened to equal the riding time; with penalties in it an
+  eight-kilometre ride would have gained four minutes out of nowhere. Riding
+  time is summed separately from the legs now, and the penalties steer the
+  route without ever reaching the rider's ETA.
+- The Python reference under `scripts/mapgen` carries the same two penalties,
+  because the golden test pins the Dart router against its numbers; a
+  regression test now counts changes of line per kilometre, so losing a penalty
+  fails the suite instead of quietly returning the saw.
+
+### Send a picture of the problem, not a description of it
+
+- "The speed was blank" and "the speed read 0" are the same sentence and
+  different faults. One tap on the log screen now gathers four attachments into
+  a share sheet: a screenshot of the app taken from its render tree, a JPEG of
+  the head unit's panel, the head unit's own log, and the app's journal. The
+  gatherer takes a written note to head the journal with, but nothing asks for
+  one yet — the button sends straight away, and the rider types what happened in
+  the message they attach it to.
+- Each attachment is best-effort and none of them can sink the report: a head
+  unit that is not connected, a panel too busy to snapshot, a filesystem that is
+  not mounted — each costs one attachment. The log comes down even when the
+  picture does not, because a panel too busy to photograph is itself worth
+  reporting and then the log is all there is.
+- The capture already existed on the firmware side but was locked inside the
+  UART debug bridge, which cannot be enabled on the ESP32-S3 board at all: it
+  adds 60 KB to an image whose internal RAM is already down to single-digit
+  kilobytes, and the board stops advertising over BLE entirely. `lv_snapshot` is
+  no longer tied to `CONFIG_DEBUG_UART_BRIDGE`, and the capture lives in
+  `main/screen_capture.c`, which holds the LVGL lock only for the render and
+  frees both PSRAM buffers before returning.
+- The app asks over the file channel it already uses, as `FOP_SNAPSHOT` (0x09),
+  answered like delete or mkdir; the files then come down as ordinary
+  downloads. The request carries no path — the firmware chooses where they land,
+  so an app of any age cannot aim a JPEG at another file. It runs on the file
+  worker, not the BLE host task, because the encode is slow and the host task
+  must not wait on a lock.
+- Neither half is exercised on hardware yet: the board and the phone were both
+  unplugged when this was built.
+
 ## v1.3.30 / app 0.3.38 — 2026-09-16
 
 ### The navigator reaches the square board
