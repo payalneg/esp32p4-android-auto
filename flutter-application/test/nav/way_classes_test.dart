@@ -102,6 +102,43 @@ void main() {
     expect(s[kWayClasses.indexOf('sidewalk')].isNaN, isFalse);
   });
 
+  test('line groups match CLASS_GROUP in profiles.py', () {
+    final block = RegExp(r'CLASS_GROUP\s*=\s*\(\n(.*?)\n\)', dotAll: true)
+        .firstMatch(src)!
+        .group(1)!;
+    final py = RegExp('"([a-z]+)"')
+        .allMatches(block)
+        .map((m) => m.group(1)!)
+        .toList();
+    expect(py.length, kWayClassCount, reason: 'python CLASS_GROUP');
+    const byName = <String, int>{
+      'road': kGroupRoad,
+      'cycle': kGroupCycle,
+      'foot': kGroupFoot,
+      'other': kGroupOther,
+      'connector': kGroupConnector,
+    };
+    for (var i = 0; i < kWayClassCount; i++) {
+      expect(kWayClassGroup[i], byName[py[i]], reason: kWayClasses[i]);
+    }
+  });
+
+  test('the penalties match profiles.py', () {
+    double pyConst(String name) => double.parse(
+        RegExp('$name\\s*=\\s*([0-9.]+)').firstMatch(src)!.group(1)!);
+    expect(kGroupSwitchPenaltyS, pyConst('GROUP_SWITCH_PENALTY_S'));
+    expect(kCrossingPenaltyS, pyConst('CROSSING_PENALTY_S'));
+  });
+
+  test('a crossing is a connector, not a group of its own', () {
+    // The whole point: a crossing carries the previous group through, so
+    // pavement -> crossing -> pavement is not a change of line.
+    expect(kWayClassGroup[kWayClasses.indexOf('crossing')], kGroupConnector);
+    expect(kWayClassGroup[kWayClasses.indexOf('sidewalk')], kGroupFoot);
+    expect(kWayClassGroup[kWayClasses.indexOf('cycleway')], kGroupCycle);
+    expect(kWayClassGroup[kWayClasses.indexOf('residential')], kGroupRoad);
+  });
+
   test('foot mask covers exactly the pedestrian classes', () {
     for (var i = 0; i < kWayClassCount; i++) {
       expect(kFootClassMask & (1 << i) != 0, kFootClasses.contains(kWayClasses[i]),

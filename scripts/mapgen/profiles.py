@@ -41,6 +41,48 @@ HIGHWAY_CLASS = {
     "pedestrian": "pedestrian", "footway": "footway", "steps": "steps",
 }
 
+# Группы линий. Проезжая часть, велодорожка и тротуар вдоль неё — это
+# параллельные линии OSM, связанные друг с другом каждые 30-50 метров въездом
+# во двор или переходом. По одной только длине прыжок между ними почти
+# бесплатен — отсюда маршруты, которые пилят между дорогой и тротуаром ради
+# десятка метров. За выход из группы A* берёт GROUP_SWITCH_PENALTY_S, так что
+# «туда и обратно» стоит 20 секунд и окупается только реальным выигрышем.
+#
+# "connector" — не группа: переход (и искусственная связка link) прозрачен и
+# переносит предыдущую группу дальше. Поэтому дорога -> переход -> тротуар
+# платит смену один раз, а тротуар -> переход -> тротуар не платит вовсе.
+LINE_GROUPS = ("road", "cycle", "foot", "other", "connector")
+GROUP_INDEX = {name: i for i, name in enumerate(LINE_GROUPS)}
+GROUP_CONNECTOR = GROUP_INDEX["connector"]
+
+# Группа каждого класса — порядок как в WAY_CLASSES.
+CLASS_GROUP = (
+    "cycle",      # 0  cycleway
+    "road",       # 1  tertiary
+    "road",       # 2  residential
+    "road",       # 3  secondary
+    "road",       # 4  primary
+    "road",       # 5  service
+    "other",      # 6  path
+    "other",      # 7  track
+    "foot",       # 8  pedestrian
+    "foot",       # 9  footway
+    "foot",       # 10 sidewalk
+    "connector",  # 11 crossing
+    "foot",       # 12 steps
+    "connector",  # 13 link
+)
+CLASS_GROUP_INDEX = tuple(GROUP_INDEX[g] for g in CLASS_GROUP)
+
+# Секунды за выход из одной группы линий в другую. Замерено на 200 маршрутах
+# по Кракову: при 0 с маршрут меняет линию 2.4 раза на километр, из них 0.7 —
+# вылазки короче 80 метров; при 10 с — 1.0 и 0.14, а время растёт на 2.5 %.
+GROUP_SWITCH_PENALTY_S = 10.0
+
+# Секунды за выход на переход — бордюр и взгляд по сторонам, которые шесть
+# метров геометрии (2.7 секунды езды) сами по себе не оплачивают.
+CROSSING_PENALTY_S = 10.0
+
 # Классы, по которым едут пешком/на тротуаре — нужны для анализа связности.
 FOOT_CLASSES = ("pedestrian", "footway", "sidewalk", "crossing", "steps")
 

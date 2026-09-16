@@ -6,6 +6,14 @@
 /// expanded. The heuristic is the great-circle distance to the goal over the
 /// profile's top speed — never an overestimate, so the result is the optimal
 /// route rather than a plausible one.
+///
+/// Length is not the whole cost. Leaving one line group for another — the
+/// carriageway, the cycleway and the pavement run parallel and touch every
+/// driveway — and stepping onto a crossing each cost a flat number of seconds
+/// (see kGroupSwitchPenaltyS, kCrossingPenaltyS). Without them the cheapest
+/// path saws between a road and its pavement for metres at a time. The
+/// penalties are non-negative and the heuristic ignores them, so it still
+/// never overestimates.
 library;
 
 import 'dart:math' as math;
@@ -28,6 +36,11 @@ class RouteResult {
   /// Full geometry, start to finish, following the curve of every street.
   final List<LatLon> points;
   final double lengthM;
+
+  /// Time actually spent riding — length over the profile's speed, summed per
+  /// edge. The search's own penalties for changing line or crossing a road
+  /// are not in here: they steer the route, they are not minutes on the road,
+  /// and this number is shown to the rider as the ETA.
   final double timeS;
 
   /// (way class, length in decimetres) per edge traversed, in travel order.
@@ -51,6 +64,8 @@ class Router {
       : _dist = Float64List(graph.nodeCount),
         _cameEdge = Int32List(graph.nodeCount),
         _closed = Uint8List(graph.nodeCount),
+        _group = Uint8List(graph.nodeCount),
+        _viaConnector = Uint8List(graph.nodeCount),
         _open = _MinHeap(1024);
 
   final RouteGraph graph;
@@ -63,6 +78,15 @@ class Router {
   /// negative meaning the edge was traversed against its stored direction.
   final Int32List _cameEdge;
   final Uint8List _closed;
+
+  /// Line group the node was reached on, carried through connectors, so the
+  /// switch penalty sees the pavement or road behind a crossing rather than
+  /// the crossing itself. [kGroupNone] until the node is reached.
+  final Uint8List _group;
+
+  /// 1 when the edge that reached the node was a connector, so a chain of
+  /// crossings is charged once rather than per segment.
+  final Uint8List _viaConnector;
   final _MinHeap _open;
 
   /// Routes between two taps. Returns null when either end cannot be snapped,
@@ -86,6 +110,8 @@ class Router {
     _dist.fillRange(0, _dist.length, double.infinity);
     _cameEdge.fillRange(0, _cameEdge.length, 0);
     _closed.fillRange(0, _closed.length, 0);
+    _group.fillRange(0, _group.length, kGroupNone);
+    _viaConnector.fillRange(0, _viaConnector.length, 0);
     _open.clear();
 
     _dist[s] = 0;
@@ -101,16 +127,31 @@ class Router {
       if (_closed[u] != 0) continue; // stale heap entry
       _closed[u] = 1;
       final end = graph.adjStart[u + 1];
+      final prevGroup = _group[u];
+      final prevConnector = _viaConnector[u] != 0;
       for (var slot = graph.adjStart[u]; slot < end; slot++) {
         final e = graph.adjEdgeIndex(slot);
-        final speed = speeds[graph.edgeClass[e]];
+        final cls = graph.edgeClass[e];
+        final speed = speeds[cls];
         if (speed.isNaN) continue; // class forbidden by this profile
         final v = graph.adjTarget(slot);
         if (_closed[v] != 0) continue;
-        final nd = _dist[u] + graph.edgeLenDm[e] / 10.0 / speed;
+        final group = kWayClassGroup[cls];
+        var cost = graph.edgeLenDm[e] / 10.0 / speed;
+        if (group == kGroupConnector) {
+          // A crossing costs once, at the kerb, not per segment of it.
+          if (!prevConnector) cost += kCrossingPenaltyS;
+        } else if (prevGroup != kGroupNone && group != prevGroup) {
+          cost += kGroupSwitchPenaltyS;
+        }
+        final nd = _dist[u] + cost;
         if (nd < _dist[v]) {
           _dist[v] = nd;
           _cameEdge[v] = graph.adjForward(slot) ? e + 1 : -(e + 1);
+          // A connector is transparent: the pavement behind the crossing is
+          // still what we are riding, so coming off it is not a switch.
+          _group[v] = group == kGroupConnector ? prevGroup : group;
+          _viaConnector[v] = group == kGroupConnector ? 1 : 0;
           _open.push(nd + haversineM(graph.node(v), goalPos) / vmax, v);
         }
       }
@@ -122,6 +163,7 @@ class Router {
     var points = <LatLon>[];
     final legs = <({int wayClass, int lenDm})>[];
     var lengthDm = 0;
+    var travelS = 0.0;
     var node = g;
     while (node != s) {
       final marker = _cameEdge[node];
@@ -129,6 +171,7 @@ class Router {
       final forward = marker > 0;
       final e = marker.abs() - 1;
       lengthDm += graph.edgeLenDm[e];
+      travelS += graph.edgeLenDm[e] / 10.0 / speeds[graph.edgeClass[e]];
       legs.add((wayClass: graph.edgeClass[e], lenDm: graph.edgeLenDm[e]));
       final seg = graph.edgePoints(e, forward);
       points = points.isEmpty
@@ -139,7 +182,7 @@ class Router {
     return RouteResult(
       points: points,
       lengthM: lengthDm / 10.0,
-      timeS: _dist[g],
+      timeS: travelS,
       legs: legs.reversed.toList(growable: false),
       profile: profile,
     );

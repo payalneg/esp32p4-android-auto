@@ -7,6 +7,12 @@
 Стоимость ребра берётся из профиля (profiles.py) в момент запроса, а не из
 графа: смена профиля не требует пересборки, а запрещённые классы просто не
 раскрываются в поиске.
+
+Кроме длины в цену входят два фиксированных штрафа: за выход из одной группы
+линий в другую (дорога / велодорожка / тротуар идут параллельно и касаются на
+каждом въезде во двор) и за выход на переход. Без них самый дешёвый путь
+пилит между дорогой и её тротуаром по десятку метров. Штрафы неотрицательны,
+а эвристика их не учитывает — то есть по-прежнему не переоценивает.
 """
 import heapq
 import math
@@ -128,6 +134,11 @@ class Router:
         vmax = prof.max_speed_ms(self.profile)
         dist = {s: 0.0}
         came: dict[int, tuple[int, int, bool]] = {}  # node -> (prev, edge, fwd)
+        # Группа линии, по которой пришли в вершину (переход её переносит),
+        # и признак «пришли по переходу» — чтобы цепочка переходов стоила
+        # один бордюр, а не по бордюру на сегмент.
+        group: dict[int, int | None] = {s: None}
+        via_conn: dict[int, bool] = {s: False}
         pq = [(_haversine(self.nodes[s], goal_pos) / vmax, s)]
         visited = set()
         while pq:
@@ -137,14 +148,26 @@ class Router:
             if u in visited:
                 continue
             visited.add(u)
+            prev_group = group[u]
+            prev_conn = via_conn[u]
             for v, ei, fwd in self.adj[u]:
-                speed = speeds[self.edges[ei]["way_class"]]
+                cls = self.edges[ei]["way_class"]
+                speed = speeds[cls]
                 if speed is None:          # класс запрещён профилем
                     continue
-                nd = dist[u] + self.edges[ei]["len_dm"] / 10.0 / speed
+                grp = prof.CLASS_GROUP_INDEX[cls]
+                cost = self.edges[ei]["len_dm"] / 10.0 / speed
+                if grp == prof.GROUP_CONNECTOR:
+                    if not prev_conn:
+                        cost += prof.CROSSING_PENALTY_S
+                elif prev_group is not None and grp != prev_group:
+                    cost += prof.GROUP_SWITCH_PENALTY_S
+                nd = dist[u] + cost
                 if nd < dist.get(v, math.inf):
                     dist[v] = nd
                     came[v] = (u, ei, fwd)
+                    group[v] = prev_group if grp == prof.GROUP_CONNECTOR else grp
+                    via_conn[v] = grp == prof.GROUP_CONNECTOR
                     h = _haversine(self.nodes[v], goal_pos) / vmax
                     heapq.heappush(pq, (nd + h, v))
         if g not in came:
@@ -152,6 +175,7 @@ class Router:
         # восстановление пути с геометрией рёбер
         points: list[tuple[float, float]] = []
         length_dm = 0
+        travel_s = 0.0      # настоящее время в пути, без штрафов поиска
         legs: list[tuple[int, int]] = []   # (класс дороги, длина в дм)
         node = g
         while node != s:
@@ -159,11 +183,15 @@ class Router:
             edge = self.edges[ei]
             pts = edge["points"]
             length_dm += edge["len_dm"]
+            travel_s += edge["len_dm"] / 10.0 / speeds[edge["way_class"]]
             legs.append((edge["way_class"], edge["len_dm"]))
             seg = pts if fwd else list(reversed(pts))
             # последняя точка seg == первая точка накопленного пути
             points = seg[:-1] + points if points else seg
             node = prev
         legs.reverse()
+        # time_s — время езды, а не цена поиска: штрафы за смену линии и за
+        # переход направляют маршрут, но минутами на дороге не являются, а
+        # это число показывается ездоку.
         return {"points": points, "length_m": length_dm / 10.0,
-                "time_s": dist[g], "legs": legs, "profile": self.profile}
+                "time_s": travel_s, "legs": legs, "profile": self.profile}

@@ -43,6 +43,54 @@ const List<String> kFootClasses = <String>[
   'steps',
 ];
 
+/// Line groups — the carriageway, the bike path and the pavement beside it are
+/// parallel lines in OSM, tied together every 30-50 m by a driveway or a
+/// crossing. By distance alone hopping between them is almost free, which is
+/// what made a route saw between road and pavement for the sake of a few
+/// metres. A* pays [kGroupSwitchPenaltyS] to leave one group for another, so
+/// there and back costs 20 s and a hop has to save more than that to be taken.
+///
+/// [kGroupConnector] is not a group of its own: a crossing (or a synthetic
+/// link) carries the previous group through, so road -> crossing -> pavement
+/// pays the switch once, and pavement -> crossing -> pavement pays none.
+const int kGroupRoad = 0;
+const int kGroupCycle = 1;
+const int kGroupFoot = 2;
+const int kGroupOther = 3;
+const int kGroupConnector = 4;
+
+/// Nothing ridden yet — the state a search starts in, where no group has been
+/// chosen and the first edge is free whatever it is.
+const int kGroupNone = 255;
+
+/// Group per way class, indexed like [kWayClasses].
+final Uint8List kWayClassGroup = Uint8List.fromList(<int>[
+  kGroupCycle, // 0  cycleway
+  kGroupRoad, // 1  tertiary
+  kGroupRoad, // 2  residential
+  kGroupRoad, // 3  secondary
+  kGroupRoad, // 4  primary
+  kGroupRoad, // 5  service
+  kGroupOther, // 6  path
+  kGroupOther, // 7  track
+  kGroupFoot, // 8  pedestrian
+  kGroupFoot, // 9  footway
+  kGroupFoot, // 10 sidewalk
+  kGroupConnector, // 11 crossing
+  kGroupFoot, // 12 steps
+  kGroupConnector, // 13 link
+]);
+
+/// Seconds charged for leaving one line group for another. Measured over 200
+/// routes across Krakow: at 0 s a route changes line 2.4 times per km, 0.7 of
+/// those excursions shorter than 80 m; at 10 s it is 1.0 and 0.14, and the
+/// route takes 2.5 % longer.
+const double kGroupSwitchPenaltyS = 10.0;
+
+/// Seconds charged for stepping onto a crossing — a kerb and a look both ways,
+/// which the 6 m of geometry (2.7 s of riding) does not pay for by itself.
+const double kCrossingPenaltyS = 10.0;
+
 /// Ride profiles. [pythonName] is the key in profiles.PROFILES — the parity
 /// test matches on it, and it is what a saved preference stores.
 enum RideProfile {
