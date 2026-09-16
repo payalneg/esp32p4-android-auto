@@ -644,6 +644,34 @@ class FileManagerProxy {
 
   Future<void> rename(String src, String dst) =>
       _ble.fileRequest(IpcCmd.fileRename, {'src': src, 'dst': dst});
+
+  /// Have the head unit capture its panel and dump its log, then fetch both.
+  /// Returns the bytes, freshly captured each time. Used by the problem report,
+  /// which attaches them next to the phone's own screenshot and journal.
+  ///
+  /// The log comes down even when the picture does not: a panel too busy to
+  /// snapshot is itself worth reporting, and then the log is all there is.
+  Future<({Uint8List? screen, Uint8List? log})> captureReport() async {
+    Uint8List? screen;
+    Uint8List? log;
+    try {
+      await _ble.fileRequest(IpcCmd.fileCaptureReport, const {});
+    } on Object {
+      // Capture refused (no filesystem, panel busy, out of memory). Still try
+      // to fetch whatever an earlier run left behind.
+    }
+    try {
+      screen = await downloadFile(FileOps.reportScreenPath);
+    } on Object {
+      screen = null;
+    }
+    try {
+      log = await downloadFile(FileOps.reportLogPath);
+    } on Object {
+      log = null;
+    }
+    return (screen: screen, log: log);
+  }
 }
 
 /// UI-facing handle for the LISP editor, routed through [BleProxy] to the

@@ -12,6 +12,7 @@ set(MAIN_SRCS
     "mdns_advertise.c"
     "display_init.c"
     "img_jpeg.c"
+    "screen_capture.c"
     "ota_screen.c"
     "ota_http.c"
     "files_http.c"

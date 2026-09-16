@@ -732,13 +732,12 @@
  *----------*/
 
 /*1: Enable API to take snapshot for object*/
-/* Driven by Kconfig: the UART debug bridge needs lv_snapshot to capture the
- * screen. Production builds without it keep this off and pay nothing. */
-#ifdef CONFIG_DEBUG_UART_BRIDGE
-    #define LV_USE_SNAPSHOT 1
-#else
-    #define LV_USE_SNAPSHOT 0
-#endif
+/* Screen capture. Used by the UART debug bridge and, more importantly, by the
+ * problem report the rider sends from the app: a picture of what the panel was
+ * showing says in one glance what a paragraph of description does not. The
+ * code it pulls in is small and the frame buffer is only held while a shot is
+ * being taken, so this is on in production builds too. */
+#define LV_USE_SNAPSHOT 1
 
 /*1: Enable Monkey test*/
 #define LV_USE_MONKEY 0

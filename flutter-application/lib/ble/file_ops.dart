@@ -22,6 +22,17 @@ class FileOps {
   static const opMkdir = 0x07; // [TLV {1:path}]
   static const opAbort = 0x08;
 
+  /// Capture the panel and dump the head unit's log, both to fixed paths
+  /// (see main/screen_capture.h). No arguments: the paths are the firmware's
+  /// to choose, so an app of any age cannot aim a JPEG at another file.
+  /// Answered with DONE/ERROR like delete or mkdir; the files are then
+  /// downloaded normally.
+  static const opSnapshot = 0x09;
+
+  /// Where [opSnapshot] leaves them.
+  static const reportScreenPath = '/vescfs/report-screen.jpg';
+  static const reportLogPath = '/vescfs/report-log.txt';
+
   // CTRL status notifications (head unit → phone): [u8 status][u32 detail LE].
   static const stReady = 0x10; // detail = size (download) / 0 (upload accepted)
   static const stProgress = 0x11; // detail = bytes received (upload)

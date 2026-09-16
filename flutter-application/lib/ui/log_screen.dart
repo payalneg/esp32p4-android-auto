@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../diagnostics/problem_report.dart';
 import '../i18n/strings.dart';
 import '../log/app_log.dart';
 
@@ -27,6 +28,7 @@ class LogScreen extends StatefulWidget {
 
 class _LogScreenState extends State<LogScreen> {
   bool _problemsOnly = false;
+  bool _reporting = false;
 
   @override
   void initState() {
@@ -72,6 +74,23 @@ class _LogScreenState extends State<LogScreen> {
       if (mounted) _snack(t(context, 'log.saved'));
     } on Object catch (e) {
       if (mounted) _snack('$e');
+    }
+  }
+
+  /// Gather a problem report: this screen, the panel, both logs. Asking the
+  /// head unit for its picture takes a moment over BLE, so the button is
+  /// disabled while it runs — a second tap would photograph a spinner.
+  Future<void> _report() async {
+    setState(() => _reporting = true);
+    try {
+      final n = await ProblemReport.gatherAndShare();
+      if (mounted) {
+        _snack(tf(context, 'log.reportSent', <String, Object?>{'n': n}));
+      }
+    } on Object catch (e) {
+      if (mounted) _snack('$e');
+    } finally {
+      if (mounted) setState(() => _reporting = false);
     }
   }
 
@@ -140,6 +159,14 @@ class _LogScreenState extends State<LogScreen> {
             tooltip: t(context, 'log.share'),
             icon: const Icon(Icons.share),
             onPressed: all.isEmpty ? null : _share,
+          ),
+          // A full report is the journal plus the two things it cannot
+          // describe: a picture of this screen and a picture of the panel,
+          // with the head unit's own log beside them.
+          IconButton(
+            tooltip: t(context, 'log.report'),
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: _reporting ? null : _report,
           ),
           IconButton(
             tooltip: t(context, 'log.clear'),

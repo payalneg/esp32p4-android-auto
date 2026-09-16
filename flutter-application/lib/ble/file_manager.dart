@@ -243,6 +243,13 @@ class FileManager {
   Future<void> rename(String src, String dst) =>
       _simpleOp(_ctrlReq(FileOps.opRename, Tlv.encode({1: src, 2: dst})));
 
+  /// Ask the head unit to capture its panel and dump its log, for a problem
+  /// report. Returns when the firmware says it is done; the files are then at
+  /// [FileOps.reportScreenPath] and [FileOps.reportLogPath] and come down with
+  /// [download] like anything else.
+  Future<void> captureReport() =>
+      _simpleOp(_ctrlReq(FileOps.opSnapshot, Uint8List(0)));
+
   /// One-shot op that just awaits DONE/ERROR (delete/mkdir/rename).
   Future<void> _simpleOp(Uint8List req) => _serial(() async {
         await _ensureSubscribed();

@@ -37,6 +37,9 @@ class IpcCmd {
   static const fileUploadPath = 'fileUploadPath'; // {path, src}
   static const fileDelete = 'fileDelete'; // {path}
   static const fileMkdir = 'fileMkdir'; // {path}
+  // Head unit captures its panel and dumps its log for a problem report; the
+  // two files are then fetched with fileDownload.
+  static const fileCaptureReport = 'fileCaptureReport'; // {} → {}
   static const fileRename = 'fileRename'; // {src, dst}
 
   // LISP editor (VESC over a NUS link — head unit bridge or direct adapter).

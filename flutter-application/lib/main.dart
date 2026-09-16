@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'app.dart';
 import 'ble/ble_proxy.dart';
 import 'bridge/foreground_bridge.dart';
+import 'diagnostics/problem_report.dart' show appCaptureKey;
 import 'i18n/strings.dart';
 import 'nav/map_data.dart';
 import 'settings/agent_settings.dart';
@@ -66,8 +67,14 @@ Future<void> main() async {
       await Permission.bluetoothConnect.isGranted) {
     unawaited(ForegroundBridge().start());
   }
-  runApp(LocaleScope(
-    notifier: locale,
-    child: const AaBridgeApp(),
+  // The boundary is what lets a problem report photograph the live UI
+  // (diagnostics/problem_report.dart). It never repaints on its own, so it
+  // costs nothing until someone asks for a picture.
+  runApp(RepaintBoundary(
+    key: appCaptureKey,
+    child: LocaleScope(
+      notifier: locale,
+      child: const AaBridgeApp(),
+    ),
   ));
 }

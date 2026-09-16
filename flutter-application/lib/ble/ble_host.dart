@@ -539,6 +539,11 @@ class BleTaskHandler extends TaskHandler {
           _reply(id, {});
           break;
 
+        case IpcCmd.fileCaptureReport:
+          await FileManager.instance.captureReport();
+          _reply(id, {});
+          break;
+
         case IpcCmd.fileMkdir:
           await FileManager.instance.mkdir(m['path'] as String);
           _reply(id, {});

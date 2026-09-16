@@ -47,6 +47,7 @@
 #include "esp_heap_caps.h"
 #include "esp_littlefs.h"         /* esp_littlefs_info — /vescfs free space */
 #include "esp_log.h"
+#include "screen_capture.h"       /* FOP_SNAPSHOT — the picture in a report */
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -71,6 +72,11 @@ static const char *TAG = "ble_files";
 #define FOP_RENAME     0x06
 #define FOP_MKDIR      0x07
 #define FOP_ABORT      0x08
+/* Capture the panel to SCREEN_CAPTURE_PATH and answer DONE; the app then
+ * downloads it like any other file. A problem report wants the picture as much
+ * as the log — "the speed was blank" and "the speed read 0" read the same in
+ * words and look nothing alike on screen. */
+#define FOP_SNAPSHOT   0x09
 
 #define FST_READY      0x10
 #define FST_PROGRESS   0x11
@@ -112,7 +118,8 @@ typedef enum { FS_IDLE, FS_BUSY, FS_UP_RECV, FS_UP_FINAL } files_state_t;
 
 typedef enum {
     EV_LIST, EV_DOWNLOAD, EV_UP_BEGIN, EV_UP_END,
-    EV_DELETE, EV_RENAME, EV_MKDIR, EV_PROGRESS, EV_BUSY, EV_ABORT
+    EV_DELETE, EV_RENAME, EV_MKDIR, EV_PROGRESS, EV_BUSY, EV_ABORT,
+    EV_SNAPSHOT
 } ev_kind_t;
 
 typedef struct {
@@ -467,6 +474,25 @@ static void do_download(const char *path) {
     else if (rc != -2)  notify_status(FST_ERROR, FERR_IO);  /* -2 = aborted, no notify */
 }
 
+/* Screen capture for a problem report. Runs on this worker rather than the
+ * caller's task because the encode is slow and the LVGL lock is taken inside —
+ * the BLE host task must not wait on either. */
+static void do_snapshot(void) {
+    if (!app_fs_ready()) {
+        notify_status(FST_NOT_READY, (uint32_t)app_fs_state());
+        return;
+    }
+    /* The log goes out whatever the picture does: a panel too busy to snapshot
+     * is itself worth reporting, and then the log is all there is. */
+    report_log_to_file();
+
+    esp_err_t err = screen_capture_to_file(SCREEN_CAPTURE_PATH, 80);
+    if (err == ESP_OK)                     notify_status(FST_DONE, 0);
+    else if (err == ESP_ERR_NO_MEM)        notify_status(FST_ERROR, FERR_NOSPC);
+    else if (err == ESP_ERR_TIMEOUT)       notify_status(FST_ERROR, FERR_BUSY);
+    else                                   notify_status(FST_ERROR, FERR_IO);
+}
+
 static void do_delete(const char *path) {
     char p[MAX_PATH];
     strlcpy(p, path, sizeof p);
@@ -616,6 +642,7 @@ static void worker(void *arg) {
             case EV_DELETE:   do_delete(ev.path);          s_state = FS_IDLE; break;
             case EV_RENAME:   do_rename(ev.path, ev.path2); s_state = FS_IDLE; break;
             case EV_MKDIR:    do_mkdir(ev.path);           s_state = FS_IDLE; break;
+            case EV_SNAPSHOT: do_snapshot();               s_state = FS_IDLE; break;
             case EV_UP_BEGIN: do_upload_begin(&ev);        break;  /* sets state */
             case EV_UP_END:   do_upload_end();             break;  /* sets state */
             case EV_PROGRESS: notify_status(FST_PROGRESS, ev.detail); break;
@@ -719,6 +746,12 @@ void ble_files_ctrl_write(const uint8_t *data, uint16_t len) {
         case FOP_MKDIR:
             e.kind = EV_MKDIR;
             tlv_get(data + 1, len - 1, 1, e.path, sizeof e.path);
+            break;
+        case FOP_SNAPSHOT:
+            /* No path from the app: the shot always lands in the same place,
+             * so an older app that does not know about it cannot be told to
+             * write a JPEG over something else. */
+            e.kind = EV_SNAPSHOT;
             break;
         case FOP_RENAME:
             e.kind = EV_RENAME;
