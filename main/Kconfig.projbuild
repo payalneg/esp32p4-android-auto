@@ -48,6 +48,20 @@ menu "Android Auto Head Unit"
             the firmware is the VESC dashboard alone — Wi-Fi, BLE, CAN, the web
             UI and OTA all stay, so this option only removes AA itself.
 
+    config NAV_ENABLE
+        bool "Phone navigator screen"
+        default y
+        help
+            Compiles the navigator: the BLE channel the companion app pushes
+            map tiles, position, route and manoeuvre over (ble_nav), the tile
+            cache, the map compositor and the full-screen navigator UI.
+
+            It is independent of AA_ENABLE even though the two used to share a
+            flag: the navigator talks to the phone over BLE and composes the
+            map itself, so it needs neither the PPA blitter nor the BT agent
+            and runs on the ESP32-S3 dashboard board as well. Turn it off to
+            reclaim its flash and the PSRAM its tile cache takes.
+
     config WEB_MDNS_HOSTNAME
         string "mDNS hostname for the on-device web UI"
         default "android-auto" if AA_ENABLE

@@ -25,6 +25,15 @@
 #include "settings_wrapper.h"
 #include "gui_guider.h"   /* guider_ui, setup_scr_settings, ui_load_scr_animation */
 
+/* The big speedometer face, declared here rather than taken from
+ * gui_guider.h: that header only declares the fonts the GUI Guider project
+ * actually places, and the 480x480 project does not use this size on any of
+ * its screens — so on that board the header leaves it out and this file would
+ * not compile. It is linked into every board's image regardless (see
+ * COCKPIT_FONTS in components/vesc_ui/CMakeLists.txt). A second extern
+ * declaration is harmless where the header does declare it. */
+LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
+
 #include <stdio.h>
 
 /* Palette — kept local, intentionally distinct from the cockpit's. */

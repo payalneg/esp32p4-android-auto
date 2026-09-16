@@ -1,5 +1,7 @@
 #include "nav_map.h"
 
+#include "lvgl.h"
+
 #include <math.h>
 
 #include "esp_timer.h"
@@ -17,10 +19,14 @@
 #define COL_RIDER     0x1B1B   /* blue */
 #define COL_RING      0xFFFF
 
-/* The panel the view is composed for. Only the debug helper needs it as a
- * constant; nav_map_render is told the size it is filling. */
-#define NAV_VIEW_W 800
-#define NAV_VIEW_H 480
+/* The panel the view is composed for. Asked of the live display rather than
+ * fixed: the same navigator runs on the 800x480 head units and on the 480x480
+ * dashboard board, and nav_map_view_tiles decides from this which tiles the
+ * phone is asked for — wired to 800 it would have requested a screenful and a
+ * half of them on the square panel. nav_map_render is told the size it fills,
+ * so it never needed these. */
+#define NAV_VIEW_W  ((int)lv_disp_get_hor_res(NULL))
+#define NAV_VIEW_H  ((int)lv_disp_get_ver_res(NULL))
 
 static nav_map_view_t s_view;
 static float s_speed_ms;

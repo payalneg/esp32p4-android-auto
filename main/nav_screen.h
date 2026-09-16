@@ -26,6 +26,10 @@
 extern "C" {
 #endif
 
+/* The panel the screen was written against, and the fallback until LVGL has
+ * been asked. The live size is nav_screen_width/height — a board with a
+ * different panel (the 480x480 S3) sizes its framebuffers and its map from
+ * those, not from these. */
 #define NAV_SCREEN_W 800
 #define NAV_SCREEN_H 480
 
@@ -35,6 +39,11 @@ esp_err_t nav_screen_init(void);
 
 /* The screen object for ui_mode_set to load. NULL before a successful init. */
 lv_obj_t *nav_screen_get(void);
+
+/* The panel, as LVGL reports it. Valid after nav_screen_init; before that
+ * they answer NAV_SCREEN_W/H. This is what the map is composed at. */
+int nav_screen_width(void);
+int nav_screen_height(void);
 
 /* Back framebuffer to decode/scale the next frame into (NAV_SCREEN_W *
  * NAV_SCREEN_H * 2 bytes, cache-line aligned), or NULL when the previous

@@ -18,8 +18,6 @@
 #include "custom.h"
 #include "custom.h"
 #include "dashboard_theme.h"
-#include "custom.h"
-#include "custom.h"
 
 static void dashboard_Classic_event_handler (lv_event_t *e)
 {
@@ -233,7 +231,6 @@ void events_init_dashboard_Classic_Max (lv_ui *ui)
     lv_obj_add_event_cb(ui->dashboard_Classic_Max_statistics_button, dashboard_Classic_Max_statistics_button_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->dashboard_Classic_Max_max_reset_btn, dashboard_Classic_Max_max_reset_btn_event_handler, LV_EVENT_ALL, ui);
 }
-
 
 
 void events_init(lv_ui *ui)

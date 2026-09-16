@@ -102,12 +102,7 @@ else()
         "c6_ota.c"
         "mic_capture.c"
         "aa_overclock.c"
-        "vbat_routing.c"
-        "ble_nav.c"
-        "nav_screen.c"
-        "nav_tiles.c"
-        "nav_map.c"
-        "nav_route.c")
+        "vbat_routing.c")
     list(APPEND MAIN_REQUIRES
         esp_hosted
         esp_driver_ppa
@@ -117,6 +112,30 @@ else()
         esp32_p4_wifi6_touch_lcd_4_3
         espressif__esp_h264
         espressif__libpng)
+endif()
+
+# The navigator is not part of the Android Auto stack, even though it used to
+# share its flag: the phone pushes map tiles, position, route and manoeuvre
+# over BLE and the head unit composes the picture itself, so none of this needs
+# the P4's video path or the external BT agent. It therefore builds for both
+# chips — see NAV_ENABLE in Kconfig.projbuild.
+# libpng (map tiles arrive as PNG) is required unconditionally on purpose: IDF
+# reads this file TWICE, and the first pass — the one that builds the component
+# dependency graph — runs before sdkconfig exists, so every CONFIG_* is empty
+# there. A REQUIRES inside the if() below therefore never reaches the graph and
+# the build fails on a missing png.h, while SRCS (taken from the second pass)
+# look fine. Costs nothing when the navigator is off: nothing references it and
+# the linker drops it.
+list(APPEND MAIN_REQUIRES espressif__libpng)
+
+if(CONFIG_NAV_ENABLE)
+    list(APPEND MAIN_SRCS
+        "ble_nav.c"
+        "nav_screen.c"
+        "nav_tiles.c"
+        "nav_tile_store.c"
+        "nav_map.c"
+        "nav_route.c")
 endif()
 
 idf_component_register(

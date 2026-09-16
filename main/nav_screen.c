@@ -44,6 +44,8 @@ static lv_obj_t *s_status_lbl;
 static lv_obj_t *s_speed_lbl;
 static lv_obj_t *s_speed_unit;
 static lv_obj_t *s_batt_lbl;
+/* The plate the charge is drawn on; the GPS button is hung off its top. */
+static lv_obj_t *s_batt_row;
 static lv_obj_t *s_cc_img;
 static lv_obj_t *s_turn_box;
 static lv_obj_t *s_turn_arrow;
@@ -60,6 +62,11 @@ static lv_obj_t *s_lang_lbl;
 
 /* Shown only while the map has been dragged off the rider. */
 static lv_obj_t *s_recentre_btn;
+/* Set when the map becomes the screen being looked at, acted on by the
+ * LVGL tick: coming back to the map means "where am I". */
+static atomic_bool s_recentre_req;
+/* The GPS button has been put above the charge plate. */
+static bool s_gps_placed;
 static nav_screen_search_cb_t s_search_cb;
 
 /* Typing on the panel. The keyboard and the results live in one overlay that
@@ -80,6 +87,17 @@ static atomic_int  s_nhits;
 static atomic_bool s_hits_fresh;
 static lv_obj_t *s_zoom_lbl;
 static lv_timer_t *s_tick;
+
+/* What the panel actually is, read from LVGL once the screen is built.
+ *
+ * The header's NAV_SCREEN_W/H are the P4 head units and nothing else; the
+ * 480x480 board would have had two 768000-byte buffers for a 460800-byte
+ * panel — 600 KB of PSRAM spent on ground that is not on the screen. Taken
+ * from the display rather than the BSP because the P4 scans its panel
+ * portrait and the adapter rotates it, so the BSP's own numbers arrive the
+ * wrong way round. */
+static int s_scr_w = NAV_SCREEN_W;
+static int s_scr_h = NAV_SCREEN_H;
 
 static uint16_t *s_fb[2];
 static size_t    s_fb_bytes;
@@ -577,8 +595,8 @@ static void show_committed_frame(void)
 {
     s_front ^= 1;
     s_dsc.header.always_zero = 0;
-    s_dsc.header.w  = NAV_SCREEN_W;
-    s_dsc.header.h  = NAV_SCREEN_H;
+    s_dsc.header.w  = s_scr_w;
+    s_dsc.header.h  = s_scr_h;
     s_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
     s_dsc.data      = (const uint8_t *)s_fb[s_front];
     s_dsc.data_size = s_fb_bytes;
@@ -599,6 +617,22 @@ static void tick_cb(lv_timer_t *t)
      * the rider is looking at us. */
     if (lv_scr_act() != s_screen) return;
 
+    /* Coming back to the map is a question about now, not about where the
+     * rider was looking when they last left it. A drag stops the view
+     * following them until the GPS button is pressed, which is what you
+     * want while the map is up and the wrong thing to keep: the next time
+     * the screen came round it was still parked two streets away, with
+     * the rider's own marker off at the edge or past it. */
+    if (atomic_exchange(&s_recentre_req, false)) {
+        if (nav_map_is_panned()) {
+            nav_map_pan_reset();
+            /* The phone sends tiles around what we said we are looking at
+             * — it has to hear that this is the rider again. */
+            if (s_look_cb) s_look_cb(true, 0, 0);
+        }
+        if (s_recentre_btn) lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
     int cd = atomic_load(&s_cooldown);
     if (cd > 0) atomic_store(&s_cooldown, cd - 1);
 
@@ -612,6 +646,18 @@ static void tick_cb(lv_timer_t *t)
      * pixels did not change, so a parked bike sends nothing for minutes and
      * the last picture is still the right one. */
     refresh_hud();
+    /* The GPS button sits on top of the charge plate, and that plate is as
+     * tall as Antonio 64 makes it — a number this file cannot write down.
+     * The fixed offset it used to have was measured against an empty row,
+     * so on the panel the button's bottom edge lay over the digits. The
+     * row has its text by now, so its height is real; once is enough,
+     * since a different number does not change how tall the line is. */
+    if (!s_gps_placed && s_recentre_btn && s_batt_row) {
+        s_gps_placed = true;
+        lv_obj_update_layout(s_batt_row);
+        lv_obj_align_to(s_recentre_btn, s_batt_row, LV_ALIGN_OUT_TOP_RIGHT,
+                        -2, -10);
+    }
     refresh_guide();
     refresh_zoom();
     refresh_results();
@@ -632,11 +678,21 @@ esp_err_t nav_screen_init(void)
 {
     if (s_screen) return ESP_OK;
 
+    /* Before the buffers, because it decides how big they are. LVGL is up by
+     * now — display_init runs first — and this needs no lock: it reads the
+     * resolution the driver was created with, which nothing changes. */
+    const lv_coord_t hor = lv_disp_get_hor_res(NULL);
+    const lv_coord_t ver = lv_disp_get_ver_res(NULL);
+    if (hor > 0 && ver > 0) {
+        s_scr_w = (int)hor;
+        s_scr_h = (int)ver;
+    }
+
     size_t line = 64;
     if (esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &line) != ESP_OK || line == 0) {
         line = 64;
     }
-    s_fb_bytes = ((size_t)NAV_SCREEN_W * NAV_SCREEN_H * 2 + line - 1) & ~(line - 1);
+    s_fb_bytes = ((size_t)s_scr_w * s_scr_h * 2 + line - 1) & ~(line - 1);
     for (int i = 0; i < 2; i++) {
         /* The JPEG decoder and the PPA both write here over DMA. */
         s_fb[i] = heap_caps_aligned_calloc(line, 1, s_fb_bytes,
@@ -661,7 +717,7 @@ esp_err_t nav_screen_init(void)
 
     s_img = lv_img_create(s_screen);
     lv_obj_set_pos(s_img, 0, 0);
-    lv_obj_set_size(s_img, NAV_SCREEN_W, NAV_SCREEN_H);
+    lv_obj_set_size(s_img, s_scr_w, s_scr_h);
     /* Drag to move the map. CLICKABLE is what makes an image take touch at
      * all; there is no click handler on it any more, only the drag. */
     lv_obj_add_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
@@ -670,7 +726,7 @@ esp_err_t nav_screen_init(void)
 
     /* Placeholder card, centred, drawn over whatever the last picture was. */
     s_status_box = lv_obj_create(s_screen);
-    lv_obj_set_size(s_status_box, UI_SX(560), 96);
+    lv_obj_set_size(s_status_box, UI_SX(420), 64);
     lv_obj_align(s_status_box, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_status_box, lv_color_hex(0x1c2530), 0);
     lv_obj_set_style_bg_opa(s_status_box, LV_OPA_80, 0);
@@ -679,9 +735,17 @@ esp_err_t nav_screen_init(void)
     lv_obj_clear_flag(s_status_box, LV_OBJ_FLAG_SCROLLABLE);
 
     s_status_lbl = lv_label_create(s_status_box);
+    /* A caption, not a headline: it says why there is no map, and the map is
+     * what the rider came for. At 32 px it filled a third of the screen and
+     * read as an error. Wrapped and centred so the longer ones ("Waiting for
+     * the navigator app...") stay inside the card instead of running out of
+     * it. */
+    lv_obj_set_width(s_status_lbl, UI_SX(420) - 32);
+    lv_label_set_long_mode(s_status_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_status_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(s_status_lbl);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_status_lbl, &aabridge_font_32, 0);
+    lv_obj_set_style_text_font(s_status_lbl, &aabridge_font_24, 0);
     lv_label_set_text(s_status_lbl, "Phone not connected");
     s_status_text = "Phone not connected";
 
@@ -696,9 +760,10 @@ esp_err_t nav_screen_init(void)
     s_speed_lbl = hud_text(left, &lv_font_Antonio_Regular_64, 0xFFFFFF);
     s_speed_unit = hud_text(left, &lv_font_Antonio_Regular_22, 0xC8D0D8);
 
-    lv_obj_t *right = hud_row_create(s_screen, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
-    s_batt_lbl = hud_text(right, &lv_font_Antonio_Regular_64, 0xFFFFFF);
-    lv_label_set_text(hud_text(right, &lv_font_Antonio_Regular_22, 0xC8D0D8), "%");
+    s_batt_row = hud_row_create(s_screen, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
+    s_batt_lbl = hud_text(s_batt_row, &lv_font_Antonio_Regular_64, 0xFFFFFF);
+    lv_label_set_text(hud_text(s_batt_row, &lv_font_Antonio_Regular_22, 0xC8D0D8),
+                      "%");
 
     /* "FIND" opens the keyboard. Top right, above the zoom buttons — plain
      * ASCII on purpose, like the zoom glyphs. */
@@ -716,7 +781,7 @@ esp_err_t nav_screen_init(void)
 
     /* The overlay: a line to type in, what came back, and a keyboard. */
     s_find_box = lv_obj_create(s_screen);
-    lv_obj_set_size(s_find_box, NAV_SCREEN_W, NAV_SCREEN_H);
+    lv_obj_set_size(s_find_box, s_scr_w, s_scr_h);
     lv_obj_align(s_find_box, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_color(s_find_box, lv_color_hex(0x0c1116), 0);
     lv_obj_set_style_bg_opa(s_find_box, LV_OPA_COVER, 0);
@@ -746,7 +811,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_center(find_x_lbl);
 
     s_find_list = lv_obj_create(s_find_box);
-    lv_obj_set_size(s_find_list, NAV_SCREEN_W - 24, 150);
+    lv_obj_set_size(s_find_list, s_scr_w - 24, 150);
     lv_obj_align(s_find_list, LV_ALIGN_TOP_LEFT, 12, 74);
     lv_obj_set_style_bg_opa(s_find_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_find_list, 0, 0);
@@ -786,7 +851,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_center(s_lang_lbl);
 
     s_find_kb = lv_keyboard_create(s_find_box);
-    lv_obj_set_size(s_find_kb, NAV_SCREEN_W, 240);
+    lv_obj_set_size(s_find_kb, s_scr_w, 240);
     lv_obj_align(s_find_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     /* Montserrat 24, not our subsetted font: the keyboard's backspace,
      * enter and hide keys are LV_SYMBOL glyphs from the FontAwesome range,
@@ -887,12 +952,15 @@ esp_err_t nav_screen_init(void)
     s_tick = lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
     bsp_display_unlock();
-    ESP_LOGI(TAG, "navigator screen ready (2 x %u-byte framebuffers)",
-             (unsigned)s_fb_bytes);
+    ESP_LOGI(TAG, "navigator screen ready (%dx%d, 2 x %u-byte framebuffers)",
+             s_scr_w, s_scr_h, (unsigned)s_fb_bytes);
     return ESP_OK;
 }
 
 lv_obj_t *nav_screen_get(void) { return s_screen; }
+
+int nav_screen_width(void)  { return s_scr_w; }
+int nav_screen_height(void) { return s_scr_h; }
 
 uint16_t *nav_screen_back_buffer(void)
 {
@@ -906,7 +974,14 @@ size_t nav_screen_back_buffer_bytes(void) { return s_fb_bytes; }
 
 void nav_screen_commit(void) { atomic_store(&s_pending, true); }
 
-void nav_screen_set_active(bool active) { atomic_store(&s_active, active); }
+void nav_screen_set_active(bool active)
+{
+    atomic_store(&s_active, active);
+    /* Done on the LVGL tick rather than here: ui_mode_set calls this from
+     * whichever task made the gesture, and both the pan state and the
+     * button belong to LVGL. */
+    if (active) atomic_store(&s_recentre_req, true);
+}
 bool nav_screen_active(void) { return atomic_load(&s_active); }
 
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }

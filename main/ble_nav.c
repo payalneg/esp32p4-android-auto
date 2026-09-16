@@ -12,8 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "driver/jpeg_decode.h"
-#include "driver/ppa.h"
 #include "esp_cache.h"
 #include "esp_private/esp_cache_private.h"
 #include "esp_heap_caps.h"
@@ -22,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
@@ -33,6 +32,7 @@
 #include "nav_route.h"
 #include "nav_screen.h"
 #include "nav_tiles.h"
+#include "nav_tile_store.h"
 #include "ui_mode.h"
 
 static const char *TAG = "ble_nav";
@@ -97,9 +97,9 @@ typedef enum { ST_IDLE, ST_RECEIVING, ST_DECODING } nav_state_t;
 
 /* What the open transfer is carrying. One at a time: the app waits for the
  * acknowledgement before it starts the next. */
-typedef enum { RX_FRAME, RX_TILE, RX_ROUTE, RX_FOUND } rx_kind_t;
+typedef enum { RX_TILE, RX_ROUTE, RX_FOUND } rx_kind_t;
 
-typedef enum { EV_FRAME, EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
+typedef enum { EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
                EV_DEST, EV_ROUTE, EV_ZOOM, EV_LOOK, EV_SEARCH,
                EV_FOUND } ev_kind_t;
 typedef struct {
@@ -120,24 +120,19 @@ static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_ctrl_handle;
 
 /* Receive state. Written by the host task, read by the worker only after an
- * EV_FRAME hands it over (the queue carries the barrier), and never written
- * again until the worker has replied — the app sends one frame at a time. */
+ * EV_TILE (or EV_ROUTE, EV_FOUND) hands it over — the queue carries the
+ * barrier — and never written again until the worker has replied: the app
+ * sends one thing at a time. */
 static volatile nav_state_t s_state = ST_IDLE;
 static uint8_t  *s_stage;
 static uint32_t  s_expect;
 static uint32_t  s_got;
-static uint16_t  s_w, s_h;
 static uint16_t  s_seq;
 static rx_kind_t s_rx_kind;
 static uint8_t   s_tile_z, s_tile_fmt;
 static uint32_t  s_tile_x, s_tile_y;
 
-/* Decode side, worker task only. */
-static jpeg_decoder_handle_t s_jpgd;
-static ppa_client_handle_t   s_ppa;
-static uint8_t *s_dec;             /* RGB565 at the frame's own size */
-static size_t   s_dec_bytes;
-static uint16_t s_dec_w, s_dec_h;
+/* Worker task only. */
 static size_t   s_cache_line = 64;
 static bool     s_boosted;
 static int64_t  s_last_frame_us;
@@ -150,7 +145,14 @@ static ble_nav_stats_t s_stats;
 
 static void notify(uint8_t status, uint8_t a, uint16_t b, uint16_t c)
 {
-    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) return;
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_ctrl_handle == 0) {
+        /* No link or no CTRL handle means the app hears nothing back and waits
+         * on its own timeout — worth a line, because from the phone side it is
+         * indistinguishable from a head unit that ignores the protocol. */
+        ESP_LOGW(TAG, "notify 0x%02x dropped: conn=%u ctrl_handle=%u",
+                 status, (unsigned)s_conn, (unsigned)s_ctrl_handle);
+        return;
+    }
     uint8_t f[6] = { status, a, (uint8_t)b, (uint8_t)(b >> 8),
                      (uint8_t)c, (uint8_t)(c >> 8) };
     /* Ride out a congested host: an acknowledgement lands right after sixty
@@ -343,149 +345,10 @@ static void set_boost(bool on)
     ble_link_boost_request(s_conn, on, false);
 }
 
-static size_t align_up(size_t v, size_t a) { return (v + a - 1) & ~(a - 1); }
-
 static uint32_t rd_u32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-/* RGB565 scratch for a frame that is not already panel-sized. */
-static bool ensure_decode_buffer(uint16_t w, uint16_t h)
-{
-    if (s_dec && s_dec_w == w && s_dec_h == h) return true;
-    if (s_dec) { heap_caps_free(s_dec); s_dec = NULL; }
-    /* The decoder rounds its output up to a whole 16x16 MCU on both axes, so
-     * the buffer must be sized to the aligned frame even when the picture
-     * itself is smaller (music_info_view.c learned this the hard way). */
-    size_t need = (size_t)align_up(w, 16) * align_up(h, 16) * 2;
-    s_dec_bytes = align_up(need, s_cache_line);
-    s_dec = heap_caps_aligned_calloc(s_cache_line, 1, s_dec_bytes,
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    if (!s_dec) {
-        s_dec_bytes = 0;
-        s_dec_w = s_dec_h = 0;
-        ESP_LOGE(TAG, "no PSRAM for a %ux%u decode buffer", w, h);
-        return false;
-    }
-    s_dec_w = w;
-    s_dec_h = h;
-    return true;
-}
-
-static bool decode_into(uint8_t *dst, size_t dst_bytes,
-                        const uint8_t *src, uint32_t len)
-{
-    jpeg_decode_cfg_t cfg = {
-        .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
-        /* BGR is what the ST7701 pipeline expects on this board; RGB order
-         * shows up as a red/blue swap (same as the splash and album art). */
-        .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR,
-    };
-    uint32_t out_size = 0;
-    esp_err_t r = jpeg_decoder_process(s_jpgd, &cfg, (uint8_t *)src, len,
-                                       dst, dst_bytes, &out_size);
-    if (r != ESP_OK) {
-        ESP_LOGW(TAG, "jpeg decode failed: %s", esp_err_to_name(r));
-        return false;
-    }
-    return true;
-}
-
-/* PPA: s_dec (w x h RGB565) -> dst (800x480 RGB565), no rotation. The LVGL
- * adapter rotates for the panel, so this is a straight upscale. */
-static bool scale_into(uint16_t *dst, size_t dst_bytes, uint16_t w, uint16_t h)
-{
-    esp_cache_msync(s_dec, s_dec_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    ppa_srm_oper_config_t op = {
-        .in = {
-            .buffer  = s_dec,
-            .pic_w   = align_up(w, 16),
-            .pic_h   = align_up(h, 16),
-            .block_w = w,
-            .block_h = h,
-            .srm_cm  = PPA_SRM_COLOR_MODE_RGB565,
-        },
-        .out = {
-            .buffer      = dst,
-            .buffer_size = dst_bytes,
-            .pic_w       = NAV_SCREEN_W,
-            .pic_h       = NAV_SCREEN_H,
-            .srm_cm      = PPA_SRM_COLOR_MODE_RGB565,
-        },
-        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
-        .scale_x = (float)NAV_SCREEN_W / (float)w,
-        .scale_y = (float)NAV_SCREEN_H / (float)h,
-        .mode    = PPA_TRANS_MODE_BLOCKING,
-    };
-    esp_err_t e = ppa_do_scale_rotate_mirror(s_ppa, &op);
-    if (e != ESP_OK) {
-        ESP_LOGW(TAG, "ppa scale %ux%u -> %dx%d: %s", w, h,
-                 NAV_SCREEN_W, NAV_SCREEN_H, esp_err_to_name(e));
-        return false;
-    }
-    return true;
-}
-
-static uint8_t present_frame(const uint8_t *jpeg, uint16_t w, uint16_t h,
-                             uint32_t len)
-{
-    if (ui_mode_get() != UI_MODE_NAV) return NAV_ACK_HIDDEN;
-
-    uint16_t *dst = nav_screen_back_buffer();
-    if (!dst) return NAV_ACK_BUSY;
-    const size_t dst_bytes = nav_screen_back_buffer_bytes();
-
-    if (w == NAV_SCREEN_W && h == NAV_SCREEN_H) {
-        if (!decode_into((uint8_t *)dst, dst_bytes, jpeg, len)) {
-            return NAV_ACK_DECODE;
-        }
-    } else {
-        if (!ensure_decode_buffer(w, h)) return NAV_ACK_DECODE;
-        if (!decode_into(s_dec, s_dec_bytes, jpeg, len)) return NAV_ACK_DECODE;
-        if (!scale_into(dst, dst_bytes, w, h)) return NAV_ACK_DECODE;
-    }
-    /* DMA wrote the framebuffer; LVGL reads it with the CPU. */
-    esp_cache_msync(dst, dst_bytes,
-                    ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
-    nav_screen_commit();
-    return NAV_ACK_OK;
-}
-
-/* ---- worker ---- */
-
-static void handle_frame(const nav_evt_t *ev)
-{
-    const int64_t t0 = esp_timer_get_time();
-    const uint16_t w = s_w, h = s_h;
-    const uint32_t len = s_got;
-
-    uint8_t ack;
-    if (s_got != s_expect) {
-        ack = NAV_ACK_TRUNCATED;
-    } else {
-        ack = present_frame(s_stage, w, h, len);
-    }
-
-    const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
-    s_state = ST_IDLE;   /* the app may start the next frame */
-
-    s_stats.last_bytes = len;
-    s_stats.last_w = w;
-    s_stats.last_h = h;
-    s_stats.last_decode_ms = ms;
-    s_stats.last_ack = ack;
-    if (ack == NAV_ACK_OK) {
-        s_stats.frames_ok++;
-        s_last_frame_us = esp_timer_get_time();
-        nav_screen_set_streaming(true);
-    } else {
-        s_stats.frames_failed++;
-        ESP_LOGD(TAG, "frame #%u %ux%u %u B rejected (%u)", ev->seq, w, h,
-                 (unsigned)len, ack);
-    }
-    notify(NAV_ST_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
 }
 
 /* Compose the current view from the tiles we hold and put it on screen.
@@ -510,7 +373,8 @@ static void render_view(void)
     if (ui_mode_get() != UI_MODE_NAV) return;
     const int64_t t0 = esp_timer_get_time();
     int wanted = 0;
-    const int have = nav_map_render(dst, NAV_SCREEN_W, NAV_SCREEN_H, &wanted);
+    const int have = nav_map_render(dst, nav_screen_width(),
+                                    nav_screen_height(), &wanted);
     const int64_t t1 = esp_timer_get_time();
     /* Push the frame out of the cache before LVGL's DMA reads it. Timed
      * separately because it is 768 KB of write-back and therefore a fixed
@@ -553,6 +417,56 @@ static void step_view(void)
     s_last_step_us = now;
     nav_map_dead_reckon(dt);
     render_view();
+}
+
+/* How many tiles one idle pass may lift off the microSD card.
+ *
+ * A read plus a decode is tens of milliseconds and this runs on the worker
+ * that also answers the phone, so it is done a couple at a time between
+ * events rather than as one long stall with a frozen map. A screenful comes
+ * up over about a second — a different world from the same tiles over BLE,
+ * where one of them takes that long on its own. */
+#define NAV_SD_PREFETCH_PER_PASS 2
+
+/* Fill the holes in the view from the card, when there is one.
+ *
+ * Only what the view actually covers, and only what is not already in a slot.
+ * Tiles the card does not have cost one failed open each and are then
+ * remembered as missing (nav_tile_store.c), so riding over ground the card
+ * does not cover does not turn into a stream of filesystem calls. */
+static void prefetch_pass(void)
+{
+    if (ui_mode_get() != UI_MODE_NAV) return;
+    if (!nav_tile_store_ready()) return;
+
+    uint8_t z;
+    int64_t x0, x1, y0, y1;
+    if (!nav_map_view_tiles(&z, &x0, &x1, &y0, &y1)) return;
+
+    /* Widest layer first, sharpest last — the opposite of the order the
+     * picture is composed in, and on purpose. One tile six levels down covers
+     * sixty-four by sixty-four of the detail, so a single read puts a whole
+     * blurred map on the screen; the detail then sharpens it over the next
+     * few passes. Fetching detail first would leave the rider looking at bare
+     * ground with two sharp squares in it. */
+    static const int k_dz[] = { NAV_WIDE_DZ, NAV_COARSE_DZ, 0 };
+    int budget = NAV_SD_PREFETCH_PER_PASS;
+    bool got = false;
+    for (unsigned i = 0; i < sizeof k_dz / sizeof k_dz[0] && budget > 0; i++) {
+        const int dz = k_dz[i];
+        if (dz > z) continue;
+        const uint8_t lz = (uint8_t)(z - dz);
+        for (int64_t ty = y0 >> dz; ty <= (y1 >> dz) && budget > 0; ty++) {
+            for (int64_t tx = x0 >> dz; tx <= (x1 >> dz) && budget > 0; tx++) {
+                if (tx < 0 || ty < 0) continue;
+                if (nav_tiles_have(lz, (uint32_t)tx, (uint32_t)ty)) continue;
+                if (!nav_tiles_load_cached(lz, (uint32_t)tx, (uint32_t)ty)) continue;
+                budget--;
+                got = true;
+            }
+        }
+    }
+    if (got) render_view();
 }
 
 static void handle_tile(const nav_evt_t *ev)
@@ -633,16 +547,6 @@ static void handle_found(const nav_evt_t *ev)
 static void worker(void *arg)
 {
     (void)arg;
-    jpeg_decode_engine_cfg_t ecfg = { .intr_priority = 0, .timeout_ms = 400 };
-    if (jpeg_new_decoder_engine(&ecfg, &s_jpgd) != ESP_OK) {
-        ESP_LOGE(TAG, "jpeg engine init failed — navigator frames disabled");
-        s_jpgd = NULL;
-    }
-    ppa_client_config_t pcfg = { .oper_type = PPA_OPERATION_SRM };
-    if (ppa_register_client(&pcfg, &s_ppa) != ESP_OK) {
-        ESP_LOGE(TAG, "ppa client init failed — navigator frames disabled");
-        s_ppa = NULL;
-    }
     if (esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &s_cache_line) != ESP_OK ||
         s_cache_line == 0) {
         s_cache_line = 64;
@@ -671,20 +575,12 @@ static void worker(void *arg)
                 set_boost(false);
             }
             step_view();
+            /* Nothing from the phone this pass: a good moment to go to the
+             * card for whatever the view is still missing. */
+            prefetch_pass();
             continue;
         }
         switch (ev.kind) {
-            case EV_FRAME:
-                if (!s_jpgd || !s_ppa) {
-                    s_state = ST_IDLE;
-                    notify(NAV_ST_ACK, NAV_ACK_DECODE, ev.seq, 0);
-                    break;
-                }
-                s_stats.streaming = true;
-                nav_screen_set_streaming(true);
-                set_boost(true);
-                handle_frame(&ev);
-                break;
             case EV_TILE:
                 s_stats.streaming = true;
                 set_boost(true);
@@ -717,6 +613,17 @@ static void worker(void *arg)
                 set_boost(false);
                 break;
             case EV_STATE:
+#if !CONFIG_AA_ENABLE
+                /* Dashboard-only board: bring the navigator up on the first
+                 * greeting of a link. The phone only streams tiles while it is
+                 * told the navigator is the live screen, and on the head units
+                 * that state comes from the rider's three-finger gesture
+                 * between the dashboard and Android Auto. Here there is no AA
+                 * to swap with, so a phone that has the map open would sit
+                 * greeting a dashboard for ever — which is exactly how this
+                 * looked on the bench. The gesture still toggles back. */
+                if (ui_mode_get() != UI_MODE_NAV) ui_mode_set(UI_MODE_NAV);
+#endif
                 notify_state();
                 break;
             case EV_DEST:
@@ -767,8 +674,35 @@ void ble_nav_init(void)
      * this task only memcpy'd, but it now runs libpng — whose simplified read
      * API is generous with the stack — and composes the view on top. A task
      * that overflows here takes the whole device down with it. */
-    xTaskCreatePinnedToCore(worker, "ble_nav", 8192, NULL, 5, &s_task, 0);
-    ESP_LOGI(TAG, "ble_nav ready");
+    /* The stack normally comes out of internal RAM. On the ESP32-S3 board that
+     * is the scarce resource: by the time the bridge registers its services
+     * the largest free block is around 7.5 KB, so this 8 KB task silently
+     * failed to start — and nothing checked. The greeting was then written
+     * into a queue nobody read, so the phone kept greeting and the panel kept
+     * saying it was waiting for the app, with no error anywhere.
+     *
+     * So: check, and fall back to a stack in PSRAM. That is sound on the board
+     * that needs it — it already runs its code from PSRAM
+     * (CONFIG_SPIRAM_FETCH_INSTRUCTIONS), which is what keeps the cache
+     * enabled across a flash write, and both ALLOW_EXT_MEM options are on. */
+    BaseType_t ok = xTaskCreatePinnedToCore(worker, "ble_nav", 8192, NULL,
+                                            5, &s_task, 0);
+    if (ok != pdPASS) {
+        ESP_LOGW(TAG, "no internal RAM for the worker stack "
+                      "(free=%u largest=%u) — retrying in PSRAM",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        ok = xTaskCreatePinnedToCoreWithCaps(worker, "ble_nav", 8192, NULL, 5,
+                                             &s_task, 0, MALLOC_CAP_SPIRAM);
+    }
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "worker task not created — the navigator cannot answer"
+                      " the phone; it will greet for ever");
+        s_task = NULL;
+        return;
+    }
+    ESP_LOGI(TAG, "ble_nav ready (internal free=%u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 }
 
 void ble_nav_notify_state(void)
@@ -811,19 +745,6 @@ void ble_nav_on_disconnect(void)
     }
 }
 
-#if CONFIG_DEBUG_UART_BRIDGE
-uint8_t ble_nav_debug_present(const uint8_t *jpeg, uint32_t len,
-                              uint16_t w, uint16_t h)
-{
-    if (!s_jpgd || !s_ppa) return NAV_ACK_DECODE;
-    /* Runs on the console task, not the worker. Safe only because the phone
-     * is not streaming while a human drives the bridge — this is a bench
-     * shortcut, not a second producer. */
-    nav_screen_set_streaming(true);
-    return present_frame(jpeg, w, h, len);
-}
-#endif
-
 /* ---- routed from notif_bridge access_cb (NimBLE host task) ---- */
 
 static void reject(uint16_t seq, uint8_t reason)
@@ -835,35 +756,32 @@ static void reject(uint16_t seq, uint8_t reason)
 
 void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
 {
-    if (len < 1 || !s_q || !s_stage) return;
+    if (len < 1 || !s_q || !s_stage) {
+        /* Silence here was expensive to debug once: with no queue or staging
+         * buffer this returns without answering, and the app retries its HELLO
+         * forever while the panel sits on "Waiting for the navigator app". */
+        ESP_LOGW(TAG, "ctrl write dropped: len=%u q=%d stage=%d",
+                 (unsigned)len, s_q ? 1 : 0, s_stage ? 1 : 0);
+        return;
+    }
     switch (data[0]) {
+        /* The picture path is gone: the head unit composes the map from
+         * tiles now, and the app stopped offering a rendered frame long before
+         * the decoder that took it was removed. Answered rather than ignored,
+         * so an old build hears "not supported" instead of waiting for an ack
+         * that will never come. */
         case NAV_OP_BEGIN: {
-            if (len < NAV_BEGIN_LEN) { reject(0, NAV_ACK_BAD_PARAM); return; }
-            const uint16_t w   = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-            const uint16_t h   = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
-            const uint32_t tot = (uint32_t)data[5] | ((uint32_t)data[6] << 8) |
-                                 ((uint32_t)data[7] << 16) | ((uint32_t)data[8] << 24);
-            const uint16_t seq = (uint16_t)data[9] | ((uint16_t)data[10] << 8);
-            if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
-            /* The picture is scaled to the whole panel, so it has to arrive in
-             * the panel's proportions, and both axes must be whole MCUs. */
-            if (tot == 0 || tot > BLE_NAV_MAX_FRAME ||
-                w == 0 || h == 0 || w > NAV_SCREEN_W || h > NAV_SCREEN_H ||
-                (w % 16) != 0 || (h % 16) != 0 ||
-                (uint32_t)w * NAV_SCREEN_H != (uint32_t)h * NAV_SCREEN_W) {
-                reject(seq, NAV_ACK_BAD_PARAM);
-                return;
-            }
-            s_w = w;
-            s_h = h;
-            s_expect = tot;
-            s_got = 0;
-            s_seq = seq;
-            s_rx_kind = RX_FRAME;
-            s_state = ST_RECEIVING;
-            break;
+            const uint16_t seq = (len >= NAV_BEGIN_LEN)
+                ? (uint16_t)data[9] | ((uint16_t)data[10] << 8) : 0;
+            reject(seq, NAV_ACK_DECODE);
+            return;
         }
-        case NAV_OP_END:
+        case NAV_OP_END: {
+            const uint16_t seq = (len >= NAV_END_LEN)
+                ? (uint16_t)data[1] | ((uint16_t)data[2] << 8) : 0;
+            reject(seq, NAV_ACK_DECODE);
+            return;
+        }
         case NAV_OP_TILE_END:
         case NAV_OP_ROUTE_END:
         case NAV_OP_FOUND_END: {
@@ -871,8 +789,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             const uint16_t seq = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
             const rx_kind_t want = (data[0] == NAV_OP_TILE_END) ? RX_TILE
                                  : (data[0] == NAV_OP_ROUTE_END) ? RX_ROUTE
-                                 : (data[0] == NAV_OP_FOUND_END) ? RX_FOUND
-                                                                 : RX_FRAME;
+                                                                 : RX_FOUND;
             if (s_state != ST_RECEIVING || seq != s_seq || s_rx_kind != want) {
                 reject(seq, NAV_ACK_TRUNCATED);
                 return;
@@ -880,8 +797,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_state = ST_DECODING;
             nav_evt_t ev = { .kind = (want == RX_TILE)  ? EV_TILE
                                    : (want == RX_ROUTE) ? EV_ROUTE
-                                   : (want == RX_FOUND) ? EV_FOUND
-                                                        : EV_FRAME,
+                                                        : EV_FOUND,
                              .seq = seq };
             xQueueSend(s_q, &ev, 0);
             break;
@@ -1019,9 +935,9 @@ void ble_nav_data_write(const uint8_t *data, uint16_t len)
 {
     if (s_state != ST_RECEIVING || !s_stage || len == 0) return;
     if (s_got + len > s_expect) {
-        /* More than promised: the sender and we disagree about this frame, so
+        /* More than promised: the sender and we disagree about this one, so
          * drop it rather than decode a mixture of two. */
-        s_got = s_expect + 1;   /* handle_frame sees the mismatch */
+        s_got = s_expect + 1;   /* the handler sees the mismatch */
         s_state = ST_RECEIVING;
         return;
     }

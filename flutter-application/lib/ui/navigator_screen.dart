@@ -173,6 +173,25 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     // have the receiver on; one that goes away is a reason to let it go.
     _huLinkSub = BleProxy.instance.state.listen((_) => _reviewBackgroundFixes());
     _syncStreamer();
+    unawaited(_locateOnOpen());
+  }
+
+  /// Opening the map is a question about where you are, so answer it
+  /// without being asked twice.
+  ///
+  /// Only when the permission is already there: a system dialog thrown at
+  /// the rider by the act of opening a screen is not what they came for,
+  /// and the GPS button is still the place to ask from. The feed starts
+  /// with the platform's cached position, so the marker normally lands in
+  /// the same frame as the map rather than a fix later.
+  Future<void> _locateOnOpen() async {
+    if (_controller.gpsActive) {
+      _controller.setFollow(true);
+      return;
+    }
+    if (!await _location.hasPermission() || !mounted) return;
+    if (!await _ensureGps() || !mounted) return;
+    _controller.setFollow(true);
   }
 
   @override
@@ -763,7 +782,10 @@ class _NavigatorScreenState extends State<NavigatorScreen>
         initialCenter: saved == null
             ? LatLng(kFallbackCentre.lat, kFallbackCentre.lon)
             : LatLng(saved.$1, saved.$2),
-        initialZoom: saved?.$3 ?? 13,
+        // Nothing saved means a first look, and a first look is at the
+        // street you are standing in — 13 is a whole city, which only
+        // tells you which one that is.
+        initialZoom: saved?.$3 ?? 16,
         minZoom: 3,
         maxZoom: 19,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,

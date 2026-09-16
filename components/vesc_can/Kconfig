@@ -108,7 +108,7 @@ menu "VESC CAN"
 
     config VESC_BLE_INTERVAL_PCT
         int "Poll interval multiplier in BLE mode (percent)"
-        default 200
+        default 130
         range 100 500
         help
             Every periodic poll (RT data, dashboard stats, the quick-action
@@ -118,14 +118,25 @@ menu "VESC CAN"
             actually carry once each request costs a couple of connection
             intervals.
 
+            Was 200, and the dashboard was visibly slow to catch up over BLE:
+            half-rate polling on top of a round trip that already costs two
+            connection intervals. 130 keeps some slack for the phone link and
+            the sensors while feeling close to CAN; raise it again if the link
+            starts missing replies (watch for sync timeouts in the log).
+
     config VESC_BLE_CONN_ITVL_MS
         int "Requested BLE connection interval (ms)"
-        default 15
+        default 10
         range 8 50
         help
             Requested from the adapter right after the link comes up. Every
             request/reply costs two of these, so it sets the ceiling on how
             fast the dashboard can be polled. Lower is faster but leaves the
             radio less room for the phone links and the sensors.
+
+            Was 15, which put the floor at a 30 ms round trip; 10 brings it to
+            20. The radio still has to carry the phone (notifications, and on
+            the dashboard-only board the navigator's map tiles as well), so
+            going to the 8 ms minimum is not free.
 
 endmenu

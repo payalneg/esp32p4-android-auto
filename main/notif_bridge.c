@@ -19,8 +19,8 @@
 #include "notif_bridge.h"
 #include "ble_ota.h"
 #include "ble_files.h"
-#if CONFIG_AA_ENABLE
-#include "ble_nav.h"   /* navigator: P4-only (HW JPEG + PPA) */
+#if CONFIG_NAV_ENABLE
+#include "ble_nav.h"   /* navigator: both chips, see NAV_ENABLE */
 #endif
 #include "board.h"
 
@@ -107,22 +107,24 @@ static const ble_uuid128_t NB_FILE_CTRL_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t NB_FILE_DATA_UUID = BLE_UUID128_INIT(
     0x0A, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
-/* NAV-CTRL / NAV-DATA chars — the navigator picture the companion app renders
- * on the phone and streams here as small JPEGs, one frame at a time. CTRL
- * carries BEGIN/END/STOP/HELLO and notifies STATE + FRAME_ACK; DATA carries
- * the raw JPEG bytes. See ble_nav.c for the protocol. Optional/probed by the
- * app — older firmware simply doesn't expose ...000B/...000C and the app hides
- * the feature. The pair is only advertised where the navigator itself is
- * compiled in — it decodes with the P4's JPEG engine and scales with its PPA,
- * so on the ESP32-S3 board the app simply won't find these two. */
-#if CONFIG_AA_ENABLE
+/* NAV-CTRL / NAV-DATA chars — the navigator. CTRL carries BEGIN/END/STOP/HELLO
+ * and notifies STATE + FRAME_ACK; DATA carries the map tiles, position, route
+ * and manoeuvre the companion app pushes. See ble_nav.c for the protocol.
+ * Optional/probed by the app — older firmware simply doesn't expose
+ * ...000B/...000C and the app hides the feature. The pair follows NAV_ENABLE,
+ * not the AA stack: the navigator used to decode frames with the P4's JPEG
+ * engine and scale them with its PPA, but tiles arrive as PNG and the head
+ * unit composes the view itself, so it runs on the ESP32-S3 board too. Gating
+ * these on AA is what made the app fail to attach there: it looks the two
+ * characteristics up after connecting, and not finding them threw. */
+#if CONFIG_NAV_ENABLE
 static const ble_uuid128_t NB_NAV_CTRL_UUID = BLE_UUID128_INIT(
     0x0B, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 static const ble_uuid128_t NB_NAV_DATA_UUID = BLE_UUID128_INIT(
     0x0C, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
-#endif /* CONFIG_AA_ENABLE */
+#endif /* CONFIG_NAV_ENABLE */
 
 /* ---------- PDU layer ---------- */
 
@@ -151,7 +153,7 @@ static const ble_uuid128_t NB_NAV_DATA_UUID = BLE_UUID128_INIT(
 static uint16_t s_in_handle, s_out_handle, s_st_handle, s_time_handle, s_ota_handle;
 static uint16_t s_ota_ctrl_handle, s_ota_data_handle;
 static uint16_t s_file_ctrl_handle, s_file_data_handle;
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
 static uint16_t s_nav_ctrl_handle, s_nav_data_handle;
 #endif
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -506,7 +508,7 @@ static bool bridge_bind(uint16_t conn, bool insist)
     s_last_bridge_write_us = now;
     ble_ota_set_link(conn, s_ota_ctrl_handle);
     ble_files_set_link(conn, s_file_ctrl_handle);
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
     ble_nav_set_link(conn, s_nav_ctrl_handle);
 #endif
     return true;
@@ -526,7 +528,7 @@ static bool bridge_bind(uint16_t conn, bool insist)
  * themselves lower, as they always did. */
 static uint8_t s_wbuf[BLE_OTA_MAX_DATA + 3];
 #define NB_SMALL_WRITE 260      /* notification chunks and file-manager writes */
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
 _Static_assert(sizeof(s_wbuf) >= BLE_NAV_MAX_DATA + 3, "nav write must fit");
 #endif
 _Static_assert(sizeof(s_wbuf) >= NB_SMALL_WRITE, "small writes must fit");
@@ -557,7 +559,7 @@ static int access_cb(uint16_t conn, uint16_t attr,
          * the rider was actually navigating with could not write a thing. Its
          * greeting came back refused and the app, being told nothing else,
          * called the firmware too old. */
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
         const bool navigating = (attr == s_nav_ctrl_handle ||
                                  attr == s_nav_data_handle);
 #else
@@ -611,7 +613,7 @@ static int access_cb(uint16_t conn, uint16_t attr,
         else                           ble_ota_data_write(s_wbuf, out_len);
         return 0;
     }
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
         (attr == s_nav_ctrl_handle || attr == s_nav_data_handle)) {
         /* Navigator frame control / JPEG bytes. Same flatten-and-forward
@@ -627,7 +629,7 @@ static int access_cb(uint16_t conn, uint16_t attr,
         else                           ble_nav_data_write(s_wbuf, out_len);
         return 0;
     }
-#endif /* CONFIG_AA_ENABLE */
+#endif /* CONFIG_NAV_ENABLE */
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
         (attr == s_file_ctrl_handle || attr == s_file_data_handle)) {
         /* File manager control / upload-data channel. Same flatten-and-forward
@@ -735,7 +737,7 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
                 .val_handle = &s_file_data_handle,
             },
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
             {
                 .uuid       = &NB_NAV_CTRL_UUID.u,
                 .access_cb  = access_cb,
@@ -748,7 +750,7 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
                 .val_handle = &s_nav_data_handle,
             },
-#endif /* CONFIG_AA_ENABLE */
+#endif /* CONFIG_NAV_ENABLE */
             { 0 },
         },
     },
@@ -780,7 +782,7 @@ void notif_bridge_on_disconnect(uint16_t conn) {
     s_last_bridge_write_us = 0;
     ble_ota_on_disconnect();
     ble_files_on_disconnect();
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
     ble_nav_on_disconnect();
 #endif
     reasm_reset();
@@ -883,7 +885,7 @@ void notif_bridge_init(void)
     xTaskCreatePinnedToCore(out_task, "notif_out", 4096, NULL, 5, &s_out_task, 0);
     ble_ota_init();
     ble_files_init();
-#if CONFIG_AA_ENABLE
+#if CONFIG_NAV_ENABLE
     ble_nav_init();
 #endif
     ESP_LOGI(TAG, "notif_bridge ready");

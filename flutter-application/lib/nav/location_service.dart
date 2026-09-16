@@ -59,6 +59,18 @@ class LocationService {
     }
   }
 
+  /// Whether a fix can be had right now without asking the rider anything.
+  ///
+  /// [ensurePermission] puts a system dialog on the screen when the answer is
+  /// "not yet", which is right when a button was pressed and wrong when a
+  /// screen merely opened. This is the same question with no dialog in it.
+  Future<bool> hasPermission() async {
+    if (!await Geolocator.isLocationServiceEnabled()) return false;
+    final permission = await Geolocator.checkPermission();
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
+  }
+
   /// Positions, starting with whatever the platform already knows.
   ///
   /// The first live fix can take a while — indoors, for ever — and until it

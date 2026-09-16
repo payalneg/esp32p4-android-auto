@@ -3611,19 +3611,30 @@ void settings_ui_init(lv_ui *ui) {
      * If a subsystem isn't up yet when Settings is opened for the very first
      * time, the fw_info_get_* returns "" and the row shows "(unknown)". */
 #ifdef LV_REALDEVICE
-    const char *p4_v = fw_info_get_p4();
-    const char *bt_v = fw_info_get_bt();
-    const char *c6_v = fw_info_get_c6();
-    if (!*p4_v) p4_v = "(unknown)";
-    if (!*bt_v) bt_v = "(unknown)";
-    if (!*c6_v) c6_v = "(unknown)";
+    /* One row per processor this board actually carries. The dashboard-only
+     * ESP32-S3 has neither of the P4's companions — no BT agent (that is part
+     * of the Android Auto path) and no ESP32-C6 (its Wi-Fi is on-chip) — so
+     * printing their versions there offered two permanent "(unknown)" rows for
+     * hardware that does not exist. */
+    const char *host_v = fw_info_get_p4();
+    if (!*host_v) host_v = "(unknown)";
     char fw_buf[160];
-    snprintf(fw_buf, sizeof(fw_buf),
-             "Firmware versions:\n"
-             "  P4 host  : %s\n"
-             "  BT agent : %s\n"
-             "  C6 slave : %s",
-             p4_v, bt_v, c6_v);
+    int fw_n = snprintf(fw_buf, sizeof(fw_buf),
+                        "Firmware versions:\n"
+                        "  Host     : %s", host_v);
+#if CONFIG_AA_ENABLE
+    const char *bt_v = fw_info_get_bt();
+    if (!*bt_v) bt_v = "(unknown)";
+    fw_n += snprintf(fw_buf + fw_n, sizeof(fw_buf) - (size_t)fw_n,
+                     "\n  BT agent : %s", bt_v);
+#endif
+#if CONFIG_IDF_TARGET_ESP32P4
+    const char *c6_v = fw_info_get_c6();
+    if (!*c6_v) c6_v = "(unknown)";
+    fw_n += snprintf(fw_buf + fw_n, sizeof(fw_buf) - (size_t)fw_n,
+                     "\n  C6 slave : %s", c6_v);
+#endif
+    (void)fw_n;
     lv_obj_t *fw_label = lv_label_create(parent);
     lv_label_set_text(fw_label, fw_buf);
     lv_obj_set_pos(fw_label, 20, y_pos);

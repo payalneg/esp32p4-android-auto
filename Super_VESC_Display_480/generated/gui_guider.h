@@ -121,65 +121,6 @@ typedef struct
 	bool settings_del;
 	lv_obj_t *settings_exit_button;
 	lv_obj_t *settings_exit_button_label;
-	lv_obj_t *reference;
-	bool reference_del;
-	lv_obj_t *reference_btn_1;
-	lv_obj_t *reference_btn_1_label;
-	lv_obj_t *reference_imgbtn_1;
-	lv_obj_t *reference_imgbtn_1_label;
-	lv_obj_t *reference_btnm_1;
-	lv_obj_t *reference_sw_1;
-	lv_obj_t *reference_bar_1;
-	lv_obj_t *reference_slider_1;
-	lv_obj_t *reference_img_1;
-	lv_obj_t *reference_animimg_1;
-	lv_obj_t *reference_image3D_1;
-	lv_obj_t *reference_label_1;
-	lv_obj_t *reference_spangroup_1;
-	lv_span_t *reference_spangroup_1_span;
-	lv_obj_t *reference_ddlist_1;
-	lv_obj_t *reference_ta_1;
-	lv_obj_t *reference_cb_1;
-	lv_obj_t *reference_cont_1;
-	lv_obj_t *reference_tabview_1;
-	lv_obj_t *reference_tabview_1_tab_1;
-	lv_obj_t *reference_tabview_1_tab_2;
-	lv_obj_t *reference_tabview_1_tab_3;
-	lv_obj_t *reference_win_1;
-	lv_obj_t *reference_win_1_item0;
-	lv_obj_t *reference_tileview_1;
-	lv_obj_t *reference_tileview_1_tile;
-	lv_obj_t *reference_menu_1;
-	lv_obj_t *reference_menu_1_sidebar_page;
-	lv_obj_t *reference_menu_1_subpage_1;
-	lv_obj_t *reference_menu_1_cont_1;
-	lv_obj_t *reference_menu_1_label_1;
-	lv_obj_t *reference_menu_1_subpage_2;
-	lv_obj_t *reference_menu_1_cont_2;
-	lv_obj_t *reference_menu_1_label_2;
-	lv_obj_t *reference_menu_1_subpage_3;
-	lv_obj_t *reference_menu_1_cont_3;
-	lv_obj_t *reference_menu_1_label_3;
-	lv_obj_t *reference_roller_1;
-	lv_obj_t *reference_arc_1;
-	lv_obj_t *reference_line_1;
-	lv_obj_t *reference_table_1;
-	lv_obj_t *reference_msgbox_1;
-	lv_obj_t *reference_calendar_1;
-	lv_obj_t *reference_list_1;
-	lv_obj_t *reference_list_1_item0;
-	lv_obj_t *reference_spinbox_1;
-	lv_obj_t *reference_spinbox_1_btn_plus;
-	lv_obj_t *reference_spinbox_1_btn_minus;
-	lv_obj_t *reference_meter_1;
-	lv_meter_scale_t *reference_meter_1_scale_0;
-	lv_meter_indicator_t *reference_meter_1_scale_0_ndline_0;
-	lv_obj_t *reference_chart_1;
-	lv_chart_series_t *reference_chart_1_0;
-	lv_obj_t *reference_canvas_1;
-	lv_obj_t *reference_led_1;
-	lv_obj_t *reference_cpicker_1;
-	lv_obj_t *reference_spinner_1;
 	lv_obj_t *dashboard_Classic_Max;
 	bool dashboard_Classic_Max_del;
 	lv_obj_t *dashboard_Classic_Max_statusbar_sep;
@@ -309,26 +250,18 @@ void setup_scr_dashboard_Classic(lv_ui *ui);
 void setup_scr_settings(lv_ui *ui);
 void setup_scr_dashboard_Classic_Max(lv_ui *ui);
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
-#include "extra/widgets/animimg/lv_animimg.h"
-#include "extra/widgets/animimg/lv_animimg.h"
 LV_IMG_DECLARE(_cruise_control_alpha_38x38);
 
 LV_FONT_DECLARE(lv_font_montserratMedium_16)
-LV_FONT_DECLARE(lv_font_montserratMedium_24)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
-LV_FONT_DECLARE(lv_font_montserratMedium_22)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_50)
+LV_FONT_DECLARE(lv_font_montserratMedium_18)
 LV_FONT_DECLARE(lv_font_montserratMedium_12)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_200)
-LV_FONT_DECLARE(lv_font_montserratMedium_20)
-LV_FONT_DECLARE(lv_font_montserratMedium_26)
-LV_FONT_DECLARE(lv_font_montserratMedium_18)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_40)
-LV_FONT_DECLARE(lv_font_montserratMedium_11)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_32)
+LV_FONT_DECLARE(lv_font_montserratMedium_11)
 LV_FONT_DECLARE(lv_font_Antonio_Regular_22)
-LV_FONT_DECLARE(lv_font_montserratMedium_25)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_50)
-LV_FONT_DECLARE(lv_font_Antonio_Regular_100)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_40)
+LV_FONT_DECLARE(lv_font_montserratMedium_24)
 
 
 #ifdef __cplusplus

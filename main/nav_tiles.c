@@ -2,13 +2,13 @@
 
 #include <string.h>
 
-#include "driver/jpeg_decode.h"
-#include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_private/esp_cache_private.h"
 #include "esp_timer.h"
 #include "png.h"
+
+#include "nav_tile_store.h"
 
 static const char *TAG = "nav_tiles";
 
@@ -19,6 +19,7 @@ typedef struct {
     uint32_t  x, y;
     bool      used;
     uint32_t  age;        /* bumped on every touch; smallest is oldest */
+    bool      on_sd;      /* the card holds the compressed original */
     uint16_t *px;         /* RGB565, TILE_BYTES */
 } slot_t;
 
@@ -34,10 +35,6 @@ static uint8_t s_detail_z;
 static uint32_t s_tick;
 static bool s_inited;
 static size_t s_cache_line = 64;
-
-static jpeg_decoder_handle_t s_jpgd;
-static uint8_t *s_scratch;          /* DMA-aligned copy for the JPEG engine */
-static size_t   s_scratch_cap;
 
 static nav_tiles_stats_t s_stats;
 static nav_tiles_evict_cb_t s_evict_cb;
@@ -73,6 +70,16 @@ static slot_t *claim(void)
     for (int i = 0; i < NAV_TILE_SLOTS; i++) {
         slot_t *s = &s_slots[i];
         if (!s->px) {
+            /* Growing into the last of PSRAM is not free: the notification
+             * bridge needs one 192 KB block and cannot borrow a tile slot, so
+             * a cache that fills the heap silently costs the rider their
+             * notifications (see NAV_TILE_PSRAM_RESERVE). Stop short and reuse
+             * a slot instead — the cache is a cache, it loses nothing but
+             * speed. */
+            if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) <
+                    TILE_BYTES + NAV_TILE_PSRAM_RESERVE) {
+                continue;
+            }
             s->px = heap_caps_aligned_calloc(s_cache_line, 1, TILE_BYTES,
                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
             if (!s->px) continue;          /* PSRAM is full — reuse instead */
@@ -94,9 +101,18 @@ static slot_t *claim(void)
         s_stats.evicted++;
         /* Say so before the pixels are overwritten: the phone's idea of what
          * we hold is the only thing that decides whether this tile is ever
-         * sent again. */
-        if (s_evict_cb) s_evict_cb(oldest->z, oldest->x, oldest->y);
+         * sent again.
+         *
+         * Unless the card has it. Then losing the slot costs a file read, not
+         * a radio round trip, and telling the phone would only make it send
+         * over BLE what we can already read in a few milliseconds. */
+        if (oldest->on_sd) {
+            s_stats.evicted_quiet++;
+        } else if (s_evict_cb) {
+            s_evict_cb(oldest->z, oldest->x, oldest->y);
+        }
         oldest->used = false;
+        oldest->on_sd = false;
     }
     return oldest;
 }
@@ -145,42 +161,6 @@ static bool decode_png(const uint8_t *data, size_t len, uint16_t *out)
     return ok;
 }
 
-static bool ensure_scratch(size_t need)
-{
-    if (need <= s_scratch_cap) return true;
-    if (s_scratch) heap_caps_free(s_scratch);
-    const size_t alloc = (need + 1023) & ~(size_t)1023;
-    s_scratch = heap_caps_aligned_calloc(s_cache_line, 1, alloc,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    s_scratch_cap = s_scratch ? alloc : 0;
-    return s_scratch != NULL;
-}
-
-static bool decode_jpeg(const uint8_t *data, size_t len, uint16_t *out)
-{
-    if (!s_jpgd) {
-        jpeg_decode_engine_cfg_t cfg = { .intr_priority = 0, .timeout_ms = 400 };
-        if (jpeg_new_decoder_engine(&cfg, &s_jpgd) != ESP_OK) {
-            ESP_LOGE(TAG, "jpeg engine unavailable");
-            return false;
-        }
-    }
-    if (!ensure_scratch(len)) return false;
-    memcpy(s_scratch, data, len);
-    jpeg_decode_cfg_t cfg = {
-        .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
-        .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR,
-    };
-    uint32_t out_size = 0;
-    esp_err_t r = jpeg_decoder_process(s_jpgd, &cfg, s_scratch, len,
-                                       (uint8_t *)out, TILE_BYTES, &out_size);
-    if (r != ESP_OK) {
-        ESP_LOGW(TAG, "jpeg decode: %s", esp_err_to_name(r));
-        return false;
-    }
-    return true;
-}
-
 /* ---- public ---- */
 
 void nav_tiles_set_evict_cb(nav_tiles_evict_cb_t cb) { s_evict_cb = cb; }
@@ -198,8 +178,11 @@ void nav_tiles_init(void)
              NAV_TILE_SLOTS, (unsigned)(TILE_BYTES / 1024));
 }
 
-bool nav_tiles_put(uint8_t z, uint32_t x, uint32_t y,
-                   uint8_t fmt, const uint8_t *data, size_t len)
+/* The body of both ways a tile lands in a slot. `from_sd` says the bytes
+ * came off the card, so they are not written back to it. */
+static bool put_common(uint8_t z, uint32_t x, uint32_t y,
+                       uint8_t fmt, const uint8_t *data, size_t len,
+                       bool from_sd)
 {
     if (!s_inited) nav_tiles_init();
     if (!data || len == 0) return false;
@@ -212,13 +195,17 @@ bool nav_tiles_put(uint8_t z, uint32_t x, uint32_t y,
     }
 
     const int64_t t0 = esp_timer_get_time();
+    /* PNG and nothing else. The wire still carries a format byte per tile —
+     * the app has always set it to PNG (kTileFormatPng in head_unit_feed.dart)
+     * — but the hardware JPEG engine that used to sit behind the other value
+     * is a P4 part, and a decoder nobody sends work to is a decoder nobody
+     * tests. A tile in any other format is refused here. */
     bool ok;
-    switch (fmt) {
-        case NAV_TILE_FMT_PNG:  ok = decode_png(data, len, s->px); break;
-        case NAV_TILE_FMT_JPEG: ok = decode_jpeg(data, len, s->px); break;
-        default:
-            ESP_LOGW(TAG, "unknown tile format %u", fmt);
-            ok = false;
+    if (fmt == NAV_TILE_FMT_PNG) {
+        ok = decode_png(data, len, s->px);
+    } else {
+        ESP_LOGW(TAG, "tile format %u is not PNG — refused", fmt);
+        ok = false;
     }
     s_stats.last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
     s_stats.bytes_last = (uint32_t)len;
@@ -229,25 +216,41 @@ bool nav_tiles_put(uint8_t z, uint32_t x, uint32_t y,
         s_stats.rejected++;
         return false;
     }
-    if (fmt == NAV_TILE_FMT_JPEG) {
-        /* The JPEG engine wrote these by DMA, behind the cache: drop what the
-         * cache thinks it knows so the render pass reads the real pixels.
-         *
-         * Only for that path. The PNG decoder writes with the CPU, so the
-         * fresh pixels ARE the dirty cache lines — invalidating them threw
-         * the tile away line by line and the map came out in black bands. */
-        esp_cache_msync(s->px, TILE_BYTES,
-                        ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
-    }
     s->z = z;
     s->x = x;
     s->y = y;
     s->used = true;
     s->age = ++s_tick;
+    /* Keep the compressed original on the card, if there is one. This is what
+     * lets the eviction above stay quiet later: the tile crosses the link
+     * once in its life instead of once per time the ground comes round. */
+    s->on_sd = from_sd ||
+               nav_tile_store_save(z, x, y, fmt, data, len);
     s_stats.decoded++;
     s_stats.stored = 0;
     for (int i = 0; i < NAV_TILE_SLOTS; i++) if (s_slots[i].used) s_stats.stored++;
     return true;
+}
+
+bool nav_tiles_put(uint8_t z, uint32_t x, uint32_t y,
+                   uint8_t fmt, const uint8_t *data, size_t len)
+{
+    return put_common(z, x, y, fmt, data, len, false);
+}
+
+bool nav_tiles_load_cached(uint8_t z, uint32_t x, uint32_t y)
+{
+    if (!s_inited) nav_tiles_init();
+    if (find(z, x, y)) return false;       /* already in RAM */
+
+    uint8_t fmt = 0;
+    size_t len = 0;
+    uint8_t *data = nav_tile_store_read(z, x, y, &fmt, &len);
+    if (!data) return false;
+    const bool ok = put_common(z, x, y, fmt, data, len, true);
+    heap_caps_free(data);
+    if (ok) s_stats.from_sd++;
+    return ok;
 }
 
 const uint16_t *nav_tiles_get(uint8_t z, uint32_t x, uint32_t y)
@@ -265,7 +268,10 @@ bool nav_tiles_have(uint8_t z, uint32_t x, uint32_t y)
 
 void nav_tiles_clear(void)
 {
-    for (int i = 0; i < NAV_TILE_SLOTS; i++) s_slots[i].used = false;
+    for (int i = 0; i < NAV_TILE_SLOTS; i++) {
+        s_slots[i].used = false;
+        s_slots[i].on_sd = false;
+    }
     s_stats.stored = 0;
 }
 

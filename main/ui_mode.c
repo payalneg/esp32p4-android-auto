@@ -12,8 +12,10 @@
 #include "touch_input.h"
 #include "vesc_ui.h"
 #if CONFIG_AA_ENABLE
-#include "ble_nav.h"
 #include "display_video.h"
+#endif
+#if CONFIG_NAV_ENABLE
+#include "ble_nav.h"
 #include "nav_screen.h"
 #endif
 
@@ -66,13 +68,12 @@ const char *ui_mode_name(ui_mode_t mode)
     }
 }
 
-#if !CONFIG_AA_ENABLE
-/* Dashboard-only board: UI_MODE_VESC is the only mode there is. The setter
- * stays (vesc_ui_updater and the header are shared with the AA boards) but
- * has nothing to switch to, so it just reports the attempt. The navigator
- * screen goes with the AA stack (it is built for the 800x480 head units), so
- * the gesture has no "phone" mode to offer here either. */
-static ui_mode_t phone_mode(void) { return UI_MODE_AA; }
+#if !CONFIG_AA_ENABLE && !CONFIG_NAV_ENABLE
+/* Neither phone screen is compiled in: UI_MODE_VESC is the only mode there is.
+ * The setter stays (vesc_ui_updater and the header are shared with the boards
+ * that do have one) but has nothing to switch to, so it just reports the
+ * attempt. */
+static ui_mode_t phone_mode(void) { return UI_MODE_VESC; }
 
 void ui_mode_set(ui_mode_t mode)
 {
@@ -82,41 +83,71 @@ void ui_mode_set(ui_mode_t mode)
     }
 }
 #else
-/* Which full-screen source the gesture brings up, honouring the Settings
- * choice and falling back to Android Auto if the navigator screen could not
- * allocate its framebuffers. */
+/* Which full-screen source the gesture brings up. A board with both honours
+ * the Settings choice and falls back to Android Auto if the navigator screen
+ * could not allocate its buffers; the dashboard-only board has just the
+ * navigator, so there the choice does not arise. */
 static ui_mode_t phone_mode(void)
 {
-    if (settings_get_phone_screen() == 1 && nav_screen_get() != NULL) {
+#if CONFIG_NAV_ENABLE
+    if (nav_screen_get() != NULL
+#if CONFIG_AA_ENABLE
+        && settings_get_phone_screen() == 1
+#endif
+       ) {
         return UI_MODE_NAV;
     }
+#endif
+#if CONFIG_AA_ENABLE
     return UI_MODE_AA;
+#else
+    /* Navigator did not come up and there is no projection to fall back on. */
+    return UI_MODE_VESC;
+#endif
 }
 
 void ui_mode_set(ui_mode_t mode)
 {
     if (!s_inited) return;
-    if (mode == UI_MODE_NAV && nav_screen_get() == NULL) mode = UI_MODE_AA;
+#if CONFIG_NAV_ENABLE
+    if (mode == UI_MODE_NAV && nav_screen_get() == NULL) {
+#if CONFIG_AA_ENABLE
+        mode = UI_MODE_AA;
+#else
+        mode = UI_MODE_VESC;
+#endif
+    }
+#endif
+#if !CONFIG_AA_ENABLE
+    if (mode == UI_MODE_AA) {
+        ESP_LOGW(TAG, "ui_mode_set(AA) ignored — no Android Auto in this build");
+        return;
+    }
+#endif
     if (atomic_load(&s_mode) == mode) return;
     ESP_LOGW(TAG, "ui_mode_set(%s) called from task=%s",
              ui_mode_name(mode), pcTaskGetName(NULL));
     if (mode == UI_MODE_VESC || mode == UI_MODE_NAV) {
         /* Flip the mode flag BEFORE we let LVGL start rendering the VESC
-         * dashboard. Decoder thread (display_video_show_yuv420) checks
-         * ui_mode_get() at the top and takes the non-AA early-out, which
-         * resumes the worker and drops the frame. If we did this in the
-         * opposite order — load+invalidate the screen → resume LVGL → store
-         * mode — a decoder pass that read mode==AA before our store would dive
-         * into the AA branch and call esp_lv_adapter_pause(2000) just as
-         * the worker started a full-screen redraw of ~1700 GUI Guider
-         * widgets. That redraw is heavy enough on 800×480 that pause()
-         * times out, leaving the AA path stuck in 2 s/frame mode after
-         * every AA→VESC→AA toggle. */
+         * dashboard. On the AA boards the decoder thread
+         * (display_video_show_yuv420) checks ui_mode_get() at the top and
+         * takes the non-AA early-out, which resumes the worker and drops the
+         * frame. If we did this in the opposite order — load+invalidate the
+         * screen → resume LVGL → store mode — a decoder pass that read
+         * mode==AA before our store would dive into the AA branch and call
+         * esp_lv_adapter_pause(2000) just as the worker started a full-screen
+         * redraw of ~1700 GUI Guider widgets. That redraw is heavy enough on
+         * 800×480 that pause() times out, leaving the AA path stuck in
+         * 2 s/frame mode after every AA→VESC→AA toggle. */
         atomic_store(&s_mode, mode);
+#if CONFIG_NAV_ENABLE
         nav_screen_set_active(mode == UI_MODE_NAV);
+#endif
         if (bsp_display_lock(200) != ESP_OK) return;
-        lv_obj_t *scr = (mode == UI_MODE_NAV) ? nav_screen_get()
-                                              : vesc_ui_get_screen();
+        lv_obj_t *scr = vesc_ui_get_screen();
+#if CONFIG_NAV_ENABLE
+        if (mode == UI_MODE_NAV) scr = nav_screen_get();
+#endif
         if (scr) {
             lv_scr_load(scr);
             /* The video sink wrote the last AA frame straight to the
@@ -126,34 +157,43 @@ void ui_mode_set(ui_mode_t mode)
              * dashboard changes. */
             lv_obj_invalidate(scr);
         }
+#if CONFIG_AA_ENABLE
         /* Resume LVGL worker now if the video sink had paused it —
          * otherwise the dashboard wouldn't repaint until the next
          * decoded frame triggers the resume from inside show_yuv420.
          * Idempotent — if the decoder already raced us through the
          * non-AA branch above and resumed, this is a no-op. */
         display_video_yield_panel();
+#endif
         bsp_display_unlock();
-    } else {
+    }
+#if CONFIG_AA_ENABLE
+    else {
         /* AA: load the (mostly empty) AA screen FIRST so when we flip the
          * mode flag the next decoder pass sees a worker with nothing heavy
          * to redraw, and esp_lv_adapter_pause completes immediately. */
+#if CONFIG_NAV_ENABLE
         nav_screen_set_active(false);
+#endif
         if (bsp_display_lock(200) != ESP_OK) return;
         if (s_aa_screen) lv_scr_load(s_aa_screen);
         bsp_display_unlock();
         atomic_store(&s_mode, mode);
     }
+#endif
     /* Tell touch_input which consumer should see GT911 events — LVGL when
      * the VESC dashboard or the navigator picture is up, AA when the phone
      * is the active screen. */
     touch_input_set_mode(mode == UI_MODE_AA ? TOUCH_MODE_AA : TOUCH_MODE_LVGL);
-    /* The phone only streams frames while the navigator screen is the one
+#if CONFIG_NAV_ENABLE
+    /* The phone only streams tiles while the navigator screen is the one
      * being looked at — tell it which way this went. */
     ble_nav_notify_state();
+#endif
     ESP_LOGI(TAG, "switched to %s", ui_mode_name(mode));
 }
 
-#endif /* CONFIG_AA_ENABLE */
+#endif /* CONFIG_AA_ENABLE || CONFIG_NAV_ENABLE */
 
 void ui_mode_toggle(void)
 {

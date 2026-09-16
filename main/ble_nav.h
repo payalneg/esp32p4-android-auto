@@ -131,14 +131,8 @@ void ble_nav_notify_state(void);
 
 /* Diagnostics for the `navstat` debug command. */
 typedef struct {
-    uint32_t frames_ok;
-    uint32_t frames_failed;
-    uint32_t last_bytes;
-    uint16_t last_w, last_h;
-    uint32_t last_decode_ms;
-    uint8_t  last_ack;
     bool     streaming;
-    /* Tile path. */
+    /* Tile path — the only path. */
     uint32_t tiles_ok;
     uint32_t tiles_failed;
     uint32_t tile_last_bytes;
@@ -153,14 +147,6 @@ typedef struct {
     uint32_t stack_free;    /* worker stack high-water mark, bytes */
 } ble_nav_stats_t;
 void ble_nav_get_stats(ble_nav_stats_t *out);
-
-#if CONFIG_DEBUG_UART_BRIDGE
-/* Bench shortcut: decode, scale and show a frame that never came over the
- * air, so the picture path can be exercised without a phone. Returns a
- * NAV_ACK_* code. Console task only, and only while nothing is streaming. */
-uint8_t ble_nav_debug_present(const uint8_t *jpeg, uint32_t len,
-                              uint16_t w, uint16_t h);
-#endif
 
 /* ---- notif_bridge wiring ---- */
 void ble_nav_set_link(uint16_t conn_handle, uint16_t ctrl_val_handle);

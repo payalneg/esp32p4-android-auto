@@ -53,8 +53,10 @@ void port_start_app_hook(void)
 #include "display_video.h"
 #include "h264_pipe.h"
 #include "idle_screen.h"
-#include "nav_screen.h"
 #include "tcp_server.h"
+#endif
+#if CONFIG_NAV_ENABLE
+#include "nav_screen.h"
 #endif
 #include "ble_host.h"
 #include "ble_nus.h"
@@ -507,14 +509,15 @@ void app_main(void)
      * drop the boot splash overlay. No-op if no splash was shown. */
     splash_screen_hide();
 
-#if CONFIG_AA_ENABLE
-    /* Navigator screen — shows the map picture the companion app streams over
-     * BLE (ble_nav.c). Built here rather than on first use: its two 800x480
-     * framebuffers should be claimed while PSRAM is still unfragmented, and
-     * ui_mode falls back to Android Auto if this fails. Goes with the AA
-     * stack: it is laid out for the 800x480 head units. */
+#if CONFIG_NAV_ENABLE
+    /* Navigator screen — composes its map from the tiles, position and route
+     * the companion app pushes over BLE (ble_nav.c). Built here rather than on
+     * first use: its buffers should be claimed while PSRAM is still
+     * unfragmented. Independent of the AA stack — it needs only BLE and the
+     * panel, so the dashboard-only board gets it too; ui_mode falls back to
+     * whatever else that board can show if this fails. */
     if (nav_screen_init() != ESP_OK) {
-        ESP_LOGW(TAG, "navigator screen unavailable — the gesture will show AA");
+        ESP_LOGW(TAG, "navigator screen unavailable — the gesture has nothing to show");
     }
 #endif
     /* "Battery charged — reset trip?" prompt: arm battery_calc's callback
@@ -522,10 +525,11 @@ void app_main(void)
      * reading (the check runs once per boot on that reading). */
     charge_prompt_init();
     if (ui_err == ESP_OK) {
-#if CONFIG_AA_ENABLE
-        /* 3-finger gesture toggles between VESC dashboard and AA projection.
-         * Only meaningful once the AA stack is up. The GT911 polling task
-         * starts unconditionally so LVGL touch keeps working. */
+#if CONFIG_AA_ENABLE || CONFIG_NAV_ENABLE
+        /* 3-finger gesture toggles between the VESC dashboard and whichever
+         * phone screen this board has — AA projection, the navigator, or on
+         * the dashboard-only board just the navigator. The GT911 polling task
+         * starts unconditionally so LVGL touch keeps working regardless. */
         touch_input_set_gesture_cb(ui_mode_toggle);
 #endif
         /* Left-edge swipe opens the LISP quick-action panel. The handler

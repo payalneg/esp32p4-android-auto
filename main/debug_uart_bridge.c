@@ -42,6 +42,7 @@
 #include "nav_screen.h"
 #include "nav_route.h"
 #include "nav_tiles.h"
+#include "nav_tile_store.h"
 #endif
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
@@ -55,6 +56,13 @@ static const char *TAG = "dbg_uart";
  * and a smaller active object just fills less of it: the wire header and the
  * encode take their size from the LVGL descriptor, not from these constants. */
 #define SHOT_BUF_SIZE     (BSP_LCD_H_RES * BSP_LCD_V_RES * 2)   /* RGB565 */
+/* Where a tap may land. The panel as the rider sees it, which on the P4 head
+ * units is the BSP's dimensions swapped: the display is scanned portrait and
+ * rotated in the adapter, so BSP_LCD_H_RES is the short axis there. Taken from
+ * LVGL rather than the BSP for that reason — it is the one that knows which
+ * way round the picture ended up. */
+#define SHOT_W            ((int)lv_disp_get_hor_res(NULL))
+#define SHOT_H            ((int)lv_disp_get_ver_res(NULL))
 #define JPEG_OUT_CAP      (384 * 1024)            /* worst-case q100 fits easily */
 #define CHUNK_RAW         768                     /* 768 raw -> exactly 1024 b64 */
 #define B64_LINE_CAP      1025                    /* 1024 + NUL */
@@ -471,7 +479,7 @@ static int cmd_navwarp(int argc, char **argv)
     /* Source is the same buffer read at a rotated offset — the access pattern
      * is what costs, and it is identical to a real source buffer. */
     const uint16_t *src = dst;
-    const int w = NAV_SCREEN_W, h = NAV_SCREEN_H;
+    const int w = nav_screen_width(), h = nav_screen_height();
     const float rad = (float)deg * 0.0174532925f;
     const int32_t cos_q = (int32_t)lroundf(cosf(rad) * 65536.0f);
     const int32_t sin_q = (int32_t)lroundf(sinf(rad) * 65536.0f);
@@ -513,12 +521,8 @@ static int cmd_navstat(int argc, char **argv)
     const int64_t age_ms = last ? (esp_timer_get_time() - last) / 1000 : -1;
     printf("mode=%s live=%d streaming=%d\n", ui_mode_name(ui_mode_get()),
            nav_screen_active() ? 1 : 0, st.streaming ? 1 : 0);
-    printf("frames ok=%u failed=%u shown=%u last_shown=%lld ms ago\n",
-           (unsigned)st.frames_ok, (unsigned)st.frames_failed,
+    printf("frames shown=%u last_shown=%lld ms ago\n",
            (unsigned)nav_screen_frames_shown(), (long long)age_ms);
-    printf("last frame %ux%u %u B decode=%u ms ack=%u\n",
-           st.last_w, st.last_h, (unsigned)st.last_bytes,
-           (unsigned)st.last_decode_ms, st.last_ack);
     nav_tiles_stats_t ts;
     nav_tiles_get_stats(&ts);
     nav_map_view_t v;
@@ -530,6 +534,13 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
            (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    nav_tile_store_stats_t ss;
+    nav_tile_store_get_stats(&ss);
+    printf("sd cache %s saved=%u loaded=%u missing=%u errors=%u | "
+           "evictions not re-asked=%u\n",
+           ss.ready ? "on" : "no card",
+           (unsigned)ss.saved, (unsigned)ss.loaded, (unsigned)ss.missing,
+           (unsigned)ss.errors, (unsigned)ts.evicted_quiet);
     printf("frame: compose %u us + cache flush %u us\n",
            (unsigned)st.compose_us, (unsigned)st.msync_us);
     printf("route %u points, last draw %u us\n",
@@ -547,63 +558,6 @@ static int cmd_navstat(int argc, char **argv)
     return 0;
 }
 
-/* Draw a test picture, encode it exactly the way the phone app does, and push
- * it through the navigator's decode + scale + display path. Verifies the whole
- * picture chain — colour order, the 2x upscale, the framebuffer swap — without
- * a phone in the room. */
-static int cmd_navtest(int argc, char **argv)
-{
-    const int w = (argc > 1) ? clampi(atoi(argv[1]), 16, 800) : 400;
-    const int h = w * 480 / 800;
-    if ((w % 16) != 0 || (h % 16) != 0) {
-        printf("ERR: width must be a multiple of 16 and keep 5:3\n");
-        return 1;
-    }
-    const size_t raw_len = (size_t)w * h * 2;
-    uint16_t *raw = heap_caps_aligned_calloc(64, 1, raw_len,
-                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    uint8_t *jpg = heap_caps_aligned_calloc(64, 1, 96 * 1024,
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    if (!raw || !jpg) {
-        printf("ERR: no PSRAM\n");
-        heap_caps_free(raw);
-        heap_caps_free(jpg);
-        return 1;
-    }
-    /* Colour bars with a white diagonal: bars catch a red/blue swap, the
-     * diagonal catches a wrong stride or a bad scale factor. */
-    static const uint16_t bars[8] = {
-        0xFFFF, 0xFFE0, 0x07FF, 0x07E0, 0xF81F, 0xF800, 0x001F, 0x0000,
-    };
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            uint16_t px = bars[(x * 8) / w];
-            if (abs(y - (x * h) / w) < 3) px = 0xFFFF;
-            raw[y * w + x] = px;
-        }
-    }
-    esp_cache_msync(raw, raw_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-
-    /* Same encoder the screenshot path uses (img_jpeg: the P4's hardware
-     * engine, 4:2:0 subsampling — the head unit's decoder only understands
-     * 4:2:0, the same rule the phone app follows). */
-    size_t jlen = 0;
-    if (!img_jpeg_encode_rgb565((const uint8_t *)raw, (uint16_t)w, (uint16_t)h, 80,
-                                jpg, 96 * 1024, &jlen) || jlen == 0) {
-        printf("ERR: jpeg encode failed\n");
-        heap_caps_free(raw);
-        heap_caps_free(jpg);
-        return 1;
-    }
-    const int64_t t0 = esp_timer_get_time();
-    const uint8_t ack = ble_nav_debug_present(jpg, jlen, (uint16_t)w, (uint16_t)h);
-    const int64_t ms = (esp_timer_get_time() - t0) / 1000;
-    printf("navtest %dx%d jpeg=%u B ack=%u in %lld ms\n", w, h,
-           (unsigned)jlen, ack, (long long)ms);
-    heap_caps_free(raw);
-    heap_caps_free(jpg);
-    return ack == 0 ? 0 : 1;
-}
 #endif /* CONFIG_AA_ENABLE — navigator console commands */
 
 static void register_cmds(void)
@@ -633,10 +587,6 @@ static void register_cmds(void)
           .help = "Show or set the full-screen mode: vesc|aa|nav|toggle",
           .hint = NULL, .func = cmd_uimode },
 #if CONFIG_AA_ENABLE
-        { .command = "navtest",
-          .help = "Show a locally-made test frame on the navigator screen "
-                  "[width, default 400]",
-          .hint = NULL, .func = cmd_navtest },
         { .command = "navwarp",
           .help = "Time a full-screen rotated copy, as a heading-up map would "
                   "need every frame [degrees] [block]",

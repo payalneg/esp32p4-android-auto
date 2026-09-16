@@ -22,11 +22,12 @@ extern "C" {
 /* Slippy tiles are 256 px square. */
 #define NAV_TILE_PX 256
 
-/* Wire formats a tile can arrive in. PNG is what the phone already holds, so
- * it costs nothing to forward; JPEG is a third smaller on the wire and
- * decodes in hardware, at the cost of transcoding on the phone and of
- * fringing on coloured labels. The format travels with each tile so the two
- * can be mixed and the choice revisited without a protocol change. */
+/* Wire formats a tile can arrive in, as the protocol defines them.
+ *
+ * Only PNG is decoded. That is what the phone holds and what it has always
+ * sent; the JPEG value stays here because it is part of the wire format, but
+ * the hardware decoder behind it was a P4 part and a path nothing exercised,
+ * so a tile that arrives as JPEG is now refused rather than decoded. */
 #define NAV_TILE_FMT_PNG  0
 #define NAV_TILE_FMT_JPEG 1
 
@@ -50,9 +51,28 @@ extern "C" {
  * layers survive long enough to be there when a hole opens. */
 #define NAV_TILE_FALLBACK_RESERVE 32
 
+/* PSRAM the cache will not take, however many slots are still empty.
+ *
+ * Ninety-six slots is 12 MB of tiles, which is fine on the P4 head units and
+ * more than the ESP32-S3 board has: it leaves about 5.7 MB after the code it
+ * runs from PSRAM and the framebuffers. The cache grew until the allocator
+ * started refusing it — and the thing that lost the race was the notification
+ * bridge, whose reassembly buffer is a single 192 KB block: three hours on the
+ * bench logged 275 "reasm buf alloc fail" in the first four minutes, i.e. every
+ * notification the phone sent while the map filled up was dropped.
+ *
+ * So the cache stops short and leaves this much for everyone else, reusing a
+ * slot instead of claiming another. Size it for the largest single block the
+ * rest of the firmware asks for, with room to spare. */
+#define NAV_TILE_PSRAM_RESERVE (768 * 1024)
+
 /* Told when a tile is dropped to make room. The phone keeps its own list of
  * what it has sent and will never send a tile twice, so it has to hear about
- * this or the hole would never be filled again. Worker task. */
+ * this or the hole would never be filled again. Worker task.
+ *
+ * Not called for a tile the microSD cache holds (nav_tile_store.c): that one
+ * is not lost, it is one file read away, and asking the phone for it again
+ * would put it back on the radio for no reason. */
 typedef void (*nav_tiles_evict_cb_t)(uint8_t z, uint32_t x, uint32_t y);
 void nav_tiles_set_evict_cb(nav_tiles_evict_cb_t cb);
 
@@ -72,6 +92,14 @@ const uint16_t *nav_tiles_get(uint8_t z, uint32_t x, uint32_t y);
 /* Whether the tile is in the store, without touching its age. */
 bool nav_tiles_have(uint8_t z, uint32_t x, uint32_t y);
 
+/* Bring a tile back from the microSD cache into a slot. False when there is
+ * no card, the card does not have this tile, or it is already in RAM — the
+ * caller then leaves it to the phone, as before.
+ *
+ * Costs a file read plus a decode (tens of milliseconds for a PNG), which is
+ * two orders of magnitude less than the same tile over BLE. Worker task. */
+bool nav_tiles_load_cached(uint8_t z, uint32_t x, uint32_t y);
+
 /* Forget everything — a new region, or a link that came back after long
  * enough that the phone will resend. */
 void nav_tiles_clear(void);
@@ -86,6 +114,8 @@ typedef struct {
     uint32_t decoded;      /* tiles decoded since boot */
     uint32_t rejected;     /* payloads we could not decode */
     uint32_t evicted;
+    uint32_t evicted_quiet; /* of those, ones the card held — phone not told */
+    uint32_t from_sd;      /* tiles brought back from the card */
     uint32_t last_ms;      /* how long the last decode took */
     uint32_t bytes_last;
 } nav_tiles_stats_t;
