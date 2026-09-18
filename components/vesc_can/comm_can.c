@@ -10,9 +10,11 @@
 
 #include "driver/twai.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"   /* xTaskCreatePinnedToCoreWithCaps */
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -116,6 +118,36 @@ static bool set_timing_for_speed(int can_speed_kbps)
     }
 }
 
+/* Task stacks come out of internal RAM, which on the ESP32-S3 board is the
+ * scarce resource — by the time the dashboard is up, the largest free block
+ * there is a few kilobytes. These two tasks are the whole receive path: the
+ * TWAI driver installs and starts without complaint whether or not they exist,
+ * so a failed xTaskCreate turns into a bus that is electrically alive and
+ * completely silent — frames reach the controller, nobody reads the replies,
+ * and the dashboard reports no VESC. Exactly the failure the navigator worker
+ * had on the same board.
+ *
+ * So: check, and fall back to a stack in PSRAM. That is sound on the board
+ * which needs it — it already runs its code from PSRAM
+ * (CONFIG_SPIRAM_FETCH_INSTRUCTIONS), which keeps the cache enabled across a
+ * flash write. */
+static BaseType_t can_task_create(TaskFunction_t fn, const char *name,
+                                  uint32_t stack, UBaseType_t prio,
+                                  TaskHandle_t *out, BaseType_t core)
+{
+    BaseType_t ok = xTaskCreatePinnedToCore(fn, name, stack, NULL, prio, out, core);
+    if (ok == pdPASS) return ok;
+
+    ESP_LOGW(TAG, "no internal RAM for the %s stack (free=%u largest=%u)"
+                  " — retrying in PSRAM", name,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    ok = xTaskCreatePinnedToCoreWithCaps(fn, name, stack, NULL, prio, out, core,
+                                         MALLOC_CAP_SPIRAM);
+    if (ok != pdPASS) ESP_LOGE(TAG, "%s task not created — CAN would be silent", name);
+    return ok;
+}
+
 esp_err_t comm_can_start(int pin_tx, int pin_rx,
                          uint8_t controller_id, int can_speed_kbps)
 {
@@ -142,8 +174,10 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
         /* 4096: the dispatch chain fans out to every *_process_response handler
          * (RT data, LISP stats, IO, config, LISP code, quick-action panel); a
          * couple of them parse multi-hundred-byte frames. 3072 was marginal. */
-        xTaskCreatePinnedToCore(process_task, "can_proc", 4096, NULL, 8,
-                                &s_process_task, 0);
+        if (can_task_create(process_task, "can_proc", 4096, 8,
+                            &s_process_task, 0) != pdPASS) {
+            return ESP_ERR_NO_MEM;   /* nothing would decode what arrives */
+        }
         s_sem_init_done = true;
     }
 
@@ -172,7 +206,11 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
     }
 
     s_stop_rx = false;
-    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, 0);
+    if (can_task_create(rx_task, "can_rx", 3072, 8, NULL, 0) != pdPASS) {
+        twai_stop();
+        twai_driver_uninstall();
+        return ESP_ERR_NO_MEM;       /* a silent bus is worse than a refused one */
+    }
 
     s_init_done = true;
     ESP_LOGI(TAG, "TWAI up: TX=%d RX=%d ID=%u %d kbps",
@@ -219,7 +257,11 @@ esp_err_t comm_can_reinit(uint8_t controller_id, int can_speed_kbps)
     }
 
     s_stop_rx = false;
-    xTaskCreatePinnedToCore(rx_task, "can_rx", 3072, NULL, 8, NULL, 0);
+    if (can_task_create(rx_task, "can_rx", 3072, 8, NULL, 0) != pdPASS) {
+        twai_stop();
+        twai_driver_uninstall();
+        return ESP_ERR_NO_MEM;
+    }
     s_init_done = true;
     ESP_LOGI(TAG, "reinit ok TX=%d RX=%d ID=%u %d kbps",
              prev_tx, prev_rx, controller_id, s_can_config.can_baud_rate_kbps);

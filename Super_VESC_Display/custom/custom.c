@@ -53,6 +53,18 @@ static int s_units_epoch = 0;
 #include "vesc_can/vesc_link.h"
 #endif
 
+/* Android Auto exists only on the P4 head units: the S3 dashboard board has no
+ * AA stack at all (CONFIG_AA_ENABLE depends on the P4), no BT agent to page a
+ * phone with, and its 3-finger gesture can only ever bring up the navigator —
+ * ui_mode's phone_mode() does not even read the setting there. Offering the
+ * choice anyway left two rows in Settings that did nothing. The simulator
+ * draws the P4 panel, so it keeps them. */
+#if !defined(LV_REALDEVICE) || CONFIG_AA_ENABLE
+#define UI_HAS_ANDROID_AUTO 1
+#else
+#define UI_HAS_ANDROID_AUTO 0
+#endif
+
 int cruise_active = 0;
 
 /*********************
@@ -425,8 +437,10 @@ static lv_obj_t *settings_theme_dropdown = NULL;
 static lv_obj_t *settings_theme_label = NULL;
 static lv_obj_t *settings_splash_loops_dropdown = NULL;
 static lv_obj_t *settings_splash_loops_label = NULL;
+#if UI_HAS_ANDROID_AUTO
 static lv_obj_t *settings_phone_screen_dropdown = NULL;
 static lv_obj_t *settings_phone_screen_label = NULL;
+#endif
 static lv_obj_t *settings_display_flip_switch = NULL;
 static lv_obj_t *settings_display_flip_label = NULL;
 static lv_obj_t *settings_brightness_slider = NULL;
@@ -445,9 +459,11 @@ static lv_obj_t *settings_demo_mode_label = NULL;
 static lv_obj_t *settings_vesc_emulator_switch = NULL;
 static lv_obj_t *settings_vesc_emulator_label = NULL;
 static lv_obj_t *settings_vesc_emulator_hint  = NULL;
+#if UI_HAS_ANDROID_AUTO
 static lv_obj_t *settings_aa_autoconnect_switch = NULL;
 static lv_obj_t *settings_aa_autoconnect_label  = NULL;
 static lv_obj_t *settings_aa_autoconnect_hint   = NULL;
+#endif
 static lv_obj_t *settings_units_switch = NULL;
 static lv_obj_t *settings_units_label  = NULL;
 static lv_obj_t *settings_units_hint   = NULL;
@@ -1587,6 +1603,7 @@ static void splash_loops_dropdown_event_cb(lv_event_t *e) {
  * Android Auto (the phone projecting over Wi-Fi) or the Navigator picture the
  * companion app streams over BLE. Only one of them can own the panel. Read by
  * ui_mode_toggle, so the choice applies on the next gesture. */
+#if UI_HAS_ANDROID_AUTO
 static void phone_screen_dropdown_event_cb(lv_event_t *e) {
     if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
     uint16_t sel = lv_dropdown_get_selected(lv_event_get_target(e));
@@ -1597,6 +1614,7 @@ static void phone_screen_dropdown_event_cb(lv_event_t *e) {
                                    : "3-finger hold shows Android Auto");
     }
 }
+#endif /* UI_HAS_ANDROID_AUTO */
 
 // Event handler for the display-flip switch. ON = 180° flip for upside-down
 // mounting. The LVGL adapter's rotation is fixed at boot, so the new
@@ -1984,6 +2002,7 @@ static void vesc_emulator_switch_event_cb(lv_event_t *e) {
 // Event handler for AA Auto-Connect switch. The actual reconnect loop lives
 // on the BT agent (D1 Mini); the setter fires a callback in main.c that
 // pushes AUTO_RECONNECT|0|1 over UART, so the flag takes effect immediately.
+#if UI_HAS_ANDROID_AUTO
 static void aa_autoconnect_switch_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
@@ -1992,6 +2011,7 @@ static void aa_autoconnect_switch_event_cb(lv_event_t *e) {
         settings_wrapper_set_aa_autoconnect(checked);
     }
 }
+#endif /* UI_HAS_ANDROID_AUTO */
 
 // Event handler for Units switch. OFF = metric (km, km/h), ON = imperial
 // (miles, mph). Persists immediately and re-skins every speed/distance readout
@@ -2520,9 +2540,11 @@ static void reset_button_event_cb(lv_event_t *e) {
         if (settings_splash_loops_dropdown) {
             lv_dropdown_set_selected(settings_splash_loops_dropdown, splash_loops_to_index(1));
         }
+#if UI_HAS_ANDROID_AUTO
         if (settings_phone_screen_dropdown) {
             lv_dropdown_set_selected(settings_phone_screen_dropdown, 0);
         }
+#endif
         if (settings_display_flip_switch) {
             lv_obj_clear_state(settings_display_flip_switch, LV_STATE_CHECKED);
         }
@@ -2756,6 +2778,7 @@ void settings_ui_init(lv_ui *ui) {
 
     y_pos += SETTINGS_ROW_H;
 
+#if UI_HAS_ANDROID_AUTO
     SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
 
     // ========== Phone screen (what the 3-finger gesture shows) ==========
@@ -2776,6 +2799,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_add_event_cb(settings_phone_screen_dropdown, phone_screen_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     y_pos += SETTINGS_ROW_H;
+#endif /* UI_HAS_ANDROID_AUTO */
 
     SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
 
@@ -3268,6 +3292,7 @@ void settings_ui_init(lv_ui *ui) {
     y_pos += SETTINGS_ROW_H;
 #endif /* LV_REALDEVICE */
 
+#if UI_HAS_ANDROID_AUTO
     SETTINGS_GROUP(SETTINGS_TAB_CONNECTION);
 
     // ========== AA Auto-Connect Switch ==========
@@ -3296,6 +3321,7 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_text_font(settings_aa_autoconnect_hint, &lv_font_montserrat_14, 0);
 
     y_pos += SETTINGS_ROW_H;
+#endif /* UI_HAS_ANDROID_AUTO */
 
     SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
 

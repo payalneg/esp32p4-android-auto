@@ -259,3 +259,29 @@ menu "Android Auto Head Unit"
         range 1 100
 
 endmenu
+
+# ---------------------------------------------------------------------------
+# LVGL 9 decoder switches, declared here only so they exist.
+#
+# The registry's dependency graph pulls libpng / lz4 / libjpeg-turbo into LVGL
+# under rules like `if: LV_USE_LIBPNG`. Those options live in LVGL 9's Kconfig;
+# we are on 8.3.11, where they exist nowhere, so the component manager could
+# not evaluate the rules and asked CMake to re-run — and ESP-IDF 5.5 turns the
+# second failure into "Missing required kconfig option after retry". Every
+# board stopped configuring at once, with no change of ours to blame.
+#
+# Declaring them false answers the question the manager is asking: those
+# decoders are not wanted. libpng still arrives the normal way, as
+# esp_lv_decoder's own dependency. Delete this block if LVGL is ever updated
+# to 9, which defines them itself.
+config LV_USE_LIBPNG
+    bool "LVGL PNG decoder (not used on LVGL 8.3)"
+    default n
+
+config LV_USE_LZ4
+    bool "LVGL LZ4 support (not used on LVGL 8.3)"
+    default n
+
+config LV_USE_LIBJPEG_TURBO
+    bool "LVGL libjpeg-turbo decoder (not used on LVGL 8.3)"
+    default n
