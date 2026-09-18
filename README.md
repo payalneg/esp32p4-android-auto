@@ -23,6 +23,43 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
+## ⚠️ THIS RELEASE IS NOT TESTED ON HARDWARE ⚠️
+
+**Read this before flashing anything.** Firmware 1.3.33 / app 0.3.41 compiles
+for all three boards and its numbers were measured on a host, but almost none
+of it has been run on a real vehicle. The panel used for testing broke during
+the investigation below, so the work stops here rather than being finished.
+
+What that means, point by point:
+
+- **CAN on the ESP32-S3 board does not work, and the cause is unknown.** The
+  dashboard boots and the driver comes up (`TWAI up: TX=6 RX=0 ID=2 500 kbps`),
+  but not one frame is ever acknowledged: the controller counter pins at
+  `tx_err=128` and the bus drops off roughly once a second, 21 times in the
+  first 25 seconds. Nothing is received. Wiring, on-board termination (120 Ω
+  reads correctly at the connector), bus speed and the board's own CAN id were
+  all checked and none of them explains it. Do not assume the S3 board talks to
+  a VESC.
+- **The CAN task fix is unproven.** `comm_can.c` now checks whether its receive
+  tasks were actually created and falls back to a PSRAM stack — on the S3 board
+  internal RAM runs out (the navigator worker already hits this: 8.9 KB free,
+  7.2 KB largest block). The fix compiles and the boot log shows the path is
+  live, but it was never the thing that was broken, so it has never fired for
+  CAN in anger.
+- **Problem reports** (panel screenshot + log pulled over BLE into a share
+  sheet) are verified by compilation only — the phone and the head unit were
+  never connected to each other with this build.
+- **Route quality** (the penalties that stop a route sawing between a road and
+  its pavement) is measured on a host against the real Kraków graph: 1.58 → 0.58
+  changes of line per km. Nobody has ridden it.
+- **The LV_USE_* Kconfig stubs** exist only to let the build configure at all
+  (the registry asks for LVGL 9 options we do not have). They are proven by the
+  build system and by nothing else.
+- **The two P4 boards were not powered on for this release at all.** Their
+  images build; that is the whole of the evidence.
+
+Earlier releases were ridden. This one was not.
+
 ![VESC dashboard — battery, speed, voltage, odometer, motor / controller temps](docs/images/hero.jpg)
 
 > 🎬 Short ride demo: [`docs/demo.mp4`](docs/demo.mp4) · [`docs/demo-2.mp4`](docs/demo-2.mp4) · [`docs/demo-3.mp4`](docs/demo-3.mp4)

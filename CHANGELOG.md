@@ -9,6 +9,42 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.33 / app 0.3.41 — 2026-09-18
+
+### NOT TESTED ON HARDWARE
+
+The panel used for testing broke mid-investigation, so this release ships
+unridden — see the warning at the top of the README. What follows was built and
+reasoned about, not driven.
+
+### The square board: a receive path that cannot fail silently
+
+- **CAN on the ESP32-S3 board does not work, and the cause is still unknown.**
+  The dashboard boots, the driver comes up (`TWAI up: TX=6 RX=0 ID=2
+  500 kbps`), and then not one frame is ever acknowledged: `tx_err` pins at 128
+  and the bus drops off 21 times in the first 25 seconds with nothing received.
+  Wiring, the on-board 120 Ω termination, bus speed and the board's own CAN id
+  were all checked and none of them accounts for it.
+- What did get fixed is a way that failure could have hidden. `comm_can`'s two
+  tasks are the whole receive path, their stacks come from internal RAM — the
+  scarce resource on that board, where the navigator worker already falls back
+  to PSRAM — and the TWAI driver starts happily whether or not they exist. A
+  failed `xTaskCreate` would have left a bus that is electrically alive and
+  completely silent, with nothing in the log. The result is checked now, the
+  stack falls back to PSRAM, and a start that cannot receive returns an error
+  instead of pretending.
+- **Android Auto is gone from the settings menu on boards that do not have it.**
+  "Phone screen (3-finger)" and "AA Auto-Connect" were offered on the S3
+  dashboard, where the gesture can only ever raise the navigator and there is no
+  BT agent to page a phone. The simulator keeps both rows, because it draws the
+  P4 panel.
+- **The build itself had to be unblocked.** Every board stopped configuring with
+  "Missing required kconfig option after retry": the registry pulls libpng, lz4
+  and libjpeg-turbo under rules like `if: LV_USE_LIBPNG`, those options belong
+  to LVGL 9, and we are on 8.3.11. Three stubs in `main/Kconfig.projbuild`
+  answer it — with prompts, because the component manager reads options from the
+  generated `sdkconfig.json` and an option without a prompt never arrives there.
+
 ## v1.3.32 / app 0.3.40 — 2026-09-16
 
 ### The route stops crossing the road for nothing
