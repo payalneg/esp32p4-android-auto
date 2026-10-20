@@ -35,6 +35,9 @@ class NotifListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification) = emit(sbn, true)
 
     private fun emit(sbn: StatusBarNotification, removed: Boolean) {
+        // No receiver: avoid rendering icons and forwarding every phone
+        // notification into the Flutter engine while the bike is away.
+        if (!LinkPower.connected) return
         val n = sbn.notification ?: return
         val extras = n.extras ?: return
         val title = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() ?: ""

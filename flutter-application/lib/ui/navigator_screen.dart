@@ -1249,9 +1249,11 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   /// needs the receiver back, and the first version of this never looked
   /// again — so guidance started after the screen went dark never got a fix.
   void _reviewBackgroundFixes() {
-    if (!_appHidden || !_gpsWanted) return;
+    if (!_appHidden) return;
     if (_fixesNeededInBackground) {
-      if (!_controller.gpsActive) _controller.attachFixes(_location.fixes());
+      if (_gpsWanted && !_controller.gpsActive) {
+        _controller.attachFixes(_location.fixes());
+      }
     } else if (_controller.gpsActive) {
       _controller.detachFixes();
     }
@@ -1278,6 +1280,11 @@ class _NavigatorScreenState extends State<NavigatorScreen>
       ));
       return false;
     }
+    // Permission checks can finish after the app was put away. Remember the
+    // request for the next connection/foreground, but do not start GNSS in
+    // the background when there is neither a ride nor a head unit.
+    _gpsWanted = true;
+    if (_appHidden && !_fixesNeededInBackground) return false;
     _controller.attachFixes(_location.fixes());
     // Only say "waiting" if there is actually a wait: a cached position
     // normally lands within the frame.

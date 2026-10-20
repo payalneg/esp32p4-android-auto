@@ -20,6 +20,7 @@ import '../firmware/ota_info.dart';
 import 'messages.dart';
 import 'nav_stream.dart';
 import 'protocol.dart';
+import 'reconnect_backoff.dart';
 import 'uuids.dart';
 
 enum BleConnState { idle, scanning, connecting, connected, disconnected }
@@ -96,8 +97,7 @@ class BleService {
   /// "the OS will handle it" is not good enough.
   Timer? _linkWatchdog;
   Timer? _helloRetry;
-  int _idleTicks = 0;
-  static const Duration _watchdogPeriod = Duration(seconds: 20);
+  final _idleBackoff = ReconnectBackoff();
 
   Stream<BleConnState> get state => _stateCtrl.stream;
   Stream<InboundCommand> get commands => _cmdCtrl.stream;
@@ -512,6 +512,7 @@ class BleService {
       _handleLinkUp(_device!);
     } else if (s == BluetoothConnectionState.disconnected) {
       _setState(BleConnState.disconnected);
+      _armLinkWatchdog();
       // Deliberately NOT re-arming here. With autoConnect:true this event
       // fires as a matter of course — once when the request is queued, and
       // again on transients while the link is perfectly alive — and cycling
@@ -579,24 +580,24 @@ class BleService {
   /// stack can otherwise hand back stale attribute handles and every write
   /// lands nowhere (link up, no data). Capped backoff covers a head unit
   /// that's still booting.
-  /// Re-ask for the link once it has been missing for two ticks in a row.
-  ///
-  /// Two, not one: a single [_watchdogPeriod] of "not connected" is normal
-  /// while a connection is being made, and re-arming through that window
-  /// cancels the attempt it is waiting for.
+  /// Recover a stalled autoConnect request, progressively less often while
+  /// the head unit is away. The OS can still connect immediately between
+  /// these manual retries. No periodic watchdog runs on a working link.
   void _armLinkWatchdog() {
-    _linkWatchdog?.cancel();
-    _idleTicks = 0;
-    _linkWatchdog = Timer.periodic(_watchdogPeriod, (_) {
+    if (_linkWatchdog?.isActive ?? false) return;
+    if (_state == BleConnState.connected || _userInitiatedDisconnect) return;
+    _linkWatchdog = Timer(_idleBackoff.delay, () {
+      _linkWatchdog = null;
       if (_userInitiatedDisconnect || _savedRemoteId == null) return;
       if (_state == BleConnState.connected) {
-        _idleTicks = 0;
+        _idleBackoff.reset();
         return;
       }
-      if (_handshaking) return;
-      if (_reconnectTimer?.isActive ?? false) return;
-      if (++_idleTicks < 2) return;
-      _idleTicks = 0;
+      if (_handshaking || (_reconnectTimer?.isActive ?? false)) {
+        _armLinkWatchdog();
+        return;
+      }
+      _idleBackoff.didRetry();
       _scheduleForceReconnect();
     });
   }
@@ -647,6 +648,9 @@ class BleService {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectAttempt = 0;
+    _idleBackoff.reset();
+    _linkWatchdog?.cancel();
+    _linkWatchdog = null;
     _clockTimer?.cancel();
     await _outSub?.cancel();
     _outSub = null;
@@ -668,6 +672,7 @@ class BleService {
   }
 
   Future<void> _teardown() async {
+    _idleBackoff.reset();
     _linkWatchdog?.cancel();
     _linkWatchdog = null;
     _reconnectTimer?.cancel();
@@ -871,6 +876,17 @@ class BleService {
   }
 
   void _setState(BleConnState s) {
+    if (s == BleConnState.connected) {
+      _linkWatchdog?.cancel();
+      _linkWatchdog = null;
+      _idleBackoff.reset();
+    }
+    if (s != BleConnState.connected) {
+      _clockTimer?.cancel();
+      _clockTimer = null;
+      _helloRetry?.cancel();
+      _helloRetry = null;
+    }
     _state = s;
     _stateCtrl.add(s);
     // Mirror the state into the system shade pill so the user sees

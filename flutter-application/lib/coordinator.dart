@@ -88,6 +88,7 @@ class Coordinator {
       s.replaceAll('…', '...').replaceAll(_exoticSpace, ' ');
 
   Future<void> _onNotification(IncomingNotification n) async {
+    if (!_ble.isConnected) return;
     if (_filter?.allows(n.package) == false) return;
     // Navigation notifications carry their own maneuver-arrow glyph,
     // rendered natively. Prefer it over the launcher icon so the head
@@ -151,6 +152,7 @@ class Coordinator {
   bool _mediaSending = false;
 
   Future<void> _onMedia(MediaSnapshot m) async {
+    if (!_ble.isConnected) return;
     _lastMedia = m;
     if (_mediaSending) return;
     _mediaSending = true;

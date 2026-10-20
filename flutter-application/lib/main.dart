@@ -65,7 +65,7 @@ Future<void> main() async {
   // pump and re-arms auto-connect. It survives the UI being closed.
   if (Platform.isAndroid &&
       await Permission.bluetoothConnect.isGranted) {
-    unawaited(ForegroundBridge().start());
+    unawaited(ForegroundBridge().start(migrateIdlePower: true));
   }
   // The boundary is what lets a problem report photograph the live UI
   // (diagnostics/problem_report.dart). It never repaints on its own, so it

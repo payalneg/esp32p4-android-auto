@@ -27,6 +27,8 @@ object MediaListener {
     private val main = Handler(Looper.getMainLooper())
     private var ticker: Runnable? = null
     private var lastSourcePackage: String? = null
+    private var linkConnected = false
+    private var attached = false
     // True once we've already pushed a fully-empty snapshot. Stops the
     // 1 Hz ticker from continually emitting "" / "" / "", which would
     // overwrite anything the test panel (or another producer) sent
@@ -39,7 +41,8 @@ object MediaListener {
         object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 sink = events
-                attach(ctx)
+                lastWasEmpty = false
+                if (linkConnected) attach(ctx)
             }
             override fun onCancel(arguments: Any?) {
                 sink = null
@@ -47,6 +50,25 @@ object MediaListener {
                 detach()
             }
         }
+
+    // The service can live for days waiting for the head unit. Do not run
+    // a 1 Hz ticker, render artwork or observe players during that wait.
+    fun setLinkConnected(ctx: Context, connected: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { setLinkConnected(ctx, connected) }
+            return
+        }
+        linkConnected = connected
+        if (connected && sink != null) {
+            if (!attached) {
+                lastWasEmpty = false
+                attach(ctx) // Sends the current player/cover immediately.
+            }
+        } else {
+            stopTicker()
+            detach()
+        }
+    }
 
     fun control(ctx: Context, cmd: String) {
         val c = activeController() ?: return
@@ -72,6 +94,8 @@ object MediaListener {
     private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
 
     private fun attach(ctx: Context) {
+        if (attached) return
+        attached = true
         val msm = ctx.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
         sessionManager = msm
         val cn = ComponentName(ctx, NotifListener::class.java)
@@ -94,6 +118,7 @@ object MediaListener {
     }
 
     private fun detach() {
+        attached = false
         sessionsListener?.let { listener ->
             try {
                 sessionManager?.removeOnActiveSessionsChangedListener(listener)

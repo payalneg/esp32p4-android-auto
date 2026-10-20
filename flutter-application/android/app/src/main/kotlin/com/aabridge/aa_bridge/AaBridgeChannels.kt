@@ -31,6 +31,18 @@ object AaBridgeChannels {
     ) {
         val appCtx = context.applicationContext
 
+        MethodChannel(messenger, "aabridge/link-power")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "setConnected") {
+                    val connected = call.argument<Boolean>("connected") == true
+                    LinkPower.setConnected(appCtx, connected)
+                    MediaListener.setLinkConnected(appCtx, connected)
+                    result.success(null)
+                } else {
+                    result.notImplemented()
+                }
+            }
+
         MethodChannel(messenger, "aabridge/notifications.cmd")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

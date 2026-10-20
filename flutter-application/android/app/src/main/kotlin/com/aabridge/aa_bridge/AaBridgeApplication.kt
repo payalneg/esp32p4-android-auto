@@ -35,8 +35,14 @@ class AaBridgeApplication : Application() {
 
                 override fun onTaskStart(starter: FlutterForegroundTaskStarter) {}
                 override fun onTaskRepeatEvent() {}
-                override fun onTaskDestroy() {}
-                override fun onEngineWillDestroy() {}
+                override fun onTaskDestroy() {
+                    LinkPower.release()
+                    MediaListener.setLinkConnected(applicationContext, false)
+                }
+                override fun onEngineWillDestroy() {
+                    LinkPower.release()
+                    MediaListener.setLinkConnected(applicationContext, false)
+                }
             }
         )
     }
