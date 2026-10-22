@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ESP32-P4 Android Auto head unit flasher.
+ESP32-P4 / ESP32-S3 head unit flasher.
 
 Sits next to the merged images release/esp32p4_android_auto-<board>-<ver>-merged.bin.
 Asks which board to flash, finds the serial port, writes the image with esptool.
@@ -16,7 +16,6 @@ it is missing.
 """
 import glob, os, re, shutil, subprocess, sys
 
-CHIP = "esp32p4"
 BAUD = "460800"          # safe on almost any USB-serial; can be raised to 921600
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -24,7 +23,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BOARDS = {
     "waveshare": "Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3  (32 MB)",
     "jc4880":    "Guition JC4880P443C                      (16 MB)",
+    "s3touch4":  "Waveshare ESP32-S3-Touch-LCD-4           (16 MB)",
 }
+CHIPS = {"waveshare": "esp32p4", "jc4880": "esp32p4", "s3touch4": "esp32s3"}
 
 
 def die(msg):
@@ -101,7 +102,7 @@ def choose(prompt, items, render):
 
 def main():
     print("=" * 60)
-    print("  ESP32-P4 Android Auto flasher")
+    print("  ESP32-P4 / ESP32-S3 head unit flasher")
     print("=" * 60)
 
     fws = find_firmwares()
@@ -113,6 +114,9 @@ def main():
         "\nSelect board", fws,
         lambda f: f"{BOARDS.get(f[0], f[0])}   v{f[1]}",
     )
+    chip = CHIPS.get(board)
+    if chip is None:
+        die(f"unsupported board: {board}")
     size_mb = os.path.getsize(fw) / 1024 / 1024
     print(f"\nImage: {os.path.basename(fw)}  ({size_mb:.1f} MB)")
 
@@ -127,7 +131,7 @@ def main():
         print("\nNo ports listed -- esptool will auto-detect the port.")
 
     # --- flash ---
-    cmd = esptool_cmd() + ["--chip", CHIP]
+    cmd = esptool_cmd() + ["--chip", chip]
     if port:
         cmd += ["--port", port]
     cmd += ["--baud", BAUD, "write-flash", "--flash-size", "keep", "0x0", fw]

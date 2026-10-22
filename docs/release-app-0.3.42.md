@@ -34,9 +34,23 @@ The public APK has no embedded assistant API key.
 
 This is an app-only release. The APK carries the existing **1.3.33** firmware
 images for Waveshare, JC4880 and S3-Touch-LCD-4; no new firmware is released.
-Standalone firmware downloads remain in
-[v1.3.33](https://github.com/payalneg/esp32p4-android-auto/releases/tag/v1.3.33).
-The hardware limitations documented for that firmware still apply.
+Standalone firmware images for all three boards are attached to this release:
+
+| Board | OTA image | Full USB image |
+| --- | --- | --- |
+| Guition JC4880P443C | `esp32p4_android_auto-jc4880-1.3.33.bin` | `esp32p4_android_auto-jc4880-1.3.33-merged.bin` |
+| Waveshare ESP32-P4 | `esp32p4_android_auto-waveshare-1.3.33.bin` | `esp32p4_android_auto-waveshare-1.3.33-merged.bin` |
+| Waveshare ESP32-S3-Touch-LCD-4 | `esp32p4_android_auto-s3touch4-1.3.33.bin` | `esp32p4_android_auto-s3touch4-1.3.33-merged.bin` |
+
+For USB installation, download your board's `-merged.bin` together with
+`flash.py` and `flash.bat` (Windows) or `flash.command` (macOS), into one
+folder. Run the launcher, or use `python3 flash.py` on Linux. The flasher
+selects ESP32-P4 or ESP32-S3 to match the board and writes the full image
+at offset `0x0`. `SHA256SUMS.txt` covers the APK, firmware and flash tools.
+
+The hardware limitations documented for
+[v1.3.33](https://github.com/payalneg/esp32p4-android-auto/releases/tag/v1.3.33)
+still apply; in particular, CAN on the S3 board is not working.
 
 The battery-fix build was checked on an Android 16 phone: its foreground
 service stayed running without an app CPU wake lock or active GPS request
@@ -55,6 +69,12 @@ after reconnecting to a real head unit still needs hardware verification.
 останавливаются обработка медиа и лишние таймеры, реже выполняются
 принудительные повторы подключения. Автоподключение Android сохранено.
 Версия приложения — **0.3.42 (102)**, прошивка — прежняя **1.3.33**.
+К релизу приложены прошивки для Waveshare P4, JC4880 и S3-Touch-LCD-4:
+обычные `.bin` для OTA и полные `-merged.bin` для USB. Для USB скачайте
+образ своей платы, `flash.py` и `flash.bat` (Windows) или `flash.command`
+(macOS) в одну папку. На Linux запускайте `python3 flash.py`.
+Контрольные суммы — в `SHA256SUMS.txt`. Ограничения прошивки 1.3.33
+сохраняются, включая неработающий CAN на S3.
 
 Ключ подписи изменился. Исправленная сборка от 20 октября обновляется обычным
 способом. Для перехода с прежнего APK с GitHub потребуется удалить старое
