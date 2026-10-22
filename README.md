@@ -23,7 +23,12 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-## ⚠️ THIS RELEASE IS NOT TESTED ON HARDWARE ⚠️
+**Android companion app 0.3.42:** [Download APK and release notes](https://github.com/payalneg/esp32p4-android-auto/releases/tag/app-v0.3.42).
+Reduces background work while the head unit is out of range. This app-only
+release keeps firmware 1.3.33. Read the installation notes: the signing key
+changed since the previous GitHub APK.
+
+## ⚠️ FIRMWARE 1.3.33 IS NOT TESTED ON HARDWARE ⚠️
 
 **Read this before flashing anything.** Firmware 1.3.33 / app 0.3.41 compiles
 for all three boards and its numbers were measured on a host, but almost none
