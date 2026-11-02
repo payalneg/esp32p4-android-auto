@@ -13,7 +13,13 @@ Use ESP-IDF **v5.5.6** for this release (minimum v5.5.3 with v3.x support).
 The new profile disables the ROM watchdog implementation to avoid
 the v3.2 watchdog workaround mismatch in older IDF releases. It uses 200 MHz
 PSRAM with the startup memory test enabled and DIO / 80 MHz external flash.
-The BSP already uses IDF's revision-aware default MIPI clock sources.
+Starting with 1.3.35, the BSP leaves the DSI PHY clock source unset so IDF
+selects its revision-aware default (XTAL on v3.x, PLL_F20M on v1.x).
+Version 1.3.34 incorrectly used the deprecated `MIPI_DSI_PHY_CLK_SRC_DEFAULT`
+alias, which still means PLL_F20M and triggers `abort()` in the v3.x HAL.
+The reported 1.3.34 crash at PC `0x4010abe3` resolves to
+`_mipi_dsi_ll_set_phy_pllref_clock_source`; flash and PSRAM initialization
+had completed before this display startup failure.
 
 ## Build and flash on Windows
 

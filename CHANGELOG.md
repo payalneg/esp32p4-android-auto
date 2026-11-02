@@ -9,6 +9,17 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.35 / app 0.3.44 — 2026-11-02
+
+- Fix the P4 v3.x display startup panic in the MIPI DSI HAL. Leave the PHY
+  reference clock unspecified so IDF selects XTAL for v3.x and PLL_F20M for
+  legacy silicon, instead of forcing the deprecated legacy-only default.
+- Bundle the corrected firmware in the companion APK.
+- Initialize the P4 backlight PWM once, avoiding the duplicate GPIO 26
+  reservation warning during display startup.
+- Decoded the v1.3.34 v3.2 crash against its matching ELF: the abort originated
+  in `_mipi_dsi_ll_set_phy_pllref_clock_source` before panel initialization.
+
 ## v1.3.34 / app 0.3.43 — 2026-11-02
 
 - Add a separate `waveshare-rev3` build and release image for ESP32-P4

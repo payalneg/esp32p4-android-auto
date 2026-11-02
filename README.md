@@ -23,7 +23,7 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-**Firmware 1.3.34 / Android companion app 0.3.43:** files in [release/](release/).
+**Firmware 1.3.35 / Android companion app 0.3.44:** files in [release/](release/).
 Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
 images. The app selects the image using the board's reported profile.
 See [v3.2 recovery instructions](docs/esp32p4-rev3.md).

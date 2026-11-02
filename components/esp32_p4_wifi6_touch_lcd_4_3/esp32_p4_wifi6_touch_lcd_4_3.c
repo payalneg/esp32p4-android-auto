@@ -612,7 +612,10 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
     esp_lcd_dsi_bus_config_t bus_config = {
         .bus_id = 0,
         .num_data_lanes = BSP_LCD_MIPI_DSI_LANE_NUM,
-        .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+        // Let IDF select the revision-specific PLL reference clock. The old
+        // MIPI_DSI_PHY_CLK_SRC_DEFAULT alias always selects legacy PLL_F20M,
+        // which aborts in the P4 v3.x HAL (v3.x requires XTAL by default).
+        .phy_clk_src = 0,
         .lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS,
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus), TAG, "New DSI bus init failed");
@@ -856,8 +859,8 @@ lv_display_t *bsp_display_start_with_config(bsp_display_cfg_t *cfg)
     assert(cfg != NULL);
     BSP_ERROR_CHECK_RETURN_NULL(esp_lv_adapter_init(&cfg->lv_adapter_cfg));
 
-    BSP_ERROR_CHECK_RETURN_NULL(bsp_display_brightness_init());
-
+    // bsp_display_lcd_init -> bsp_display_new initializes backlight PWM.
+    // Configuring it here as well reserves the same GPIO twice.
     BSP_NULL_CHECK(disp = bsp_display_lcd_init(cfg), NULL);
 
     /* GT911 sometimes fails its first I2C transaction on cold boot —
