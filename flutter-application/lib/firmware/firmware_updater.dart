@@ -53,14 +53,18 @@ class FirmwareUpdater {
   /// Boards the APK ships an image for. Slugs match the firmware's
   /// BOARD_MODEL_ID (main/board.h) and the staged asset names
   /// (scripts/stage_firmware_asset.sh). Drives the manual firmware picker.
-  static const boards = <String>['waveshare', 'jc4880', 's3touch4'];
+  static const boards = <String>[
+    'waveshare', 'waveshare-rev3', 'jc4880', 's3touch4',
+  ];
 
   /// Human-readable product name for a board slug (untranslated — these are
   /// product names). Returns the raw slug for anything unrecognised.
   static String displayName(String? model) {
     switch (model) {
       case 'waveshare':
-        return 'Waveshare 4.3"';
+        return 'Waveshare 4.3" (P4 v1.x)';
+      case 'waveshare-rev3':
+        return 'Waveshare 4.3" (P4 v3.x)';
       case 'jc4880':
         return 'Guition JC4880P443C';
       case 's3touch4':
@@ -71,12 +75,20 @@ class FirmwareUpdater {
   }
 
   /// Resolve the bundled firmware asset for a given board model. The APK ships
-  /// one image per board; falls back to the default board when [model] is null
-  /// or unrecognised.
+  /// one image per board/revision. Legacy firmware without a model uses the
+  /// default; an explicit unknown model must never silently select a v1 image.
   static String assetFor(String? model) {
-    final m = boards.contains(model) ? model! : defaultModel;
+    final m = model ?? defaultModel;
+    if (!boards.contains(m)) {
+      throw ArgumentError.value(model, 'model', 'Unsupported firmware profile');
+    }
     return 'assets/firmware/esp32p4_android_auto-$m.bin';
   }
+
+  /// A detected profile cannot be overridden with an incompatible image.
+  /// Without device info the user must explicitly choose a known profile.
+  static bool canFlash(String? detected, String? selected) =>
+      boards.contains(selected) && (detected == null || detected == selected);
 
   /// Load the bundled firmware image bytes for [model]. Usable from the
   /// background isolate (rootBundle works there too) — the BLE OTA flash now

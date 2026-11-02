@@ -42,6 +42,17 @@ idf_build_set_property(DEPENDENCIES_LOCK "${DEPENDENCIES_LOCK}")
 
 project(esp32p4_android_auto)
 
+# ESP32-P4 v1.x and v3.x need different firmware, not a patched image header.
+if(CONFIG_IDF_TARGET_ESP32P4 AND NOT CONFIG_ESP32P4_SELECTS_REV_LESS_V3)
+    set(_idf_release "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}.${IDF_VERSION_PATCH}")
+    if(_idf_release VERSION_LESS "5.5.3")
+        message(FATAL_ERROR "ESP32-P4 rev3.x requires ESP-IDF >= 5.5.3")
+    endif()
+    if(CONFIG_ESP_REV_MIN_FULL LESS 300 OR CONFIG_ESP_REV_MAX_FULL LESS 302)
+        message(FATAL_ERROR "Invalid ESP32-P4 rev3.x configuration; use a fresh build directory")
+    endif()
+endif()
+
 # main/lv_conf.h is the single source of truth for LVGL configuration.
 # It must reach every component that does '#include "lv_conf.h"' or
 # '#include "lvgl.h"' (BSP, esp_lv_adapter, vesc_ui, Super_VESC_Display

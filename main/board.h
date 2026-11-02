@@ -21,6 +21,10 @@
 #define BOARD_MODEL_ID    "s3touch4"
 #define BOARD_MODEL_NAME  "Waveshare ESP32-S3-Touch-LCD-4"
 #else
+#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
 #define BOARD_MODEL_ID    "waveshare"
+#else
+#define BOARD_MODEL_ID    "waveshare-rev3"
+#endif
 #define BOARD_MODEL_NAME  "Waveshare ESP32-P4 4.3\""
 #endif

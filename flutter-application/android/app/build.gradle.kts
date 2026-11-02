@@ -7,7 +7,8 @@ plugins {
 
 android {
     namespace = "com.aabridge.aa_bridge"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_tts 4.2.5 requires API 36 even when using Flutter 3.29's SDK 35 default.
+    compileSdk = 36
     // flutter_local_notifications drags in a desugar dep that requires NDK 27.
     ndkVersion = "27.0.12077973"
 

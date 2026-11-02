@@ -40,7 +40,9 @@
 #include "esp_rom_sys.h"
 #include "esp_vbat.h"
 #include "hal/pmu_types.h"
+#include "soc/pmu_reg.h"
 #include "soc/pmu_struct.h"
+#include "soc/soc.h"
 
 static const char *TAG = "vbat";
 
@@ -54,8 +56,10 @@ void vbat_routing_enable(void)
     esp_rom_delay_us(500);
 
     esp_vbat_state_t bs = esp_vbat_get_battery_state();
+    /* The status bits are the same on v1.x/v3.x, but the v3.x register
+     * struct calls this field `module` instead of `ana_vddbat_mode`. */
     ESP_LOGI(TAG, "VBAT routing armed (ana=%u); coin cell: %s",
-             (unsigned)PMU.vbat_cfg.ana_vddbat_mode,
+             (unsigned)REG_GET_FIELD(PMU_VDDBAT_CFG_REG, PMU_ANA_VDDBAT_MODE),
              bs == ESP_VBAT_STATE_NORMAL     ? "NORMAL (>2.6V)" :
              bs == ESP_VBAT_STATE_LOWBATTERY ? "LOW — replace" :
                                                "CHARGING/?");

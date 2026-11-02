@@ -1,7 +1,7 @@
 name: aa_bridge
 description: "Notification + media BLE bridge to ESP32-P4 head unit."
 publish_to: 'none'
-version: 0.3.42+102
+version: 0.3.43+103
 
 environment:
   sdk: ^3.7.2
@@ -51,6 +51,7 @@ flutter:
     # (see lib/firmware/firmware_updater.dart). Refresh all with
     # scripts/stage_firmware_asset.sh after building each board.
     - assets/firmware/esp32p4_android_auto-waveshare.bin
+    - assets/firmware/esp32p4_android_auto-waveshare-rev3.bin
     - assets/firmware/esp32p4_android_auto-jc4880.bin
     - assets/firmware/esp32p4_android_auto-s3touch4.bin
     - assets/firmware/version.txt

@@ -9,6 +9,28 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.34 / app 0.3.43 — 2026-11-02
+
+- Add a separate `waveshare-rev3` build and release image for ESP32-P4
+  rev3.x / v3.2. Keep the `waveshare` profile for v1.x boards.
+- Use DIO/80 MHz flash, enable the PSRAM startup test, and disable the ROM
+  watchdog implementation in the rev3 profile for initial bring-up.
+- Read VBAT status using the register field macros shared by P4 v1.x/v3.x,
+  instead of the struct field name removed from the v3.x headers.
+- Use 80 MHz flash for the legacy P4 profiles too, avoiding IDF 5.5.6's
+  unresolved HPM-DC helpers at 120 MHz without requiring a DC-aware bootloader.
+- Advertise the revision-specific firmware profile over BLE and HTTP. Bundle
+  both Waveshare images in the companion app and reject a firmware selection
+  that disagrees with the detected profile.
+- Require modern esptool in the recovery helper, check the connected P4
+  revision before writing, and default to 115200 baud.
+- Set Android compile SDK 36 explicitly for the existing flutter_tts dependency.
+- Use NUL-terminating string copying in the CAN LISP stats parser and media
+  title/artist cache and file paths so S3 passes the compiler's truncation checks.
+- Mark release firmware and APK files as binary in Git to preserve their bytes.
+- Hardware validation is still required; these changes do not establish that
+  a particular board or display is electrically healthy.
+
 ## v1.3.33 / app 0.3.41 — 2026-09-18
 
 ### NOT TESTED ON HARDWARE

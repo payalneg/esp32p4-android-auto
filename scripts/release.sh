@@ -29,7 +29,7 @@ cd "$ROOT"
 
 # Boards to build a firmware image for. Each must have a sdkconfig.defaults.<board>
 # overlay and is built into its own build_<board>/ dir by scripts/build_board.sh.
-BOARDS=(waveshare jc4880 s3touch4)
+BOARDS=(waveshare waveshare-rev3 jc4880 s3touch4)
 
 # board -> chip, for esptool's --chip. Keep in sync with build_board.sh.
 board_chip() {

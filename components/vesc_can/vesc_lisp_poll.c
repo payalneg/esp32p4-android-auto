@@ -108,9 +108,8 @@ void vesc_lisp_poll_process_response(const uint8_t *data, unsigned int len)
             break;
         }
         double v = buffer_get_float32_auto(data, &ind);
-        strncpy(s_stats.variables[s_stats.variable_count].name, name,
-                sizeof(s_stats.variables[0].name) - 1);
-        s_stats.variables[s_stats.variable_count].name[sizeof(s_stats.variables[0].name) - 1] = '\0';
+        strlcpy(s_stats.variables[s_stats.variable_count].name, name,
+                sizeof(s_stats.variables[0].name));
         s_stats.variables[s_stats.variable_count].value = v;
         s_stats.variable_count++;
     }

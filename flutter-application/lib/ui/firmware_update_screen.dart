@@ -25,8 +25,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   String? _deviceModel;
 
   /// Board whose image will actually be flashed. Defaults to [_deviceModel]
-  /// when it's a known board, else [FirmwareUpdater.defaultModel]; the user
-  /// can override it with the picker.
+  /// when it's known. Without device info the user must choose explicitly.
   String? _selectedModel;
   String? _bundled;
 
@@ -73,7 +72,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
       _deviceModel = detected;
       _selectedModel = FirmwareUpdater.boards.contains(detected)
           ? detected
-          : FirmwareUpdater.defaultModel;
+          : null;
       _bleOtaSupported = bleOta;
       _transport = bleOta ? OtaTransport.ble : OtaTransport.wifi;
       _loading = false;
@@ -81,6 +80,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   }
 
   Future<void> _confirmAndFlash() async {
+    if (!FirmwareUpdater.canFlash(_deviceModel, _selectedModel)) return;
     final viaBle = _transport == OtaTransport.ble;
     final host = _hostCtrl.text.trim();
     if (!viaBle && host.isEmpty) return;
@@ -120,8 +120,7 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   /// the user picked an image for a different board than the one detected.
   String? _modelWarning(BuildContext context) {
     if (_deviceModel == null) return t(context, 'fw.warn.undetected');
-    if (FirmwareUpdater.boards.contains(_deviceModel) &&
-        _selectedModel != _deviceModel) {
+    if (_selectedModel != _deviceModel) {
       return t(context, 'fw.warn.mismatch');
     }
     return null;
@@ -279,7 +278,8 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
         _progress(context),
         const Spacer(),
         FilledButton.icon(
-          onPressed: _busy ? null : _confirmAndFlash,
+          onPressed: _busy || !FirmwareUpdater.canFlash(_deviceModel, _selectedModel)
+              ? null : _confirmAndFlash,
           icon: _busy
               ? const SizedBox(
                   width: 18,

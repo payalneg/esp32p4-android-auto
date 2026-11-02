@@ -18,7 +18,7 @@ set ROOT=%~dp0..
 cd /d "%ROOT%"
 
 :: Keep in sync with release.bat / build_board.sh.
-set BOARDS=waveshare jc4880 s3touch4
+set BOARDS=waveshare waveshare-rev3 jc4880 s3touch4
 
 :: Make idf.py available if the caller forgot to run export.bat.
 where idf.py >nul 2>nul
@@ -58,7 +58,7 @@ if /i "%BOARD%"=="all" (
 set VALID=0
 for %%B in (%BOARDS%) do if /i "%BOARD%"=="%%B" set VALID=1
 if "%VALID%"=="0" (
-    echo usage: %~nx0 [all^|waveshare^|jc4880^|s3touch4] [idf.py args...] 1>&2
+    echo usage: %~nx0 [all^|waveshare^|waveshare-rev3^|jc4880^|s3touch4] [idf.py args...] 1>&2
     exit /b 2
 )
 

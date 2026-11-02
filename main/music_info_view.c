@@ -16,7 +16,7 @@
  * background, show a transport glyph next to the labels.
  *
  * Polling once a tick — cheap; the LVGL task is the natural home for
- * this since strncpy/lv_label_set_text both expect the LVGL mutex. */
+ * this since strlcpy/lv_label_set_text both expect the LVGL mutex. */
 
 #include "music_info_view.h"
 
@@ -201,11 +201,11 @@ static void poll_cb(lv_timer_t *t)
 
     if (strcmp(s_last_title, m->title) != 0) {
         lv_label_set_text(s_title_lbl, m->title);
-        strncpy(s_last_title, m->title, sizeof(s_last_title) - 1);
+        strlcpy(s_last_title, m->title, sizeof(s_last_title));
     }
     if (strcmp(s_last_artist, m->artist) != 0) {
         lv_label_set_text(s_artist_lbl, m->artist);
-        strncpy(s_last_artist, m->artist, sizeof(s_last_artist) - 1);
+        strlcpy(s_last_artist, m->artist, sizeof(s_last_artist));
     }
     /* Transport state intentionally not surfaced as a glyph — the tile
      * is a read-only readout, not a control. The fallback s_art_glyph

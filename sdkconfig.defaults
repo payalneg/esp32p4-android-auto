@@ -131,9 +131,11 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="32MB"
-# 120 MHz QIO is supported on ESP32-P4 with this Waveshare board's GD25 flash;
-# saves ~150 ms of app-image load time.
-CONFIG_ESPTOOLPY_FLASHFREQ_120M=y
+# Stay at 80 MHz: IDF 5.5.6's >80 MHz timing path references HPM-DC helpers
+# unavailable with the legacy non-DC-aware bootloader configuration. This also
+# keeps OTA compatible with existing bootloaders without new dummy-cycle modes.
+CONFIG_ESPTOOLPY_FLASHFREQ_120M=n
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

@@ -14,7 +14,7 @@ set ROOT=%~dp0..
 cd /d "%ROOT%"
 
 :: Keep in sync with build_board.bat / release.sh.
-set BOARDS=waveshare jc4880 s3touch4
+set BOARDS=waveshare waveshare-rev3 jc4880 s3touch4
 
 where idf.py >nul 2>nul
 if %errorlevel% neq 0 (

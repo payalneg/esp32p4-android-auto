@@ -1,0 +1,4 @@
+# Merged P4 images begin with 8 KiB of 0xFF padding, which can fool Git's
+# binary detection. Preserve firmware bytes and avoid textual diffs/merges.
+release/*.bin binary
+release/*.apk binary

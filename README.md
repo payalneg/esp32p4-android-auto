@@ -23,10 +23,11 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-**Android companion app 0.3.42:** [Download APK and release notes](https://github.com/payalneg/esp32p4-android-auto/releases/tag/app-v0.3.42).
-Reduces background work while the head unit is out of range. This app-only
-release keeps firmware 1.3.33. Read the installation notes: the signing key
-changed since the previous GitHub APK.
+**Firmware 1.3.34 / Android companion app 0.3.43:** files in [release/](release/).
+Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
+images. The app selects the image using the board's reported profile.
+See [v3.2 recovery instructions](docs/esp32p4-rev3.md).
+This release still needs hardware validation; the limitations below remain.
 
 ## ⚠️ FIRMWARE 1.3.33 IS NOT TESTED ON HARDWARE ⚠️
 
@@ -290,9 +291,15 @@ manually once.
 
 ## 🚀 Build & Flash
 
+**ESP32-P4 v3.x / v3.2:** use the separate `waveshare-rev3` profile:
+`scripts\build_board.bat waveshare-rev3 build` (Windows) or
+`scripts/build_board.sh waveshare-rev3 build` (Linux/macOS).
+The existing `waveshare` 1.3.33 images target v1.x and cannot run on v3.x.
+Do not use `--force`. See [recovery and esptool requirements](docs/esp32p4-rev3.md).
+
 ### Prerequisites
 
-- **ESP-IDF v5.5 or newer** (tested with v5.5.3).
+- **ESP-IDF v5.5.6** (the 5.5 branch with P4 v3.2 fixes).
 - Install both targets — `esp32p4` is mandatory, `esp32` only if you want
   the Android Auto bonus.
 

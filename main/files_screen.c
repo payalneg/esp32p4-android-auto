@@ -168,8 +168,7 @@ static void basename_of(const char *path, char *out, size_t out_sz)
 {
     const char *slash = strrchr(path, '/');
     const char *n = slash ? slash + 1 : path;
-    strncpy(out, n, out_sz - 1);
-    out[out_sz - 1] = '\0';
+    strlcpy(out, n, out_sz);
 }
 
 static void format_size(uint64_t bytes, char *out, size_t out_sz)
@@ -652,11 +651,10 @@ static void on_rename_save(lv_event_t *e)
     }
     /* Compute parent dir from selected_path → join with new_name. */
     char parent[MAX_PATH];
-    strncpy(parent, s_st.selected_path, sizeof(parent) - 1);
-    parent[sizeof(parent) - 1] = '\0';
+    strlcpy(parent, s_st.selected_path, sizeof(parent));
     char *slash = strrchr(parent, '/');
     if (slash) *slash = '\0';
-    else strncpy(parent, s_st.cwd, sizeof(parent) - 1);
+    else strlcpy(parent, s_st.cwd, sizeof(parent));
 
     char dst[MAX_PATH];
     path_join(dst, sizeof dst, parent, new_name);

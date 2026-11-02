@@ -19,7 +19,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VER="${ROOT}/version.txt"
 DEST="${ROOT}/flutter-application/assets/firmware"
-BOARDS=(waveshare jc4880 s3touch4)
+BOARDS=(waveshare waveshare-rev3 jc4880 s3touch4)
 
 mkdir -p "$DEST"
 
