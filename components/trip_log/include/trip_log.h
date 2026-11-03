@@ -1,7 +1,8 @@
 /*
  * Trip time-series logging to the raw "triplog" flash partition (no filesystem)
- * — a circular log of fixed 64-byte records appended every ~10 s. Each record
- * carries a trip id that rolls over on "reset trip" / battery swap (hooked via
+ * — a circular log of fixed 64-byte records appended every ~10 s (a trip
+ * sample plus a lifetime-odometer checkpoint). Each record carries a trip id
+ * that rolls over on "reset trip" / battery swap (hooked via
  * vesc_trip_persist's reset callback); the current trip continues across
  * reboots. The reader exposes at most the 50 most recent (non-deleted) trips.
  *
@@ -26,6 +27,13 @@ void trip_log_init(void);
 /* Call every RT-data tick with the latest VESC snapshot. Internally throttles
  * the time-series sampling to ~10 s and tracks max speed. */
 void trip_log_tick(const vesc_setup_values_t *rt);
+
+/* Queue a lifetime-odometer checkpoint right away when odo_persist says one is
+ * due (the rider edited the number in Settings, or a trip reset folded the
+ * finished trip into the base). Cheap and non-blocking; safe to call from the
+ * UI tick even when no VESC data is arriving, so an edit made with the ESC
+ * silent still reaches flash. */
+void trip_log_odo_flush(void);
 
 /* ---- Optional external speed source (BLE wheel-speed sensor) ----
  *

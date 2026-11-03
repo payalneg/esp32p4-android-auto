@@ -46,6 +46,12 @@ void  trip_persist_set_reset_cb(void (*cb)(void));
  * speed_sensor.c to zero the BLE wheel-sensor trip alongside the VESC one. */
 void  trip_persist_add_reset_cb(void (*cb)(void));
 
+/* Listener fired at the START of trip_persist_reset(), before anything is
+ * zeroed, with the trip total as it stands (km). The lifetime odometer mirror
+ * (vesc_odo_persist) folds it into its base there; the post-reset callbacks
+ * cannot, because they only ever see the zeroed counters. */
+void  trip_persist_add_pre_reset_cb(void (*cb)(float trip_km));
+
 #ifdef __cplusplus
 }
 #endif

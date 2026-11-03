@@ -1,4 +1,4 @@
-# Firmware 1.3.35 / Android app 0.3.44
+# Firmware 1.3.36 / Android app 0.3.45
 
 Built with ESP-IDF 5.5.6. The APK contains an OTA image for every profile below.
 
@@ -15,7 +15,7 @@ The helper checks the P4 revision before writing and requires stable esptool
 
 - `*-merged.bin`: complete USB image, written at **0x0**.
 - The `.bin` without `-merged`: application image for OTA.
-- `aa_bridge-0.3.44.apk`: one app for all profiles. It selects the firmware using
+- `aa_bridge-0.3.45.apk`: one app for all profiles. It selects the firmware using
   the device's reported profile and blocks a detected revision/profile mismatch.
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 

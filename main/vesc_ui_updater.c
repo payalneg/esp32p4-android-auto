@@ -16,6 +16,7 @@
 #include "vesc_can/vesc_rt_data.h"
 #include "speed_sensor.h"
 #include "vesc_trip_persist.h"
+#include "vesc_odo_persist.h"
 #include "vesc_head2.h"
 #include "trip_log.h"
 #include "dashboard_theme.h"
@@ -95,7 +96,9 @@ static void push_zeros_locked(void)
     update_amp_hours(0.0f);
     update_battery_temp(0.0f);
     update_battery_voltage(0.0f);
-    update_odometer(0.0f);
+    /* Lifetime distance is not a "zero when the ESC is silent" value — it is
+     * stored here, so keep showing it. */
+    update_odometer(odo_persist_get_km());
     update_fps(0);
 }
 
@@ -120,6 +123,12 @@ static void push_rt_locked(void)
         update_speed(speed_sensor_get_kmh());
         update_trip(speed_sensor_get_trip_km());
         update_odometer(speed_sensor_get_odometer_km());
+    } else {
+        /* The lifetime odometer is stored on this display (vesc_odo_persist),
+         * not read live from the controller — so it is valid with the ESC
+         * silent, and an edit made in Settings shows up as soon as the
+         * dashboard is back. */
+        update_odometer(odo_persist_get_km());
     }
 
     if (!fresh) return;
@@ -148,6 +157,10 @@ static void push_rt_locked(void)
     trip_persist_update(rt->tachometer_abs,
                         rt->amp_hours - rt->amp_hours_charged,
                         rt->uptime_ms);
+    /* Lifetime odometer: only the first reading of a boot is used (to adopt the
+     * controller's counter when the log had no base); after that the mirror
+     * runs on trip_persist, which already survives VESC reboots. */
+    odo_persist_update(rt->odometer);
     trip_log_tick(rt);   /* per-trip history on the triplog partition (throttled to 10 s) */
 
     if (!ble_src) update_speed(vesc_rt_data_get_speed_kmh());
@@ -167,7 +180,6 @@ static void push_rt_locked(void)
     update_amp_hours(trip_persist_get_amp_hours());
     update_battery_temp(rt->temp_mos);
     update_battery_voltage(rt->v_in);
-    if (!ble_src) update_odometer(vesc_rt_data_get_odometer_km());
     update_uptime(trip_persist_get_uptime_ms());
 }
 
@@ -209,6 +221,14 @@ static void push_cruise_locked(void)
 static void updater_lv_timer_cb(lv_timer_t *t)
 {
     (void)t;
+
+    /* An odometer checkpoint made outside the sample cadence (the rider set the
+     * number in Settings, or a trip reset folded a trip into the base) is
+     * queued here rather than in push_rt_locked(): the Settings dialog runs
+     * with the dashboard off-screen and the ESC possibly silent, and both would
+     * otherwise delay the write. Non-blocking — it only fills the trip writer's
+     * queue. */
+    trip_log_odo_flush();
 
     /* Only write dashboard widgets while the dashboard is the active screen.
      * These setters target widgets that live on the dashboard screen; when

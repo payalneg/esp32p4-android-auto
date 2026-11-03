@@ -87,7 +87,9 @@ Earlier releases were ridden. This one was not.
 - **BLE NUS bridge** — VESC Tool over Bluetooth Low Energy talks straight
   to the controller through this dashboard, no extra adapter needed.
 - **Settings UI** on the device: CAN bitrate, controller ID, persisted
-  units / preferences, in-PSRAM ring buffer log viewer.
+  units / preferences, in-PSRAM ring buffer log viewer, and an odometer
+  editor (the lifetime total is kept on the display and checkpointed every
+  10 s, so a key-off never loses the end of a ride).
 - **HTTP OTA** with on-screen progress (`scripts/ota_push.sh`).
 
 ### 📺 Bonus — Wireless Android Auto

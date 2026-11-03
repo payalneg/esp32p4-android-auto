@@ -319,6 +319,16 @@ void speed_sensor_trip_reset(void)
     ESP_LOGI(TAG, "trip reset");
 }
 
+void speed_sensor_set_odometer_km(float km)
+{
+    if (!(km >= 0.0f)) return;        /* NaN / negative → ignore */
+    portENTER_CRITICAL(&s_mux);
+    s_odo_m = (double)km * 1000.0;
+    portEXIT_CRITICAL(&s_mux);
+    enqueue_dist_locked_snapshot();   /* persist immediately (deferred writer) */
+    ESP_LOGI(TAG, "odometer set to %.1f km", (double)km);
+}
+
 void speed_sensor_select(const uint8_t addr[6], uint8_t addr_type)
 {
     save_msg_t m = { .kind = SAVE_SENSOR };

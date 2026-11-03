@@ -4,6 +4,7 @@ idf_component_register(
         "vesc_stubs.c"
         "vesc_battery_calc.c"
         "vesc_trip_persist.c"
+        "vesc_odo_persist.c"
         "vesc_head2.c"
         "app_fs.c"
         "fw_slots.c"

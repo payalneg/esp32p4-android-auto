@@ -31,6 +31,7 @@ static bool     s_have_saved_state;
 static bool     s_uptime_supported;   /* VESC reports uptime_ms (sticky once seen) */
 static void   (*s_reset_cb)(void);
 static void   (*s_reset_cb2)(void);   /* second listener (BLE trip reset) */
+static void   (*s_pre_reset_cb)(float trip_km); /* sees the finished trip */
 
 /* A VESC uptime that went back by more than this is a controller reboot, not
  * jitter between two CAN replies. */
@@ -191,6 +192,10 @@ uint32_t trip_persist_get_uptime_ms(void)
 
 void trip_persist_reset(void)
 {
+    /* Tell the listeners that need the FINISHED trip total (the lifetime
+     * odometer folds it into its base) before the counters go to zero. */
+    if (s_pre_reset_cb) s_pre_reset_cb(trip_persist_get_trip_km());
+
     zero_state();
     ESP_LOGI(TAG, "reset complete");
 
@@ -206,4 +211,9 @@ void trip_persist_set_reset_cb(void (*cb)(void))
 void trip_persist_add_reset_cb(void (*cb)(void))
 {
     s_reset_cb2 = cb;
+}
+
+void trip_persist_add_pre_reset_cb(void (*cb)(float trip_km))
+{
+    s_pre_reset_cb = cb;
 }

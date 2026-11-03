@@ -9,6 +9,32 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.36 / app 0.3.45 — 2026-11-03
+
+### The odometer stops forgetting the end of the ride
+
+- Keep the lifetime odometer on the display instead of reading the controller's
+  counter every tick. The VESC only flushes its own odometer to flash every so
+  often, so a key-off straight after a ride regularly lost the last few hundred
+  metres. The mirror is `base + trip` at runtime, checkpointed into the raw trip
+  log every 10 s — the same cadence as the trip samples — so a power cut costs
+  at most one sample. A trip reset folds the finished trip into the base, and a
+  VESC reboot is already handled by `trip_persist`.
+- The checkpoint stores the **absolute** odometer, not the base: after a trip
+  reset right before a power cut the log can end up with a checkpoint from the
+  old trip next to a sample from the new one, and a base+sample pair from two
+  different trips would either add the finished trip twice or drop it. An
+  absolute value is correct in either order.
+- Settings → Bike → **Odometer** shows the current total and opens a modal with
+  a number keyboard to re-base it (a new controller, a frame swap, or a
+  controller that was flashed). It edits whichever odometer the dashboard is
+  showing — the VESC mirror or the BLE wheel sensor's.
+- The first boot after the update adopts the controller's own counter (after two
+  consistent readings, so a garbled frame cannot install a nonsense number), so
+  the displayed total does not jump.
+- The trip log now appends a small odometer-checkpoint record alongside each
+  trip sample; the reader ignores them, so trip statistics are unchanged.
+
 ## v1.3.35 / app 0.3.44 — 2026-11-02
 
 - Fix the P4 v3.x display startup panic in the MIPI DSI HAL. Leave the PHY

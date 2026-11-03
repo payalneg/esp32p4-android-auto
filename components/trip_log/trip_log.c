@@ -1,10 +1,12 @@
 /*
  * Trip time-series logger — raw circular log on the "triplog" flash partition
- * (no filesystem). Each 10 s a fixed 64-byte record is appended; records are
- * tagged with a trip id (rolled over on reset / battery swap) and a monotonic
- * seq. On NOR a programmed record is durable immediately (no fsync), so nothing
- * is lost on a power cut except an in-progress write (caught by CRC on the next
- * boot scan).
+ * (no filesystem). Each 10 s two fixed 64-byte records are appended: a trip
+ * sample and a lifetime-odometer checkpoint (see REC_TYPE_ODO — the mirror in
+ * vesc_odo_persist is checkpointed here so a power cut costs one sample, not
+ * whatever the controller forgot to flush). Records are tagged with a trip id
+ * (rolled over on reset / battery swap) and a monotonic seq. On NOR a
+ * programmed record is durable immediately (no fsync), so nothing is lost on a
+ * power cut except an in-progress write (caught by CRC on the next boot scan).
  *
  * Erase strategy: a flash erase suspends the cache for BOTH cores for its whole
  * duration (45 ms typical, up to 400 ms per the GD25Q256 datasheet — AUTO_SUSPEND
@@ -12,7 +14,8 @@
  * task AND stalls the DSI DMA fetching the PSRAM framebuffer: the screen
  * freezes and flashes blue. So erases must never land while the rider is
  * looking at the screen. The writer keeps a runway of pre-erased sectors AHEAD
- * of the head (RUNWAY_TARGET_SECTORS ≈ 11 h of logging), and the runway is
+ * of the head (RUNWAY_TARGET_SECTORS ≈ 8 h of logging at two records per
+ * sample), and the runway is
  * (re)built at BOOT, synchronously in trip_log_init() — main.c calls it before
  * display_init(), so the panel is still dark: a dirty sector costs a few tens
  * of ms of boot time instead of a mid-ride freeze. Only the sectors consumed
@@ -23,7 +26,7 @@
  * runway one sector at a time, but only after a SUSTAINED standstill (speed
  * ~0 for IDLE_DWELL_TICKS, or the ESC silent for minutes — see bike_is_idle);
  * before crossing into a fresh sector it checks the sector is clean and erases
- * just-in-time if not — that only happens if the runway was exhausted (>11 h
+ * just-in-time if not — that only happens if the runway was exhausted (>8 h
  * of logging in one session without a long stop).
  *
  * History: the boot pre-erase originally ran from the writer task concurrently
@@ -38,6 +41,7 @@
 #include "trip_log.h"
 
 #include "vesc_trip_persist.h"
+#include "vesc_odo_persist.h"
 #include "vesc_battery_calc.h"
 #include "vesc_head2.h"
 #include "vesc_can/crc.h"
@@ -61,13 +65,14 @@ static const char *TAG = "trip_log";
 #define REC_VER            4            /* v2: 2nd-head temps; v3: smart-battery state; v4: boot-time pack voltage */
 #define REC_TYPE_SAMPLE    0
 #define REC_TYPE_TRIP_START 1
+#define REC_TYPE_ODO       2   /* lifetime odometer checkpoint (distance_m = absolute odometer) */
 #define REC_SIZE           64
 #define SECTOR             4096
 #define RECS_PER_SECTOR    (SECTOR / REC_SIZE)   /* 64 — records never straddle a sector */
 #define SAMPLE_INTERVAL_US (10ULL * 1000 * 1000)
 #define QUEUE_DEPTH        8
 #define MAX_TRIPS          50          /* logical history window, enforced at boot only */
-#define RUNWAY_TARGET_SECTORS 64       /* clean sectors kept ahead of the head (~11 h) */
+#define RUNWAY_TARGET_SECTORS 90       /* clean sectors kept ahead of the head (~8 h at 2 rec/10 s) */
 #define RUNWAY_BOOT_MIN       2        /* writer-task safety net if the boot build fell short */
 #define RUNWAY_BOOT_BUDGET_US (3LL * 1000 * 1000) /* wall-time cap for the boot runway build */
 #define RUNWAY_TRICKLE_MS     3000     /* idle-loop period for background runway erases */
@@ -86,7 +91,7 @@ typedef struct __attribute__((packed)) {
     uint32_t trip_id;
     uint32_t seq;          /* global monotonic; assigned by the writer */
     uint32_t t_s;          /* seconds into this trip */
-    uint32_t distance_m;   /* trip total (resume seed) */
+    uint32_t distance_m;   /* trip total (resume seed); TYPE_ODO: absolute odometer */
     float    ah;           /* trip total Ah (resume seed) */
     float    wh;           /* VESC watt-hours (cumulative) */
     uint32_t uptime_ms;    /* trip total uptime (resume seed) */
@@ -191,15 +196,32 @@ static void boot_scan(void)
         return;
     }
 
-    /* Fine pass: within the newest sector, find the last valid record. The head
-     * is the slot after it (or the first slot of the next sector if full). */
-    uint32_t last_slot = best_sec * RECS_PER_SECTOR;
-    trip_rec_t last = {0};
-    bool got = false;
-    for (uint32_t i = 0; i < RECS_PER_SECTOR; i++) {
-        uint32_t slot = best_sec * RECS_PER_SECTOR + i;
-        if (esp_partition_read(s_part, slot_off(slot), &r, REC_SIZE) != ESP_OK) continue;
-        if (rec_valid(&r) && (!got || r.seq >= last.seq)) { last = r; last_slot = slot; got = true; }
+    /* Fine pass: within the newest sector — and, when a checkpoint or a sample
+     * straddles the sector boundary, the sectors just before it — find the last
+     * record of any kind (head + seq + trip clock), the last trip SAMPLE (trip
+     * totals seed) and the last odometer checkpoint. They are separate walks
+     * because a TYPE_ODO record carries the lifetime odometer in distance_m
+     * and must never seed the trip totals. */
+    uint32_t last_slot = (uint32_t)best_sec * RECS_PER_SECTOR;
+    trip_rec_t last = {0}, last_sample = {0}, last_odo = {0};
+    bool got = false, got_sample = false, got_odo = false;
+    uint32_t sec = (uint32_t)best_sec;
+    for (uint32_t back = 0;
+         back < 4 && (!got_sample || !got_odo);
+         back++, sec = (sec + sectors - 1) % sectors) {
+        for (uint32_t i = 0; i < RECS_PER_SECTOR; i++) {
+            uint32_t slot = sec * RECS_PER_SECTOR + i;
+            if (esp_partition_read(s_part, slot_off(slot), &r, REC_SIZE) != ESP_OK) continue;
+            if (!rec_valid(&r)) continue;
+            if (back == 0 && (!got || r.seq >= last.seq)) {
+                last = r; last_slot = slot; got = true;
+            }
+            if (r.type == REC_TYPE_ODO) {
+                if (!got_odo || r.seq > last_odo.seq) { last_odo = r; got_odo = true; }
+            } else {
+                if (!got_sample || r.seq > last_sample.seq) { last_sample = r; got_sample = true; }
+            }
+        }
     }
     if (!got) {
         /* The coarse pass picked this sector precisely because its first record
@@ -217,27 +239,41 @@ static void boot_scan(void)
     s_trip_t_s = last.t_s;
     s_head    = (last_slot + 1) % s_total_recs;
 
-    /* Resume the dashboard running totals from the last record. */
-    trip_persist_seed_totals(last.distance_m, last.ah, last.uptime_ms);
+    /* Resume the dashboard running totals from the last SAMPLE record. */
+    if (got_sample) {
+        trip_persist_seed_totals(last_sample.distance_m, last_sample.ah, last_sample.uptime_ms);
 
-    /* Resume the smart-battery tracker too (10 s freshness vs the rare NVS
-     * fallback). battery_calc validates the epoch and rejects stale seeds. */
-    if (last.ver >= 3) {
-        battery_calc_seed_remaining(last.batt_remaining_ah, last.batt_epoch);
+        /* Resume the smart-battery tracker too (10 s freshness vs the rare NVS
+         * fallback). battery_calc validates the epoch and rejects stale seeds. */
+        if (last_sample.ver >= 3) {
+            battery_calc_seed_remaining(last_sample.batt_remaining_ah, last_sample.batt_epoch);
+        }
+
+        /* Charge/swap baseline for battery_calc_voltage_boot_check(): the pack
+         * voltage the PREVIOUS power-on saw, carried in every record since v4. Read
+         * here, while the panel is still dark, instead of the old nvs_commit that
+         * landed right as the ESC came up (= a blue flash on every power-on). A
+         * pre-v4 newest record (first boot after the update) seeds "none" and
+         * battery_calc falls back to its legacy NVS value, read-only. */
+        battery_calc_seed_boot_vin(true, (last_sample.ver >= 4 && last_sample.boot_vin_dv != 0)
+                                             ? last_sample.boot_vin_dv / 10.0f : -1.0f);
+    } else {
+        /* Only checkpoints in the ring — no trip to resume. */
+        battery_calc_seed_boot_vin(true, -1.0f);
     }
 
-    /* Charge/swap baseline for battery_calc_voltage_boot_check(): the pack
-     * voltage the PREVIOUS power-on saw, carried in every record since v4. Read
-     * here, while the panel is still dark, instead of the old nvs_commit that
-     * landed right as the ESC came up (= a blue flash on every power-on). A
-     * pre-v4 newest record (first boot after the update) seeds "none" and
-     * battery_calc falls back to its legacy NVS value, read-only. */
-    battery_calc_seed_boot_vin(true, (last.ver >= 4 && last.boot_vin_dv != 0)
-                                         ? last.boot_vin_dv / 10.0f : -1.0f);
+    /* Lifetime odometer: the absolute total at the checkpoint, resumed against
+     * the trip total that was just seeded (the term cancels out, so a reset
+     * between the two records cannot move the number). */
+    if (got_odo) {
+        odo_persist_seed_m(last_odo.distance_m);
+    }
 
-    ESP_LOGI(TAG, "resumed: trip=%u seq=%u head=%u dist=%um ah=%.2f",
+    ESP_LOGI(TAG, "resumed: trip=%u seq=%u head=%u dist=%um ah=%.2f odo=%s",
              (unsigned)s_trip_id, (unsigned)s_seq, (unsigned)s_head,
-             (unsigned)last.distance_m, last.ah);
+             (unsigned)(got_sample ? last_sample.distance_m : 0),
+             got_sample ? last_sample.ah : 0.0f,
+             got_odo ? "saved" : "none");
 }
 
 /* ---- writer task (all flash I/O) ---- */
@@ -474,6 +510,47 @@ void trip_log_new_trip(void)
     s_pending_new = true;   /* handled in trip_log_tick (single context) */
 }
 
+/* Odometer checkpoint: the lifetime distance itself, so the boot scan can
+ * resume the mirror without the controller's own sporadically saved counter.
+ * It is stored ABSOLUTE rather than as the mirror's base because after a trip
+ * reset near a power cut the newest checkpoint and the newest sample can come
+ * from different trips — an absolute value is right in either order, a base
+ * would be read against the wrong trip distance. Everything else in the record
+ * is filler; seq + crc are the writer's job. */
+static void queue_odo_record(void)
+{
+    /* No base yet (first boot with no log and no usable VESC counter): writing
+     * a 0 here would seed the next boot with a zeroed odometer. */
+    if (!odo_persist_has_base()) return;
+
+    trip_rec_t rec;
+    memset(&rec, 0, sizeof rec);
+    rec.magic      = REC_MAGIC;
+    rec.type       = REC_TYPE_ODO;
+    rec.ver        = REC_VER;
+    rec.trip_id    = s_trip_id;
+    rec.t_s        = s_trip_t_s;
+    rec.distance_m = odo_persist_get_m();
+
+    if (xQueueSend(s_queue, &rec, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "queue full — odometer checkpoint dropped");
+        return;
+    }
+    odo_persist_checkpoint_taken();
+}
+
+/* Queue a checkpoint now when the mirror changed outside the sample cadence
+ * (the rider set the number in Settings, or a trip reset folded a trip into
+ * the base). Called from the UI tick even while the ESC is silent, so an edit
+ * with no CAN link still lands. Non-blocking — it only fills the writer's
+ * queue. */
+void trip_log_odo_flush(void)
+{
+    if (!s_part || !s_queue) return;
+    if (!odo_persist_checkpoint_due()) return;
+    queue_odo_record();
+}
+
 void trip_log_tick(const vesc_setup_values_t *rt)
 {
     if (!rt || !s_part || !s_queue) return;
@@ -551,6 +628,10 @@ void trip_log_tick(const vesc_setup_values_t *rt)
     if (xQueueSend(s_queue, &rec, 0) != pdTRUE) {
         ESP_LOGW(TAG, "queue full — sample dropped");
     }
+
+    /* Lifetime odometer checkpoint alongside the sample: one extra 64-byte
+     * record per cadence keeps the mirror within one sample of a power cut. */
+    queue_odo_record();
 }
 
 bool trip_log_is_trip_deleted(uint32_t trip_id) { return is_deleted(trip_id); }
@@ -615,6 +696,7 @@ typedef struct { trip_acc_t *acc; uint32_t first, current; } list_ctx_t;
 static void list_cb(const trip_rec_t *r, void *u)
 {
     list_ctx_t *c = (list_ctx_t *)u;
+    if (r->type == REC_TYPE_ODO) return;                            /* checkpoint, not a sample */
     if (r->trip_id < c->first || r->trip_id > c->current) return;   /* outside the window */
     if (is_deleted(r->trip_id)) return;                             /* hidden by the user */
     trip_acc_t *a = &c->acc[r->trip_id - c->first];
@@ -676,6 +758,7 @@ typedef struct { uint32_t trip_id, max_t_s, count; } span_ctx_t;
 static void span_cb(const trip_rec_t *r, void *u)
 {
     span_ctx_t *c = (span_ctx_t *)u;
+    if (r->type == REC_TYPE_ODO) return;
     if (r->trip_id != c->trip_id) return;
     if (r->t_s > c->max_t_s) c->max_t_s = r->t_s;
     c->count++;
@@ -687,6 +770,7 @@ typedef struct { uint32_t trip_id, span; int nb; bucket_t *b; } bk_ctx_t;
 static void bucket_cb(const trip_rec_t *r, void *u)
 {
     bk_ctx_t *c = (bk_ctx_t *)u;
+    if (r->type == REC_TYPE_ODO) return;
     if (r->trip_id != c->trip_id) return;
     int idx = (c->span > 0) ? (int)(((uint64_t)r->t_s * c->nb) / (c->span + 1)) : 0;
     if (idx < 0) idx = 0;

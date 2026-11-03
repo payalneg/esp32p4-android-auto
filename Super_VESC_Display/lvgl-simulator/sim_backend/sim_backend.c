@@ -23,6 +23,7 @@
 #include "ble_speed_client.h"
 #include "pas.h"
 #include "speed_sensor.h"
+#include "vesc_odo_persist.h"
 #include "vesc_can/vesc_io_data.h"
 #include "vesc_can/vesc_lisp_code.h"
 #include "vesc_can/vesc_lisp_panel.h"
@@ -137,6 +138,7 @@ bool speed_sensor_is_fresh(void) { return s_spd_bound; }
 float speed_sensor_get_trip_km(void) { return s_trip_km; }
 float speed_sensor_get_odometer_km(void) { return s_odo_km; }
 void speed_sensor_trip_reset(void) { s_trip_km = 0.0f; }
+void speed_sensor_set_odometer_km(float km) { if (km >= 0.0f) s_odo_km = km; }
 void speed_sensor_select(const uint8_t a[6], uint8_t t) { (void)a; (void)t; s_spd_bound = true; }
 void speed_sensor_forget(void) { s_spd_bound = false; }
 
@@ -264,6 +266,18 @@ float    vesc_rt_data_get_odometer_km(void) { return s_odo_km; }
 float    vesc_rt_data_get_efficiency_whkm(void) { return 28.4f; }
 float    vesc_rt_data_get_amp_hours(void) { return 8.64f; }
 uint32_t vesc_rt_data_get_uptime_ms(void) { return lv_tick_get(); }
+
+/* components/dev_settings/vesc_odo_persist.c is not compiled into the host
+ * build; the odometer dialog and the speed screen stand in on s_odo_km. */
+void     odo_persist_init(void) { }
+void     odo_persist_seed_m(uint32_t odo_m) { (void)odo_m; }
+void     odo_persist_update(uint32_t vesc_odometer_m) { (void)vesc_odometer_m; }
+uint32_t odo_persist_get_m(void) { return (uint32_t)(s_odo_km * 1000.0f); }
+float    odo_persist_get_km(void) { return s_odo_km; }
+bool     odo_persist_has_base(void) { return true; }
+void     odo_persist_set_km(float km) { if (km >= 0.0f) s_odo_km = km; }
+bool     odo_persist_checkpoint_due(void) { return false; }
+void     odo_persist_checkpoint_taken(void) { }
 
 static vesc_io_data_t s_io;
 static bool s_io_active;

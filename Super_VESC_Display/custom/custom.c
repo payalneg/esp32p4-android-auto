@@ -435,6 +435,9 @@ static void settings_tabs_build(lv_obj_t *screen)
 // Settings UI objects (dynamically created)
 static lv_obj_t *settings_theme_dropdown = NULL;
 static lv_obj_t *settings_theme_label = NULL;
+/* Odometer row caption — refreshed by settings_odometer_refresh() after the
+ * "Set" dialog re-bases the lifetime total. */
+static lv_obj_t *settings_odometer_label = NULL;
 static lv_obj_t *settings_splash_loops_dropdown = NULL;
 static lv_obj_t *settings_splash_loops_label = NULL;
 #if UI_HAS_ANDROID_AUTO
@@ -2023,6 +2026,7 @@ static void units_switch_event_cb(lv_event_t *e) {
         bool checked = lv_obj_has_state(obj, LV_STATE_CHECKED);
         settings_wrapper_set_use_imperial(checked);
         dashboard_units_changed();
+        settings_odometer_refresh();   /* caption is in km or mi */
         if (settings_info_label) {
             lv_label_set_text(settings_info_label,
                               checked ? "Units: miles / mph" : "Units: km / km/h");
@@ -2614,6 +2618,23 @@ static void vesc_link_open_btn_event_cb(lv_event_t *e)
 static void speed_open_btn_event_cb(lv_event_t *e) {
     (void)e;
     show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
+}
+
+static void odo_set_btn_event_cb(lv_event_t *e) {
+    (void)e;
+    show_odo_set_dialog(); /* modal editor (custom/odo_dialog.c) */
+}
+
+void settings_odometer_refresh(void)
+{
+    if (!settings_odometer_label) return;
+    /* The label belongs to the Settings screen; it is rebuilt on every entry,
+     * and this is only called from the dialog that sits on top of it. */
+    if (lv_scr_act() != guider_ui.settings) return;
+
+    char cap[48];
+    odo_settings_summary(cap, (int)sizeof cap);
+    lv_label_set_text(settings_odometer_label, cap);
 }
 
 #ifdef LV_REALDEVICE
@@ -3413,6 +3434,36 @@ void settings_ui_init(lv_ui *ui) {
         lv_obj_add_event_cb(spd_btn, speed_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
     }
     y_pos += SETTINGS_ROW_H;
+
+    // ========== Odometer (lifetime total, editable) =====================
+    // Kept on this display (components/dev_settings/vesc_odo_persist.c) and
+    // checkpointed into the raw trip log every ~10 s: the controller only
+    // flushes its own counter occasionally, so a key-off right after a ride
+    // used to lose the tail. "Set" opens a modal with a number keyboard.
+    {
+        char cap[48];
+        odo_settings_summary(cap, (int)sizeof cap);
+        settings_odometer_label = settings_heading_create(parent, y_pos, cap);
+
+        lv_obj_t *odo_btn = lv_btn_create(parent);
+        lv_obj_set_pos(odo_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(odo_btn, SETTINGS_OPEN_W, 44);
+        lv_obj_set_style_bg_color(odo_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(odo_btn, 8, 0);
+        lv_obj_t *odo_lbl = lv_label_create(odo_btn);
+        lv_label_set_text(odo_lbl, "Set");
+        lv_obj_center(odo_lbl);
+        lv_obj_add_event_cb(odo_btn, odo_set_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *odo_hint = lv_label_create(parent);
+        lv_label_set_text(odo_hint, "Saved here every 10 s - a power cut keeps the last ride");
+        lv_label_set_long_mode(odo_hint, LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(odo_hint, SETTINGS_MARGIN, y_pos + 54);
+        lv_obj_set_width(odo_hint, SETTINGS_FULL_W);
+        lv_obj_set_style_text_color(odo_hint, lv_color_hex(0x999999), 0);
+        lv_obj_set_style_text_font(odo_hint, &lv_font_montserrat_14, 0);
+    }
+    y_pos += SETTINGS_ROW_H + 18;
 
     /*
     // ========== Wheel Diameter Spinbox ==========

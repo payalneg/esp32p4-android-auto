@@ -97,6 +97,7 @@ void port_start_app_hook(void)
 #include "vesc_config/vesc_config_transport.h"
 #include "vesc_sim.h"
 #include "vesc_trip_persist.h"
+#include "vesc_odo_persist.h"
 #include "trip_log.h"
 #include "vesc_ui_updater.h"
 #include "wifi_manager.h"
@@ -445,6 +446,11 @@ void app_main(void)
      * pattern as battery_calc, separate namespace. The dashboard reset icon
      * eventually flows here via battery_calc_reset_trip_and_ah(). */
     trip_persist_init();
+    /* Lifetime odometer mirror (base + trip), checkpointed by the trip log
+     * below. Must be before trip_log_init(): the boot scan seeds it, and the
+     * trip-reset hook it registers has to see any reset the battery tracker
+     * fires on the first ESC reading. */
+    odo_persist_init();
     /* Per-trip history on the raw "triplog" partition. MUST stay before
      * display_init(): it erases the dirty part of its sector runway
      * synchronously here, while the panel is still dark — every flash erase

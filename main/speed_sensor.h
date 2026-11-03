@@ -61,6 +61,11 @@ float speed_sensor_get_odometer_km(void);
  * battery-swap rollover cover it too. */
 void speed_sensor_trip_reset(void);
 
+/* Overwrite the BLE odometer (Settings → Odometer always edits whichever
+ * odometer the dashboard is showing). Persisted through the same deferred NVS
+ * writer as the integrator's own saves — no flash work on the caller's task. */
+void speed_sensor_set_odometer_km(float km);
+
 /* Pairing — persists the address and (re)binds the client. */
 void speed_sensor_select(const uint8_t addr[6], uint8_t addr_type);
 void speed_sensor_forget(void);

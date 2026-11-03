@@ -78,6 +78,22 @@ void show_pas_settings(void);
  * directly — no phone involvement. Defined in custom/speed_screen.c. */
 void show_speed_settings(void);
 
+/* Lifetime odometer editor. Opened from Settings → Bike → "Set": a modal with
+ * a number keyboard that re-bases whichever odometer the dashboard shows (the
+ * VESC mirror or the BLE wheel sensor's). The total is kept on this display
+ * (components/dev_settings/vesc_odo_persist.c) and checkpointed into the raw
+ * trip log every ~10 s, so a power cut no longer loses the end of the ride.
+ * Defined in custom/odo_dialog.c. */
+void show_odo_set_dialog(void);
+
+/* Caption for the Settings row, e.g. "Odometer: 4128 km" (in the user's
+ * units). Async because the value comes from the live backend. */
+void odo_settings_summary(char *buf, int n);
+
+/* Re-read the odometer into that caption after the dialog changed it. Must run
+ * on the LVGL task; a no-op unless the Settings screen is built and active. */
+void settings_odometer_refresh(void);
+
 /* VESC link settings screen. Opened from the Settings screen. Picks the
  * transport to the motor controller — the wired CAN bus or BLE to a VESC
  * Express adapter — pairs that adapter, and shows the live link state. Talks
