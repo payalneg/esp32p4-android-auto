@@ -29,6 +29,9 @@ extern lv_ui guider_ui;
 #include "vesc_can/vesc_lisp_code.h"
 #include "app_fs.h"
 
+#if defined(_WIN32)
+#include <direct.h>          /* _mkdir — MinGW has no POSIX mkdir(path, mode) */
+#endif
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,7 +174,11 @@ static void save_file(void)
         if (l + 5 < sizeof fname) strcat(fname, ".lisp");
     }
 
+#if defined(_WIN32)
+    _mkdir(LISP_DIR);        /* ok if it already exists */
+#else
     mkdir(LISP_DIR, 0775);   /* ok if it already exists */
+#endif
     char path[160];
     snprintf(path, sizeof path, "%s/%s", LISP_DIR, fname);
 

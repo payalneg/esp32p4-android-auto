@@ -433,6 +433,9 @@ to change units, CAN bitrate, controller ID, or open the log viewer.
 While the dashboard is running, **VESC Tool can connect over Bluetooth LE**
 (NUS bridge) just like to any other VESC adapter.
 
+📖 **[Screen-by-screen guide](docs/ui-guide.md)** — every screen with a rendered
+picture and what each control does ([по-русски](docs/ui-guide.ru.md)).
+
 ### Switching between modes
 
 **Three-finger tap** (any three fingers on the screen for ~100 ms) toggles

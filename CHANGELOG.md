@@ -9,6 +9,21 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### A screen-by-screen user guide
+
+- [`docs/ui-guide.md`](docs/ui-guide.md) (and
+  [`docs/ui-guide.ru.md`](docs/ui-guide.ru.md)) render every screen the dashboard
+  can show — both themes, all four Settings tabs, the odometer dialog, the trip
+  log and its chart, VESC Config, PAS, the speed sensor, Quick actions, the LISP
+  editor, Realtime, the QR codes and the log viewer — straight from the
+  simulator, with what each control does. The pictures are screenshots of the
+  firmware's own screens (`make menus`), not mock-ups.
+- `Super_VESC_Display/custom/lisp_editor.c`: build the LISP editor on Windows
+  hosts too (`_mkdir` instead of the POSIX two-argument `mkdir`), so the
+  simulator's `make menus` works on a MinGW toolchain.
+
 ## v1.3.36 / app 0.3.45 — 2026-11-03
 
 ### The odometer stops forgetting the end of the ride
