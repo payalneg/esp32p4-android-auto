@@ -21,6 +21,7 @@
 #include "app_fs.h"
 #include "ble_cadence_client.h"
 #include "ble_speed_client.h"
+#include "bms_battery.h"
 #include "pas.h"
 #include "speed_sensor.h"
 #include "vesc_odo_persist.h"
@@ -168,6 +169,8 @@ static const fake_dev_t s_fake_devs[] = {
 
 static ble_cadence_scan_cb_t s_cad_cb;
 static ble_speed_scan_cb_t   s_spd_cb;
+static bms_scan_cb_t         s_bms_cb;
+static bool                  s_bms_bound = true, s_bms_scanning;
 
 static void cad_scan_emit(void *unused)
 {
@@ -187,6 +190,23 @@ static void spd_scan_emit(void *unused)
         if (s_spd_cb) s_spd_cb(addr, 0, s_fake_devs[i].name, s_fake_devs[i].rssi);
     }
     s_spd_scanning = false;
+}
+
+/* A JK-BMS advertises the 0xFFE0 service and a "JK-..." name; the second entry
+ * exercises the long-name path in the pairing list. */
+static const fake_dev_t s_fake_packs[] = {
+    { "JK-B2A24S15P", -61, 0xC3 },
+    { "JK-BMS-24S-Bluetooth-Battery-Monitor", -83, 0xD4 },
+};
+
+static void bms_scan_emit(void *unused)
+{
+    (void)unused;
+    for (unsigned i = 0; i < sizeof s_fake_packs / sizeof s_fake_packs[0]; i++) {
+        uint8_t addr[6] = { s_fake_packs[i].addr0, 0x22, 0x33, 0x44, 0x55, 0x88 };
+        if (s_bms_cb) s_bms_cb(addr, 0, s_fake_packs[i].name, s_fake_packs[i].rssi);
+    }
+    s_bms_scanning = false;
 }
 
 void ble_cadence_client_init(void) { }
@@ -225,6 +245,55 @@ void ble_speed_get(ble_speed_state_t *out)
     out->bound     = s_spd_bound;
     out->connected = s_spd_bound;
     out->scanning  = s_spd_scanning;
+}
+
+/* ------------------------------------------------------- JK-BMS (fake) */
+
+void bms_battery_init(void) { }
+void bms_battery_scan_start(void) { s_bms_scanning = true; sim_later(bms_scan_emit, NULL, 700); }
+void bms_battery_scan_stop(void) { s_bms_scanning = false; }
+void bms_battery_set_scan_cb(bms_scan_cb_t cb) { s_bms_cb = cb; }
+void bms_battery_select(const uint8_t a[6], uint8_t t) { (void)a; (void)t; s_bms_bound = true; }
+void bms_battery_forget(void) { s_bms_bound = false; }
+bool bms_battery_is_bound(void) { return s_bms_bound; }
+
+void bms_battery_get(bms_telem_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof *out);
+
+    float soc = wobble(84.0f, 2.0f, 21.0f);
+    out->bound           = s_bms_bound;
+    out->connected       = s_bms_bound;
+    out->scanning        = s_bms_scanning;
+    out->fresh           = s_bms_bound;
+    out->has_data        = s_bms_bound;
+    out->soc             = soc;
+    out->full_ah         = 81.0f;
+    out->remaining_ah    = 81.0f * soc / 100.0f;
+    out->voltage         = wobble(52.4f, 1.2f, 33.0f);
+    out->current         = wobble(-4.2f, 3.0f, 37.0f);
+    out->power           = out->voltage * out->current;
+    out->temp1           = wobble(19.0f, 1.0f, 41.0f);
+    out->temp2           = out->temp1 + 0.1f;
+    out->temp_mos        = wobble(22.0f, 2.0f, 43.0f);
+    out->cell_min        = 3.327f;
+    out->cell_max        = 3.329f;
+    out->cell_delta      = 0.002f;
+    out->cell_min_index  = 4;
+    out->cell_max_index  = 9;
+    out->cell_count      = 24;
+    for (int i = 0; i < out->cell_count; i++) {
+        out->cells[i] = out->cell_min + (out->cell_max - out->cell_min) * (i % 3) / 2.0f;
+    }
+    out->cycles          = 3;
+    out->soh             = 100.0f;
+    out->charging_mos    = true;
+    out->discharging_mos = true;
+    out->balancing       = false;
+    out->heating         = false;
+    snprintf(out->model, sizeof out->model, "JK-B2A24S15P");
+    out->age_ms          = 120;
 }
 
 /* ------------------------------------------------------ VESC live telemetry */

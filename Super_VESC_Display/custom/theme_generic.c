@@ -93,6 +93,10 @@ void dashboard_generic_set_active(const dashboard_widgets_t *w)
     s_warn_shown     = false;
     s_warn_blink_ms  = 0;
 
+    /* Battery percentage is the way into the pack detail screen on every
+     * convention-bound dashboard, same as the cockpit. */
+    bms_screen_attach_percent(w ? w->batt_pct_text : NULL);
+
     /* Phantom-touch hardening for the invisible brightness drag slider — the
      * same fix the cockpit theme carries in custom.c. GUI Guider styles the
      * slider transparent only in LV_STATE_DEFAULT, so a vibration-induced

@@ -22,6 +22,11 @@ typedef enum {
 typedef enum {
     BATTERY_CALC_MODE_DIRECT = 0,
     BATTERY_CALC_MODE_SMART  = 1,
+    /* SOC and remaining/full Ah read directly from a JK-BMS over BLE.
+     * Current still comes from the VESC; this mode only replaces the pack
+     * gauge and the range estimate. Falls back to DIRECT while the BMS has
+     * no fresh reading (not paired / out of range). */
+    BATTERY_CALC_MODE_BMS    = 2,
 } battery_calc_mode_t;
 
 /* How a request is addressed on a BLE link.

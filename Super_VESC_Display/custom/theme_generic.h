@@ -144,6 +144,11 @@ void dashboard_generic_set_active(const dashboard_widgets_t *w);
  * screen itself and so never passes through set_active. */
 void dashboard_nav_widen_touch(lv_obj_t *vesc, lv_obj_t *stat, lv_obj_t *set);
 
+/* Make a dashboard battery-percentage label open the pack screen on tap.
+ * Declared here as well as in custom.h so this file stays independent of
+ * guider_ui; implemented in custom/bms_screen.c. Safe with NULL. */
+void bms_screen_attach_percent(lv_obj_t *obj);
+
 /* Implemented by the generated dashboard_themes_auto.c (firmware build only);
  * registers a generic theme for every discovered dashboard_* screen. Declared
  * here so custom_init_once() can call it under LV_REALDEVICE. */

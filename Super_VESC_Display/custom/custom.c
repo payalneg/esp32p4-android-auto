@@ -731,6 +731,11 @@ static void cockpit_screen_init(lv_ui *ui)
         lv_obj_add_flag(ui->dashboard_Classic_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* The battery readout is the way into the pack screen: tap the number or
+     * the "%" beside it to see JK-BMS SOC / Ah / cells / temps. */
+    bms_screen_attach_percent(ui->dashboard_Classic_Battery_proc_text);
+    bms_screen_attach_percent(ui->dashboard_Classic_battery_pct);
+
     // Initialize cruise-active widgets as hidden (shown when CC engages).
     if (ui->dashboard_Classic_cruise_control_img != NULL) {
         lv_obj_add_flag(ui->dashboard_Classic_cruise_control_img, LV_OBJ_FLAG_HIDDEN);
@@ -1689,9 +1694,11 @@ static void battery_calc_mode_dropdown_event_cb(lv_event_t *e) {
         
         // Save to settings
         settings_wrapper_set_battery_calc_mode((uint8_t)selected);
-        
+
         // Update info label
-        if (selected == 1) { // Smart Calculation
+        if (selected == 2) {          // JK-BMS over BLE
+            lv_label_set_text(settings_info_label, "JK-BMS enabled - SOC and Ah from the pack (pair it under Battery)");
+        } else if (selected == 1) {   // Smart Calculation
             lv_label_set_text(settings_info_label, "Smart calc enabled - will calibrate on next data!");
         } else {
             lv_label_set_text(settings_info_label, "Direct mode - using controller battery level");
@@ -2620,6 +2627,11 @@ static void speed_open_btn_event_cb(lv_event_t *e) {
     show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
 }
 
+static void bms_open_btn_event_cb(lv_event_t *e) {
+    (void)e;
+    show_bms_settings(); /* battery state + JK-BMS pairing (custom/bms_screen.c) */
+}
+
 static void odo_set_btn_event_cb(lv_event_t *e) {
     (void)e;
     show_odo_set_dialog(); /* modal editor (custom/odo_dialog.c) */
@@ -2859,8 +2871,9 @@ void settings_ui_init(lv_ui *ui) {
     settings_battery_calc_mode_label = settings_heading_create(parent, y_pos, "Battery Calculation:");
 
     settings_battery_calc_mode_dropdown = lv_dropdown_create(parent);
-    lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
-    lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
+    lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation\nJK-BMS (BLE)");
+    lv_dropdown_set_selected(settings_battery_calc_mode_dropdown,
+                             (battery_calc_mode > 2) ? 0 : battery_calc_mode);
     lv_obj_set_pos(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_X, y_pos + 5);
     lv_obj_set_size(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_W, SETTINGS_CTRL_H);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
@@ -2871,6 +2884,24 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Battery monitor (JK-BMS over BLE) ==========
+    // Opens the battery state screen (also reachable by tapping the battery
+    // percentage on the dashboard). Pairing lives there because it needs the
+    // scan list; this row is the "Settings -> Battery" entry point.
+    settings_heading_create(parent, y_pos, "Battery monitor (JK-BMS)");
+    {
+        lv_obj_t *bms_btn = lv_btn_create(parent);
+        lv_obj_set_pos(bms_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(bms_btn, SETTINGS_OPEN_W, 44);
+        lv_obj_set_style_bg_color(bms_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(bms_btn, 8, 0);
+        lv_obj_t *bms_lbl = lv_label_create(bms_btn);
+        lv_label_set_text(bms_lbl, "Open");
+        lv_obj_center(bms_lbl);
+        lv_obj_add_event_cb(bms_btn, bms_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
     y_pos += SETTINGS_ROW_H;
 
     SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);

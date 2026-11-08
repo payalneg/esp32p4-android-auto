@@ -38,10 +38,31 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
 /* Battery percentage as shown on the dashboard / HUD — picks Direct vs Smart
  * per the battery_calc_mode setting and pulls capacity from settings. Use this
  * everywhere a "what the rider sees" battery % is needed (cockpit, AA overlay,
- * trip log) so all readouts stay in agreement. */
+ * trip log) so all readouts stay in agreement. In BMS mode the value comes
+ * from the registered external provider (see battery_calc_set_bms_cb); when
+ * it has no fresh reading the call falls back to the controller estimate. */
 float battery_calc_display_percentage(float controller_battery_level,
                                       float controller_amp_hours,
                                       float controller_amp_hours_charged);
+
+/* Amp-hours shown on the dashboard. In BMS mode this is the pack's own
+ * remaining capacity; otherwise it is the trip's consumed Ah (the historical
+ * behaviour). */
+float battery_calc_display_amp_hours(float consumed_ah);
+
+/* External pack gauge (the JK-BMS BLE client in main/bms_battery.c).
+ *
+ * The callback returns true only with a fresh, plausible reading: percent
+ * 0..100 and a positive full capacity. It must be cheap and safe to call from
+ * any task (the dashboard pump, the AA overlay task and the trip log all ask
+ * for the percentage). Pass NULL to unregister. */
+typedef bool (*battery_calc_bms_cb_t)(float *soc, float *remaining_ah,
+                                      float *full_ah);
+void  battery_calc_set_bms_cb(battery_calc_bms_cb_t cb);
+
+/* True while the external pack gauge has a fresh reading. Lets the UI update
+ * battery %/Ah/range even when the VESC itself is silent. */
+bool  battery_calc_bms_fresh(void);
 
 bool  battery_calc_is_initialized(void);
 
