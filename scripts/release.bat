@@ -40,7 +40,7 @@ if %errorlevel% neq 0 exit /b 1
 
 if exist .release_tmp.txt (
     for /f "tokens=*" %%i in (.release_tmp.txt) do (
-        if not defined FW_VER ( set FW_VER=%%i ) else ( set APP_VER=%%i )
+        if not defined FW_VER (set FW_VER=%%i) else (set APP_VER=%%i)
     )
     del .release_tmp.txt
 )
