@@ -9,6 +9,9 @@ temperatures / cell extremes.
 Tested against a **JK-B2A24S15P** frame layout; the decoder also handles the
 32-cell `JK_PB…` variant and the older `JK04` (float) protocol. The
 24S/32S layout is auto-detected — see `detect_variant()` in `jkbms.py`.
+The target pack in this project is a **JK-BD6A24S6PD (V20)** — same JK02 24S
+frame layout: 7–24 Li-ion cells, 60 A continuous / 100 A peak, 0.6 A active
+balancer, three temperature sensors (JIKONG manual V2.1, tables 1–2).
 
 ## Install
 
@@ -67,6 +70,26 @@ The scripts must be run from this directory (they import `jkbms.py`).
   but "Remove device" in Bluetooth settings is the clean reset.
 - `--all-devices` stops the JK/BMS name filter and lists everything in range.
 
+## Password / PIN
+
+The official JIKONG app asks for a password on its first connection:
+
+- **BLE password: `1234`** (default; the app remembers it afterwards).
+- **Internal configuration password: `123456`** (protected settings only).
+
+That password is an app-level gate, not BLE pairing and not authentication on
+the GATT link. The open-source JK-BMS implementation reports that the password
+is carried in the device-info frame and is only compared by the app, and its
+BLE client reads/writes with `ESP_GATT_AUTH_REQ_NONE` — so no PIN is needed for
+monitoring. This tool and the head-unit firmware therefore connect without
+asking for one; a changed app password does not lock them out. See the
+maintenance manual, section 5.3.1.1 ("Device connection"), and
+syssi/esphome-jk-bms issue #139.
+
+The device name can be changed in the app (English/numbers only). That only
+changes the advertised name — the service UUID `0xFFE0` and MAC address stay
+the same.
+
 ## Protocol summary
 
 Service `0000ffe0-…`, characteristic `0000ffe1-…` (one write-only and one
@@ -108,6 +131,8 @@ temperature.
 
 ## Sources / prior art
 
+- [JIKONG BMS maintenance manual V2.1](https://jikongbms.com/wp-content/uploads/2024/07/Jikong-BMS-JKBMS-Maintenance-instruction-of-Smart-BMS-with-Active-Balancer-V2.1.pdf)
+  — BD6A…-6P/8P/10P/15P/20P series; default PINs, APP flow, status fields.
 - [syssi/esphome-jk-bms](https://github.com/syssi/esphome-jk-bms) — the
   reference open-source implementation (MIT). This tool's frame layouts,
   checksum, BLE UUIDs and 24S/32S/JK04 distinctions come from
