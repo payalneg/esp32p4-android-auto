@@ -65,6 +65,7 @@ static uint16_t  s_cccd_handle;
 static int64_t   s_last_frame_us;      /* last valid cell-info frame */
 static int64_t   s_last_dev_us;        /* last valid device-info frame */
 static uint32_t  s_frames;
+static bool      s_logged_status;      /* one-shot first-frame log */
 static bool      s_has_data;
 
 /* Decoded snapshot, protected by s_mux. NAN = field not present. */
@@ -120,6 +121,46 @@ static float plaus(float v, float lo, float hi)
     return (v >= lo && v <= hi) ? v : NAN;
 }
 
+static int iabs(int v)
+{
+    return v < 0 ? -v : v;
+}
+
+/* Validate a JK02 layout's own summary block against the populated cell
+ * slots.  JK02_24S and JK02_32S differ by 32 bytes from the enabled-cell
+ * bitmask onward.  The old "is cell 28 a real voltage?" test fails on a 16S
+ * pack in the 32S frame: cells 17..32 are empty, so bytes 60..61 are zero
+ * and the frame looked like 24S (BD6A24S6PD V20, fw 20.28). */
+static bool layout_matches(const uint8_t *d, int cells, int mask_off,
+                           int avg_off, int delta_off, int *score)
+{
+    int count = __builtin_popcount(rd_u32(d, mask_off));
+    if (count < 1 || count > cells) return false;
+
+    int avg = rd_u16(d, avg_off);
+    int delta = rd_u16(d, delta_off);
+    if (avg < 1000 || avg > 5000 || delta > 250) return false;
+
+    int live = 0, sum = 0, vmin = 10000, vmax = 0;
+    for (int i = 0; i < cells; i++) {
+        int v = rd_u16(d, 6 + i * 2);
+        if (v >= 1000 && v <= 5000) {
+            live++;
+            sum += v;
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+    }
+    if (live != count) return false;
+
+    int mean = sum / live;
+    if (iabs(avg - mean) > 20) return false;
+    if (iabs((vmax - vmin) - delta) > 20) return false;
+
+    *score = iabs(avg - mean);
+    return true;
+}
+
 /* ---- frame parsing ---- */
 
 static void parse_cell_info(const uint8_t *d, int len)
@@ -129,9 +170,18 @@ static void parse_cell_info(const uint8_t *d, int len)
         return;
     }
 
-    /* 32S variant: bytes 60..61 hold cell 28's voltage; on 24S that is the
-     * (small) delta cell voltage. */
-    bool is32 = rd_u16(d, 60) > 1000;
+    int score24 = 0, score32 = 0;
+    bool m24 = layout_matches(d, 24, 54, 58, 60, &score24);
+    bool m32 = layout_matches(d, 32, 70, 74, 76, &score32);
+    bool is32;
+    if (m32 && (!m24 || score32 <= score24)) {
+        is32 = true;
+    } else if (m24) {
+        is32 = false;
+    } else {
+        /* Inconsistent summary fields: fall back to the old heuristic. */
+        is32 = rd_u16(d, 60) > 1000;
+    }
     int off = is32 ? 16 : 0;      /* byte offset from the 24S layout */
     int cells = is32 ? 32 : 24;
     int o = off * 2;
@@ -194,6 +244,12 @@ static void parse_cell_info(const uint8_t *d, int len)
     ESP_LOGD(TAG, "status: %.0f%% %.2f/%.2f Ah %.2f V %.2f A (%s)",
              (double)soc, (double)rem, (double)full, (double)voltage,
              (double)current, is32 ? "32S" : "24S");
+    if (!s_logged_status) {
+        s_logged_status = true;
+        ESP_LOGI(TAG, "first status: %.0f%% %.2f/%.2f Ah %.2f V %.2f A (%s)",
+                 (double)soc, (double)rem, (double)full, (double)voltage,
+                 (double)current, is32 ? "32S" : "24S");
+    }
 }
 
 static void parse_device_info(const uint8_t *d, int len)
@@ -208,11 +264,16 @@ static void parse_device_info(const uint8_t *d, int len)
         n++;
     }
     model[n] = '\0';
+    static char logged_model[sizeof(s_model)];
+    bool changed = strcmp(model, logged_model) != 0;
     portENTER_CRITICAL(&s_mux);
     memcpy(s_model, model, sizeof(s_model));
     s_last_dev_us = esp_timer_get_time();
     portEXIT_CRITICAL(&s_mux);
-    ESP_LOGI(TAG, "BMS model: %s", model);
+    if (changed) {
+        snprintf(logged_model, sizeof(logged_model), "%s", model);
+        ESP_LOGI(TAG, "BMS model: %s", model);
+    }
 }
 
 static bool frame_checksum_ok(const uint8_t *d)
@@ -329,7 +390,7 @@ static void poll_task(void *arg)
 static int on_subscribed(uint16_t conn, const struct ble_gatt_error *err,
                          struct ble_gatt_attr *attr, void *arg)
 {
-    (void)conn; (void)attr; (void)arg;
+    (void)attr; (void)arg;
     if (err->status != 0) {
         ESP_LOGW(TAG, "CCCD write failed status=%d", err->status);
         return 0;
@@ -350,6 +411,12 @@ static int on_dsc(uint16_t conn, const struct ble_gatt_error *err,
                   void *arg)
 {
     (void)chr_val_handle; (void)arg;
+    if (err->status == 0 && dsc) {
+        ESP_LOGI(TAG, "descriptor handle 0x%04X", (unsigned)dsc->handle);
+    } else if (err->status == BLE_HS_EDONE) {
+        ESP_LOGI(TAG, "descriptor discovery done, cccd=0x%04X",
+                 (unsigned)s_cccd_handle);
+    }
     if (err->status == 0 && dsc && s_cccd_handle == 0 &&
         ble_uuid_cmp(&dsc->uuid.u, CCCD_UUID) == 0) {
         s_cccd_handle = dsc->handle;
@@ -367,8 +434,23 @@ static void start_descriptor_discovery(uint16_t conn)
         ESP_LOGW(TAG, "JK-BMS notify characteristic not found");
         return;
     }
-    s_cccd_handle = 0;
-    ble_gattc_disc_all_dscs(conn, s_notify_val, s_svc_end, on_dsc, NULL);
+    /* JK-BMS FFE1 is a single notify/write characteristic; its CCCD is the
+     * attribute right after the value handle.  Writing it directly avoids a
+     * Find Information walk that this BMS's ATT server never answers (the
+     * discovery callback never fired on hardware, so the link stayed
+     * unsubscribed and no status frames were ever requested). */
+    s_cccd_handle = s_notify_val + 1;
+    static const uint8_t en[2] = { 0x01, 0x00 };
+    int rc = ble_gattc_write_flat(conn, s_cccd_handle, en, sizeof(en),
+                                  on_subscribed, NULL);
+    ESP_LOGI(TAG, "CCCD subscribe handle=0x%04X rc=%d",
+             (unsigned)s_cccd_handle, rc);
+    if (rc != 0) {
+        s_cccd_handle = 0;
+        rc = ble_gattc_disc_all_dscs(conn, s_notify_val, s_svc_end, on_dsc, NULL);
+        ESP_LOGI(TAG, "descriptor discovery fallback rc=%d notify=0x%04X end=0x%04X",
+                 rc, (unsigned)s_notify_val, (unsigned)s_svc_end);
+    }
 }
 
 static int on_chr(uint16_t conn, const struct ble_gatt_error *err,

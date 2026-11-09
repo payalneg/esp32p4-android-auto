@@ -35,6 +35,12 @@ static bool bms_provider(float *soc, float *remaining_ah, float *full_ah)
         !isfinite(st.full_ah) || st.full_ah <= 0.0f) {
         return false;
     }
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        ESP_LOGI(TAG, "BMS source: %.0f%% %.2f/%.2f Ah",
+                 (double)st.soc, (double)st.remaining_ah, (double)st.full_ah);
+    }
     if (soc)          *soc = st.soc;
     if (remaining_ah) *remaining_ah = st.remaining_ah;
     if (full_ah)      *full_ah = st.full_ah;

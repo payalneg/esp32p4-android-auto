@@ -7,11 +7,13 @@ verifies the checksum, and prints SOC / remaining Ah / voltage / current /
 temperatures / cell extremes.
 
 Tested against a **JK-B2A24S15P** frame layout; the decoder also handles the
-32-cell `JK_PB…` variant and the older `JK04` (float) protocol. The
-24S/32S layout is auto-detected — see `detect_variant()` in `jkbms.py`.
-The target pack in this project is a **JK-BD6A24S6PD (V20)** — same JK02 24S
-frame layout: 7–24 Li-ion cells, 60 A continuous / 100 A peak, 0.6 A active
-balancer, three temperature sensors (JIKONG manual V2.1, tables 1–2).
+32-cell `JK_PB...` variant and the older `JK04` (float) protocol. The
+24S/32S layout is auto-detected - see `detect_variant()` in `jkbms.py`.
+The target pack in this project is a **JK-BD6A24S6PD (V20)**: 7-24 Li-ion
+cells, 60 A continuous / 100 A peak, 0.6 A active balancer, three temperature
+sensors (JIKONG manual V2.1, tables 1-2). Even with a 16S pack it uses the
+**32-cell frame layout**, with cells 17..32 empty - see the real-pack notes
+below.
 
 ## Install
 
@@ -56,6 +58,27 @@ JK-BMS JK02_24S (JK-B2A24S15P)
   Cells            : 3.327 .. 3.329 V (delta 2 mV)
   Status           : cycles 0, SOH 100%, charge MOS on, discharge MOS on
 ```
+
+## Real-pack notes (JK-BD6A24S6PD V20)
+
+The target BD6A24S6PD reports 16 cells but packs them in the **32-cell frame
+layout**: the cell array is followed by 16 empty slots, so cell 28's slot is
+zero. The old "is bytes 60..61 a real voltage?" shortcut then picked 24S and
+decoded voltage/SOC/capacity from the wrong offsets. Both the PC decoder and
+the firmware now validate each layout's enabled-cell bitmask, average voltage
+and delta against the populated cells (24S at 54/58/60, 32S at 70/74/76) and
+pick the matching one. A captured 16S/32S frame is in `test_jkbms.py`.
+
+The pack also ignores a cell-info request sent immediately after connecting:
+it first dumps settings/device info. `jkbms.py` now sends 0x97, waits two
+seconds, then starts 0x96 polling; the firmware's 2 s poll loop recovers on
+its own.
+
+On the head-unit side, the BMS does not answer the ATT *Find Information*
+walk for the 0xFFE1 descriptor range, so `ble_bms_client.c` writes the CCCD
+directly at `notify_handle + 1` (0x000F on this pack) instead of doing
+descriptor discovery. That makes notifications start and the dashboard shows
+the pack's SOC/Ah/range once the battery source is set to BMS.
 
 The scripts must be run from this directory (they import `jkbms.py`).
 
@@ -123,9 +146,11 @@ of the first 299 bytes. Key offsets in a 0x02 frame (24-cell layout):
 | 146 | full charge capacity (u32) | 0.001 Ah |
 | 150 | cycle count (u32) | 1 |
 | 158 | SOH | 1 % |
-| 166 / 167 | charge / discharge MOSFET | 0/1 |
-
-The 32-cell (`JK_PB…`) layout is the same shifted by +32 bytes; its MOSFET
+The 32-cell (`JK_PB...`) layout is the same shifted by +32 bytes from the
+cell array onward: cells at 6, enabled mask at 70, average at 74, delta at 76,
+voltage at 150, current at 158, temperatures at 162/164, SOC at 173,
+remaining/full Ah at 174/178, cycles at 182, SOH at 190 and MOSFET bits at
+198/199. The BD6A24S6PD V20 uses this layout even with 16 cells.
 temperature lives at 144 and its error bitmask where 24S puts the MOSFET
 temperature.
 

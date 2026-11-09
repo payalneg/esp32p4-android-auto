@@ -27,9 +27,12 @@ Decoding follows the layouts documented by syssi/esphome-jk-bms
               (JK-PB2A16S-20P etc.)
     JK04      older JK-B2A16S v3, IEEE-754 float cells, no SOC/Ah fields
 
-The 24S/32S choice is auto-detected: for a 24S frame bytes 60..61 hold the
-cell-voltage delta (a few millivolts), while in a 32S frame the same bytes
-hold cell 28's voltage (~3 V). See detect_variant().
+The 24S/32S choice is auto-detected: both layouts carry an enabled-cell
+bitmask, average cell voltage and delta right after the cell array, so the
+decoder validates those against the populated slots.  This also handles a
+16S pack that still uses the 32-cell frame layout (JK-BD6A24S6PD V20), where
+cells 17..32 are empty and the old "cell 28 is present" shortcut failed.
+See detect_variant().
 
 Only the fields needed by the head unit are decoded (SOC, remaining/full Ah,
 voltage, current, temperatures, cell extremes, cycles, SOH, MOSFET state);
@@ -208,6 +211,45 @@ def _text(data: bytes, off: int, length: int) -> str:
     return raw.split(b"\x00", 1)[0].decode("ascii", "replace").strip()
 
 
+def _popcount32(value: int) -> int:
+    return bin(value & 0xFFFFFFFF).count("1")
+
+
+def _layout_score(
+    data: bytes, *, cell_slots: int, mask_off: int, avg_off: int, delta_off: int
+) -> Optional[int]:
+    """How well a JK02 layout matches the frame's own summary fields.
+
+    JK02_24S and JK02_32S differ by 32 bytes from the enabled-cell bitmask
+    onward.  The old detector only looked at bytes 60..61 ("cell 28 is a real
+    voltage on 32S"), which fails on a 16S pack in a 32S frame: cell 28 is
+    empty, so bytes 60..61 are zero and the frame looked like 24S.  Validate
+    the bitmask/average/delta block against the actual cells instead; it works
+    for partially populated packs too.
+    """
+    mask = _u32(data, mask_off)
+    count = _popcount32(mask)
+    if not (1 <= count <= cell_slots):
+        return None
+
+    avg = _u16(data, avg_off)
+    delta = _u16(data, delta_off)
+    if not (1000 <= avg <= 5000) or delta > 250:
+        return None
+
+    cells = [_u16(data, 6 + 2 * i) for i in range(cell_slots)]
+    live = [v for v in cells if 1000 <= v <= 5000]
+    if len(live) != count:
+        return None
+
+    mean = sum(live) / len(live)
+    if abs(avg - mean) > 20:
+        return None
+    if abs((max(live) - min(live)) - delta) > 20:
+        return None
+    return abs(avg - mean)
+
+
 def detect_variant(data: bytes, hint: str = "") -> str:
     """Return 'JK02_32S', 'JK02_24S' or 'JK04' for a cell-info frame."""
     hint = (hint or "").upper()
@@ -220,8 +262,22 @@ def detect_variant(data: bytes, hint: str = "") -> str:
     if not (1000 <= first <= 5000) and 1.0 <= first_float <= 5.0:
         return "JK04"
 
-    # 24S: 60..61 is the delta cell voltage (small, tens of mV).
-    # 32S: bytes 54..69 are cells 25..32; bytes 60..61 are cell 28.
+    # Validate both layouts and pick the better match.  A 16S pack in a 32S
+    # frame leaves cells 17..32 empty, so the old "is cell 28 present?"
+    # shortcut was not enough.
+    score32 = _layout_score(
+        data, cell_slots=32, mask_off=70, avg_off=74, delta_off=76
+    )
+    score24 = _layout_score(
+        data, cell_slots=24, mask_off=54, avg_off=58, delta_off=60
+    )
+    if score32 is not None and (score24 is None or score32 <= score24):
+        return "JK02_32S"
+    if score24 is not None:
+        return "JK02_24S"
+
+    # Fallback for frames whose summary fields are inconsistent: 32S has a
+    # real voltage in cell 28's slot, 24S has the (small) delta there.
     if _u16(data, 60) > 1000:
         return "JK02_32S"
     return "JK02_24S"
@@ -521,6 +577,20 @@ class JkBmsClient:
                 await client.start_notify(self._notify_char, self._on_notify)
                 self._client = client
                 self._connected = True
+
+                # Some JK firmware (e.g. BD6A24S6PD V20, 20.28) answers the
+                # first command with a settings/device-info dump and ignores
+                # an immediate 0x96, then starts streaming cell info.  Prime
+                # it with 0x97 and give it a moment so read_state() succeeds
+                # on the first try.
+                try:
+                    await self._request(CMD_DEVICE_INFO)
+                    await asyncio.sleep(2.0)
+                except Exception:  # noqa: BLE001 - warm-up is best effort
+                    pass
+                self._assembler.reset()
+                while not self._queue.empty():
+                    self._queue.get_nowait()
                 return
             except Exception as exc:  # noqa: BLE001 - report the real cause
                 last_error = exc
