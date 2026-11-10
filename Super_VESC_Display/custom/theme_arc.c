@@ -554,7 +554,7 @@ static lv_obj_t *arc_create(void)
     s.batt_title = mk_label(scr, "BATTERY", &lv_font_montserrat_16, ARC_DIM,
                             330, 108, 140, LV_TEXT_ALIGN_CENTER);
     s.batt_pct = mk_label(scr, "0", &lv_font_DSEG7Classic_Regular_50, ARC_GREEN,
-                          330, 132, 92, LV_TEXT_ALIGN_RIGHT);
+                          330, 132, 92, LV_TEXT_ALIGN_CENTER);
     s.batt_pct_unit = mk_label(scr, "%", &lv_font_montserrat_20, ARC_DIM,
                                424, 152, 26, LV_TEXT_ALIGN_LEFT);
     s.batt_bar = lv_bar_create(scr);

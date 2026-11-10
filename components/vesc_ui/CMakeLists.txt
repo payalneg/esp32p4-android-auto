@@ -52,10 +52,10 @@ file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
-# The amber and twin-arc dashboards are 800x480-only; the 480x480 S3 build has
-# no dashboard_Amber widgets and no room for the wide twin-arc layout.
+# The amber, twin-arc and mono dashboards are 800x480-only; the 480x480 S3
+# build has no dashboard_Amber widgets and no room for the wide layouts.
 if("${IDF_TARGET}" STREQUAL "esp32s3")
-    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*(theme_dashboard_amber|theme_arc)\\.c$")
+    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*(theme_dashboard_amber|theme_arc|theme_mono)\\.c$")
 endif()
 
 # ── Cockpit Antonio fonts: subsetted from the TTF at build time ──
@@ -176,8 +176,8 @@ add_custom_command(
 # keep the build linkable until the vesc_app backend lands.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_REALDEVICE)
 
-# The amber and twin-arc dashboards are 800x480; keep their registration out
-# of the 480x480 S3 build (both modules are filtered from SVD_CUSTOM above).
+# The amber, twin-arc and mono dashboards are 800x480; keep their registration
+# out of the 480x480 S3 build (the modules are filtered from SVD_CUSTOM above).
 if(NOT "${IDF_TARGET}" STREQUAL "esp32s3")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SVD_WIDE_UI=1)
 endif()
