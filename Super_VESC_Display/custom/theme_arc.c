@@ -21,6 +21,7 @@
 #include <string.h>
 
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_160)
+LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_140)
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_64)
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_50)
 
@@ -39,7 +40,7 @@ LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_50)
 
 static struct {
     lv_obj_t *screen;
-    lv_obj_t *speed_arc, *speed_lbl, *speed_unit, *speed_title, *mode_lbl, *max_speed_lbl;
+    lv_obj_t *speed_arc, *speed_lbl, *speed_unit, *speed_title, *mode_lbl;
     lv_obj_t *power_arc, *power_lbl, *power_unit, *power_title, *current_lbl, *power_max_lbl;
     lv_obj_t *batt_title, *batt_pct, *batt_pct_unit, *batt_bar, *ah_lbl;
     lv_obj_t *range_lbl, *range_unit;
@@ -85,7 +86,7 @@ static void mk_hline(lv_obj_t *parent, lv_coord_t y)
 static lv_obj_t *mk_arc(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
 {
     lv_obj_t *a = lv_arc_create(parent);
-    lv_obj_set_size(a, 280, 280);
+    lv_obj_set_size(a, 300, 300);
     lv_obj_set_pos(a, x, y);
     lv_obj_set_style_bg_opa(a, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(a, 0, LV_PART_MAIN);
@@ -174,7 +175,7 @@ static void arc_speed(float kmh)
         set_arc_pct(s.speed_arc, 0.0f);
         return;
     }
-    set_font_if(s.speed_lbl, &lv_font_DSEG7Classic_Regular_160);
+    set_font_if(s.speed_lbl, &lv_font_DSEG7Classic_Regular_140);
     int disp = (int)settings_wrapper_speed_to_display(kmh);
     if (disp < 0) disp = 0; else if (disp > 99) disp = 99;
     char text[8];
@@ -354,12 +355,7 @@ static void arc_hide_mode_text(void)
 
 static void arc_max_values(float max_speed_kmh, float max_power_kw)
 {
-    if (s.max_speed_lbl) {
-        char text[20];
-        snprintf(text, sizeof(text), "MAX %d",
-                 (int)settings_wrapper_speed_to_display(max_speed_kmh));
-        dash_label_set(s.max_speed_lbl, text);
-    }
+    (void)max_speed_kmh;   /* the left ring shows live speed only */
     if (s.power_max_lbl) {
         char text[20];
         snprintf(text, sizeof(text), "MAX %.1f kW", max_power_kw);
@@ -471,12 +467,12 @@ static lv_obj_t *arc_create(void)
     mk_hline(scr, 42);
 
     /* Two 270° rings. */
-    s.speed_arc = mk_arc(scr, 60, 95, ARC_ORANGE);
-    s.power_arc = mk_arc(scr, 460, 95, ARC_CYAN);
+    s.speed_arc = mk_arc(scr, 20, 95, ARC_ORANGE);
+    s.power_arc = mk_arc(scr, 480, 95, ARC_CYAN);
 
-    s.speed_lbl = mk_label(scr, "00", &lv_font_DSEG7Classic_Regular_160, ARC_TEXT,
-                           60, 0, 280, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, -30);
+    s.speed_lbl = mk_label(scr, "00", &lv_font_DSEG7Classic_Regular_140, ARC_TEXT,
+                           20, 0, 300, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align_to(s.speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, -20);
     s.speed_unit = mk_label(scr, settings_wrapper_speed_unit(), &lv_font_montserrat_20,
                             ARC_ORANGE, 0, 0, 0, LV_TEXT_ALIGN_CENTER);
     lv_obj_align_to(s.speed_unit, s.speed_arc, LV_ALIGN_CENTER, 0, 62);
@@ -485,13 +481,10 @@ static lv_obj_t *arc_create(void)
     lv_obj_align_to(s.speed_title, s.speed_arc, LV_ALIGN_CENTER, 0, 90);
     s.mode_lbl = mk_label(scr, "MODE 1", &lv_font_montserrat_16, ARC_ORANGE,
                           0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 116);
-    s.max_speed_lbl = mk_label(scr, "MAX 0", &lv_font_montserrat_16, ARC_DIM,
-                               0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.max_speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 140);
+    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 112);
 
     s.power_lbl = mk_label(scr, "0.0", &lv_font_DSEG7Classic_Regular_64, ARC_CYAN,
-                           460, 0, 280, LV_TEXT_ALIGN_CENTER);
+                           480, 0, 300, LV_TEXT_ALIGN_CENTER);
     lv_obj_align_to(s.power_lbl, s.power_arc, LV_ALIGN_CENTER, 0, -52);
     s.power_unit = mk_label(scr, "kW", &lv_font_montserrat_20, ARC_CYAN,
                             0, 0, 0, LV_TEXT_ALIGN_CENTER);
@@ -508,14 +501,14 @@ static lv_obj_t *arc_create(void)
 
     /* Centre column: battery %, remaining Ah, range. */
     s.batt_title = mk_label(scr, "BATTERY", &lv_font_montserrat_16, ARC_DIM,
-                            340, 108, 120, LV_TEXT_ALIGN_CENTER);
+                            330, 108, 140, LV_TEXT_ALIGN_CENTER);
     s.batt_pct = mk_label(scr, "0", &lv_font_DSEG7Classic_Regular_50, ARC_GREEN,
-                          340, 132, 82, LV_TEXT_ALIGN_RIGHT);
+                          330, 132, 92, LV_TEXT_ALIGN_RIGHT);
     s.batt_pct_unit = mk_label(scr, "%", &lv_font_montserrat_20, ARC_DIM,
                                424, 152, 26, LV_TEXT_ALIGN_LEFT);
     s.batt_bar = lv_bar_create(scr);
-    lv_obj_set_size(s.batt_bar, 110, 8);
-    lv_obj_set_pos(s.batt_bar, 345, 198);
+    lv_obj_set_size(s.batt_bar, 130, 8);
+    lv_obj_set_pos(s.batt_bar, 335, 198);
     lv_bar_set_range(s.batt_bar, 0, 100);
     lv_bar_set_value(s.batt_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s.batt_bar, ARC_TRACK, LV_PART_MAIN);
@@ -524,12 +517,12 @@ static lv_obj_t *arc_create(void)
     lv_obj_set_style_bg_color(s.batt_bar, ARC_GREEN, LV_PART_INDICATOR);
     lv_obj_set_style_radius(s.batt_bar, 4, LV_PART_INDICATOR);
     s.ah_lbl = mk_label(scr, "0.0 Ah", &lv_font_montserrat_18, ARC_DIM,
-                        340, 214, 120, LV_TEXT_ALIGN_CENTER);
+                        330, 214, 140, LV_TEXT_ALIGN_CENTER);
     lv_obj_t *range_title = mk_label(scr, "RANGE", &lv_font_montserrat_16, ARC_DIM,
-                                     340, 252, 120, LV_TEXT_ALIGN_CENTER);
+                                     330, 252, 140, LV_TEXT_ALIGN_CENTER);
     (void)range_title;
     s.range_lbl = mk_label(scr, "0.0", &lv_font_montserrat_24, ARC_TEXT,
-                           340, 272, 82, LV_TEXT_ALIGN_RIGHT);
+                           330, 272, 92, LV_TEXT_ALIGN_RIGHT);
     s.range_unit = mk_label(scr, settings_wrapper_dist_unit(), &lv_font_montserrat_16,
                             ARC_DIM, 424, 280, 40, LV_TEXT_ALIGN_LEFT);
 
