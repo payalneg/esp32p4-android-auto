@@ -23,13 +23,12 @@
 #include "dashboard_theme.h"
 #include "theme_ref.h"
 #include "theme_generic.h"
-/* The amber, twin-arc and mono dashboards are authored at 800×480; the 480×480
- * S3 project has no dashboard_Amber widgets and no room for the wide layouts,
+/* The amber and twin-arc dashboards are authored at 800×480; the 480×480 S3
+ * project has no dashboard_Amber widgets and no room for the wide layouts,
  * so those theme modules are excluded there. */
 #ifdef SVD_WIDE_UI
 #include "theme_dashboard_amber.h"
 #include "theme_arc.h"
-#include "theme_mono.h"
 #endif
 
 /* The 480x480 project's gui_guider.h only declares the faces its screens
@@ -3922,7 +3921,6 @@ void custom_init_once(void)
 #ifdef SVD_WIDE_UI
     theme_dashboard_amber_register();
     theme_arc_register();
-    theme_mono_register();
 #endif
 }
 
