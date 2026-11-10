@@ -87,8 +87,8 @@ set(COCKPIT_FONT_NAMES
     # Amber dashboard's 7-segment numeric readouts (see tools/regen_cockpit_fonts.py).
     lv_font_DSEG7Classic_Regular_20  lv_font_DSEG7Classic_Regular_24
     lv_font_DSEG7Classic_Regular_32  lv_font_DSEG7Classic_Regular_50
-    lv_font_DSEG7Classic_Regular_64  lv_font_DSEG7Classic_Regular_140
-    lv_font_DSEG7Classic_Regular_160)
+    lv_font_DSEG7Classic_Regular_64  lv_font_DSEG7Classic_Regular_120
+    lv_font_DSEG7Classic_Regular_140  lv_font_DSEG7Classic_Regular_160)
 set(COCKPIT_FONT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cockpit_fonts")
 set(COCKPIT_FONT_SRCS "")
 foreach(_cf ${COCKPIT_FONT_NAMES})

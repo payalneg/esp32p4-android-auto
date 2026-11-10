@@ -22,6 +22,7 @@
 
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_160)
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_140)
+LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_120)
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_64)
 LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_50)
 
@@ -177,7 +178,7 @@ static void arc_speed(float kmh)
         set_arc_pct(s.speed_arc, 0.0f);
         return;
     }
-    set_font_if(s.speed_lbl, &lv_font_DSEG7Classic_Regular_140);
+    set_font_if(s.speed_lbl, &lv_font_DSEG7Classic_Regular_120);
     int disp = (int)settings_wrapper_speed_to_display(kmh);
     if (disp < 0) disp = 0; else if (disp > 99) disp = 99;
     char text[8];
@@ -520,18 +521,18 @@ static lv_obj_t *arc_create(void)
     s.speed_arc = mk_arc(scr, 20, 95, ARC_ORANGE);
     s.power_arc = mk_arc(scr, 480, 95, ARC_CYAN);
 
-    s.speed_lbl = mk_label(scr, "00", &lv_font_DSEG7Classic_Regular_140, ARC_TEXT,
+    s.speed_lbl = mk_label(scr, "00", &lv_font_DSEG7Classic_Regular_120, ARC_TEXT,
                            20, 0, 300, LV_TEXT_ALIGN_CENTER);
     lv_obj_align_to(s.speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, -20);
     s.speed_unit = mk_label(scr, settings_wrapper_speed_unit(), &lv_font_montserrat_20,
                             ARC_ORANGE, 0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_unit, s.speed_arc, LV_ALIGN_CENTER, 0, 62);
+    lv_obj_align_to(s.speed_unit, s.speed_arc, LV_ALIGN_CENTER, 0, 72);
     s.speed_title = mk_label(scr, "SPEED", &lv_font_montserrat_16, ARC_DIM,
                              0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_title, s.speed_arc, LV_ALIGN_CENTER, 0, 90);
+    lv_obj_align_to(s.speed_title, s.speed_arc, LV_ALIGN_CENTER, 0, 94);
     s.mode_lbl = mk_label(scr, "MODE 1", &lv_font_montserrat_16, ARC_ORANGE,
                           0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 112);
+    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 116);
 
     s.power_lbl = mk_label(scr, "0.0", &lv_font_DSEG7Classic_Regular_64, ARC_CYAN,
                            480, 0, 300, LV_TEXT_ALIGN_CENTER);
