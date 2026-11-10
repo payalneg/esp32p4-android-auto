@@ -44,13 +44,15 @@ static struct {
     lv_obj_t *power_arc, *power_lbl, *power_unit, *power_title, *current_lbl, *power_max_lbl;
     lv_obj_t *batt_title, *batt_pct, *batt_pct_unit, *batt_bar, *ah_lbl;
     lv_obj_t *range_lbl, *range_unit;
-    lv_obj_t *clock_lbl, *bt_lbl, *warn_lbl;
+    lv_obj_t *clock_lbl, *bt_lbl, *warn_lbl, *cruise_lbl;
+    lv_obj_t *music_tile, *song_lbl;
     lv_obj_t *volt_val, *volt_unit, *trip_val, *trip_unit, *odo_val, *odo_unit;
     lv_obj_t *mtmp_val, *mtmp_unit, *ctmp_val, *ctmp_unit;
 } s;
 
 static float s_last_current_a;
 static float s_last_voltage_v;
+static bool  s_cruise_active;
 static bool  s_warn_connected = true;
 static bool  s_warn_shown;
 static uint32_t s_warn_blink_ms;
@@ -418,6 +420,46 @@ static void arc_esc_connection_status(bool connected)
     }
 }
 
+static void arc_cruise_control_status(bool active)
+{
+    s_cruise_active = active;
+    if (!s.cruise_lbl) return;
+    if (active) {
+        if (lv_obj_has_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN))
+            lv_obj_clear_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
+        dash_label_set(s.cruise_lbl, "CC");
+    } else {
+        lv_obj_add_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void arc_cruise_speed(float kmh)
+{
+    if (!s_cruise_active || !s.cruise_lbl || !isfinite(kmh)) return;
+    char text[20];
+    snprintf(text, sizeof(text), "CC %d",
+             (int)settings_wrapper_speed_to_display(kmh));
+    dash_label_set(s.cruise_lbl, text);
+}
+
+/* Demo/simulator path only: the real device drives the music tile through
+ * music_info_view, which owns its own labels. This keeps a scripted screenshot
+ * (or the generated GIF) able to show a track without notif_bridge. */
+static void arc_music_text(const char *text)
+{
+    if (!s.song_lbl) return;
+    if (!text || !*text) {
+        lv_obj_add_flag(s.song_lbl, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char buf[160];
+    strncpy(buf, text, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+    for (char *p = buf; *p; p++) if (*p == '|') *p = '\n';
+    lv_label_set_text(s.song_lbl, buf);
+    lv_obj_clear_flag(s.song_lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void arc_units_changed(void)
 {
     dash_label_set(s.speed_unit, settings_wrapper_speed_unit());
@@ -455,7 +497,15 @@ static lv_obj_t *arc_create(void)
     s.clock_lbl = mk_label(scr, "14:32", &lv_font_montserrat_20, ARC_TEXT,
                            370, 7, 100, LV_TEXT_ALIGN_CENTER);
     lv_obj_t *settings = mk_label(scr, "SETTINGS", &lv_font_montserrat_20, ARC_TEXT,
-                                  500, 7, 140, LV_TEXT_ALIGN_RIGHT);
+                                  500, 7, 120, LV_TEXT_ALIGN_RIGHT);
+    s.cruise_lbl = mk_label(scr, "CC", &lv_font_montserrat_16, ARC_GREEN,
+                            630, 9, 62, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_style_bg_color(s.cruise_lbl, ARC_GREEN, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s.cruise_lbl, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_radius(s.cruise_lbl, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(s.cruise_lbl, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(s.cruise_lbl, 2, LV_PART_MAIN);
+    lv_obj_add_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
     s.bt_lbl = mk_label(scr, "BT", &lv_font_montserrat_20, ARC_DIM,
                         700, 7, 60, LV_TEXT_ALIGN_RIGHT);
     lv_obj_add_flag(vesc, LV_OBJ_FLAG_CLICKABLE);
@@ -526,6 +576,27 @@ static lv_obj_t *arc_create(void)
     s.range_unit = mk_label(scr, settings_wrapper_dist_unit(), &lv_font_montserrat_16,
                             ARC_DIM, 424, 280, 40, LV_TEXT_ALIGN_LEFT);
 
+    /* Now-playing card in the centre gap. On the device the app attaches
+     * music_info_view here (album art + scrolling title/artist); the dark card
+     * and demo label below are only what the headless simulator shows, because
+     * it has no notif_bridge/media poller. */
+    s.music_tile = lv_obj_create(scr);
+    lv_obj_set_pos(s.music_tile, 324, 300);
+    lv_obj_set_size(s.music_tile, 152, 92);
+    lv_obj_clear_flag(s.music_tile, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s.music_tile, lv_color_hex(0x0B141B), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s.music_tile, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s.music_tile, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(s.music_tile, ARC_TRACK, LV_PART_MAIN);
+    lv_obj_set_style_radius(s.music_tile, 10, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s.music_tile, 0, LV_PART_MAIN);
+
+    s.song_lbl = mk_label(s.music_tile, "", &lv_font_montserrat_18, ARC_TEXT,
+                          0, 0, 140, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_long_mode(s.song_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s.song_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s.song_lbl, LV_OBJ_FLAG_HIDDEN);
+
     /* Bottom five-cell telemetry strip. */
     mk_hline(scr, 399);
     mk_cell(scr, 80,  "VOLTAGE", &s.volt_val, &s.volt_unit);
@@ -555,6 +626,7 @@ static void arc_destroy(void)
     memset(&s, 0, sizeof(s));
     s_last_current_a = 0.0f;
     s_last_voltage_v = 0.0f;
+    s_cruise_active = false;
 }
 
 static const dashboard_theme_ops_t arc_ops = {
@@ -575,17 +647,25 @@ static const dashboard_theme_ops_t arc_ops = {
     .hide_cur_time         = arc_hide_cur_time,
     .ble_status            = arc_ble_status,
     .esc_connection_status = arc_esc_connection_status,
+    .cruise_control_status = arc_cruise_control_status,
+    .cruise_speed          = arc_cruise_speed,
+    .music_text            = arc_music_text,
     .max_values            = arc_max_values,
     .units_changed         = arc_units_changed,
     /* uptime / fps / cruise_* / navigation_* / music_* / brightness: not shown */
 };
+
+static lv_obj_t *arc_music_tile(void)
+{
+    return s.music_tile;
+}
 
 static const dashboard_theme_t arc_theme = {
     .id         = "arc",
     .name       = "Twin Arc",
     .create     = arc_create,
     .destroy    = arc_destroy,
-    .music_tile = NULL,
+    .music_tile = arc_music_tile,
     .ops        = &arc_ops,
 };
 
