@@ -23,6 +23,7 @@
 #include "dashboard_theme.h"
 #include "theme_ref.h"
 #include "theme_generic.h"
+#include "theme_dashboard_amber.h"
 
 /* The 480x480 project's gui_guider.h only declares the faces its screens
  * use; the cockpit battery readout needs the 64 px face on every board. */
@@ -3898,9 +3899,7 @@ void custom_init_once(void)
     /* theme_ref ("Minimal (ref)") is a scaffold/reference theme — not exposed
      * in the Settings dropdown. Re-enable by calling theme_ref_register() here
      * (it would take the next free index). See theme_ref.c. */
-    /* Append new themes at the END so saved NVS theme indices stay stable.
-     * The amber theme (its GUI Guider screen and theme_dashboard_amber.c)
-     * was removed; every other dashboard screen is auto-registered below. */
+    /* Append new themes at the END so saved NVS theme indices stay stable. */
 
     /* Auto-register every convention-named dashboard_* GUI Guider screen. The
      * registrar is code-generated from gui_guider.h — by
@@ -3909,6 +3908,11 @@ void custom_init_once(void)
      * of themes. See scripts/gen_dashboard_themes.py + theme_generic.h.
      * Appended last, so these take the indices after the hand-written themes. */
     dashboard_themes_auto_register_all();
+
+    /* Cyberpunk-amber reskin (design_handoff_vesc_dashboard, Variant A) —
+     * hand-written ops, so it is skipped by the generic registrar. Registered
+     * last to keep every existing NVS theme index stable. */
+    theme_dashboard_amber_register();
 }
 
 /* Simulator / desktop-port entry point. setup_ui() already built and loaded the

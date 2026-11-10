@@ -38,12 +38,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TTF = os.path.join(ROOT, "import", "font", "Antonio-Regular.ttf")
-# The DSEG7 / DSEG14 segment subsets lived here for the amber dashboard theme.
-# That screen was deleted, no screen references DSEG any more, and the subsets
-# were ~3 MB of source (DSEG14@200 alone 664 KB) linked into every image, so
-# they are gone. The .ttf files stay in import/font/ and are still registered in
-# the .guiguider ImportFonts — re-add jobs here (and to COCKPIT_FONT_NAMES in
-# components/vesc_ui/CMakeLists.txt) if a screen picks them up again.
+# DSEG7 Classic — 7-segment numeric readouts for the amber dashboard theme.
+DSEG7_TTF = os.path.join(ROOT, "import", "font", "DSEG7Classic-Regular.ttf")
+# DSEG7 is back for the amber dashboard's numeric readouts; only the five sizes
+# that screen uses are subset (the full GUI Guider exports overflow the OTA
+# slot). DSEG14 is currently unused. Keep the DSEG7 jobs below in sync with
+# COCKPIT_FONT_NAMES in components/vesc_ui/CMakeLists.txt.
 OUT_DIR = os.path.join(ROOT, "generated", "guider_fonts")
 
 # (file_basename_without_.c, size_px, lv_font_conv_range_spec, ttf)
@@ -63,7 +63,7 @@ OUT_DIR = os.path.join(ROOT, "generated", "guider_fonts")
 # (trip/odo/voltage/units) — hence the threshold. Requires LV_USE_FONT_COMPRESSED=1
 # in main/lv_conf.h + Super_VESC_Display/lv_conf.h (set), else compressed glyphs
 # render blank.
-COMPRESS_MIN_PX = 10000
+COMPRESS_MIN_PX = 100
 
 JOBS = [
     # dashboard_Speed_text — snprintf "%02d", clamped 0..999. Digits only;
@@ -87,6 +87,15 @@ JOBS = [
     # bottom-strip values — digits, minus, ., /, A-Z, °, ·, space.
     ("lv_font_Antonio_Regular_32",   32, "0x20,0x2D-0x39,0x41-0x5A,0xB0,0xB7", TTF),
 
+    # ── DSEG7 Classic 7-segment subsets for the amber dashboard ──
+    # Numeric readouts only: speed/power/battery, trip/odo/voltage, clocks and
+    # the cruise target. DSEG7 has no slash, so dual-motor temperatures use
+    # Montserrat instead of this face.
+    ("lv_font_DSEG7Classic_Regular_20",  20, "0x20,0x2D,0x2E,0x30-0x3A", DSEG7_TTF),
+    ("lv_font_DSEG7Classic_Regular_24",  24, "0x20,0x2D,0x2E,0x30-0x3A", DSEG7_TTF),
+    ("lv_font_DSEG7Classic_Regular_32",  32, "0x20,0x2D,0x2E,0x30-0x3A", DSEG7_TTF),
+    ("lv_font_DSEG7Classic_Regular_50",  50, "0x20,0x2D,0x2E,0x30-0x3A", DSEG7_TTF),
+    ("lv_font_DSEG7Classic_Regular_160", 160, "0x20,0x2D,0x2E,0x30-0x3A", DSEG7_TTF),
 ]
 
 def find_npx() -> str | None:
