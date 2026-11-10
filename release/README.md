@@ -1,6 +1,11 @@
-# Firmware 1.3.37 / Android app 0.3.46
+# Firmware 1.3.38 / Android app 0.3.47
 
 Built with ESP-IDF 5.5.6. The APK contains an OTA image for every profile below.
+
+This build adds the JK-BMS pack as a dashboard battery source (JK02 frames,
+24S and 32S layouts, 16S packs on the 32S layout). Pack SOC and remaining Ah
+feed the dashboard, AA HUD and range estimate; while the selected pack is
+offline the percentage reads **N/A** instead of an unrelated controller value.
 
 | Profile in filename / app | Hardware |
 | --- | --- |
@@ -15,7 +20,7 @@ The helper checks the P4 revision before writing and requires stable esptool
 
 - `*-merged.bin`: complete USB image, written at **0x0**.
 - The `.bin` without `-merged`: application image for OTA.
-- `aa_bridge-0.3.46.apk`: one app for all profiles. It selects the firmware using
+- `aa_bridge-0.3.47.apk`: one app for all profiles. It selects the firmware using
   the device's reported profile and blocks a detected revision/profile mismatch.
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 
