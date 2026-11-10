@@ -4,6 +4,7 @@
 #include "nav_map.h"
 #include "nav_route.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,7 @@ static lv_obj_t *s_status_lbl;
 static lv_obj_t *s_speed_lbl;
 static lv_obj_t *s_speed_unit;
 static lv_obj_t *s_batt_lbl;
+static lv_obj_t *s_batt_unit;
 /* The plate the charge is drawn on; the GPS button is hung off its top. */
 static lv_obj_t *s_batt_row;
 static lv_obj_t *s_cc_img;
@@ -177,15 +179,24 @@ static void refresh_hud(void)
 
     const bool ble_src = speed_source_is_ble();
     float kmh = ble_src ? speed_sensor_get_kmh() : 0.0f;
-    int batt = -1;
-    if (vesc_rt_data_is_fresh()) {
-        const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
-        if (!ble_src) kmh = vesc_rt_data_get_speed_kmh();
+    bool batt_known = false;
+    int batt = 0;
+    const bool rt_fresh = vesc_rt_data_is_fresh();
+    const vesc_setup_values_t *rt = rt_fresh ? vesc_rt_data_get_latest() : NULL;
+    if (rt && !ble_src) kmh = vesc_rt_data_get_speed_kmh();
+    /* A JK-BMS feeds this HUD independently of the VESC, so ask it even when
+     * the ESC is silent. No fresh reading -> "N/A", not a stale number. */
+    if (rt_fresh || settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
         const float pct = battery_calc_display_percentage(
-            rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
-        batt = (int)(pct + 0.5f);
-        if (batt < 0) batt = 0;
-        if (batt > 99) batt = 99;
+            rt ? rt->battery_level : 0.0f,
+            rt ? rt->amp_hours : 0.0f,
+            rt ? rt->amp_hours_charged : 0.0f);
+        if (isfinite(pct)) {
+            batt = (int)(pct + 0.5f);
+            if (batt < 0) batt = 0;
+            if (batt > 99) batt = 99;
+            batt_known = true;
+        }
     }
     if (kmh < 0) kmh = -kmh;
     const bool imperial = settings_get_use_imperial();
@@ -204,10 +215,20 @@ static void refresh_hud(void)
         lv_label_set_text(s_speed_unit, unit);
     }
 
-    if (batt < 0) snprintf(buf, sizeof buf, "--");
-    else          snprintf(buf, sizeof buf, "%d", batt);
+    if (!batt_known) snprintf(buf, sizeof buf, "N/A");
+    else             snprintf(buf, sizeof buf, "%d", batt);
     if (strcmp(buf, lv_label_get_text(s_batt_lbl)) != 0) {
         lv_label_set_text(s_batt_lbl, buf);
+    }
+    /* Antonio 64 is digit-subsetted; "N/A" needs a full-ASCII face. */
+    lv_obj_set_style_text_font(s_batt_lbl,
+                               batt_known ? &lv_font_Antonio_Regular_64
+                                          : &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(s_batt_lbl,
+                                lv_color_hex(batt_known ? 0xFFFFFF : 0x8A9499), 0);
+    if (s_batt_unit) {
+        if (batt_known) lv_obj_clear_flag(s_batt_unit, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(s_batt_unit, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* Cruise comes from the LISP dash packet, which has its own pump — it can
@@ -762,8 +783,8 @@ esp_err_t nav_screen_init(void)
 
     s_batt_row = hud_row_create(s_screen, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
     s_batt_lbl = hud_text(s_batt_row, &lv_font_Antonio_Regular_64, 0xFFFFFF);
-    lv_label_set_text(hud_text(s_batt_row, &lv_font_Antonio_Regular_22, 0xC8D0D8),
-                      "%");
+    s_batt_unit = hud_text(s_batt_row, &lv_font_Antonio_Regular_22, 0xC8D0D8);
+    lv_label_set_text(s_batt_unit, "%");
 
     /* "FIND" opens the keyboard. Top right, above the zoom buttons — plain
      * ASCII on purpose, like the zoom glyphs. */

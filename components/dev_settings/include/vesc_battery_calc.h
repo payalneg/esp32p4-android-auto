@@ -40,7 +40,8 @@ float battery_calc_get_smart_percentage(float controller_battery_level,
  * everywhere a "what the rider sees" battery % is needed (cockpit, AA overlay,
  * trip log) so all readouts stay in agreement. In BMS mode the value comes
  * from the registered external provider (see battery_calc_set_bms_cb); when
- * it has no fresh reading the call falls back to the controller estimate. */
+ * it has no fresh reading the call returns NaN so the UI can show "N/A"
+ * rather than a percentage from a gauge that is not the selected source. */
 float battery_calc_display_percentage(float controller_battery_level,
                                       float controller_amp_hours,
                                       float controller_amp_hours_charged);

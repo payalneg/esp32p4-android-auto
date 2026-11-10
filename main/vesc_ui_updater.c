@@ -1,5 +1,6 @@
 #include "vesc_ui_updater.h"
 
+#include <math.h>
 #include <time.h>
 
 #include "ble_host.h"
@@ -88,7 +89,10 @@ static void push_zeros_locked(void)
 {
     update_speed(0.0f);
     update_current(0.0f);
-    update_battery_proc(0.0f);
+    /* With the pack as the selected source, "no reading yet" is N/A, not 0 %.
+     * Other modes keep the historical zero placeholder. */
+    update_battery_proc(settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS
+                            ? NAN : 0.0f);
     update_trip(0.0f);
     update_range(0.0f);
     update_temp_fet(0.0f);
@@ -136,11 +140,15 @@ static void push_rt_locked(void)
          * and the range derived from them stay meaningful while the ESC is
          * silent. Current, power and temperatures still need the VESC, so
          * those hold their last values behind the "ESC NOT CONNECTED" banner. */
-        if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS &&
-            battery_calc_bms_fresh()) {
-            update_battery_proc(battery_calc_display_percentage(0, 0, 0));
-            update_range(compute_range_km());
-            update_amp_hours(battery_calc_display_amp_hours(0.0f));
+        if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
+            if (battery_calc_bms_fresh()) {
+                update_battery_proc(battery_calc_display_percentage(0, 0, 0));
+                update_range(compute_range_km());
+                update_amp_hours(battery_calc_display_amp_hours(0.0f));
+            } else {
+                /* Pack offline: do not leave the last SOC frozen on screen. */
+                update_battery_proc(NAN);
+            }
         }
         return;
     }

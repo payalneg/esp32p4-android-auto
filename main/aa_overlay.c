@@ -1,5 +1,6 @@
 #include "aa_overlay.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -283,21 +284,29 @@ void aa_overlay_draw(uint16_t *fb)
      * so it's the only source guaranteed to be fresh while AA video runs. */
     unsigned speed = 0;
     unsigned batt  = 0;
+    bool batt_valid = false;
     bool cc_active = false;
     /* Speed follows the user-selected source: the BLE wheel sensor keeps
      * feeding the HUD even when the VESC is silent (speed_sensor's getter is
      * spinlock-backed and safe on this decoder task). */
     bool ble_src = speed_source_is_ble();
     float spd_kmh = ble_src ? speed_sensor_get_kmh() : 0.0f;
-    if (vesc_rt_data_is_fresh()) {
-        const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
-        if (!ble_src) spd_kmh = vesc_rt_data_get_speed_kmh();
+    const bool rt_fresh = vesc_rt_data_is_fresh();
+    const vesc_setup_values_t *rt = rt_fresh ? vesc_rt_data_get_latest() : NULL;
+    if (rt && !ble_src) spd_kmh = vesc_rt_data_get_speed_kmh();
 
-        /* Battery percent — same helper as the cockpit / trip log so every
-         * readout agrees (Smart tracker vs Direct controller estimate). */
-        float pct = battery_calc_display_percentage(rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
-        int b = (int)(pct + 0.5f);
-        batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
+    /* Battery percent — same helper as the cockpit / trip log so every
+     * readout agrees (BMS pack vs Smart tracker vs Direct estimate). A JK-BMS
+     * is independent of the VESC, so ask it even when the ESC is silent. */
+    if (rt_fresh || settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
+        float pct = battery_calc_display_percentage(rt ? rt->battery_level : 0.0f,
+                                                    rt ? rt->amp_hours : 0.0f,
+                                                    rt ? rt->amp_hours_charged : 0.0f);
+        if (isfinite(pct)) {
+            int b = (int)(pct + 0.5f);
+            batt = b < 0 ? 0u : (b > 99 ? 99u : (unsigned)b);
+            batt_valid = true;
+        }
     }
     if (spd_kmh < 0) spd_kmh = -spd_kmh;
     /* Honour the km/miles toggle (same setting as the dashboard). */
@@ -314,7 +323,8 @@ void aa_overlay_draw(uint16_t *fb)
     char speed_buf[8];
     char batt_buf[8];
     snprintf(speed_buf, sizeof speed_buf, "%u", speed);
-    snprintf(batt_buf,  sizeof batt_buf,  "%u", batt);
+    if (batt_valid) snprintf(batt_buf, sizeof batt_buf, "%u", batt);
+    else            snprintf(batt_buf, sizeof batt_buf, "N/A");
 
     const lv_font_t *big = &lv_font_Antonio_Regular_64;
     const lv_font_t *sml = &lv_font_Antonio_Regular_22;
@@ -347,19 +357,28 @@ void aa_overlay_draw(uint16_t *fb)
                         settings_get_use_imperial() ? "MPH" : "KM/H");
 
     /* ── Battery widget (right) ──
-     * [icon] [gap] "78" big "%" small, right-anchored at BATT_RIGHT_X. */
-    int batt_digits_w = measure_text(big, batt_buf);
-    int pct_w         = measure_text(sml, "%");
+     * [icon] [gap] "78" big "%" small, right-anchored at BATT_RIGHT_X.
+     * With no pack reading the number (and its "%") becomes "N/A". */
+    /* The digit-subset Antonio face has no 'N'/'A'/'/', so "N/A" uses LVGL's
+     * Montserrat (full ASCII) at a comparable weight. */
+    const lv_font_t *batt_font = batt_valid ? big : &lv_font_montserrat_48;
+    int batt_top = batt_valid ? big_top
+                              : line_top_for_baseline(batt_font, baseline_y);
+    int batt_digits_w = measure_text(batt_font, batt_buf);
+    int pct_w         = batt_valid ? measure_text(sml, "%") : 0;
     int icon_total_w  = BATT_W + BATT_TIP_W;
     int icon_gap      = 6;
-    int total_w = icon_total_w + icon_gap + batt_digits_w + 1 + pct_w;
+    int total_w = icon_total_w + icon_gap + batt_digits_w +
+                  (batt_valid ? 1 + pct_w : 0);
 
     int x0 = BATT_RIGHT_X - total_w;
     int icon_y = baseline_y - (big->line_height - big->base_line) +
                  ((big->line_height - big->base_line) - BATT_H) / 2;
-    draw_battery_icon(fb, x0, icon_y, batt);
+    draw_battery_icon(fb, x0, icon_y, batt_valid ? batt : 0);
     int xt = x0 + icon_total_w + icon_gap;
-    xt += draw_text_with_halo(fb, big, xt, big_top, batt_buf);
-    xt += 1;
-    draw_text_with_halo(fb, sml, xt, sml_top, "%");
+    xt += draw_text_with_halo(fb, batt_font, xt, batt_top, batt_buf);
+    if (batt_valid) {
+        xt += 1;
+        draw_text_with_halo(fb, sml, xt, sml_top, "%");
+    }
 }

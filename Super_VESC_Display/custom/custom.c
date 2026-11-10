@@ -24,6 +24,10 @@
 #include "theme_ref.h"
 #include "theme_generic.h"
 
+/* The 480x480 project's gui_guider.h only declares the faces its screens
+ * use; the cockpit battery readout needs the 64 px face on every board. */
+LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
+
 #ifdef LV_REALDEVICE
 #include "log_capture.h"
 #endif
@@ -524,6 +528,7 @@ static lv_obj_t *settings_limits_status_label = NULL;
 #define COCKPIT_WARN     lv_color_hex(0xFFB02E)
 #define COCKPIT_DANGER   lv_color_hex(0xFF3B30)
 #define COCKPIT_REGEN    lv_color_hex(0x2EB6FF)  /* cyan, regen / negative power */
+#define COCKPIT_MUTED    lv_color_hex(0x8A9499)  /* no reading / N/A */
 
 static lv_color_t cockpit_battery_color(int pct)
 {
@@ -1031,11 +1036,37 @@ static void cockpit_cruise_speed(float speed)
 static void cockpit_battery_proc(float battery_proc)
 {
     static float old_value = -999.0f;
-    if (battery_proc == old_value) {
+    const bool na = isnan(battery_proc);
+    if (na ? isnan(old_value) : battery_proc == old_value) {
         return;
     }
     old_value = battery_proc;
-    
+
+    /* No pack reading (BMS source selected but offline): say so. The big
+     * 64 px face is too wide for the box the two digits live in, so use the
+     * 32 px face and hide the "%" glyph next door. */
+    if (na) {
+        lv_label_set_text(guider_ui.dashboard_Classic_Battery_proc_text, "N/A");
+        lv_obj_set_style_text_font(guider_ui.dashboard_Classic_Battery_proc_text,
+                                   &lv_font_Antonio_Regular_32, LV_PART_MAIN);
+        lv_obj_set_style_text_color(guider_ui.dashboard_Classic_Battery_proc_text,
+                                    COCKPIT_MUTED, LV_PART_MAIN);
+        if (guider_ui.dashboard_Classic_battery_pct) {
+            lv_obj_add_flag(guider_ui.dashboard_Classic_battery_pct,
+                            LV_OBJ_FLAG_HIDDEN);
+        }
+        cockpit_paint_battery_bar(0);
+        atomic_store(&s_cockpit_battery_proc_value, -1);
+        return;
+    }
+
+    lv_obj_set_style_text_font(guider_ui.dashboard_Classic_Battery_proc_text,
+                               &lv_font_Antonio_Regular_64, LV_PART_MAIN);
+    if (guider_ui.dashboard_Classic_battery_pct) {
+        lv_obj_clear_flag(guider_ui.dashboard_Classic_battery_pct,
+                          LV_OBJ_FLAG_HIDDEN);
+    }
+
     int value = battery_proc;
 
     /* Cockpit: Battery_meter removed — arc/needle no longer used. */

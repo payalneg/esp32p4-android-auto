@@ -360,9 +360,10 @@ float battery_calc_display_percentage(float controller_battery_level,
             if (soc > 100.0f) soc = 100.0f;
             return soc;
         }
-        /* BMS not paired / stale: a gauge stuck at 0 % is worse than the
-         * controller's own estimate, so fall back to it. */
-        return controller_battery_level * 100.0f;
+        /* BMS not paired / stale: there is no honest state of charge to show.
+         * The controller's estimate belongs to a different gauge (and may be
+         * absent or meaningless), so return NaN and let the UI draw "N/A". */
+        return NAN;
     }
     if (mode == BATTERY_CALC_MODE_SMART) {
         return battery_calc_get_smart_percentage(controller_battery_level,
