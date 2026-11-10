@@ -440,7 +440,8 @@ static void g_amp_hours(float ah)
 {
     if (!s_w || !s_w->ah_text) return;
     char text[16];
-    snprintf(text, sizeof(text), "%.1f Ah", ah);
+    if (isfinite(ah)) snprintf(text, sizeof(text), "%.1f Ah", ah);
+    else              snprintf(text, sizeof(text), "N/A Ah");
     dash_label_set(s_w->ah_text, text);
 }
 

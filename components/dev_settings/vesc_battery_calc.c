@@ -374,17 +374,39 @@ float battery_calc_display_percentage(float controller_battery_level,
     return controller_battery_level * 100.0f;
 }
 
-float battery_calc_display_amp_hours(float consumed_ah)
+float battery_calc_display_amp_hours(float controller_battery_level,
+                                     float controller_amp_hours,
+                                     float controller_amp_hours_charged)
 {
-    if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
+    /* One quantity on the dashboard in every mode: how much is LEFT. The old
+     * Direct/Smart path showed consumed Ah here while BMS mode showed the
+     * pack's remaining Ah, so the same field changed meaning with the source
+     * setting. */
+    battery_calc_mode_t mode = settings_get_battery_calc_mode();
+    if (mode == BATTERY_CALC_MODE_BMS) {
         float soc = 0, rem = 0, full = 0;
         if (bms_snapshot(&soc, &rem, &full)) {
             if (rem < 0.0f) rem = 0.0f;
             if (full > 0.0f && rem > full) rem = full;
             return rem;
         }
+        return NAN;
     }
-    return consumed_ah;
+
+    float capacity = settings_get_battery_capacity();
+    if (!isfinite(capacity) || capacity <= 0.0f) {
+        return NAN;
+    }
+    if (mode == BATTERY_CALC_MODE_SMART) {
+        /* The percentage pump has already folded this tick into the Smart
+         * tracker (it runs first in vesc_ui_updater); read the same state
+         * back rather than integrating the counters a second time. */
+        return battery_calc_get_remaining_ah();
+    }
+    if (!isfinite(controller_battery_level)) {
+        return NAN;
+    }
+    return controller_battery_level * capacity;
 }
 
 void battery_calc_set_bms_cb(battery_calc_bms_cb_t cb)

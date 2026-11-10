@@ -46,10 +46,14 @@ float battery_calc_display_percentage(float controller_battery_level,
                                       float controller_amp_hours,
                                       float controller_amp_hours_charged);
 
-/* Amp-hours shown on the dashboard. In BMS mode this is the pack's own
- * remaining capacity; otherwise it is the trip's consumed Ah (the historical
- * behaviour). */
-float battery_calc_display_amp_hours(float consumed_ah);
+/* Remaining capacity in Ah, shown on the dashboard in every mode: the pack's
+ * own counter in BMS mode, the Smart tracker's remaining Ah, or the
+ * controller's percentage applied to the configured capacity in Direct mode.
+ * Returns NaN when that mode has no honest reading (e.g. BMS pack offline), so
+ * the UI can show N/A instead of a stale or consumed figure. */
+float battery_calc_display_amp_hours(float controller_battery_level,
+                                     float controller_amp_hours,
+                                     float controller_amp_hours_charged);
 
 /* External pack gauge (the JK-BMS BLE client in main/bms_battery.c).
  *

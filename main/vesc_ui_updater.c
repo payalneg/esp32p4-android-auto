@@ -97,7 +97,7 @@ static void push_zeros_locked(void)
     update_range(0.0f);
     update_temp_fet(0.0f);
     update_temp_motor(0.0f);
-    update_amp_hours(0.0f);
+    update_amp_hours(battery_calc_display_amp_hours(0.0f, 0.0f, 0.0f));
     update_battery_temp(0.0f);
     update_battery_voltage(0.0f);
     /* Lifetime distance is not a "zero when the ESC is silent" value — it is
@@ -144,7 +144,7 @@ static void push_rt_locked(void)
             if (battery_calc_bms_fresh()) {
                 update_battery_proc(battery_calc_display_percentage(0, 0, 0));
                 update_range(compute_range_km());
-                update_amp_hours(battery_calc_display_amp_hours(0.0f));
+                update_amp_hours(battery_calc_display_amp_hours(0.0f, 0.0f, 0.0f));
             } else {
                 /* Pack offline: do not leave the last SOC frozen on screen. */
                 update_battery_proc(NAN);
@@ -197,7 +197,9 @@ static void push_rt_locked(void)
     update_range(compute_range_km());
     update_temp_fet(rt->temp_mos);
     update_temp_motor(rt->temp_motor);
-    update_amp_hours(battery_calc_display_amp_hours(trip_persist_get_amp_hours()));
+    update_amp_hours(battery_calc_display_amp_hours(rt->battery_level,
+                                                    rt->amp_hours,
+                                                    rt->amp_hours_charged));
     update_battery_temp(rt->temp_mos);
     update_battery_voltage(rt->v_in);
     update_uptime(trip_persist_get_uptime_ms());

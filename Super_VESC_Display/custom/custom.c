@@ -1256,13 +1256,15 @@ static void cockpit_temp_motor(float temp_motor)
 static void cockpit_amp_hours(float amp_hours)
 {
     static float old_value = -999.0f;
-    if (amp_hours == old_value) {
+    const bool na = isnan(amp_hours);
+    if (na ? isnan(old_value) : amp_hours == old_value) {
         return;
     }
     old_value = amp_hours;
-    
+
     char text[16];
-    sprintf(text, "%.1f Ah", amp_hours);
+    if (na) snprintf(text, sizeof(text), "N/A Ah");
+    else    snprintf(text, sizeof(text), "%.1f Ah", amp_hours);
     lv_label_set_text(guider_ui.dashboard_Classic_Ah_text, text);
 }
 
