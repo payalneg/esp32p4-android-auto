@@ -23,7 +23,11 @@
 #include "dashboard_theme.h"
 #include "theme_ref.h"
 #include "theme_generic.h"
+/* The amber screen is authored at 800×480; the 480×480 S3 project has no
+ * dashboard_Amber widgets, so theme_dashboard_amber.c is excluded there. */
+#ifdef SVD_HAS_AMBER
 #include "theme_dashboard_amber.h"
+#endif
 
 /* The 480x480 project's gui_guider.h only declares the faces its screens
  * use; the cockpit battery readout needs the 64 px face on every board. */
@@ -3911,8 +3915,10 @@ void custom_init_once(void)
 
     /* Cyberpunk-amber reskin (design_handoff_vesc_dashboard, Variant A) —
      * hand-written ops, so it is skipped by the generic registrar. Registered
-     * last to keep every existing NVS theme index stable. */
+     * last to keep every existing NVS theme index stable. 800×480 only. */
+#ifdef SVD_HAS_AMBER
     theme_dashboard_amber_register();
+#endif
 }
 
 /* Simulator / desktop-port entry point. setup_ui() already built and loaded the

@@ -52,6 +52,11 @@ file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
+# The amber screen is 800x480-only (its generated screen lives in the wide
+# project); the 480x480 S3 build has no dashboard_Amber widgets.
+if("${IDF_TARGET}" STREQUAL "esp32s3")
+    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*theme_dashboard_amber\\.c$")
+endif()
 
 # ── Cockpit Antonio fonts: subsetted from the TTF at build time ──
 # GUI Guider exports Antonio with the full ASCII range (95 glyphs) + 60 icons
@@ -169,6 +174,12 @@ add_custom_command(
 # vesc_battery_calc include sites in custom.c. Stubs in components/dev_settings
 # keep the build linkable until the vesc_app backend lands.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_REALDEVICE)
+
+# The amber theme's screen is 800x480; keep its registration out of the
+# 480x480 S3 build (theme_dashboard_amber.c is filtered from SVD_CUSTOM above).
+if(NOT "${IDF_TARGET}" STREQUAL "esp32s3")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVD_HAS_AMBER=1)
+endif()
 
 # Mirror of main/config.h's ENABLE_WALL_CLOCK — vesc_ui can't include
 # main/config.h cleanly, so the flag is duplicated here. Must stay in
