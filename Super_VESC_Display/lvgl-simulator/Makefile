@@ -57,7 +57,7 @@ endif
 # so the simulator shows what the device shows. Without ENABLE_WALL_CLOCK the
 # dashboard draws a clock the firmware hides, and every screenshot lies about
 # how crowded the status bar is.
-CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 -DENABLE_WALL_CLOCK=0 -DSVD_HAS_AMBER=1 $(EXTRA_CFLAGS)
+CFLAGS += -DLV_CONF_INCLUDE_SIMPLE=1 -DENABLE_WALL_CLOCK=0 -DSVD_WIDE_UI=1 $(EXTRA_CFLAGS)
 
 #Collect the files to compile
 -include $(LVGL_DIR)/$(LVGL_DIR_NAME)/lvgl.mk

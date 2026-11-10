@@ -52,10 +52,10 @@ file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
-# The amber screen is 800x480-only (its generated screen lives in the wide
-# project); the 480x480 S3 build has no dashboard_Amber widgets.
+# The amber and twin-arc dashboards are 800x480-only; the 480x480 S3 build has
+# no dashboard_Amber widgets and no room for the wide twin-arc layout.
 if("${IDF_TARGET}" STREQUAL "esp32s3")
-    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*theme_dashboard_amber\\.c$")
+    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*(theme_dashboard_amber|theme_arc)\\.c$")
 endif()
 
 # ── Cockpit Antonio fonts: subsetted from the TTF at build time ──
@@ -87,7 +87,7 @@ set(COCKPIT_FONT_NAMES
     # Amber dashboard's 7-segment numeric readouts (see tools/regen_cockpit_fonts.py).
     lv_font_DSEG7Classic_Regular_20  lv_font_DSEG7Classic_Regular_24
     lv_font_DSEG7Classic_Regular_32  lv_font_DSEG7Classic_Regular_50
-    lv_font_DSEG7Classic_Regular_160)
+    lv_font_DSEG7Classic_Regular_64  lv_font_DSEG7Classic_Regular_160)
 set(COCKPIT_FONT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cockpit_fonts")
 set(COCKPIT_FONT_SRCS "")
 foreach(_cf ${COCKPIT_FONT_NAMES})
@@ -175,10 +175,10 @@ add_custom_command(
 # keep the build linkable until the vesc_app backend lands.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_REALDEVICE)
 
-# The amber theme's screen is 800x480; keep its registration out of the
-# 480x480 S3 build (theme_dashboard_amber.c is filtered from SVD_CUSTOM above).
+# The amber and twin-arc dashboards are 800x480; keep their registration out
+# of the 480x480 S3 build (both modules are filtered from SVD_CUSTOM above).
 if(NOT "${IDF_TARGET}" STREQUAL "esp32s3")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVD_HAS_AMBER=1)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVD_WIDE_UI=1)
 endif()
 
 # Mirror of main/config.h's ENABLE_WALL_CLOCK — vesc_ui can't include
