@@ -158,9 +158,14 @@ static void set_container_visible(bool on)
      * above our root tile and ships with a dark default-theme fill.
      * Toggling its HIDDEN flag is the cheapest way to suppress that
      * fill entirely when no track is playing — custom_init() hides it
-     * at boot, here we flip it on/off as media comes and goes. */
+     * at boot, here we flip it on/off as media comes and goes.
+     * Themes that parent the tile directly on the screen (Twin Arc)
+     * have no such container: the "parent" there IS the screen, and
+     * hiding it blanks the whole dashboard — invalidation on a hidden
+     * object is dropped, so the screen freezes on the last frame.
+     * Skip the toggle when there is no real container. */
     lv_obj_t *container = lv_obj_get_parent(s_root);
-    if (!container) return;
+    if (!container || lv_obj_get_parent(container) == NULL) return;
     if (on) lv_obj_clear_flag(container, LV_OBJ_FLAG_HIDDEN);
     else    lv_obj_add_flag (container, LV_OBJ_FLAG_HIDDEN);
 }
