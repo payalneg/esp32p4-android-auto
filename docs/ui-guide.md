@@ -89,6 +89,9 @@ odometer, motor and controller temperature.
 On the 480×480 ESP32-S3 panel only Cockpit and Classic Max are available; the
 two wide themes are compiled for the 800×480 boards.
 
+An animated loop of the rings and the now-playing card is in
+[`twin-arc-demo.gif`](images/ui/twin-arc-demo.gif).
+
 ---
 
 ## 3. Settings
