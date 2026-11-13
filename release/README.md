@@ -1,36 +1,34 @@
-# Firmware 1.3.41 / Android app 0.3.50
+# Firmware 1.3.42 / Android app 0.3.51
 
 Built with ESP-IDF 5.5.6. The APK contains an OTA image for every profile below.
 
-## What changed since 1.3.40
+## What changed since 1.3.41
 
-This is a **documentation and tooling release**. Firmware behaviour is unchanged
-from 1.3.40; every board is rebuilt with the new version string.
+Bug-fix release; the 1.3.41 feature set is unchanged.
 
-- **New screen-by-screen guide** — [`docs/ui-guide.md`](../docs/ui-guide.md) and
-  [`docs/ui-guide.ru.md`](../docs/ui-guide.ru.md) now document every screen with
-  a picture of the firmware's own UI: all four dashboard themes (**Cockpit**,
-  **Classic Max**, **Cockpit (Amber)**, **Twin Arc**), the JK-BMS pack screen and
-  its Bluetooth pairing, all four Settings tabs, the odometer dialog, trip log
-  and chart, VESC Config, PAS, speed sensor, Quick actions, LISP editor,
-  Realtime, QR codes and the log viewer.
-- **Refreshed screenshots** — every dashboard and Settings picture was
-  regenerated from the current simulator, including the two wide themes and the
-  connected JK-BMS state. The Twin Arc demo GIF is linked from the guide.
-- **Simulator parity** — `menu bms` was added to the headless driver so the
-  JK-BMS screen can be rendered and audited like the other menus; the LISP
-  editor now also builds on Windows/MinGW hosts.
-- **README / changelog** — both READMEs point at 1.3.41 / 0.3.50, the feature
-  list covers the themes and the JK-BMS source, and the 1.3.40 release notes are
-  recorded in [`CHANGELOG.md`](../CHANGELOG.md).
+- **Fixed: the Twin Arc white screen** — the dashboard could freeze on a white
+  screen right after the boot splash, most reliably on **Twin Arc**. The music
+  info poller hides its surrounding `music_info` container while no track is
+  playing (a trick for the GUI-Guider themes); Twin Arc parents its music tile
+  directly on the screen, so the poller hid the **whole dashboard screen** —
+  and LVGL drops every invalidation on a hidden object, so nothing could
+  repaint. The toggle is now skipped when the tile's parent is the screen.
+  Verified on a Waveshare 4.3" board: Twin Arc renders steadily (~10 fps)
+  where 1.3.41 froze at 0 fps.
+- **Android Auto auto-connect is now off by default** — the "Reconnect to last
+  phone on power-on" setting (Settings → Connection) starts disabled on a
+  fresh or erased device. A previously saved choice is kept. The manual
+  **Connect** button always works.
 
-The 1.3.40 feature set is unchanged and still present:
+Carried from 1.3.40/1.3.41:
 
 - Cockpit (Amber) and Twin Arc on the 800×480 head units; Cockpit and Classic
   Max remain the defaults, and the 480×480 S3 build keeps those two.
 - The JK-BMS pack as a dashboard battery source (JK02 frames, 24S/32S layouts,
   16S packs on the 32S layout). SOC and remaining Ah feed the dashboard, AA HUD
   and range estimate; an offline pack reads **N/A**.
+- The screen-by-screen guide: [`docs/ui-guide.md`](../docs/ui-guide.md) /
+  [`docs/ui-guide.ru.md`](../docs/ui-guide.ru.md).
 
 | Profile in filename / app | Hardware |
 | --- | --- |
@@ -45,7 +43,7 @@ The helper checks the P4 revision before writing and requires stable esptool
 
 - `*-merged.bin`: complete USB image, written at **0x0**.
 - The `.bin` without `-merged`: application image for OTA.
-- `aa_bridge-0.3.50.apk`: one app for all profiles. It selects the firmware using
+- `aa_bridge-0.3.51.apk`: one app for all profiles. It selects the firmware using
   the device's reported profile and blocks a detected revision/profile mismatch.
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 
@@ -56,5 +54,6 @@ The APK uses the same signing certificate as 0.3.42, so it can update that app
 without uninstalling it. Built using Flutter 3.29.3 / Dart 3.7.2 and Android
 compile SDK 36.
 
-Hardware validation is still required. Build and compatibility checks do not
-establish that an individual board, its power supply, or its panel is healthy.
+The white-screen fix itself was validated on real Waveshare hardware. The rest
+of the release is build- and OTA-verified only; the 1.3.33 hardware caveats
+still apply — flash with care and keep a USB recovery path available.

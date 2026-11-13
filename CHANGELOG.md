@@ -9,6 +9,29 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## v1.3.42 / app 0.3.51 — 2026-11-13
+
+Bug-fix release. Two behaviour fixes on top of 1.3.41; no new screens.
+
+### The Twin Arc white screen (fixed)
+
+- The dashboard could freeze on a white screen — most reliably on **Twin Arc**,
+  right after the boot splash. The media poller (`music_info_view`) hides its
+  "container" whenever no track is playing, a trick written for the GUI-Guider
+  themes whose music tile sits inside a `music_info` container. Twin Arc parents
+  its tile **directly on the screen**, so the poller was hiding the whole
+  dashboard screen; LVGL then drops every invalidation on a hidden object, so
+  nothing repainted and the render watchdog's forced repaint was silently
+  discarded too. The toggle is now skipped when the tile's parent is the screen.
+  Verified on a Waveshare 4.3": Twin Arc holds ~10 fps where it froze at 0 fps.
+
+### Android Auto auto-connect is off by default
+
+- `aa_autoconnect` (Settings → "Reconnect to last phone on power-on") now
+  defaults to **off** on a fresh/erased NVS. Existing saved settings are kept —
+  turn it off on the device, or it stays on, if you enabled it earlier. The
+  manual **Connect** button and the phone-initiated flow are unchanged.
+
 ## v1.3.41 / app 0.3.50 — 2026-11-13
 
 Documentation and tooling release; firmware behaviour is unchanged from 1.3.40.
