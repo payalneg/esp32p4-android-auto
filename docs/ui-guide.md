@@ -241,6 +241,11 @@ The head unit owns the whole PAS feature — no phone involved.
 - **Mode** — e.g. `Proportional to cadence`.
 - **Advanced** — start delay, start current and the rest of the ramp tuning.
 
+Any standard BLE cadence sensor works; the companion project
+[cadence-for-ebike](https://github.com/payalneg/cadence-for-ebike) is an open
+custom firmware for the COOSPO BK6LS sensor — standard CSC profile plus a
+custom service streaming signed RPM (with rotation direction) every 100 ms.
+
 ## 9. Speed sensor
 
 ![](images/ui/speed-sensor.png)
@@ -301,6 +306,10 @@ dashboard, so the ride data stays visible while you change something.
 
 Tap anywhere outside the drawer to close it.
 
+The controls are not hard-coded: the drawer renders whatever the **master LISP
+script** running on the VESC declares (§11) — its toggles, steppers and labels
+come from the script's UI descriptor. Change the script, change the panel.
+
 ## 11. LISP editor
 
 ![](images/ui/lisp-editor.png)
@@ -351,34 +360,3 @@ scrolling up pins the view. `Back to settings` returns.
 *(The picture comes from the simulator build, where log capture is switched
 off — hence the placeholder text. On the device the ring is full of real
 lines.)*
-
----
-
-## Not in this gallery
-
-- **Android Auto / navigator** — the phone's H.264 stream, decoded straight to
-  the panel. Nothing LVGL draws it, so there is nothing to render here.
-- **VESC link** (Settings → Connection → Open) — compiles only on the device
-  build; it drives the real BLE / Wi-Fi transports.
-- **Files** — the file browser lives in `main/files_screen.c` and needs the real
-  littlefs / SD card, so the simulator build has no screen to render; the Logs
-  screen is included above but shows a placeholder there.
-- **Boot splash** — the animated logo before the dashboard appears.
-
-## Regenerating these pictures
-
-```bash
-cd Super_VESC_Display/lvgl-simulator
-make menus RUN='screen Cockpit; shot 01_dashboard_cockpit'
-```
-
-`make menus` builds the real screens headless (SDL's dummy video driver) and
-`RUN='…'` drives them: `screen <theme|settings>`,
-`menu <trips|vesc|pas|speed|bms|lisp|lispedit|rt>`, `tap "<text>"` / `tap x y`,
-`swipe`, `wait <ms>`, `shot <name>`, `audit`. The BMPs land in
-`buildmenu/shots/`. The `bms` menu opens the JK-BMS screen; follow it with
-`tap "Search"` and `tap "JK-BMS"` to show a connected pack.
-
-On Windows the simulator needs a 32-bit MinGW toolchain plus `make`, `curl` and
-`jansson` from MSYS2 (`pacman -S mingw-w64-i686-gcc mingw-w64-i686-curl`), and
-`python` on `PATH` as `python3`.
