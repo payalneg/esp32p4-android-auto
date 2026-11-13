@@ -27,8 +27,8 @@ Carried from 1.3.40/1.3.41:
 - The JK-BMS pack as a dashboard battery source (JK02 frames, 24S/32S layouts,
   16S packs on the 32S layout). SOC and remaining Ah feed the dashboard, AA HUD
   and range estimate; an offline pack reads **N/A**.
-- The screen-by-screen guide: [`docs/ui-guide.md`](../docs/ui-guide.md) /
-  [`docs/ui-guide.ru.md`](../docs/ui-guide.ru.md).
+- The screen-by-screen guide: [`docs/ui-guide.md`](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/ui-guide.md) /
+  [`docs/ui-guide.ru.md`](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/ui-guide.ru.md).
 
 | Profile in filename / app | Hardware |
 | --- | --- |
@@ -48,7 +48,7 @@ The helper checks the P4 revision before writing and requires stable esptool
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 
 For a P4 v3.2 board, choose **waveshare-rev3**. Do not use `--force` to install
-a v1.x image. See [recovery details](../docs/esp32p4-rev3.md).
+a v1.x image. See [recovery details](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/esp32p4-rev3.md).
 
 The APK uses the same signing certificate as 0.3.42, so it can update that app
 without uninstalling it. Built using Flutter 3.29.3 / Dart 3.7.2 and Android
