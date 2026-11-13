@@ -82,6 +82,18 @@ static bool     s_vin_boot_checked;       /* voltage charge-detect runs once per
  * happened after that record was written and the NVS value is the truth. */
 static uint32_t s_reset_epoch;
 
+/* External pack gauge (JK-BMS BLE) — see vesc_battery_calc.h. */
+static battery_calc_bms_cb_t s_bms_cb;
+
+static bool bms_snapshot(float *soc, float *remaining_ah, float *full_ah)
+{
+    /* Copy the pointer first: registration happens once at boot, but the
+     * getters also run on the AA video task, so avoid reading a half-updated
+     * pair. The callback itself may use its own spinlock. */
+    battery_calc_bms_cb_t cb = s_bms_cb;
+    return cb && cb(soc, remaining_ah, full_ah);
+}
+
 static esp_err_t open_rw(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READWRITE, h); }
 static esp_err_t open_ro(nvs_handle_t *h)  { return nvs_open(NVS_NAMESPACE, NVS_READONLY,  h); }
 
@@ -336,16 +348,76 @@ float battery_calc_display_percentage(float controller_battery_level,
                                       float controller_amp_hours_charged)
 {
     /* Single source of truth for "the battery number on screen": honours the
-     * Direct vs Smart setting so the cockpit, AA HUD and trip log all agree.
-     * Direct forwards the controller's voltage-based estimate; Smart uses the
-     * net-Ah-integrating tracker against the configured capacity. */
-    if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_SMART) {
+     * Direct / Smart / JK-BMS setting so the cockpit, AA HUD and trip log all
+     * agree. Direct forwards the controller's voltage-based estimate; Smart
+     * uses the net-Ah-integrating tracker against the configured capacity;
+     * BMS asks the pack itself. */
+    battery_calc_mode_t mode = settings_get_battery_calc_mode();
+    if (mode == BATTERY_CALC_MODE_BMS) {
+        float soc = 0, rem = 0, full = 0;
+        if (bms_snapshot(&soc, &rem, &full)) {
+            if (soc < 0.0f)   soc = 0.0f;
+            if (soc > 100.0f) soc = 100.0f;
+            return soc;
+        }
+        /* BMS not paired / stale: there is no honest state of charge to show.
+         * The controller's estimate belongs to a different gauge (and may be
+         * absent or meaningless), so return NaN and let the UI draw "N/A". */
+        return NAN;
+    }
+    if (mode == BATTERY_CALC_MODE_SMART) {
         return battery_calc_get_smart_percentage(controller_battery_level,
                                                  controller_amp_hours,
                                                  controller_amp_hours_charged,
                                                  settings_get_battery_capacity());
     }
     return controller_battery_level * 100.0f;
+}
+
+float battery_calc_display_amp_hours(float controller_battery_level,
+                                     float controller_amp_hours,
+                                     float controller_amp_hours_charged)
+{
+    /* One quantity on the dashboard in every mode: how much is LEFT. The old
+     * Direct/Smart path showed consumed Ah here while BMS mode showed the
+     * pack's remaining Ah, so the same field changed meaning with the source
+     * setting. */
+    battery_calc_mode_t mode = settings_get_battery_calc_mode();
+    if (mode == BATTERY_CALC_MODE_BMS) {
+        float soc = 0, rem = 0, full = 0;
+        if (bms_snapshot(&soc, &rem, &full)) {
+            if (rem < 0.0f) rem = 0.0f;
+            if (full > 0.0f && rem > full) rem = full;
+            return rem;
+        }
+        return NAN;
+    }
+
+    float capacity = settings_get_battery_capacity();
+    if (!isfinite(capacity) || capacity <= 0.0f) {
+        return NAN;
+    }
+    if (mode == BATTERY_CALC_MODE_SMART) {
+        /* The percentage pump has already folded this tick into the Smart
+         * tracker (it runs first in vesc_ui_updater); read the same state
+         * back rather than integrating the counters a second time. */
+        return battery_calc_get_remaining_ah();
+    }
+    if (!isfinite(controller_battery_level)) {
+        return NAN;
+    }
+    return controller_battery_level * capacity;
+}
+
+void battery_calc_set_bms_cb(battery_calc_bms_cb_t cb)
+{
+    s_bms_cb = cb;
+}
+
+bool battery_calc_bms_fresh(void)
+{
+    float soc = 0, rem = 0, full = 0;
+    return bms_snapshot(&soc, &rem, &full);
 }
 
 bool battery_calc_is_initialized(void)
@@ -448,6 +520,16 @@ void battery_calc_set_charge_detected_cb(battery_calc_charge_cb_t cb)
 
 float battery_calc_get_remaining_ah(void)
 {
+    /* Range estimation asks for "how much is left". In BMS mode the pack's
+     * own coulomb counter is the honest answer; Smart keeps its integrator. */
+    if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
+        float soc = 0, rem = 0, full = 0;
+        if (bms_snapshot(&soc, &rem, &full)) {
+            if (rem < 0.0f) rem = 0.0f;
+            if (full > 0.0f && rem > full) rem = full;
+            return rem;
+        }
+    }
     lock();
     float rem = s_remaining_ah;
     unlock();

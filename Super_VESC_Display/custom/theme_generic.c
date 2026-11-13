@@ -23,6 +23,9 @@
 #include <stdio.h>
 #include <math.h>
 
+/* Has A-Z and '/', unlike the 64 px digit face the battery label uses. */
+LV_FONT_DECLARE(lv_font_Antonio_Regular_32)
+
 /* Neutral palette (amber-leaning default). */
 #define GEN_SEG_OFF   lv_color_hex(0x202020)
 #define GEN_ACCENT    lv_color_hex(0xFF7A1A)
@@ -34,6 +37,7 @@
 #define GEN_BT_OFF    lv_color_hex(0x6B4A2C)
 #define GEN_WARN      lv_color_hex(0xE70023)
 #define GEN_WARN_BG   lv_color_hex(0x2A0007)
+#define GEN_MUTED     lv_color_hex(0x8A9499)  /* no reading / N/A */
 
 /* Authored (single-head) geometry of one temperature value label plus its unit
  * label. Captured lazily on the first render, before anything is moved: a
@@ -48,6 +52,9 @@ typedef struct {
 } temp_geom_t;
 
 static const dashboard_widgets_t *s_w;
+/* Font the active screen authored for the battery percentage, so "N/A" can
+ * borrow the 32 px face and the numeric readout can be restored afterwards. */
+static const lv_font_t *s_batt_font;
 static float s_last_current_a;
 static float s_last_voltage_v;
 static temp_geom_t s_geom_fet;
@@ -80,6 +87,9 @@ void dashboard_nav_widen_touch(lv_obj_t *vesc, lv_obj_t *stat, lv_obj_t *set)
 void dashboard_generic_set_active(const dashboard_widgets_t *w)
 {
     s_w = w;
+    s_batt_font = (w && w->batt_pct_text)
+                      ? lv_obj_get_style_text_font(w->batt_pct_text, LV_PART_MAIN)
+                      : NULL;
     dashboard_nav_widen_touch(w->nav_vesc, w->statistics_button, w->nav_settings);
     s_last_current_a = 0.0f;
     s_last_voltage_v = 0.0f;
@@ -92,6 +102,10 @@ void dashboard_generic_set_active(const dashboard_widgets_t *w)
     s_warn_connected = true;
     s_warn_shown     = false;
     s_warn_blink_ms  = 0;
+
+    /* Battery percentage is the way into the pack detail screen on every
+     * convention-bound dashboard, same as the cockpit. */
+    bms_screen_attach_percent(w ? w->batt_pct_text : NULL);
 
     /* Phantom-touch hardening for the invisible brightness drag slider — the
      * same fix the cockpit theme carries in custom.c. GUI Guider styles the
@@ -257,10 +271,34 @@ static void g_battery_voltage(float v)
 static void g_battery_proc(float pct)
 {
     if (!s_w) return;
+
+    /* BMS source selected but the pack has no fresh reading: show N/A and
+     * drain the bars instead of pretending the last SOC is current. */
+    if (!isfinite(pct)) {
+        if (s_w->batt_pct_text) {
+            dash_label_set(s_w->batt_pct_text, "N/A");
+            dash_set_text_color(s_w->batt_pct_text, GEN_MUTED, LV_PART_MAIN);
+            lv_obj_set_style_text_font(s_w->batt_pct_text,
+                                       &lv_font_Antonio_Regular_32, LV_PART_MAIN);
+        }
+        if (s_w->batt_seg_n > 0) {
+            paint_v_bar(s_w->batt_seg, s_w->batt_seg_n, 0, GEN_MUTED);
+        }
+        if (s_w->batt_bar) {
+            bar_set(s_w->batt_bar, 0);
+            dash_set_bg_color(s_w->batt_bar, GEN_MUTED, LV_PART_INDICATOR);
+        }
+        return;
+    }
+
     int v = (int)pct; if (v > 99) v = 99; else if (v < 0) v = 0;
     if (s_w->batt_pct_text) {
         char text[8];
         snprintf(text, sizeof(text), "%d", v);
+        if (s_batt_font) {
+            lv_obj_set_style_text_font(s_w->batt_pct_text, s_batt_font,
+                                       LV_PART_MAIN);
+        }
         dash_label_set(s_w->batt_pct_text, text);
         dash_set_text_color(s_w->batt_pct_text, batt_color(v), LV_PART_MAIN);
     }
@@ -402,7 +440,8 @@ static void g_amp_hours(float ah)
 {
     if (!s_w || !s_w->ah_text) return;
     char text[16];
-    snprintf(text, sizeof(text), "%.1f Ah", ah);
+    if (isfinite(ah)) snprintf(text, sizeof(text), "%.1f Ah", ah);
+    else              snprintf(text, sizeof(text), "N/A Ah");
     dash_label_set(s_w->ah_text, text);
 }
 

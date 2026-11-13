@@ -78,6 +78,18 @@ void show_pas_settings(void);
  * directly — no phone involvement. Defined in custom/speed_screen.c. */
 void show_speed_settings(void);
 
+/* Battery state / JK-BMS pairing screen. Opened by tapping the battery
+ * percentage on the dashboard, or from Settings → Bike → Battery (JK-BMS).
+ * Shows the pack's SOC, remaining/full Ah, voltage, current, temperatures,
+ * cell range, cycles and MOSFET state, and pairs the BMS over BLE. Talks to
+ * main/bms_battery.h directly. Defined in custom/bms_screen.c. */
+void show_bms_settings(void);
+
+/* Make a dashboard widget (the percentage value or its "%" glyph) open the
+ * battery screen on tap. Safe with NULL. Called by every theme when it builds
+ * its battery readout. Defined in custom/bms_screen.c. */
+void bms_screen_attach_percent(lv_obj_t *obj);
+
 /* Lifetime odometer editor. Opened from Settings → Bike → "Set": a modal with
  * a number keyboard that re-bases whichever odometer the dashboard shows (the
  * VESC mirror or the BLE wheel sensor's). The total is kept on this display

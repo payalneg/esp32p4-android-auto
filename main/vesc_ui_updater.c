@@ -1,5 +1,6 @@
 #include "vesc_ui_updater.h"
 
+#include <math.h>
 #include <time.h>
 
 #include "ble_host.h"
@@ -88,12 +89,15 @@ static void push_zeros_locked(void)
 {
     update_speed(0.0f);
     update_current(0.0f);
-    update_battery_proc(0.0f);
+    /* With the pack as the selected source, "no reading yet" is N/A, not 0 %.
+     * Other modes keep the historical zero placeholder. */
+    update_battery_proc(settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS
+                            ? NAN : 0.0f);
     update_trip(0.0f);
     update_range(0.0f);
     update_temp_fet(0.0f);
     update_temp_motor(0.0f);
-    update_amp_hours(0.0f);
+    update_amp_hours(battery_calc_display_amp_hours(0.0f, 0.0f, 0.0f));
     update_battery_temp(0.0f);
     update_battery_voltage(0.0f);
     /* Lifetime distance is not a "zero when the ESC is silent" value — it is
@@ -131,7 +135,23 @@ static void push_rt_locked(void)
         update_odometer(odo_persist_get_km());
     }
 
-    if (!fresh) return;
+    if (!fresh) {
+        /* A JK-BMS is an independent telemetry source: its SOC / remaining Ah
+         * and the range derived from them stay meaningful while the ESC is
+         * silent. Current, power and temperatures still need the VESC, so
+         * those hold their last values behind the "ESC NOT CONNECTED" banner. */
+        if (settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS) {
+            if (battery_calc_bms_fresh()) {
+                update_battery_proc(battery_calc_display_percentage(0, 0, 0));
+                update_range(compute_range_km());
+                update_amp_hours(battery_calc_display_amp_hours(0.0f, 0.0f, 0.0f));
+            } else {
+                /* Pack offline: do not leave the last SOC frozen on screen. */
+                update_battery_proc(NAN);
+            }
+        }
+        return;
+    }
 
     const vesc_setup_values_t *rt = vesc_rt_data_get_latest();
 
@@ -177,7 +197,9 @@ static void push_rt_locked(void)
     update_range(compute_range_km());
     update_temp_fet(rt->temp_mos);
     update_temp_motor(rt->temp_motor);
-    update_amp_hours(trip_persist_get_amp_hours());
+    update_amp_hours(battery_calc_display_amp_hours(rt->battery_level,
+                                                    rt->amp_hours,
+                                                    rt->amp_hours_charged));
     update_battery_temp(rt->temp_mos);
     update_battery_voltage(rt->v_in);
     update_uptime(trip_persist_get_uptime_ms());

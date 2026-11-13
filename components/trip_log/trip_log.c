@@ -55,6 +55,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include <math.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -606,10 +607,12 @@ void trip_log_tick(const vesc_setup_values_t *rt)
         rec.temp_motor2_dc = (int16_t)(mot2 * 10.0f);
         rec.temp_fet2_dc   = (int16_t)(fet2 * 10.0f);
     }
-    /* Log the on-screen battery % (Smart vs Direct per setting), not the raw
-     * controller level — so the statistics chart matches the dashboard. */
-    rec.batt_pct      = (uint8_t)(battery_calc_display_percentage(
-                                      rt->battery_level, rt->amp_hours, rt->amp_hours_charged) + 0.5f);
+    /* Log the on-screen battery % (BMS vs Smart vs Direct per setting), not
+     * the raw controller level — so the statistics chart matches the
+     * dashboard. 0 means "no reading" (BMS source with the pack offline). */
+    const float batt_pct = battery_calc_display_percentage(
+        rt->battery_level, rt->amp_hours, rt->amp_hours_charged);
+    rec.batt_pct = isfinite(batt_pct) ? (uint8_t)(batt_pct + 0.5f) : 0;
     /* Smart-battery tracker state rides along in every record — this IS its
      * persistence (NVS only backs up rarely); seeded back in boot_scan. */
     float    batt_rem   = 0.0f;

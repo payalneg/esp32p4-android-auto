@@ -64,6 +64,7 @@ void port_start_app_hook(void)
 #include "notif_toast.h"
 #include "pas.h"
 #include "speed_sensor.h"
+#include "bms_battery.h"
 #include "music_info_view.h"
 #include "gui_guider.h"
 #include "dashboard_theme.h"
@@ -675,6 +676,11 @@ void app_main(void)
      * trip/odometer from NVS, start the integrator and NVS-writer tasks, and
      * hook into trip_log (speed provider) + trip_persist (trip reset). */
     speed_sensor_init();
+
+    /* JK-BMS pack monitor: re-bind the saved pack and let battery_calc use its
+     * SOC / remaining Ah when the user picks "JK-BMS (BLE)" as the battery
+     * source. Safe with no pack paired — everything simply reports stale. */
+    bms_battery_init();
 
 #if CONFIG_AA_ENABLE
     idle_screen_show("Android Auto", "Initialising Wi-Fi...");

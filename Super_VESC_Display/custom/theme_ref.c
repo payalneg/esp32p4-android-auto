@@ -34,6 +34,7 @@
  * declaration is harmless where the header does declare it. */
 LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
 
+#include <math.h>
 #include <stdio.h>
 
 /* Palette — kept local, intentionally distinct from the cockpit's. */
@@ -161,6 +162,11 @@ static void ref_current(float a)
 
 static void ref_battery_proc(float pct)
 {
+    if (!isfinite(pct)) {
+        if (s_batt_bar) lv_bar_set_value(s_batt_bar, 0, LV_ANIM_OFF);
+        if (s_batt_lbl) dash_label_set(s_batt_lbl, "N/A");
+        return;
+    }
     int v = (int)pct;
     if (v < 0) v = 0; else if (v > 100) v = 100;
     if (s_batt_bar) lv_bar_set_value(s_batt_bar, v, LV_ANIM_OFF);

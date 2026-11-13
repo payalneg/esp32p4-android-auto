@@ -52,6 +52,11 @@ file(GLOB SVD_FONTS      "${SVD_ROOT}/generated/guider_fonts/*.c")
 file(GLOB SVD_IMAGES     "${SVD_ROOT}/generated/images/*.c")
 list(FILTER SVD_IMAGES   EXCLUDE REGEX ".*_grid_480_800x480\\.c$")
 file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
+# The amber and twin-arc dashboards are 800x480-only; the 480x480 S3 build has
+# no dashboard_Amber widgets and no room for the wide layouts.
+if("${IDF_TARGET}" STREQUAL "esp32s3")
+    list(FILTER SVD_CUSTOM EXCLUDE REGEX ".*(theme_dashboard_amber|theme_arc)\\.c$")
+endif()
 
 # ── Cockpit Antonio fonts: subsetted from the TTF at build time ──
 # GUI Guider exports Antonio with the full ASCII range (95 glyphs) + 60 icons
@@ -64,12 +69,11 @@ file(GLOB SVD_CUSTOM     "${SVD_ROOT}/custom/*.c")
 # Needs node/npx; when absent the tool copies the committed subsets as fallback
 # so CI / clean checkouts still link. Keep COCKPIT_FONT_NAMES in sync with JOBS
 # in tools/regen_cockpit_fonts.py.
-# The DSEG7/DSEG14 segment fonts belonged to the deleted amber dashboard; no
-# screen references them any more, so they are neither compiled from
-# generated/guider_fonts (stale exports may linger there — the filter below
-# drops them) nor re-subset into the build. The .ttf files are still in
-# import/font/: to bring them back, re-add jobs to tools/regen_cockpit_fonts.py
-# and the names to COCKPIT_FONT_NAMES.
+# The amber dashboard uses DSEG7 for its numeric readouts. Like Antonio, its
+# GUI Guider exports are dropped from the build (the filter below) and hard
+# subsets are regenerated from import/font/DSEG7Classic-Regular.ttf by
+# tools/regen_cockpit_fonts.py; add new sizes in both that JOBS list and
+# COCKPIT_FONT_NAMES. DSEG14 is not referenced by any screen and stays out.
 list(FILTER SVD_FONTS EXCLUDE REGEX "/lv_font_(Antonio_Regular|DSEG7Classic_Regular|DSEG14Classic_Regular)_[0-9]+\\.c$")
 
 # Antonio@100 went with the Lamborghini / Supermoto concept screens — they were
@@ -79,7 +83,12 @@ set(COCKPIT_FONT_NAMES
     lv_font_Antonio_Regular_200
     lv_font_Antonio_Regular_50  lv_font_Antonio_Regular_40
     lv_font_Antonio_Regular_22  lv_font_Antonio_Regular_64
-    lv_font_Antonio_Regular_32)
+    lv_font_Antonio_Regular_32
+    # Amber dashboard's 7-segment numeric readouts (see tools/regen_cockpit_fonts.py).
+    lv_font_DSEG7Classic_Regular_20  lv_font_DSEG7Classic_Regular_24
+    lv_font_DSEG7Classic_Regular_32  lv_font_DSEG7Classic_Regular_50
+    lv_font_DSEG7Classic_Regular_64  lv_font_DSEG7Classic_Regular_120
+    lv_font_DSEG7Classic_Regular_140  lv_font_DSEG7Classic_Regular_160)
 set(COCKPIT_FONT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cockpit_fonts")
 set(COCKPIT_FONT_SRCS "")
 foreach(_cf ${COCKPIT_FONT_NAMES})
@@ -166,6 +175,12 @@ add_custom_command(
 # vesc_battery_calc include sites in custom.c. Stubs in components/dev_settings
 # keep the build linkable until the vesc_app backend lands.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_REALDEVICE)
+
+# The amber and twin-arc dashboards are 800x480; keep their registration out
+# of the 480x480 S3 build (the modules are filtered from SVD_CUSTOM above).
+if(NOT "${IDF_TARGET}" STREQUAL "esp32s3")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVD_WIDE_UI=1)
+endif()
 
 # Mirror of main/config.h's ENABLE_WALL_CLOCK — vesc_ui can't include
 # main/config.h cleanly, so the flag is duplicated here. Must stay in

@@ -1,0 +1,59 @@
+# Twin Arc demo frames: ride modes + cruise control + now-playing card.
+screen "Twin Arc"
+wait 500
+set clock 14:32
+set esc 1
+set bt 1
+set voltage 54.2
+set trip 12.6
+set odo 6436
+set temp_fet 42
+set temp_motor 47
+set music "Midnight City | M83"
+set battery 76
+set ah 24.3
+set range 38.0
+set speed 18
+set current 8
+set mode 0
+set cruise_off
+wait 350
+shot frame1
+
+set speed 28
+set current 18
+set mode 1
+set battery 74
+set ah 23.7
+set range 36.0
+wait 350
+shot frame2
+
+set music "Blinding Lights | The Weeknd"
+set speed 36
+set current 28
+set mode 2
+set cruise 30
+set battery 71
+set ah 22.7
+set range 34.0
+wait 350
+shot frame3
+
+set speed 42
+set current 38
+set cruise 34
+set battery 69
+set ah 22.1
+set range 32.0
+wait 350
+shot frame4
+
+set speed 45
+set current 46
+set cruise 38
+set battery 66
+set ah 21.1
+set range 30.0
+wait 350
+shot frame5

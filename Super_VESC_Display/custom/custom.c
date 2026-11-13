@@ -23,6 +23,17 @@
 #include "dashboard_theme.h"
 #include "theme_ref.h"
 #include "theme_generic.h"
+/* The amber and twin-arc dashboards are authored at 800×480; the 480×480 S3
+ * project has no dashboard_Amber widgets and no room for the wide layouts,
+ * so those theme modules are excluded there. */
+#ifdef SVD_WIDE_UI
+#include "theme_dashboard_amber.h"
+#include "theme_arc.h"
+#endif
+
+/* The 480x480 project's gui_guider.h only declares the faces its screens
+ * use; the cockpit battery readout needs the 64 px face on every board. */
+LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
 
 #ifdef LV_REALDEVICE
 #include "log_capture.h"
@@ -524,6 +535,7 @@ static lv_obj_t *settings_limits_status_label = NULL;
 #define COCKPIT_WARN     lv_color_hex(0xFFB02E)
 #define COCKPIT_DANGER   lv_color_hex(0xFF3B30)
 #define COCKPIT_REGEN    lv_color_hex(0x2EB6FF)  /* cyan, regen / negative power */
+#define COCKPIT_MUTED    lv_color_hex(0x8A9499)  /* no reading / N/A */
 
 static lv_color_t cockpit_battery_color(int pct)
 {
@@ -730,6 +742,11 @@ static void cockpit_screen_init(lv_ui *ui)
     if (ui->dashboard_Classic_esc_not_connected_text != NULL) {
         lv_obj_add_flag(ui->dashboard_Classic_esc_not_connected_text, LV_OBJ_FLAG_HIDDEN);
     }
+
+    /* The battery readout is the way into the pack screen: tap the number or
+     * the "%" beside it to see JK-BMS SOC / Ah / cells / temps. */
+    bms_screen_attach_percent(ui->dashboard_Classic_Battery_proc_text);
+    bms_screen_attach_percent(ui->dashboard_Classic_battery_pct);
 
     // Initialize cruise-active widgets as hidden (shown when CC engages).
     if (ui->dashboard_Classic_cruise_control_img != NULL) {
@@ -1026,11 +1043,37 @@ static void cockpit_cruise_speed(float speed)
 static void cockpit_battery_proc(float battery_proc)
 {
     static float old_value = -999.0f;
-    if (battery_proc == old_value) {
+    const bool na = isnan(battery_proc);
+    if (na ? isnan(old_value) : battery_proc == old_value) {
         return;
     }
     old_value = battery_proc;
-    
+
+    /* No pack reading (BMS source selected but offline): say so. The big
+     * 64 px face is too wide for the box the two digits live in, so use the
+     * 32 px face and hide the "%" glyph next door. */
+    if (na) {
+        lv_label_set_text(guider_ui.dashboard_Classic_Battery_proc_text, "N/A");
+        lv_obj_set_style_text_font(guider_ui.dashboard_Classic_Battery_proc_text,
+                                   &lv_font_Antonio_Regular_32, LV_PART_MAIN);
+        lv_obj_set_style_text_color(guider_ui.dashboard_Classic_Battery_proc_text,
+                                    COCKPIT_MUTED, LV_PART_MAIN);
+        if (guider_ui.dashboard_Classic_battery_pct) {
+            lv_obj_add_flag(guider_ui.dashboard_Classic_battery_pct,
+                            LV_OBJ_FLAG_HIDDEN);
+        }
+        cockpit_paint_battery_bar(0);
+        atomic_store(&s_cockpit_battery_proc_value, -1);
+        return;
+    }
+
+    lv_obj_set_style_text_font(guider_ui.dashboard_Classic_Battery_proc_text,
+                               &lv_font_Antonio_Regular_64, LV_PART_MAIN);
+    if (guider_ui.dashboard_Classic_battery_pct) {
+        lv_obj_clear_flag(guider_ui.dashboard_Classic_battery_pct,
+                          LV_OBJ_FLAG_HIDDEN);
+    }
+
     int value = battery_proc;
 
     /* Cockpit: Battery_meter removed — arc/needle no longer used. */
@@ -1220,13 +1263,15 @@ static void cockpit_temp_motor(float temp_motor)
 static void cockpit_amp_hours(float amp_hours)
 {
     static float old_value = -999.0f;
-    if (amp_hours == old_value) {
+    const bool na = isnan(amp_hours);
+    if (na ? isnan(old_value) : amp_hours == old_value) {
         return;
     }
     old_value = amp_hours;
-    
+
     char text[16];
-    sprintf(text, "%.1f Ah", amp_hours);
+    if (na) snprintf(text, sizeof(text), "N/A Ah");
+    else    snprintf(text, sizeof(text), "%.1f Ah", amp_hours);
     lv_label_set_text(guider_ui.dashboard_Classic_Ah_text, text);
 }
 
@@ -1689,9 +1734,11 @@ static void battery_calc_mode_dropdown_event_cb(lv_event_t *e) {
         
         // Save to settings
         settings_wrapper_set_battery_calc_mode((uint8_t)selected);
-        
+
         // Update info label
-        if (selected == 1) { // Smart Calculation
+        if (selected == 2) {          // JK-BMS over BLE
+            lv_label_set_text(settings_info_label, "JK-BMS enabled - SOC and Ah from the pack (pair it under Battery)");
+        } else if (selected == 1) {   // Smart Calculation
             lv_label_set_text(settings_info_label, "Smart calc enabled - will calibrate on next data!");
         } else {
             lv_label_set_text(settings_info_label, "Direct mode - using controller battery level");
@@ -2620,6 +2667,11 @@ static void speed_open_btn_event_cb(lv_event_t *e) {
     show_speed_settings(); /* opens the wheel-speed sensor screen (custom/speed_screen.c) */
 }
 
+static void bms_open_btn_event_cb(lv_event_t *e) {
+    (void)e;
+    show_bms_settings(); /* battery state + JK-BMS pairing (custom/bms_screen.c) */
+}
+
 static void odo_set_btn_event_cb(lv_event_t *e) {
     (void)e;
     show_odo_set_dialog(); /* modal editor (custom/odo_dialog.c) */
@@ -2859,8 +2911,9 @@ void settings_ui_init(lv_ui *ui) {
     settings_battery_calc_mode_label = settings_heading_create(parent, y_pos, "Battery Calculation:");
 
     settings_battery_calc_mode_dropdown = lv_dropdown_create(parent);
-    lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation");
-    lv_dropdown_set_selected(settings_battery_calc_mode_dropdown, battery_calc_mode);
+    lv_dropdown_set_options(settings_battery_calc_mode_dropdown, "Direct from Controller\nSmart Calculation\nJK-BMS (BLE)");
+    lv_dropdown_set_selected(settings_battery_calc_mode_dropdown,
+                             (battery_calc_mode > 2) ? 0 : battery_calc_mode);
     lv_obj_set_pos(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_X, y_pos + 5);
     lv_obj_set_size(settings_battery_calc_mode_dropdown, SETTINGS_WIDE_W, SETTINGS_CTRL_H);
     lv_obj_set_style_bg_color(settings_battery_calc_mode_dropdown, lv_color_hex(0x2a3440), 0);
@@ -2871,6 +2924,24 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_radius(settings_battery_calc_mode_dropdown, 8, 0);
     lv_obj_add_event_cb(settings_battery_calc_mode_dropdown, battery_calc_mode_dropdown_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Battery monitor (JK-BMS over BLE) ==========
+    // Opens the battery state screen (also reachable by tapping the battery
+    // percentage on the dashboard). Pairing lives there because it needs the
+    // scan list; this row is the "Settings -> Battery" entry point.
+    settings_heading_create(parent, y_pos, "Battery monitor (JK-BMS)");
+    {
+        lv_obj_t *bms_btn = lv_btn_create(parent);
+        lv_obj_set_pos(bms_btn, SETTINGS_OPEN_X, y_pos + 8);
+        lv_obj_set_size(bms_btn, SETTINGS_OPEN_W, 44);
+        lv_obj_set_style_bg_color(bms_btn, lv_color_hex(0x00a9ff), 0);
+        lv_obj_set_style_radius(bms_btn, 8, 0);
+        lv_obj_t *bms_lbl = lv_label_create(bms_btn);
+        lv_label_set_text(bms_lbl, "Open");
+        lv_obj_center(bms_lbl);
+        lv_obj_add_event_cb(bms_btn, bms_open_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
     y_pos += SETTINGS_ROW_H;
 
     SETTINGS_GROUP(SETTINGS_TAB_DISPLAY);
@@ -3834,9 +3905,7 @@ void custom_init_once(void)
     /* theme_ref ("Minimal (ref)") is a scaffold/reference theme — not exposed
      * in the Settings dropdown. Re-enable by calling theme_ref_register() here
      * (it would take the next free index). See theme_ref.c. */
-    /* Append new themes at the END so saved NVS theme indices stay stable.
-     * The amber theme (its GUI Guider screen and theme_dashboard_amber.c)
-     * was removed; every other dashboard screen is auto-registered below. */
+    /* Append new themes at the END so saved NVS theme indices stay stable. */
 
     /* Auto-register every convention-named dashboard_* GUI Guider screen. The
      * registrar is code-generated from gui_guider.h — by
@@ -3845,6 +3914,14 @@ void custom_init_once(void)
      * of themes. See scripts/gen_dashboard_themes.py + theme_generic.h.
      * Appended last, so these take the indices after the hand-written themes. */
     dashboard_themes_auto_register_all();
+
+    /* Cyberpunk-amber reskin (design_handoff_vesc_dashboard, Variant A) —
+     * hand-written ops, so it is skipped by the generic registrar. Registered
+     * last to keep every existing NVS theme index stable. 800×480 only. */
+#ifdef SVD_WIDE_UI
+    theme_dashboard_amber_register();
+    theme_arc_register();
+#endif
 }
 
 /* Simulator / desktop-port entry point. setup_ui() already built and loaded the
