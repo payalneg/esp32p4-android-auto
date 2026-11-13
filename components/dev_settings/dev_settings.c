@@ -172,7 +172,7 @@ void settings_init(void) {
      * adapter in front of it. Guessing wrong costs a dashboard that connects
      * and then shows nothing, which is exactly what a default should not do. */
     s_cache.vesc_ble_route    = VESC_BLE_ROUTE_AUTO;
-    s_cache.aa_autoconnect    = true;
+    s_cache.aa_autoconnect    = false;
     s_cache.use_imperial      = false;
     s_cache.use_fahrenheit    = false;
     s_cache.second_head_enabled = false;

@@ -60,7 +60,7 @@ static struct {
     .motor_poles = 7,  // Standard for VESC motors
     .power_max_kw = 4.5f,
     .clock_offset_secs = 0,
-    .aa_autoconnect = true,
+    .aa_autoconnect = false,
     .vesc_link_ble = false,
     .vesc_ble_route = 0,   /* auto */
     .use_imperial = false,
