@@ -25,7 +25,7 @@ service), independently of the Android Auto link.
 ## Build & run
 
 Use Flutter 3.29.3 / Dart 3.7.2 with the checked-in lock file. Android builds
-need compile SDK 36 and NDK 27.0.12077973. Firmware 1.3.40 bundles the
+need compile SDK 36 and NDK 27.0.12077973. Firmware 1.3.41 bundles the
 Waveshare P4 v1.x / v3.x, Guition JC4880 and ESP32-S3 images; build all
 profiles before staging assets.
 

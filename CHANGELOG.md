@@ -9,7 +9,9 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## v1.3.41 / app 0.3.50 — 2026-11-13
+
+Documentation and tooling release; firmware behaviour is unchanged from 1.3.40.
 
 ### A screen-by-screen user guide
 
@@ -26,6 +28,12 @@ the one recorded in the release commit.
   simulator's `make menus` works on a MinGW toolchain.
 - `Super_VESC_Display/lvgl-simulator/sim_drive.c`: add `menu bms` so the
   JK-BMS pack screen can be rendered and audited like the other menus.
+- Every dashboard and Settings screenshot in the guide was regenerated from the
+  current simulator, including Cockpit (Amber), Twin Arc and a connected
+  JK-BMS pack; the Twin Arc section links the refreshed
+  [`twin-arc-demo.gif`](docs/images/ui/twin-arc-demo.gif).
+- Both READMEs now point at 1.3.41 / 0.3.50, mention the four themes and the
+  JK-BMS source, and the hardware-validation warning refers to this release.
 
 ## v1.3.40 / app 0.3.49 — 2026-11-13
 

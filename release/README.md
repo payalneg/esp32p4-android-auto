@@ -1,22 +1,36 @@
-# Firmware 1.3.40 / Android app 0.3.49
+# Firmware 1.3.41 / Android app 0.3.50
 
 Built with ESP-IDF 5.5.6. The APK contains an OTA image for every profile below.
 
-This build adds two extra dashboards on the 800x480 head units: **Cockpit
-(Amber)**, the warm single-screen cockpit with DSEG7 numerals, and **Twin Arc**,
-two 270-degree rings framing speed and power with battery/range between them,
-a wide now-playing card under the rings and a cruise-control badge in the status
-bar. Twin Arc uses a smaller 120 px speed face and sits the KM/H label clear of
-the digits. Both are picked in Settings; the default Cockpit and Classic Max
-dashboards are unchanged.
+## What changed since 1.3.40
 
-The JK-BMS pack remains available as a dashboard battery source (JK02 frames,
-24S and 32S layouts, 16S packs on the 32S layout). Pack SOC and remaining Ah
-feed the dashboard, AA HUD and range estimate; while the selected pack is
-offline the percentage reads **N/A** instead of an unrelated controller value.
-The dashboard's Ah field always shows **remaining capacity** — the pack's own
-counter in BMS mode, the Smart tracker's remaining Ah, or the controller's
-percentage applied to the configured capacity.
+This is a **documentation and tooling release**. Firmware behaviour is unchanged
+from 1.3.40; every board is rebuilt with the new version string.
+
+- **New screen-by-screen guide** — [`docs/ui-guide.md`](../docs/ui-guide.md) and
+  [`docs/ui-guide.ru.md`](../docs/ui-guide.ru.md) now document every screen with
+  a picture of the firmware's own UI: all four dashboard themes (**Cockpit**,
+  **Classic Max**, **Cockpit (Amber)**, **Twin Arc**), the JK-BMS pack screen and
+  its Bluetooth pairing, all four Settings tabs, the odometer dialog, trip log
+  and chart, VESC Config, PAS, speed sensor, Quick actions, LISP editor,
+  Realtime, QR codes and the log viewer.
+- **Refreshed screenshots** — every dashboard and Settings picture was
+  regenerated from the current simulator, including the two wide themes and the
+  connected JK-BMS state. The Twin Arc demo GIF is linked from the guide.
+- **Simulator parity** — `menu bms` was added to the headless driver so the
+  JK-BMS screen can be rendered and audited like the other menus; the LISP
+  editor now also builds on Windows/MinGW hosts.
+- **README / changelog** — both READMEs point at 1.3.41 / 0.3.50, the feature
+  list covers the themes and the JK-BMS source, and the 1.3.40 release notes are
+  recorded in [`CHANGELOG.md`](../CHANGELOG.md).
+
+The 1.3.40 feature set is unchanged and still present:
+
+- Cockpit (Amber) and Twin Arc on the 800×480 head units; Cockpit and Classic
+  Max remain the defaults, and the 480×480 S3 build keeps those two.
+- The JK-BMS pack as a dashboard battery source (JK02 frames, 24S/32S layouts,
+  16S packs on the 32S layout). SOC and remaining Ah feed the dashboard, AA HUD
+  and range estimate; an offline pack reads **N/A**.
 
 | Profile in filename / app | Hardware |
 | --- | --- |
@@ -31,7 +45,7 @@ The helper checks the P4 revision before writing and requires stable esptool
 
 - `*-merged.bin`: complete USB image, written at **0x0**.
 - The `.bin` without `-merged`: application image for OTA.
-- `aa_bridge-0.3.49.apk`: one app for all profiles. It selects the firmware using
+- `aa_bridge-0.3.50.apk`: one app for all profiles. It selects the firmware using
   the device's reported profile and blocks a detected revision/profile mismatch.
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 

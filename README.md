@@ -23,20 +23,21 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-**Firmware 1.3.40 / Android companion app 0.3.49:** files in [release/](release/).
+**Firmware 1.3.41 / Android companion app 0.3.50:** files in [release/](release/).
 Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
 images. The app selects the image using the board's reported profile.
 See [v3.2 recovery instructions](docs/esp32p4-rev3.md).
 The new dashboards and the JK-BMS path still need hardware validation; the
 limitations below remain.
 
-## ⚠️ FIRMWARE 1.3.40 IS NOT TESTED ON HARDWARE ⚠️
+## ⚠️ FIRMWARE 1.3.41 IS NOT TESTED ON HARDWARE ⚠️
 
-**Read this before flashing anything.** Firmware 1.3.40 / app 0.3.49 compiles
+**Read this before flashing anything.** Firmware 1.3.41 / app 0.3.50 compiles
 for all three boards and its numbers were measured on a host, but the new
-dashboards and the JK-BMS path have not been run on a real vehicle in this
-build. The hardware caveats below were found during the 1.3.33 investigation
-and still apply.
+dashboards and the JK-BMS path have not been run on a real vehicle. This is a
+documentation release: firmware behaviour is unchanged from 1.3.40. The
+hardware caveats below were found during the 1.3.33 investigation and still
+apply.
 
 What that means, point by point:
 
