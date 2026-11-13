@@ -1,7 +1,8 @@
 # Head-unit screens — what each one does
 
-Every screen the LVGL dashboard can show on the 800×480 panel, with a rendered
-picture and the controls on it.
+Every screen the LVGL dashboard can show on the 800×480 panel — all four
+dashboard themes plus every menu and dialog — with a rendered picture and the
+controls on it.
 
 The pictures are **not mock-ups**: they are screenshots of the firmware's own
 screens, built for the host with `make menus` (`SIM_SHIM=1` — the real C from
@@ -32,9 +33,12 @@ the controller is working.
 - **Top bar** — `VESC` (opens the VESC Tool config), `MODE n` (the VESC's active
   LISP speed profile), uptime, `STATISTICS` (trip log), `BT` (lit when a BLE
   peer — phone or sensor — is connected), `SETTINGS`.
-- **BATTERY** (left) — charge %, Ah moved since the last charge, and a bar. The
-  number under `RANGE` is the estimated distance left in the pack, from the
-  configured capacity and recent consumption.
+- **BATTERY** (left) — charge %, **remaining Ah**, and a bar. The number under
+  `RANGE` is the estimated distance left in the pack, from the configured
+  capacity and recent consumption. In `JK-BMS (BLE)` mode the percentage and Ah
+  come from the pack itself; with the pack offline they read `N/A`.
+- **Battery percentage** is a tap target: it opens the pack screen (§9a), the
+  same one as **Settings → Bike → Battery monitor (JK-BMS) → Open**.
 - **SPEED** (centre) — the big digits; `MAX 60` is the top of the scale.
 - **POWER** (right) — instantaneous power in kW, current in amps, and a bar
   whose full scale is `Power Max` from Settings → Display (§3.2).
@@ -50,6 +54,40 @@ session), `V MAX` (top speed) and a `RESET` button in the bottom bar.
 
 `RESET` zeroes the trip counters (distance, Wh, time, peak power, top speed).
 The **odometer is not affected** — that is the lifetime total.
+
+## 2a. Dashboard — Cockpit (Amber)
+
+![](images/ui/dashboard-amber.png)
+
+The Cockpit layout in the warm “cyberpunk amber” palette: the same battery,
+speed, power and telemetry tiles, but with seven-segment DSEG7 numerals and
+amber bars on black. Every control works exactly like Cockpit (§1) — this theme
+only changes the look. Pick it in **Settings → Display** (§3.2).
+
+The battery percentage is a tap target for the JK-BMS pack screen (§9a), just
+like on Cockpit.
+
+## 2b. Dashboard — Twin Arc
+
+![](images/ui/dashboard-twin-arc.png)
+
+Two 270° rings frame the ride: the orange **speed** ring on the left, the cyan
+**power** ring on the right. The centre column carries battery %, a bar,
+remaining Ah and estimated range; the wide card underneath is the phone’s
+**now-playing** title and artist. The bottom strip shows voltage, trip,
+odometer, motor and controller temperature.
+
+- **Top bar** — `VESC`, `STATISTICS`, the clock, `SETTINGS`, `BT`, and a green
+  `CC nn` badge while cruise control is active.
+- **Speed ring** — `KM/H` (or `MPH`), `SPEED`, and `MODE n`. The ring fills
+  against a 0–60 km/h scale and the digits stay inside it.
+- **Power ring** — instantaneous `kW`, `POWER`, current in amps and this
+  session’s `MAX n.n kW`.
+- **Battery %** — tap it to open the JK-BMS pack screen (§9a). In `JK-BMS (BLE)`
+  mode an offline pack reads `N/A`; there is no fallback to the controller.
+
+On the 480×480 ESP32-S3 panel only Cockpit and Classic Max are available; the
+two wide themes are compiled for the 800×480 boards.
 
 ---
 
@@ -73,7 +111,8 @@ there is no OK / Apply.
 
 ![](images/ui/settings-display.png)
 
-- **Dashboard theme** — `Cockpit` or `Classic Max`; switches live.
+- **Dashboard theme** — `Cockpit`, `Classic Max`, `Cockpit (Amber)` or
+  `Twin Arc`; switches live. The last two are 800×480 builds only.
 - **Boot splash repeats** — how many times the boot animation loops (`Off`…`5`).
 - **Flip screen 180 (reboot)** — for an upside-down mounting; applies after a
   reboot.
@@ -90,8 +129,12 @@ there is no OK / Apply.
 
 - **Battery Capacity (Ah)** — pack size; drives the % and the range estimate.
 - **Battery Calculation** — `Direct from Controller` (use the VESC's own
-  percentage) or `Smart Calculation` (count Ah in/out against the capacity,
-  with charge detection).
+  percentage), `Smart Calculation` (count Ah in/out against the capacity, with
+  charge detection) or `JK-BMS (BLE)` (read SOC, remaining Ah and range from a
+  paired Jikong pack).
+- **Battery monitor (JK-BMS) → Open** — the pack screen: live state, cells,
+  temperatures and Bluetooth pairing (§9a). The same screen opens by tapping
+  the battery percentage on the dashboard.
 - **Pedal assist (PAS) → Open** — the PAS screen (§8).
 - **Speed sensor → Open** — the wheel-sensor screen (§9).
 - **Odometer → Set** — re-base the lifetime total (§4). The hint under it is the
@@ -209,6 +252,36 @@ The head unit owns the whole PAS feature — no phone involved.
 - **Wheel diameter** — outer tyre diameter in mm; also used by the VESC speed
   calculation helper.
 
+## 9a. Battery monitor (JK-BMS)
+
+![](images/ui/bms.png)
+
+**Settings → Bike → Battery monitor (JK-BMS) → Open**, or tap the battery
+percentage on any dashboard. The screen reads a Jikong (JK-BMS) pack over
+Bluetooth LE.
+
+- **Status** — `Connected`, `Searching…` or `Not paired`.
+- **State of charge** — the pack’s own SOC in large digits.
+- **Remaining / Full capacity** — pack Ah counters, not a controller estimate.
+- **Voltage / Current / Power** — what the BMS reports. The ride’s motor
+  current and power still come from the VESC.
+- **Temperatures** — MOSFET, T1 and T2 probes.
+- **Cell range** — lowest and highest cell voltage and the delta between them.
+- **Cycles / MOSFETs / Model** — cycle count, SOH, charge/discharge FET state
+  and the pack model string.
+
+![](images/ui/bms-pairing.png)
+
+**Bluetooth pairing** — `Search` scans for JK-BMS packs; tap a result to bind
+it, `Forget` drops the binding. The BMS accepts only one BLE connection at a
+time, so close the phone app before pairing. The chosen pack is saved and
+re-bound on the next boot.
+
+Select `JK-BMS (BLE)` under **Battery Calculation** to use the pack for the
+dashboard, Android Auto HUD and range estimate. If the selected pack is offline
+or its data is stale, SOC, remaining Ah and range show `N/A` rather than an
+unrelated controller value.
+
 ---
 
 ## 10. Quick actions (drawer)
@@ -298,9 +371,10 @@ make menus RUN='screen Cockpit; shot 01_dashboard_cockpit'
 
 `make menus` builds the real screens headless (SDL's dummy video driver) and
 `RUN='…'` drives them: `screen <theme|settings>`,
-`menu <trips|vesc|pas|speed|lisp|lispedit|rt>`, `tap "<text>"` / `tap x y`,
+`menu <trips|vesc|pas|speed|bms|lisp|lispedit|rt>`, `tap "<text>"` / `tap x y`,
 `swipe`, `wait <ms>`, `shot <name>`, `audit`. The BMPs land in
-`buildmenu/shots/`.
+`buildmenu/shots/`. The `bms` menu opens the JK-BMS screen; follow it with
+`tap "Search"` and `tap "JK-BMS"` to show a connected pack.
 
 On Windows the simulator needs a 32-bit MinGW toolchain plus `make`, `curl` and
 `jansson` from MSYS2 (`pacman -S mingw-w64-i686-gcc mingw-w64-i686-curl`), and

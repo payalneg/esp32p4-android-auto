@@ -666,6 +666,7 @@ static bool open_menu(const char *id)
     else if (strcmp(id, "vesc")     == 0) run_vesc_tool_menu();
     else if (strcmp(id, "pas")      == 0) show_pas_settings();
     else if (strcmp(id, "speed")    == 0) show_speed_settings();
+    else if (strcmp(id, "bms")      == 0) show_bms_settings();
     else if (strcmp(id, "lisp")     == 0) show_lisp_panel();
     else if (strcmp(id, "lispedit") == 0) show_lisp_editor();
     else if (strcmp(id, "rt")       == 0) show_realtime_viewer();
@@ -700,6 +701,7 @@ static void tour(void)
         { "vesc",     "vescconf", 3 },
         { "pas",      "pas",      3 },
         { "speed",    "speed",    2 },
+        { "bms",      "bms",      2 },
         { "lisp",     "lisppanel",1 },
         { "lispedit", "lispedit", 1 },
         { "rt",       "realtime", 1 },

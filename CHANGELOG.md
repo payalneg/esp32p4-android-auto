@@ -15,14 +15,45 @@ the one recorded in the release commit.
 
 - [`docs/ui-guide.md`](docs/ui-guide.md) (and
   [`docs/ui-guide.ru.md`](docs/ui-guide.ru.md)) render every screen the dashboard
-  can show — both themes, all four Settings tabs, the odometer dialog, the trip
-  log and its chart, VESC Config, PAS, the speed sensor, Quick actions, the LISP
-  editor, Realtime, the QR codes and the log viewer — straight from the
-  simulator, with what each control does. The pictures are screenshots of the
-  firmware's own screens (`make menus`), not mock-ups.
+  can show — all four dashboard themes, the JK-BMS pack screen, all four
+  Settings tabs, the odometer dialog, the trip log and its chart, VESC Config,
+  PAS, the speed sensor, Quick actions, the LISP editor, Realtime, the QR codes
+  and the log viewer — straight from the simulator, with what each control
+  does. The pictures are screenshots of the firmware's own screens
+  (`make menus`), not mock-ups.
 - `Super_VESC_Display/custom/lisp_editor.c`: build the LISP editor on Windows
   hosts too (`_mkdir` instead of the POSIX two-argument `mkdir`), so the
   simulator's `make menus` works on a MinGW toolchain.
+- `Super_VESC_Display/lvgl-simulator/sim_drive.c`: add `menu bms` so the
+  JK-BMS pack screen can be rendered and audited like the other menus.
+
+## v1.3.40 / app 0.3.49 — 2026-11-13
+
+Since 1.3.36 this release line adds two dashboards and a second battery source.
+
+### Two more dashboards
+
+- **Cockpit (Amber)** — the Cockpit layout in the warm cyberpunk-amber palette,
+  with DSEG7 segment numerals and amber bars on black.
+- **Twin Arc** — two 270° rings for speed and power, battery/remaining Ah/range
+  between them, a phone now-playing card beneath the rings, a green `CC nn`
+  cruise badge in the status bar, and the five-cell telemetry strip. The speed
+  face uses the 120 px DSEG7 subset with the KM/H label clear of the digits.
+- Both are picked live in **Settings → Display** and are compiled for the
+  800×480 boards only.
+
+### JK-BMS over BLE
+
+- **Settings → Bike → Battery Calculation → `JK-BMS (BLE)`** makes a paired
+  Jikong pack the dashboard's SOC, remaining-Ah and range source. The pack
+  screen (also opened by tapping the battery percentage) shows live SOC,
+  pack Ah counters, voltage, current, power, temperatures, cell range, cycles,
+  MOSFET state and model, and pairs a pack with `Search` / `Forget`.
+- While the selected pack is offline or stale, the dashboard reads **N/A**
+  instead of falling back to the controller. The Ah field always means
+  **remaining capacity** — the pack's own counter in BMS mode, the Smart
+  tracker's remaining Ah, or the controller percentage applied to the
+  configured capacity.
 
 ## v1.3.36 / app 0.3.45 — 2026-11-03
 

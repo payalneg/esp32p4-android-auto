@@ -23,18 +23,20 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-**Firmware 1.3.35 / Android companion app 0.3.44:** files in [release/](release/).
+**Firmware 1.3.40 / Android companion app 0.3.49:** files in [release/](release/).
 Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
 images. The app selects the image using the board's reported profile.
 See [v3.2 recovery instructions](docs/esp32p4-rev3.md).
-This release still needs hardware validation; the limitations below remain.
+The new dashboards and the JK-BMS path still need hardware validation; the
+limitations below remain.
 
-## ⚠️ FIRMWARE 1.3.33 IS NOT TESTED ON HARDWARE ⚠️
+## ⚠️ FIRMWARE 1.3.40 IS NOT TESTED ON HARDWARE ⚠️
 
-**Read this before flashing anything.** Firmware 1.3.33 / app 0.3.41 compiles
-for all three boards and its numbers were measured on a host, but almost none
-of it has been run on a real vehicle. The panel used for testing broke during
-the investigation below, so the work stops here rather than being finished.
+**Read this before flashing anything.** Firmware 1.3.40 / app 0.3.49 compiles
+for all three boards and its numbers were measured on a host, but the new
+dashboards and the JK-BMS path have not been run on a real vehicle in this
+build. The hardware caveats below were found during the 1.3.33 investigation
+and still apply.
 
 What that means, point by point:
 
@@ -77,6 +79,14 @@ Earlier releases were ridden. This one was not.
 ### 🛴 Primary — VESC dashboard
 - **Live CAN telemetry**: battery %, speed, voltage, current draw, motor
   and FET temperatures, odometer, trip, range estimate, cruise indicator.
+- **Four dashboard themes** — **Cockpit**, **Classic Max**, **Cockpit
+  (Amber)** and **Twin Arc**; the two wide layouts use the full 800×480 canvas.
+  Switch live in *Settings → Display*. The square S3 panel keeps Cockpit and
+  Classic Max.
+- **JK-BMS battery source** — a Jikong pack over BLE supplies SOC, remaining Ah
+  and range (*Settings → Bike → Battery Calculation → `JK-BMS (BLE)`*). Tap the
+  battery percentage for live pack state, cells, temperatures and pairing; an
+  offline pack reads `N/A` instead of a controller estimate.
 - **Trip tracking** — on-screen trip statistics window (distance, Wh,
   efficiency, charts) + a **Reset trip** button, backed by a raw circular
   trip log on a dedicated `triplog` flash partition that survives reboots.
@@ -427,14 +437,17 @@ slot.
 ### Dashboard mode (default)
 
 Power up. The dashboard comes up immediately on the screen showing whatever
-the VESC is reporting over CAN — battery, speed, temps, etc. Tap into Settings
-to change units, CAN bitrate, controller ID, or open the log viewer.
+the VESC is reporting over CAN — battery, speed, temps, etc. Pick a dashboard
+theme in *Settings → Display*, and tap the battery percentage for the JK-BMS
+pack screen. Tap into Settings to change units, CAN bitrate, controller ID, or
+open the log viewer.
 
 While the dashboard is running, **VESC Tool can connect over Bluetooth LE**
 (NUS bridge) just like to any other VESC adapter.
 
-📖 **[Screen-by-screen guide](docs/ui-guide.md)** — every screen with a rendered
-picture and what each control does ([по-русски](docs/ui-guide.ru.md)).
+📖 **[Screen-by-screen guide](docs/ui-guide.md)** — all four dashboard themes,
+the JK-BMS pack screen and every menu, each with a rendered picture and what
+its controls do ([по-русски](docs/ui-guide.ru.md)).
 
 ### Switching between modes
 
