@@ -1,362 +1,564 @@
-# Head-unit screens — what each one does
+# Head unit — User Guide
 
-Every screen the LVGL dashboard can show on the 800×480 panel — all four
-dashboard themes plus every menu and dialog — with a rendered picture and the
-controls on it.
+**Applies to firmware 1.3.42 and later · companion app 0.3.51 and later**
+ESP32-P4 head unit with an 800 × 480 touch display
 
-The pictures are **not mock-ups**: they are screenshots of the firmware's own
-screens, built for the host with `make menus` (`SIM_SHIM=1` — the real C from
-`Super_VESC_Display/custom/` plus `sim_backend/` standing in for CAN, BLE and
-flash). Only the numbers are fake, so ignore the values and look at the layout.
+This guide describes every screen of the head unit, the elements on it, and
+the procedures that are easier to follow step by step: choosing a battery
+source, pairing sensors, setting the odometer, and recovering when something
+does not behave as expected.
+
+The illustrations are screenshots of the device's own interface and show the
+actual layout, typography and colours of each screen.
 
 ---
 
-## Gestures that work on every dashboard screen
+## Contents
 
-| Gesture | Effect |
+1. Overview
+2. Touch gestures
+3. Dashboards
+   - 3.1 Cockpit
+   - 3.2 Classic Max
+   - 3.3 Cockpit (Amber)
+   - 3.4 Twin Arc
+4. Settings
+   - 4.1 Connection
+   - 4.2 Display
+   - 4.3 Bike
+   - 4.4 System
+5. Vehicle tools
+   - 5.1 VESC Config
+   - 5.2 Realtime
+   - 5.3 LISP editor
+   - 5.4 Quick actions
+6. Rides and history
+   - 6.1 Trip statistics — list
+   - 6.2 Trip statistics — detail
+   - 6.3 Odometer dialog
+7. Sensors and battery
+   - 7.1 Pedal assist (PAS)
+   - 7.2 Speed sensor
+   - 7.3 Battery monitor (JK-BMS)
+8. Utilities
+   - 8.1 QR codes
+   - 8.2 Logs
+9. Common tasks
+10. Troubleshooting
+11. Abbreviations and units
+
+---
+
+## 1. Overview
+
+The head unit is a touch display for an electric vehicle built around a VESC
+controller. It runs a real-time dashboard (or Android Auto, when a phone is
+connected), reads telemetry from the controller over CAN or Bluetooth, and can
+take battery data from a BLE battery-management system. Settings are stored on
+the device and applied immediately.
+
+The interface is organised in three layers:
+
+| Layer | What it contains |
 | --- | --- |
-| 3-finger tap | Switch between the dashboard and the phone screen (Android Auto or the built-in navigator — see *Settings → Connection*, §3.1) |
-| Swipe right from the left edge | Open **Quick actions** (§10) |
+| Dashboard | Live ride data. Four themes, one active at a time (§3). |
+| Menus | Settings, VESC configuration, trip history, sensors, diagnostics. |
+| Overlays | Quick actions, the odometer dialog, QR codes, the boot splash. |
+
+There is no OK / Apply button anywhere: every switch and every number field is
+saved the moment it is changed.
+
+## 2. Touch gestures
+
+| Gesture | Result |
+| --- | --- |
+| Tap the top-bar labels `VESC`, `STATISTICS`, `SETTINGS` | Open VESC Config (§5.1), trip history (§6.1) or Settings (§4) |
+| Three-finger tap | Switch between the dashboard and the phone screen configured in Settings → Connection (§4.1) |
+| Swipe right from the left edge | Open Quick actions (§5.4) |
 | Tap outside the Quick-actions drawer | Close it |
-| Drag horizontally on the dashboard background | Screen brightness (only when **Brightness gesture** is on, §3.2) |
-| Tap `VESC`, `STATISTICS`, `SETTINGS` in the top bar | Jump to VESC Config, Trip statistics, Settings |
+| Drag horizontally on the dashboard background | Adjust display brightness — only while **Brightness gesture** is enabled (§4.2) |
+| Tap the battery percentage on the dashboard | Open the battery monitor (§7.3) |
+| Tap anywhere outside a dialog | Close the dialog without saving |
+
+> **Note.** Gestures are disabled while Android Auto is on screen; they are
+> handled by the dashboard and the menus, not by the phone.
 
 ---
 
-## 1. Dashboard — Cockpit
+## 3. Dashboards
 
-![](images/ui/dashboard-cockpit.png)
+The dashboard is the screen the rider sees while moving. One of the four themes
+is active at a time; all of them show the same data and differ in layout and
+colour. Choose the theme in **Settings → Display → Dashboard theme** (§4.2).
 
-The default screen. One glance: how much battery is left, how fast, how hard
-the controller is working.
+Two themes are designed for the 800 × 480 panel only. On the 480 × 480 ESP32-S3
+board, Cockpit and Classic Max are available; Cockpit (Amber) and Twin Arc are
+not compiled into that build.
 
-- **Top bar** — `VESC` (opens the VESC Tool config), `MODE n` (the VESC's active
-  LISP speed profile), uptime, `STATISTICS` (trip log), `BT` (lit when a BLE
-  peer — phone or sensor — is connected), `SETTINGS`.
-- **BATTERY** (left) — charge %, **remaining Ah**, and a bar. The number under
-  `RANGE` is the estimated distance left in the pack, from the configured
-  capacity and recent consumption. In `JK-BMS (BLE)` mode the percentage and Ah
-  come from the pack itself; with the pack offline they read `N/A`.
-- **Battery percentage** is a tap target: it opens the pack screen (§9a), the
-  same one as **Settings → Bike → Battery monitor (JK-BMS) → Open**.
-- **SPEED** (centre) — the big digits; `MAX 60` is the top of the scale.
-- **POWER** (right) — instantaneous power in kW, current in amps, and a bar
-  whose full scale is `Power Max` from Settings → Display (§3.2).
-- **Bottom row** — pack voltage, trip distance, **odometer** (lifetime, kept on
-  the display), motor and controller temperature.
+### 3.1 Cockpit
 
-## 2. Dashboard — Classic Max
+![Cockpit dashboard](images/ui/dashboard-cockpit.png)
 
-![](images/ui/dashboard-classic-max.png)
+The default theme. It groups the ride into four areas: battery, speed, power and
+a bottom telemetry strip.
 
-The same dashboard with the trip-comparison extras: `P MAX` (peak power this
-session), `V MAX` (top speed) and a `RESET` button in the bottom bar.
+| Element | Description |
+| --- | --- |
+| `VESC` | Opens VESC Config (§5.1) |
+| `MODE n` | Active LISP speed profile reported by the controller |
+| Uptime | Time since the controller was powered on |
+| `STATISTICS` | Opens trip history (§6.1) |
+| `BT` | Lit while a BLE peer — phone or sensor — is connected |
+| `SETTINGS` | Opens Settings (§4) |
+| `BATTERY` | State of charge, remaining capacity in Ah, and a level bar |
+| `RANGE` | Estimated remaining distance, from the configured capacity and recent consumption |
+| `SPEED` | Speed in the selected unit; `MAX 60` marks the top of the scale |
+| `POWER` | Instantaneous power in kW, current in A, and a bar scaled to **Power Max** (§4.2) |
+| Bottom strip | Pack voltage, trip distance, lifetime odometer, motor temperature, controller temperature |
 
-`RESET` zeroes the trip counters (distance, Wh, time, peak power, top speed).
-The **odometer is not affected** — that is the lifetime total.
+The battery percentage is a tap target for the battery monitor (§7.3).
 
-## 2a. Dashboard — Cockpit (Amber)
+In `JK-BMS (BLE)` mode the percentage, remaining Ah and range come from the
+battery pack itself. While the pack is offline they read `N/A`; the head unit
+never substitutes an unrelated controller estimate.
 
-![](images/ui/dashboard-amber.png)
+### 3.2 Classic Max
 
-The Cockpit layout in the warm “cyberpunk amber” palette: the same battery,
-speed, power and telemetry tiles, but with seven-segment DSEG7 numerals and
-amber bars on black. Every control works exactly like Cockpit (§1) — this theme
-only changes the look. Pick it in **Settings → Display** (§3.2).
+![Classic Max dashboard](images/ui/dashboard-classic-max.png)
 
-The battery percentage is a tap target for the JK-BMS pack screen (§9a), just
-like on Cockpit.
+The Cockpit layout with session comparison values added:
 
-## 2b. Dashboard — Twin Arc
+| Element | Description |
+| --- | --- |
+| `P MAX` | Peak power for the current session |
+| `V MAX` | Top speed for the current session |
+| `RESET` | Zeroes the trip counters: distance, energy, time, peak power and top speed |
 
-![](images/ui/dashboard-twin-arc.png)
+`RESET` does **not** touch the odometer. The odometer is the lifetime total and
+is changed only through **Settings → Bike → Odometer → Set** (§6.3).
 
-Two 270° rings frame the ride: the orange **speed** ring on the left, the cyan
-**power** ring on the right. The centre column carries battery %, a bar,
-remaining Ah and estimated range; the wide card underneath is the phone’s
-**now-playing** title and artist. The bottom strip shows voltage, trip,
-odometer, motor and controller temperature.
+### 3.3 Cockpit (Amber)
 
-- **Top bar** — `VESC`, `STATISTICS`, the clock, `SETTINGS`, `BT`, and a green
-  `CC nn` badge while cruise control is active.
-- **Speed ring** — `KM/H` (or `MPH`), `SPEED`, and `MODE n`. The ring fills
-  against a 0–60 km/h scale and the digits stay inside it.
-- **Power ring** — instantaneous `kW`, `POWER`, current in amps and this
-  session’s `MAX n.n kW`.
-- **Battery %** — tap it to open the JK-BMS pack screen (§9a). In `JK-BMS (BLE)`
-  mode an offline pack reads `N/A`; there is no fallback to the controller.
+![Cockpit Amber dashboard](images/ui/dashboard-amber.png)
 
-On the 480×480 ESP32-S3 panel only Cockpit and Classic Max are available; the
-two wide themes are compiled for the 800×480 boards.
+The Cockpit layout in a warm amber palette: seven-segment numerals and amber
+bars on black. Every element behaves exactly as in Cockpit (§3.1); only the
+appearance changes.
 
-An animated loop of the rings and the now-playing card is in
+The battery percentage remains a tap target for the battery monitor (§7.3).
+
+### 3.4 Twin Arc
+
+![Twin Arc dashboard](images/ui/dashboard-twin-arc.png)
+
+Two 270° rings frame the ride: speed on the left, power on the right. The centre
+column is the battery block; the card below it shows the phone's now-playing
+track.
+
+| Area | Contents |
+| --- | --- |
+| Top bar | `VESC`, `STATISTICS`, clock, `SETTINGS`, `BT`, and a green `CC nn` badge while cruise control is active |
+| Speed ring | `KM/H` or `MPH`, the speed digits, `SPEED` and `MODE n`; the ring fills against a 0–60 km/h scale |
+| Power ring | Instantaneous `kW`, `POWER`, current in A and the session's `MAX n.n kW` |
+| Centre column | Battery percentage, level bar, remaining Ah and estimated range |
+| Now-playing card | Track title and artist from the phone |
+| Bottom strip | Voltage, trip, odometer, motor temperature, controller temperature |
+
+The battery percentage opens the battery monitor (§7.3). In `JK-BMS (BLE)` mode
+an offline pack reads `N/A`.
+
+An animated preview of the rings and the now-playing card is available in
 [`twin-arc-demo.gif`](images/ui/twin-arc-demo.gif).
 
 ---
 
-## 3. Settings
+## 4. Settings
 
-Settings is one screen with four tabs. Everything on it is saved immediately —
-there is no OK / Apply.
+Settings is a single screen with four tabs. Every change is applied and stored
+immediately.
 
-### 3.1 Connection
+### 4.1 Connection
 
-![](images/ui/settings-connection.png)
+![Settings — Connection](images/ui/settings-connection.png)
 
-- **VESC link → Open** — the transport screen: CAN or Bluetooth to the
-  controller, VESC Express pairing, live link state.
-- **Phone screen (3-finger)** — what the 3-finger gesture shows: `Android Auto`
-  (the phone projection) or `Navigator` (the companion app's map over BLE).
-- **AA Auto-Connect** — let the BT agent page the last paired phone on power-on.
-  Off means you start the connection from the phone.
+| Element | Description |
+| --- | --- |
+| `VESC link → Open` | Transport screen: CAN or Bluetooth to the controller, VESC Express pairing, live link state |
+| `Phone screen (3-finger)` | What the three-finger gesture shows: `Android Auto` (phone projection) or `Navigator` (the companion app's map over BLE) |
+| `AA Auto-Connect` | Let the BT agent page the last paired phone at power-on. **Off by default.** With it off, the connection is started from the phone or with the manual **Connect** button |
 
-### 3.2 Display
+Manual connection is always available regardless of this setting. Enabling it
+only adds the automatic reconnection at boot.
 
-![](images/ui/settings-display.png)
+### 4.2 Display
 
-- **Dashboard theme** — `Cockpit`, `Classic Max`, `Cockpit (Amber)` or
-  `Twin Arc`; switches live. The last two are 800×480 builds only.
-- **Boot splash repeats** — how many times the boot animation loops (`Off`…`5`).
-- **Flip screen 180 (reboot)** — for an upside-down mounting; applies after a
-  reboot.
-- **Power Max (kW)** — full scale of the power bar and the `MAX` label.
-- **Brightness gesture** — enable the invisible full-screen brightness slider
-  (drag horizontally on the dashboard).
-- **Units (miles)** — `Off` = km / km/h, `On` = miles / mph. Applies live to the
-  dashboard, trip statistics and the odometer dialog.
-- **Temperature (F)** — `Off` = °C, `On` = °F.
+![Settings — Display](images/ui/settings-display.png)
 
-### 3.3 Bike
+| Element | Description |
+| --- | --- |
+| `Dashboard theme` | `Cockpit`, `Classic Max`, `Cockpit (Amber)` or `Twin Arc`; switches without a reboot. The last two are 800 × 480 builds only |
+| `Boot splash repeats` | Number of times the boot animation plays (`Off` … `5`) |
+| `Flip screen 180` | For an upside-down installation; takes effect after a reboot |
+| `Power Max (kW)` | Full scale of the power bar and the `MAX` label |
+| `Brightness gesture` | Enables the invisible full-screen brightness slider (horizontal drag on the dashboard) |
+| `Units (miles)` | `Off` = km and km/h; `On` = miles and mph. Applies live to the dashboard, trip history and odometer dialog |
+| `Temperature (F)` | `Off` = °C; `On` = °F |
 
-![](images/ui/settings-bike.png)
+### 4.3 Bike
 
-- **Battery Capacity (Ah)** — pack size; drives the % and the range estimate.
-- **Battery Calculation** — `Direct from Controller` (use the VESC's own
-  percentage), `Smart Calculation` (count Ah in/out against the capacity, with
-  charge detection) or `JK-BMS (BLE)` (read SOC, remaining Ah and range from a
-  paired Jikong pack).
-- **Battery monitor (JK-BMS) → Open** — the pack screen: live state, cells,
-  temperatures and Bluetooth pairing (§9a). The same screen opens by tapping
-  the battery percentage on the dashboard.
-- **Pedal assist (PAS) → Open** — the PAS screen (§8).
-- **Speed sensor → Open** — the wheel-sensor screen (§9).
-- **Odometer → Set** — re-base the lifetime total (§4). The hint under it is the
-  point of the feature: the total is checkpointed here every 10 s, so a key-off
-  never loses the end of a ride.
+![Settings — Bike](images/ui/settings-bike.png)
 
-### 3.4 System
+| Element | Description |
+| --- | --- |
+| `Battery Capacity (Ah)` | Pack size used for the percentage and range estimate |
+| `Battery Calculation` | `Direct from Controller` — use the VESC's own percentage; `Smart Calculation` — count Ah in and out against the capacity, with charge detection; `JK-BMS (BLE)` — read SOC, remaining Ah and range from a paired Jikong pack |
+| `Battery monitor (JK-BMS) → Open` | Battery pack screen: live state, cells, temperatures and Bluetooth pairing (§7.3) |
+| `Pedal assist (PAS) → Open` | Pedal-assist screen (§7.1) |
+| `Speed sensor → Open` | Wheel-sensor screen (§7.2) |
+| `Odometer → Set` | Re-base the lifetime total (§6.3). The total is checkpointed every 10 s, so a key-off never loses the end of a ride |
 
-![](images/ui/settings-system.png)
+### 4.4 System
 
-- **Demo mode** — drive the dashboard with synthetic values (shows, photos).
-- **VESC Emulator** — pretend a controller is on the bus; needs a restart.
-- **Reset trip** — the same as the dashboard's `RESET`.
-- **Files** — on-device file browser (littlefs / SD card).
-- **Logs** — the log viewer over the in-PSRAM ring buffer.
-- **QR codes** — Wi-Fi and firmware-OTA QR codes (§13).
-- **Reset** — all settings back to defaults. The odometer, the paired sensors
-  and the trip log survive this on purpose.
-- Below the buttons: firmware versions (host / BT agent / C6) and CAN bus health.
+![Settings — System](images/ui/settings-system.png)
+
+| Element | Description |
+| --- | --- |
+| `Demo mode` | Drive the dashboard with synthetic values for demonstration |
+| `VESC Emulator` | Simulate a controller on the bus; requires a restart |
+| `Reset trip` | Same as the dashboard's `RESET` (§3.2) |
+| `Files` | On-device file browser for the internal flash and an SD card |
+| `Logs` | The firmware log viewer (§8.2) |
+| `QR codes` | Wi-Fi and firmware-OTA codes for the phone (§8.1) |
+| `Reset` | Restore all settings to defaults. The odometer, paired sensors and trip log survive by design |
+
+Below the buttons the screen reports the firmware versions (host, BT agent, C6
+Wi-Fi module) and CAN bus health.
 
 ---
 
-## 4. Set odometer dialog
+## 5. Vehicle tools
 
-![](images/ui/odometer-dialog.png)
+### 5.1 VESC Config
 
-**Settings → Bike → Odometer → Set.**
+![VESC Config](images/ui/vesc-config.png)
 
-A modal over Settings with a number keyboard. Use it when the total no longer
-matches reality: a replacement controller, a frame swap, a VESC that was
-flashed. The value is entered in your units (km or mi), `,` is the decimal
-separator, and it is converted before it is stored.
+**To open:** tap `VESC` in the dashboard's top bar.
 
-`Save` writes it; `Cancel` (or the keyboard's ✕) leaves the total alone. From
-then on the number is kept on the display: the dashboard's `ODO` field and this
-dialog always show the same value.
+The controller's own configuration, edited from the panel without a laptop. The
+title shows the controller firmware version.
 
-It edits whichever odometer the dashboard is showing — the VESC mirror, or the
-BLE wheel sensor's when that is the selected speed source.
+| Element | Description |
+| --- | --- |
+| `Motor` / `App` | Select the parameter set |
+| Two dropdowns | Select the group and sub-group (`General`, `Current`, `Speed`, …) |
+| Parameter rows | One row per VESC parameter — switches, dropdowns and number fields — generated from the VESC Tool description |
+| `Read` | Load the configuration from the controller |
+| `Write` | Push the edited configuration back |
+| `Defaults` | Load the controller's default values |
+| `Detect` | Start the FOC detection wizard |
+| `Restore` | Bring back the last backup |
+| `LISP` / `Realtime` | Jump to the LISP editor (§5.3) or the live telemetry screen (§5.2) |
 
-## 5. Trip statistics — list
+The status line at the bottom confirms the result of the last operation
+(`Read OK`, `Write OK`, and so on).
 
-![](images/ui/trips-list.png)
+### 5.2 Realtime
 
-**`STATISTICS` in the dashboard's top bar.**
+![Realtime](images/ui/realtime.png)
 
-- Newest trip first; the `*` marks the trip still being recorded.
-- Columns: distance, duration, average speed, energy (Wh).
-- The footer adds up everything the `triplog` partition still holds (about
-  11 days of powered-on time at the 10 s sample rate).
-- `Back` returns to the dashboard.
+**To open:** VESC Config → `Realtime`.
 
-## 6. Trip statistics — detail
+A live telemetry read-out straight from the controller: input voltage, battery
+current, motor current, power, duty cycle, ERPM, speed, temperatures and the
+remaining values. Use it when the dashboard tiles do not show enough detail.
+The list scrolls; `Back` returns to VESC Config.
 
-![](images/ui/trips-detail.png)
+### 5.3 LISP editor
 
-Tap any row in the list.
+![LISP editor](images/ui/lisp-editor.png)
 
-- Header: distance, duration, average and maximum speed, energy and charge
-  (Wh / Ah), efficiency (Wh per km or mi) and the lowest pack voltage.
-- Five metric tabs — `Speed`, `Power`, `Voltage`, `Temp`, `Batt` (a second
-  temperature tab appears when a second head is enabled) — each redraws the
-  chart for the same trip.
-- `X÷` / `X+` zoom the time axis; once zoomed, drag the chart left/right to pan.
-- `Delete` asks for confirmation and then drops the trip from the log. The trip
-  still being recorded (`*`) cannot be deleted.
+**To open:** VESC Config → `LISP`.
+
+A small editor for LISP scripts that run on the controller.
+
+| Element | Description |
+| --- | --- |
+| `Open…` | Pick a script already stored on the device |
+| `New` | Clear the buffer for a new script |
+| Text area | Editable with the on-screen keyboard (tap the area to raise it) |
+| `Save` | Write `<name>.lisp` to the device storage |
+| `Read VESC` | Pull the script currently stored on the controller into the editor |
+| `Upload+Run` | Erase the controller's script, write this buffer and start it |
+| `Stop` | Halt the running script |
+
+The `.lisp` suffix is added to the name automatically.
+
+Scripts are not limited to the editor: the Quick-actions drawer (§5.4) is built
+from the UI descriptor of the master script running on the controller.
+
+### 5.4 Quick actions
+
+![Quick actions](images/ui/quick-actions.png)
+
+**To open:** swipe right from the left edge of the dashboard.
+
+A drawer over the dashboard, so ride data stays visible while a setting is
+changed. Tap anywhere outside it to close.
+
+| Element | Description |
+| --- | --- |
+| `Cruise control` | Toggle cruise control |
+| `Lights` | Toggle the lighting output |
+| `Reset trip counters` | Zero the trip counters |
+| `Assist level` | Stepper for the assist level |
+| `Current limit` | Stepper for the current limit |
+| Motor temperature | Live value at the bottom of the drawer |
+
+The contents are **not hard-coded**: the drawer renders the UI descriptor
+declared by the master LISP script running on the VESC. Editing the script
+changes the controls that appear here.
 
 ---
 
-## 7. VESC Config
+## 6. Rides and history
 
-![](images/ui/vesc-config.png)
+### 6.1 Trip statistics — list
 
-**`VESC` in the dashboard's top bar.** The controller's own configuration
-straight from the panel, without a laptop.
+![Trip statistics — list](images/ui/trips-list.png)
 
-- The title shows the controller's firmware version (`VESC Config 7.00`).
-- `Motor` / `App` select the parameter set; the two dropdowns select the group
-  and sub-group (`General`, `Current`, `Speed`, …).
-- Rows are switches, dropdowns and number fields — one per VESC parameter,
-  generated from the VESC Tool XML.
-- Footer: `Read` (pull the config from the controller), `Write` (push it back),
-  `Defaults` (load the controller's defaults), `Detect` (FOC detection wizard),
-  `Restore` (bring back the last backup) and a status line (`Read OK`).
-- `LISP` and `Realtime` in the header jump to those screens.
+**To open:** tap `STATISTICS` in the dashboard's top bar.
 
-## 8. Pedal assist (PAS)
+| Element | Description |
+| --- | --- |
+| Rows | One row per trip, newest first. `*` marks the trip still being recorded |
+| Columns | Distance, duration, average speed, energy in Wh |
+| Footer | Totals for everything the trip-log partition still holds — about 11 days of powered-on time at the 10 s sample rate |
+| `Back` | Return to the dashboard |
 
-![](images/ui/pas.png)
+### 6.2 Trip statistics — detail
 
-**Settings → Bike → Pedal assist → Open.**
+![Trip statistics — detail](images/ui/trips-detail.png)
 
-The head unit owns the whole PAS feature — no phone involved.
+**To open:** tap any row in the trip list.
 
-- **Cadence sensor** — status, battery, live cadence in RPM, rotation direction
-  and the assist current it asks for. `Search` pairs a BLE cadence sensor,
-  `Forget` drops the pairing.
-- **Throttle / assist enabled** — master switch.
-- **Reverse rotation** — for a sensor mounted on the other side.
-- **Assist level** and **Max current** — how much help, and the ceiling.
-- **Mode** — e.g. `Proportional to cadence`.
-- **Advanced** — start delay, start current and the rest of the ramp tuning.
+The header summarises the trip: distance, duration, average and maximum speed,
+energy and charge (Wh / Ah), efficiency (Wh per km or mile) and the lowest pack
+voltage.
 
-Any standard BLE cadence sensor works; the companion project
-[cadence-for-ebike](https://github.com/payalneg/cadence-for-ebike) is an open
-custom firmware for the COOSPO BK6LS sensor — standard CSC profile plus a
-custom service streaming signed RPM (with rotation direction) every 100 ms.
+| Element | Description |
+| --- | --- |
+| `Speed` `Power` `Voltage` `Temp` `Batt` | Metric tabs — each redraws the chart for the same trip. A second temperature tab appears when a second head is enabled |
+| `X÷` / `X+` | Zoom the time axis |
+| Drag on the chart | Pan left and right once zoomed |
+| `Delete` | Delete the trip after confirmation. The trip still being recorded (`*`) cannot be deleted |
 
-## 9. Speed sensor
+### 6.3 Odometer dialog
 
-![](images/ui/speed-sensor.png)
+![Set odometer](images/ui/odometer-dialog.png)
 
-**Settings → Bike → Speed sensor → Open.**
+**To open:** Settings → Bike → `Odometer → Set`.
 
-- **Dashboard speed from** — `VESC` (speed from the controller's ERPM) or
-  `BLE wheel sensor`. With the sensor selected, speed, trip **and the odometer**
-  come from it and are kept on this display.
-- **Wheel sensor** — status, battery, live speed, trip and odometer; `Search` /
-  `Forget` pair the BLE CSC sensor.
-- **Wheel diameter** — outer tyre diameter in mm; also used by the VESC speed
-  calculation helper.
+A modal dialog with a numeric keypad, used when the lifetime total no longer
+matches reality — after a controller replacement, a frame swap, or a firmware
+flash that reset the controller's counter.
 
-## 9a. Battery monitor (JK-BMS)
+- The value is entered in the current display units (km or miles).
+- `,` is the decimal separator; the value is converted before it is stored.
+- `Save` writes the new total; `Cancel` or the keypad's `✕` leaves it unchanged.
 
-![](images/ui/bms.png)
+The dialog edits whichever odometer the dashboard is showing: the VESC mirror,
+or the BLE wheel sensor's when that is the selected speed source. The
+dashboard's `ODO` field and this dialog always show the same number.
 
-**Settings → Bike → Battery monitor (JK-BMS) → Open**, or tap the battery
-percentage on any dashboard. The screen reads a Jikong (JK-BMS) pack over
-Bluetooth LE.
+---
 
-- **Status** — `Connected`, `Searching…` or `Not paired`.
-- **State of charge** — the pack’s own SOC in large digits.
-- **Remaining / Full capacity** — pack Ah counters, not a controller estimate.
-- **Voltage / Current / Power** — what the BMS reports. The ride’s motor
-  current and power still come from the VESC.
-- **Temperatures** — MOSFET, T1 and T2 probes.
-- **Cell range** — lowest and highest cell voltage and the delta between them.
-- **Cycles / MOSFETs / Model** — cycle count, SOH, charge/discharge FET state
-  and the pack model string.
+## 7. Sensors and battery
 
-![](images/ui/bms-pairing.png)
+### 7.1 Pedal assist (PAS)
 
-**Bluetooth pairing** — `Search` scans for JK-BMS packs; tap a result to bind
-it, `Forget` drops the binding. The BMS accepts only one BLE connection at a
-time, so close the phone app before pairing. The chosen pack is saved and
-re-bound on the next boot.
+![Pedal assist](images/ui/pas.png)
+
+**To open:** Settings → Bike → `Pedal assist → Open`.
+
+The pedal-assist feature runs entirely on the head unit; no phone is involved.
+
+| Element | Description |
+| --- | --- |
+| `Cadence sensor` | Status, battery, live cadence in RPM, rotation direction and the assist current it requests |
+| `Search` / `Forget` | Pair or unpair a BLE cadence sensor |
+| `Throttle / assist enabled` | Master switch for pedal assist |
+| `Reverse rotation` | For a sensor mounted on the opposite side |
+| `Assist level` | Amount of assistance |
+| `Max current` | Upper current limit |
+| `Mode` | Assist strategy, for example `Proportional to cadence` |
+| `Advanced` | Start delay, start current and the remaining ramp parameters |
+
+Any standard BLE cadence sensor can be used. The companion project
+[cadence-for-ebike](https://github.com/payalneg/cadence-for-ebike) provides an
+open custom firmware for the COOSPO BK6LS sensor: it keeps the standard Cycling
+Speed & Cadence profile and adds a service that streams signed RPM — with the
+rotation direction — every 100 ms.
+
+### 7.2 Speed sensor
+
+![Speed sensor](images/ui/speed-sensor.png)
+
+**To open:** Settings → Bike → `Speed sensor → Open`.
+
+| Element | Description |
+| --- | --- |
+| `Dashboard speed from` | `VESC` — speed from the controller's ERPM; `BLE wheel sensor` — speed from the paired sensor |
+| `Wheel sensor` | Status, battery, live speed, trip and odometer |
+| `Search` / `Forget` | Pair or unpair a BLE CSC sensor |
+| `Wheel diameter` | Outer tyre diameter in millimetres; also used by the controller's speed calculation helper |
+
+With the wheel sensor selected, speed, trip and the odometer all come from it
+and are kept on this display.
+
+### 7.3 Battery monitor (JK-BMS)
+
+![Battery monitor](images/ui/bms.png)
+
+**To open:** Settings → Bike → `Battery monitor (JK-BMS) → Open`, or tap the
+battery percentage on any dashboard.
+
+The screen reads a Jikong (JK-BMS) pack over Bluetooth LE.
+
+| Element | Description |
+| --- | --- |
+| `Status` | `Connected`, `Searching…` or `Not paired` |
+| State of charge | The pack's own SOC, in large digits |
+| `Remaining` / `Full capacity` | Pack Ah counters — not a controller estimate |
+| `Voltage` / `Current` / `Power` | Values reported by the BMS. Motor current and power still come from the VESC |
+| Temperatures | MOSFET, T1 and T2 probes |
+| Cell range | Lowest and highest cell voltage, and the delta between them |
+| `Cycles` / `MOSFETs` / `Model` | Cycle count, state of health, charge and discharge FET state, and the pack model string |
+
+![JK-BMS pairing](images/ui/bms-pairing.png)
+
+**Pairing.** `Search` scans for JK-BMS packs; tap a result to bind it, `Forget`
+drops the binding. A BMS accepts only one BLE connection at a time, so close the
+phone app before pairing. The selected pack is saved and re-bound at the next
+boot.
 
 Select `JK-BMS (BLE)` under **Battery Calculation** to use the pack for the
-dashboard, Android Auto HUD and range estimate. If the selected pack is offline
-or its data is stale, SOC, remaining Ah and range show `N/A` rather than an
-unrelated controller value.
+dashboard, the Android Auto HUD and the range estimate. If the selected pack is
+offline or its data is stale, SOC, remaining Ah and range read `N/A` rather than
+an unrelated controller value.
 
 ---
 
-## 10. Quick actions (drawer)
+## 8. Utilities
 
-![](images/ui/quick-actions.png)
+### 8.1 QR codes
 
-**Swipe right from the left edge of the dashboard.** A drawer over the
-dashboard, so the ride data stays visible while you change something.
+![QR codes](images/ui/qr-codes.png)
 
-- `Cruise control` and `Lights` toggles.
-- `Reset trip counters`.
-- `Assist level` and `Current limit` with −/+ steppers.
-- Live motor temperature at the bottom.
+**To open:** Settings → System → `QR codes`.
 
-Tap anywhere outside the drawer to close it.
+Two codes for the phone:
 
-The controls are not hard-coded: the drawer renders whatever the **master LISP
-script** running on the VESC declares (§11) — its toggles, steppers and labels
-come from the script's UI descriptor. Change the script, change the panel.
+| Code | Purpose |
+| --- | --- |
+| Wi-Fi | The head unit's access point, so the companion app can join it and transfer firmware over HTTP. The caption states whether the access point is running |
+| Firmware OTA | The URL of the on-device OTA page. The caption states whether the HTTP server is running |
 
-## 11. LISP editor
+### 8.2 Logs
 
-![](images/ui/lisp-editor.png)
+![Logs](images/ui/logs.png)
 
-**VESC Config → LISP.**
+**To open:** Settings → System → `Logs`.
 
-- `Open…` picks a script already on the device; `New` empties the buffer.
-- The text area is editable with the on-screen keyboard (tap it).
-- `Save` writes `<name>.lisp` to the device storage; `Read VESC` pulls the
-  script currently stored on the controller into the editor.
-- `Upload+Run` erases and writes the buffer to the VESC and starts it; `Stop`
-  halts the running script.
-- The name field gets the `.lisp` suffix added automatically.
+The firmware's own log — the same lines that are written to the UART console —
+captured in a PSRAM ring buffer so it can be read on the panel. It is the first
+place to look when the device misbehaves away from a computer.
 
-## 12. Realtime
-
-![](images/ui/realtime.png)
-
-**VESC Config → Realtime.** A live telemetry read-out straight off the
-controller — input voltage, battery, currents, power, duty cycle, ERPM, speed,
-temperatures and the rest — for when the dashboard tiles are not enough.
-Scroll for the full list; `Back` returns.
-
-## 13. QR codes
-
-![](images/ui/qr-codes.png)
-
-**Settings → System → QR codes.** Two codes for the phone:
-
-- **Wi-Fi** — the head unit's access point, so the companion app can join it
-  and push firmware over HTTP. The caption under it says whether the AP is up.
-- **Firmware OTA** — the URL of the on-device OTA page. The caption says whether
-  the HTTP server is running.
+New lines follow the tail while the view is at the bottom; scrolling up pins the
+view. `Back to settings` returns.
 
 ---
 
-## 14. Logs
+## 9. Common tasks
 
-![](images/ui/logs.png)
+### Choose the battery source
 
-**Settings → System → Logs.** The firmware's own log (the same lines that go to
-the UART console), captured in a PSRAM ring buffer so you can read them on the
-panel — the first thing to open when something misbehaves away from a laptop.
+1. Open **Settings → Bike**.
+2. Set **Battery Capacity (Ah)** — the pack's usable capacity.
+3. Choose **Battery Calculation**:
+   - `Direct from Controller` — the VESC's own percentage;
+   - `Smart Calculation` — Ah counting with charge detection;
+   - `JK-BMS (BLE)` — the pack's own SOC and remaining capacity.
+4. For `JK-BMS (BLE)`, open **Battery monitor (JK-BMS)** and pair the pack
+   (§7.3).
 
-The list scrolls; new lines follow the tail while you stay at the bottom, and
-scrolling up pins the view. `Back to settings` returns.
+### Pair a BLE sensor
 
-*(The picture comes from the simulator build, where log capture is switched
-off — hence the placeholder text. On the device the ring is full of real
-lines.)*
+1. Open the sensor's screen: **Settings → Bike → Pedal assist** (§7.1) or
+   **Speed sensor** (§7.2).
+2. Tap `Search`; the screen lists the sensors in range.
+3. Tap the required sensor to bind it.
+4. `Forget` removes the binding.
+
+### Set or re-base the odometer
+
+1. Open **Settings → Bike → Odometer → Set**.
+2. Enter the new total in the current display units.
+3. Tap `Save`.
+
+### Change the dashboard theme
+
+1. Open **Settings → Display**.
+2. Choose one of the themes under **Dashboard theme**.
+3. The dashboard changes immediately; `Back` returns to it.
+
+### Change units
+
+Open **Settings → Display** and set **Units (miles)** and **Temperature (F)**.
+Both apply immediately to the dashboard, trip history and dialogs.
+
+### Reset the counters without losing the total
+
+Use `RESET` on the Classic Max dashboard (§3.2), **Settings → System → Reset
+trip**, or `Reset trip counters` in Quick actions (§5.4). A factory reset
+(**Settings → System → Reset**) restores the settings but keeps the odometer,
+the paired sensors and the trip log.
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| The dashboard is blank or frozen | Confirm the firmware is 1.3.42 or later — earlier versions could freeze the Twin Arc dashboard after boot. Power-cycle the unit; if the screen stays blank, open **Settings → System → Logs** from a working screen and read the last lines |
+| The dashboard does not refresh after switching themes | Update to 1.3.42 or later; if it still happens, note the active theme and the last log lines |
+| `N/A` instead of battery percentage, Ah and range | In `JK-BMS (BLE)` mode the selected pack is offline or its data is stale. Open **Battery monitor (JK-BMS)**, check the status and the pairing. Only one BLE connection is possible — close the phone app. Alternatively select another **Battery Calculation** mode |
+| A sensor is not found by `Search` | The sensor must be a BLE CSC (speed/cadence) device, awake, in range and not connected to another host |
+| Speed and trip do not move | Check **Settings → Bike → Speed sensor**: the source must match the hardware. With `BLE wheel sensor` selected, the sensor has to be paired and connected |
+| Android Auto does not connect at power-on | **AA Auto-Connect** is off by default (§4.1). Start the connection from the phone, or tap **Connect** on the idle screen |
+| The trip counters reset unexpectedly | They are reset by `RESET`, **Reset trip**, Quick actions or the demo/emulator modes. The odometer is not affected |
+| The display is upside down | Enable **Flip screen 180** in **Settings → Display** and reboot |
+| A setting was changed by mistake | **Settings → System → Reset** restores defaults. The odometer, paired sensors and trip log are preserved |
+
+---
+
+## 11. Abbreviations and units
+
+| Term | Meaning |
+| --- | --- |
+| AA | Android Auto |
+| AP | Wi-Fi access point |
+| BLE | Bluetooth Low Energy |
+| BMS | Battery management system |
+| CAN | Controller Area Network — the wired link to the VESC |
+| CSC | Cycling Speed and Cadence — the standard BLE profile used by wheel and cadence sensors |
+| ERPM | Electrical RPM — the controller's raw speed value |
+| FET | Field-effect transistor — the switching devices inside the controller and the BMS |
+| HUD | The status strip drawn over the Android Auto projection |
+| JK-BMS | Jikong battery management system |
+| LISP | The scripting language executed by the VESC controller |
+| OTA | Over-the-air firmware update |
+| PAS | Pedal assist system |
+| RPM | Revolutions per minute |
+| SOC / SOH | State of charge / state of health |
+| VESC | The motor controller family this head unit is built around |
+| Ah / Wh | Ampere-hours / watt-hours — charge and energy |
