@@ -35,6 +35,18 @@ menu "Android Auto Head Unit"
         bool "Android Auto head-unit stack"
         depends on IDF_TARGET_ESP32P4
         default y
+
+    config ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST"
+        default n
+
+    config ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST"
+        default n
+
+    config ESP_HOSTED_HOST_USB_RNDIS_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_RNDIS_MANIFEST"
+        default n
         help
             Compiles the wireless Android Auto side of the firmware: the TCP
             server on AA_TCP_PORT, the TLS/protobuf handshake, the AA service
