@@ -10,13 +10,13 @@ setlocal enabledelayedexpansion
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 
-set ROOT=%~dp0..
-cd /d "%ROOT%"
+for %%D in ("%~dp0..") do set "ROOT=%%~fD"
+cd /d "%ROOT%" || exit /b 1
 
 :: Keep in sync with build_board.bat / release.sh.
 set BOARDS=waveshare waveshare-rev3 jc4880 s3touch4
 
-call "%~dp0app_env.bat" release
+call "%ROOT%\scripts\app_env.bat" release
 if errorlevel 1 exit /b 1
 
 call idf.py --version >nul 2>nul
