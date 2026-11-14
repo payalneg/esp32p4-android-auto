@@ -28,6 +28,9 @@ shift
 goto parse_args
 
 :run
+call "%~dp0app_env.bat" build_app
+if errorlevel 1 exit /b 1
+
 set DEFINES=
 if %USE_KEY%==1 (
     if exist "%ENV_FILE%" (

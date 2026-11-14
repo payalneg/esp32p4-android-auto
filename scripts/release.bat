@@ -16,21 +16,34 @@ cd /d "%ROOT%"
 :: Keep in sync with build_board.bat / release.sh.
 set BOARDS=waveshare waveshare-rev3 jc4880 s3touch4
 
-where idf.py >nul 2>nul
-if %errorlevel% neq 0 (
-    if defined IDF_PATH (
-        call "%IDF_PATH%\export.bat"
-    ) else (
-        echo release: idf.py not found - run export.bat first 1>&2
-        exit /b 1
+call "%~dp0app_env.bat" release
+if errorlevel 1 exit /b 1
+
+call idf.py --version >nul 2>nul
+if not errorlevel 1 goto idf_ready
+
+rem Prefer the project's ESP-IDF version in the local Espressif installation.
+if not defined IDF_PATH (
+    if not defined IDF_TOOLS_PATH if exist "%SystemDrive%\esp\v5.5.6\esp-idf\export.bat" (
+        set "IDF_TOOLS_PATH=%SystemDrive%\esp"
+    )
+    if defined IDF_TOOLS_PATH if exist "!IDF_TOOLS_PATH!\v5.5.6\esp-idf\export.bat" (
+        set "IDF_PATH=!IDF_TOOLS_PATH!\v5.5.6\esp-idf"
+        for /d %%D in ("!IDF_TOOLS_PATH!\python_env\idf5.5.6_py*") do (
+            if not defined IDF_PYTHON_ENV_PATH if exist "%%D\Scripts\python.exe" (
+                set "IDF_PYTHON_ENV_PATH=%%~fD"
+            )
+        )
     )
 )
-where flutter >nul 2>nul
-if %errorlevel% neq 0 (
-    echo release: flutter not found in PATH 1>&2
+if defined IDF_PATH if exist "%IDF_PATH%\export.bat" call "%IDF_PATH%\export.bat"
+call idf.py --version >nul 2>nul
+if errorlevel 1 (
+    echo release: ESP-IDF environment is not ready - run ESP-IDF 5.5.6 export.bat first 1>&2
     exit /b 1
 )
 
+:idf_ready
 set NEW_FW=%1
 set NEW_APP=%2
 
