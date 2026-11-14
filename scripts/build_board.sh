@@ -20,6 +20,7 @@
 # `build` — for each board in turn. A plain `idf.py build` (no wrapper) still
 # builds only Waveshare from the base sdkconfig.defaults.
 set -euo pipefail
+export IDF_COMPONENT_CHECK_NEW_VERSION=0
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

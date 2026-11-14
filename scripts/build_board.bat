@@ -13,6 +13,7 @@
 setlocal enabledelayedexpansion
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
+set IDF_COMPONENT_CHECK_NEW_VERSION=0
 
 set ROOT=%~dp0..
 cd /d "%ROOT%"
