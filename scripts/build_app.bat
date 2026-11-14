@@ -9,9 +9,9 @@
 ::   scripts\build_app.bat --debug --install
 setlocal enabledelayedexpansion
 
-set ROOT=%~dp0..
-set APP=%ROOT%\flutter-application
-set ENV_FILE=%ROOT%\.env
+for %%D in ("%~dp0..") do set "ROOT=%%~fD"
+set "APP=%ROOT%\flutter-application"
+set "ENV_FILE=%ROOT%\.env"
 set MASK=aa-bridge/vesc-display/2026
 
 set MODE=release
@@ -28,7 +28,7 @@ shift
 goto parse_args
 
 :run
-call "%~dp0app_env.bat" build_app
+call "%ROOT%\scripts\app_env.bat" build_app
 if errorlevel 1 exit /b 1
 
 set DEFINES=
@@ -53,9 +53,12 @@ if %USE_KEY%==1 (
     echo build_app: no embedded key (the app asks the user for one)
 )
 
-cd /d "%APP%"
+pushd "%APP%" || exit /b 1
 call flutter pub get
-if %errorlevel% neq 0 exit /b 1
+if errorlevel 1 (
+    popd
+    exit /b 1
+)
 if "%MODE%"=="release" (
     call flutter build apk --release --obfuscate --split-debug-info=build/symbols !DEFINES!
     set APK=%APP%\build\app\outputs\flutter-apk\app-release.apk
@@ -63,7 +66,9 @@ if "%MODE%"=="release" (
     call flutter build apk --debug !DEFINES!
     set APK=%APP%\build\app\outputs\flutter-apk\app-debug.apk
 )
-if %errorlevel% neq 0 exit /b 1
+set "BUILD_RESULT=%errorlevel%"
+popd
+if not "%BUILD_RESULT%"=="0" exit /b 1
 
 echo build_app: !APK!
 
