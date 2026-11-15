@@ -512,6 +512,25 @@ static int cmd_navwarp(int argc, char **argv)
     return 0;
 }
 
+static int cmd_navheading(int argc, char **argv)
+{
+    if (argc == 2) {
+        if (strcmp(argv[1], "auto") == 0) {
+            nav_map_set_heading_override(-1);
+        } else {
+            char *end;
+            const long angle = strtol(argv[1], &end, 10);
+            if (end == argv[1] || *end || angle < 0 || angle >= 360) {
+                printf("Usage: navheading [auto|0..359]\n");
+                return 1;
+            }
+            nav_map_set_heading_override((int)angle);
+        }
+    }
+    printf("camera heading %.1f deg\n", nav_map_camera_heading());
+    return 0;
+}
+
 static int cmd_navstat(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -594,6 +613,9 @@ static void register_cmds(void)
         { .command = "navstat",
           .help = "Navigator frame stream: mode, frames, last frame size/time",
           .hint = NULL, .func = cmd_navstat },
+        { .command = "navheading",
+          .help = "Navigator camera heading [auto|0..359]",
+          .hint = NULL, .func = cmd_navheading },
 #endif
 #if CONFIG_AA_MIC_ENABLE
         { .command = "mic",

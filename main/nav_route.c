@@ -162,11 +162,12 @@ void nav_route_draw(uint16_t *dst, int w, int h)
     nav_map_proj_t proj;
     if (!nav_map_get_proj(&proj, w, h)) return;
     const int margin_px = (w > h ? w : h);
-    int32_t lat_lo, lat_hi, lon_lo, lon_hi;
-    nav_map_unproject(-margin_px, h + margin_px, w, h, &lat_lo, &lon_lo);
-    nav_map_unproject(w + margin_px, -margin_px, w, h, &lat_hi, &lon_hi);
-    if (lat_lo > lat_hi) { const int32_t t = lat_lo; lat_lo = lat_hi; lat_hi = t; }
-    if (lon_lo > lon_hi) { const int32_t t = lon_lo; lon_lo = lon_hi; lon_hi = t; }
+    const float c = fabsf(proj.cos_heading), s = fabsf(proj.sin_heading);
+    const int hw = (w + 1) / 2 + margin_px, hh = (h + 1) / 2 + margin_px;
+    const int64_t dlon = (int64_t)ceilf((c * hw + s * hh) / proj.kx);
+    const int64_t dlat = (int64_t)ceilf((s * hw + c * hh) / proj.ky);
+    const int64_t lat_lo = proj.lat_e7 - dlat, lat_hi = proj.lat_e7 + dlat;
+    const int64_t lon_lo = proj.lon_e7 - dlon, lon_hi = proj.lon_e7 + dlon;
 
     for (size_t i = 0; i < s_count; i++) {
         const int32_t la = s_pts[i * 2], lo = s_pts[i * 2 + 1];
@@ -174,8 +175,8 @@ void nav_route_draw(uint16_t *dst, int w, int h)
     }
 
     /* Place what the spans below need — a point is wanted if it or either
-     * neighbour is near the screen — with two multiplies each, against the
-     * projection built once for the view's centre. */
+     * neighbour is near the screen — using the projection built once for
+     * the view's centre and heading. */
     int32_t *px = s_px;
     bool any = false;
     for (size_t i = 0; i < s_count; i++) {

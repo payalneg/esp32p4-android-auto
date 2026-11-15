@@ -70,6 +70,7 @@ typedef struct {
     int32_t lat_e7, lon_e7;   /* the view centre this was built for */
     int     cx, cy;           /* where that centre sits on the panel */
     float   kx, ky;           /* pixels per 1e-7 degree, east and north */
+    float   cos_heading, sin_heading;
 } nav_map_proj_t;
 
 /* Build the projection for the current view on a w x h panel. Returns false
@@ -84,9 +85,14 @@ static inline void nav_map_project(const nav_map_proj_t *p,
 {
     const float dx = (float)((int64_t)lon_e7 - (int64_t)p->lon_e7);
     const float dy = (float)((int64_t)lat_e7 - (int64_t)p->lat_e7);
-    *x = p->cx + (int)lroundf(dx * p->kx);
-    *y = p->cy - (int)lroundf(dy * p->ky);   /* north is up */
+    const float east = dx * p->kx, north = dy * p->ky;
+    *x = p->cx + (int)lroundf(east * p->cos_heading - north * p->sin_heading);
+    *y = p->cy - (int)lroundf(east * p->sin_heading + north * p->cos_heading);
 }
+
+/* Bench override: -1 tracks GPS, 0 forces north-up, 1..359 sets the angle. */
+void nav_map_set_heading_override(int degrees);
+float nav_map_camera_heading(void);
 
 /* The rider's own zoom, from the buttons on the panel. Once set it wins over
  * the zoom the phone sends: the rider is looking at this screen, and the

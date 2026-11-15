@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "esp_timer.h"
+#include <stdlib.h>
 #include <string.h>
 
 #include "nav_route.h"
@@ -30,6 +31,9 @@
 
 static nav_map_view_t s_view;
 static float s_speed_ms;
+static float s_camera_heading;
+static bool s_camera_has_heading;
+static int s_heading_override = -1;
 
 /* The rider's choice from the panel's zoom buttons, or 0 while they have not
  * touched them and the phone's zoom is used as it arrives. */
@@ -123,14 +127,30 @@ void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
         s_view.valid = true;
         return;
     }
-    const int32_t dlat = lat_e7 > s_view.lat_e7 ? lat_e7 - s_view.lat_e7
-                                                : s_view.lat_e7 - lat_e7;
-    const int32_t dlon = lon_e7 > s_view.lon_e7 ? lon_e7 - s_view.lon_e7
-                                                : s_view.lon_e7 - lon_e7;
+    const int64_t dlat = llabs((int64_t)lat_e7 - s_view.lat_e7);
+    const int64_t dlon = llabs((int64_t)lon_e7 - s_view.lon_e7);
     if (dlat > JUMP_LAT_E7 || dlon > JUMP_LON_E7) {
         s_view.lat_e7 = lat_e7;
         s_view.lon_e7 = lon_e7;
     }
+}
+
+void nav_map_set_heading_override(int degrees)
+{
+    __atomic_store_n(&s_heading_override, degrees, __ATOMIC_RELAXED);
+}
+
+float nav_map_camera_heading(void)
+{
+    const int override = __atomic_load_n(&s_heading_override, __ATOMIC_RELAXED);
+    return override >= 0 ? (float)override : s_camera_heading;
+}
+
+static void camera_axes(float *c, float *s)
+{
+    const float angle = nav_map_camera_heading() * DEG_TO_RAD;
+    *c = cosf(angle);
+    *s = sinf(angle);
 }
 
 bool nav_map_get_proj(nav_map_proj_t *out, int w, int h)
@@ -146,6 +166,7 @@ bool nav_map_get_proj(nav_map_proj_t *out, int w, int h)
     out->cy = h / 2;
     out->kx = n / 3.6e9f;
     out->ky = out->kx / cosf((float)s_view.lat_e7 * E7_TO_RAD);
+    camera_axes(&out->cos_heading, &out->sin_heading);
     return true;
 }
 
@@ -160,13 +181,16 @@ void nav_map_unproject(int x, int y, int w, int h,
     /* The inverse of nav_map_project, and just as local: e7 degrees per
      * pixel, stretched by the latitude for the north-south axis. */
     const float per_px = 3.6e9f / (float)((int64_t)NAV_TILE_PX << s_view.zoom);
+    float c, s;
+    camera_axes(&c, &s);
+    const float dx = (float)(x - w / 2), dy = (float)(y - h / 2);
     if (lon_e7) {
-        *lon_e7 = s_view.lon_e7 + (int32_t)lroundf((float)(x - w / 2) * per_px);
+        *lon_e7 = s_view.lon_e7 + (int32_t)lroundf((c * dx - s * dy) * per_px);
     }
     if (lat_e7) {
         const float stretch = cosf((float)s_view.lat_e7 * E7_TO_RAD);
         *lat_e7 = s_view.lat_e7 -
-                  (int32_t)lroundf((float)(y - h / 2) * per_px * stretch);
+                  (int32_t)lroundf((s * dx + c * dy) * per_px * stretch);
     }
 }
 
@@ -178,6 +202,21 @@ void nav_map_set_speed(uint16_t cm_per_s)
 void nav_map_dead_reckon(uint32_t dt_ms)
 {
     if (!s_view.valid || s_panned) return;
+
+    if (s_speed_ms >= 1.5f && s_view.heading_deg < 360) {
+        const float target = (float)s_view.heading_deg;
+        if (!s_camera_has_heading) {
+            s_camera_heading = target;
+            s_camera_has_heading = true;
+        } else {
+            float delta = remainderf(target - s_camera_heading, 360.0f);
+            const float weight = (float)dt_ms / (210.0f + (float)dt_ms);
+            s_camera_heading = fabsf(delta) < 1.0f
+                ? target : s_camera_heading + delta * weight;
+            if (s_camera_heading < 0.0f) s_camera_heading += 360.0f;
+            if (s_camera_heading >= 360.0f) s_camera_heading -= 360.0f;
+        }
+    }
 
     if (s_speed_ms > 0.1f && s_view.heading_deg <= 360) {
         const float metres = s_speed_ms * ((float)dt_ms * 0.001f);
@@ -206,8 +245,10 @@ void nav_map_pan(int dx_px, int dy_px)
     if (!s_view.valid) return;
     const float per_px = 3.6e9f / (float)((int64_t)NAV_TILE_PX << s_view.zoom);
     const float stretch = cosf((float)s_view.lat_e7 * E7_TO_RAD);
-    s_view.lon_e7 -= (int32_t)lroundf((float)dx_px * per_px);
-    s_view.lat_e7 += (int32_t)lroundf((float)dy_px * per_px * stretch);
+    float c, s;
+    camera_axes(&c, &s);
+    s_view.lon_e7 -= (int32_t)lroundf((c * dx_px - s * dy_px) * per_px);
+    s_view.lat_e7 += (int32_t)lroundf((s * dx_px + c * dy_px) * per_px * stretch);
     /* Past the poles there is no map and the projection stops meaning
      * anything; the date line is fine and wraps on its own. */
     if (s_view.lat_e7 >  850000000) s_view.lat_e7 =  850000000;
@@ -258,17 +299,7 @@ static void fill(uint16_t *dst, int w, int x0, int y0, int x1, int y1, uint16_t 
     }
 }
 
-/* Which way the rider is pointing, as an arrow around the same spot the dot
- * marks. This is what a track-up map would have said, for nothing: turning
- * the whole map to the heading means warping all 384000 pixels between two
- * PSRAM buffers every frame, and the panel has no hardware for an arbitrary
- * angle (the PPA turns in 90-degree steps). Measured with `navwarp` on the
- * board: 38 ms at 30 degrees and 118 ms at 90, on top of 18-26 ms of
- * composing — against an LVGL flush that already costs 57 ms on the same
- * core. So the map stays north-up and the marker carries the heading.
- *
- * Filled by three edge tests per pixel over the arrow's own bounding box:
- * a few hundred pixels, unmeasurable next to the rest of the frame. */
+/* Draw the rider's arrow relative to the camera heading. */
 static void draw_arrow(uint16_t *dst, int w, int h, int cx, int cy,
                        float heading_deg)
 {
@@ -363,17 +394,30 @@ static void draw_marker(uint16_t *dst, int w, int h, int cx, int cy)
     }
 }
 
+static void rotated_extent(int w, int h, float c, float s, int *rx, int *ry)
+{
+    const float hw = (float)((w + 1) / 2), hh = (float)((h + 1) / 2);
+    *rx = (int)ceilf(fabsf(c) * hw + fabsf(s) * hh) + 1;
+    *ry = (int)ceilf(fabsf(s) * hw + fabsf(c) * hh) + 1;
+}
+
 bool nav_map_view_tiles(uint8_t *z, int64_t *x0, int64_t *x1,
                         int64_t *y0, int64_t *y1)
 {
     if (!s_view.valid) return false;
-    const int64_t left = world_x_px(s_view.lon_e7, s_view.zoom) - NAV_VIEW_W / 2;
-    const int64_t top  = world_y_px(s_view.lat_e7, s_view.zoom) - NAV_VIEW_H / 2;
+    const int64_t cx = world_x_px(s_view.lon_e7, s_view.zoom);
+    const int64_t cy = world_y_px(s_view.lat_e7, s_view.zoom);
+    int rx = NAV_VIEW_W / 2, ry = NAV_VIEW_H / 2;
+    if (nav_map_camera_heading() != 0.0f) {
+        float c, s;
+        camera_axes(&c, &s);
+        rotated_extent(NAV_VIEW_W, NAV_VIEW_H, c, s, &rx, &ry);
+    }
     if (z)  *z  = s_view.zoom;
-    if (x0) *x0 = floor_div(left, NAV_TILE_PX);
-    if (x1) *x1 = floor_div(left + NAV_VIEW_W - 1, NAV_TILE_PX);
-    if (y0) *y0 = floor_div(top, NAV_TILE_PX);
-    if (y1) *y1 = floor_div(top + NAV_VIEW_H - 1, NAV_TILE_PX);
+    if (x0) *x0 = floor_div(cx - rx, NAV_TILE_PX);
+    if (x1) *x1 = floor_div(cx + rx - 1, NAV_TILE_PX);
+    if (y0) *y0 = floor_div(cy - ry, NAV_TILE_PX);
+    if (y1) *y1 = floor_div(cy + ry - 1, NAV_TILE_PX);
     return true;
 }
 
@@ -520,21 +564,133 @@ static void blit_level_half(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
     }
 }
 
-int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
+/* Resolve tile lookups outside the pixel loop. A 128 px cell fits in one
+ * tile even at the next finer zoom; all the other levels cover whole cells. */
+#define CELL_BITS 7
+#define CELL_PX (1 << CELL_BITS)
+#define CELL_MASK (CELL_PX - 1)
+#define Q_BITS 16
+#define Q_ONE (1 << Q_BITS)
+#define ROTATE_BLOCK 8
+
+typedef struct {
+    const uint16_t *origin;
+    uint8_t shift; /* source offset = (cell offset * 2) >> shift */
+} sample_cell_t;
+
+static const uint16_t *tile_at(int z, int64_t x, int64_t y)
 {
-    if (out_wanted) *out_wanted = 0;
-    if (!dst || w <= 0 || h <= 0) return 0;
-    if (!s_view.valid) {
-        fill(dst, w, 0, 0, w, h, BG_COLOUR);
-        return 0;
+    const int64_t size = (int64_t)1 << z;
+    if (y < 0 || y >= size) return NULL;
+    return nav_tiles_get((uint8_t)z, (uint32_t)(x & (size - 1)), (uint32_t)y);
+}
+
+static sample_cell_t sample_cell(int z, int64_t wx, int64_t wy, const uint16_t *detail)
+{
+    if (detail) {
+        return (sample_cell_t){detail + (wy & 255) * NAV_TILE_PX + (wx & 255), 1};
+    }
+    const uint16_t *px = tile_at(z + 1, wx >> CELL_BITS, wy >> CELL_BITS);
+    if (px) return (sample_cell_t){px, 0};
+
+    static const int fallback[] = {1, NAV_COARSE_DZ, NAV_WIDE_DZ};
+    for (unsigned i = 0; i < sizeof fallback / sizeof fallback[0]; i++) {
+        const int dz = fallback[i];
+        if (dz > z) continue;
+        const int64_t x = wx >> dz, y = wy >> dz;
+        px = tile_at(z - dz, x >> 8, y >> 8);
+        if (px) {
+            return (sample_cell_t){px + (y & 255) * NAV_TILE_PX + (x & 255), dz + 1};
+        }
+    }
+    return (sample_cell_t){0};
+}
+
+static inline __attribute__((always_inline))
+uint16_t sample_pixel(sample_cell_t cell, int32_t xq, int32_t yq)
+{
+    const int sx = ((xq >> (Q_BITS - 1)) & (CELL_PX * 2 - 1)) >> cell.shift;
+    const int sy = ((yq >> (Q_BITS - 1)) & (CELL_PX * 2 - 1)) >> cell.shift;
+    return cell.origin[sy * NAV_TILE_PX + sx];
+}
+
+/* Keep the pixel loop optimized even in the usual -Og firmware build. */
+static int __attribute__((optimize("O2")))
+render_rotated(uint16_t *dst, int w, int h, int64_t wx, int64_t wy,
+               float angle, int *out_wanted)
+{
+    const float c = cosf(angle), s = sinf(angle);
+    int rx, ry;
+    rotated_extent(w, h, c, s, &rx, &ry);
+    /* Align to detail tiles so each detail lookup can populate four cells. */
+    const int64_t x0 = floor_div(wx - rx, NAV_TILE_PX) * NAV_TILE_PX;
+    const int64_t y0 = floor_div(wy - ry, NAV_TILE_PX) * NAV_TILE_PX;
+    const int cols = 2 * (int)((wx + rx - x0) / NAV_TILE_PX + 1);
+    const int rows = 2 * (int)((wy + ry - y0) / NAV_TILE_PX + 1);
+    sample_cell_t cells[rows][cols];
+    const int z = s_view.zoom;
+    int have = 0, wanted = 0;
+    for (int y = 0; y < rows; y += 2) {
+        for (int x = 0; x < cols; x += 2) {
+            const int64_t tx = x0 + x * CELL_PX, ty = y0 + y * CELL_PX;
+            const uint16_t *detail = tile_at(z, tx >> 8, ty >> 8);
+            wanted++;
+            have += detail != NULL;
+            cells[y][x] = sample_cell(z, tx, ty, detail);
+            cells[y][x + 1] = sample_cell(z, tx + CELL_PX, ty, detail);
+            cells[y + 1][x] = sample_cell(z, tx, ty + CELL_PX, detail);
+            cells[y + 1][x + 1] = sample_cell(z, tx + CELL_PX, ty + CELL_PX, detail);
+        }
     }
 
-    /* World pixel of the top-left corner of the screen, at the detail zoom.
-     * Integers: the longitude exactly, the latitude through the frame's one
-     * logarithm (see world_y_px). */
-    const int64_t sl = world_x_px(s_view.lon_e7, s_view.zoom) - w / 2;
-    const int64_t st = world_y_px(s_view.lat_e7, s_view.zoom) - h / 2;
+    const int32_t cq = (int32_t)lroundf(c * Q_ONE), sq = (int32_t)lroundf(s * Q_ONE);
+    const int32_t xq0 = (int32_t)(wx - x0) * Q_ONE - (w / 2) * cq + (h / 2) * sq + Q_ONE / 2;
+    const int32_t yq0 = (int32_t)(wy - y0) * Q_ONE - (w / 2) * sq - (h / 2) * cq + Q_ONE / 2;
 
+    /* Walk small blocks to reuse PSRAM cache lines even near a quarter turn.
+     * Most blocks lie in one source cell. Crossing blocks resolve the cell
+     * per pixel, without looking up the tile cache again. */
+    for (int by = 0; by < h; by += ROTATE_BLOCK) {
+        const int bh = h - by < ROTATE_BLOCK ? h - by : ROTATE_BLOCK;
+        for (int bx = 0; bx < w; bx += ROTATE_BLOCK) {
+            const int bw = w - bx < ROTATE_BLOCK ? w - bx : ROTATE_BLOCK;
+            int32_t xq = xq0 + bx * cq - by * sq;
+            int32_t yq = yq0 + bx * sq + by * cq;
+            const int ax = (bw - 1) * cq, ay = (bw - 1) * sq;
+            const int bxq = -(bh - 1) * sq, byq = (bh - 1) * cq;
+            const int mx = xq + (ax < 0 ? ax : 0) + (bxq < 0 ? bxq : 0);
+            const int my = yq + (ay < 0 ? ay : 0) + (byq < 0 ? byq : 0);
+            const int cell_x = mx >> (Q_BITS + CELL_BITS);
+            const int cell_y = my >> (Q_BITS + CELL_BITS);
+            const bool single = ((mx + abs(ax) + abs(bxq)) >> (Q_BITS + CELL_BITS)) == cell_x &&
+                                ((my + abs(ay) + abs(byq)) >> (Q_BITS + CELL_BITS)) == cell_y;
+            const sample_cell_t cell = cells[cell_y][cell_x];
+            for (int y = 0; y < bh; y++, xq -= sq, yq += cq) {
+                uint16_t *row = dst + (size_t)(by + y) * w + bx;
+                int32_t xp = xq, yp = yq;
+                if (single && cell.origin) {
+                    for (int x = 0; x < bw; x++, xp += cq, yp += sq) {
+                        row[x] = sample_pixel(cell, xp, yp);
+                    }
+                } else if (single) {
+                    for (int x = 0; x < bw; x++) row[x] = BG_COLOUR;
+                } else {
+                    for (int x = 0; x < bw; x++, xp += cq, yp += sq) {
+                        const sample_cell_t next = cells[yp >> (Q_BITS + CELL_BITS)]
+                                                        [xp >> (Q_BITS + CELL_BITS)];
+                        row[x] = next.origin ? sample_pixel(next, xp, yp) : BG_COLOUR;
+                    }
+                }
+            }
+        }
+    }
+    if (out_wanted) *out_wanted = wanted;
+    return have;
+}
+
+static int render_north_up(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
+                           int *out_wanted)
+{
     /* The detail tiles first, then the blurred layers only where they are
      * missing. Painting every layer across the whole screen wrote each pixel
      * three times over — 63 ms a frame on this panel, most of it PSRAM
@@ -607,6 +763,25 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
         }
         blit_level_half(dst, w, h, sl, st, (uint8_t)(s_view.zoom + 1), &r);
     }
+    if (out_wanted) *out_wanted = wanted;
+    return have;
+}
+
+int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
+{
+    if (out_wanted) *out_wanted = 0;
+    if (!dst || w <= 0 || h <= 0) return 0;
+    if (!s_view.valid) {
+        fill(dst, w, 0, 0, w, h, BG_COLOUR);
+        return 0;
+    }
+
+    const int64_t wx = world_x_px(s_view.lon_e7, s_view.zoom);
+    const int64_t wy = world_y_px(s_view.lat_e7, s_view.zoom);
+    const float heading = nav_map_camera_heading();
+    const int have = heading == 0.0f
+        ? render_north_up(dst, w, h, wx - w / 2, wy - h / 2, out_wanted)
+        : render_rotated(dst, w, h, wx, wy, heading * DEG_TO_RAD, out_wanted);
 
     /* The line goes over the map and under the rider. Timed on its own: it
      * is the one part of the frame whose cost depends on the route rather
@@ -630,10 +805,9 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
         }
     }
     if (s_view.heading_deg <= 360 && s_speed_ms > 0.5) {
-        draw_arrow(dst, w, h, mx, my, (float)s_view.heading_deg);
+        draw_arrow(dst, w, h, mx, my, (float)s_view.heading_deg - heading);
     } else {
         draw_marker(dst, w, h, mx, my);
     }
-    if (out_wanted) *out_wanted = wanted;
     return have;
 }
