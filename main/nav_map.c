@@ -145,7 +145,13 @@ void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
 
 void nav_map_set_heading_override(int degrees)
 {
+    if (degrees < -1 || degrees >= 360) degrees = -1;
     __atomic_store_n(&s_heading_override, degrees, __ATOMIC_RELAXED);
+}
+
+int nav_map_heading_override(void)
+{
+    return __atomic_load_n(&s_heading_override, __ATOMIC_RELAXED);
 }
 
 float nav_map_camera_heading(void)

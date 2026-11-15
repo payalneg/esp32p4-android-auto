@@ -94,6 +94,10 @@ static nav_search_hit_t s_hits[NAV_SEARCH_MAX];
 static atomic_int  s_nhits;
 static atomic_bool s_hits_fresh;
 static lv_obj_t *s_zoom_lbl;
+static lv_obj_t *s_rot_lbl;
+static nav_screen_heading_cb_t s_heading_cb;
+/* -1 follows GPS, otherwise the fixed camera heading the rider stepped to. */
+static int s_heading_step = -1;
 static lv_timer_t *s_tick;
 
 /* What the panel actually is, read from LVGL once the screen is built.
@@ -472,6 +476,49 @@ static void refresh_zoom(void)
 static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
 static void zoom_out_cb(lv_event_t *e) { (void)e; zoom_step(-1); }
 
+/* The camera in 30-degree steps.
+ *
+ * Continuous heading-up is the normal mode and what the phone drives. This
+ * button is for looking at the same ground from a fixed angle: each press
+ * advances 0, 30, 60 … 330, then back to AUTO. It changes only the camera —
+ * the rider's marker, the route and the HUD keep their own orientation. */
+#define HEADING_STEP 30
+
+static void refresh_heading(void)
+{
+    const int ov = nav_map_heading_override();
+    if (ov != s_heading_step) s_heading_step = ov;
+    if (!s_rot_lbl) return;
+    char buf[16];
+    if (s_heading_step < 0) {
+        snprintf(buf, sizeof buf, "AUTO");
+    } else {
+        snprintf(buf, sizeof buf, "%d", s_heading_step);
+    }
+    if (strcmp(buf, lv_label_get_text(s_rot_lbl)) != 0) {
+        lv_label_set_text(s_rot_lbl, buf);
+    }
+}
+
+static void rotate_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_heading_step < 0) {
+        /* Start from the nearest step to where the map is now, so the first
+         * press does not sweep across half a turn. */
+        int current = (int)lroundf(nav_map_camera_heading()) % 360;
+        if (current < 0) current += 360;
+        s_heading_step = ((current + HEADING_STEP / 2) / HEADING_STEP) *
+                         HEADING_STEP % 360;
+    } else {
+        s_heading_step += HEADING_STEP;
+        if (s_heading_step >= 360) s_heading_step = -1;   /* AUTO */
+    }
+    nav_map_set_heading_override(s_heading_step);
+    refresh_heading();
+    if (s_heading_cb) s_heading_cb(s_heading_step);
+}
+
 /* ---- the second layout ----
  *
  * LVGL decides what a key does by comparing its text with LV_SYMBOL_*, so
@@ -733,6 +780,7 @@ static void tick_cb(lv_timer_t *t)
     }
     refresh_guide();
     refresh_zoom();
+    refresh_heading();
     refresh_results();
 
     const bool have_frame = atomic_load(&s_frames) > 0;
@@ -984,6 +1032,31 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
         lv_obj_center(l);
     }
+    /* Camera in 30-degree steps, above the zoom buttons. The label beside it
+     * says AUTO or the fixed bearing, so a press is not a guess. */
+    {
+        lv_obj_t *b = lv_btn_create(s_screen);
+        lv_obj_set_size(b, 62, 62);
+        lv_obj_align(b, LV_ALIGN_RIGHT_MID, -12, -196);
+        lv_obj_set_style_bg_color(b, lv_color_hex(HUD_PLATE), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
+        lv_obj_set_style_radius(b, 14, 0);
+        lv_obj_add_event_cb(b, rotate_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, "ROT");
+        lv_obj_set_style_text_font(l, &aabridge_font_24, 0);
+        lv_obj_center(l);
+    }
+    s_rot_lbl = lv_label_create(s_screen);
+    lv_obj_align(s_rot_lbl, LV_ALIGN_RIGHT_MID, -84, -196);
+    lv_obj_set_style_text_color(s_rot_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_rot_lbl, &aabridge_font_24, 0);
+    lv_obj_set_style_bg_color(s_rot_lbl, lv_color_hex(HUD_PLATE), 0);
+    lv_obj_set_style_bg_opa(s_rot_lbl, LV_OPA_70, 0);
+    lv_obj_set_style_pad_hor(s_rot_lbl, 6, 0);
+    lv_obj_set_style_pad_ver(s_rot_lbl, 3, 0);
+    lv_obj_set_style_radius(s_rot_lbl, 8, 0);
+    lv_label_set_text(s_rot_lbl, "AUTO");
     /* Back to the rider. Only there when the map has been dragged away from
      * them — on a screen this size an always-present button would be one more
      * thing between the rider and the map. */
@@ -1083,6 +1156,7 @@ bool nav_screen_active(void) { return atomic_load(&s_active); }
 
 void nav_screen_set_dest_cb(nav_screen_dest_cb_t cb) { s_dest_cb = cb; }
 void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb) { s_zoom_cb = cb; }
+void nav_screen_set_heading_cb(nav_screen_heading_cb_t cb) { s_heading_cb = cb; }
 void nav_screen_set_look_cb(nav_screen_look_cb_t cb) { s_look_cb = cb; }
 void nav_screen_set_search_cb(nav_screen_search_cb_t cb) { s_search_cb = cb; }
 

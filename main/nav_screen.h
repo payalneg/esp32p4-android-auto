@@ -103,6 +103,12 @@ void nav_screen_set_search_cb(nav_screen_search_cb_t cb);
 typedef void (*nav_screen_zoom_cb_t)(uint8_t zoom);
 void nav_screen_set_zoom_cb(nav_screen_zoom_cb_t cb);
 
+/* The rider pressed the rotate button: -1 means "follow GPS again", 0..359
+ * a fixed camera heading in 30-degree steps. The map changes at once; the
+ * callback only asks the worker for a fresh frame. */
+typedef void (*nav_screen_heading_cb_t)(int degrees);
+void nav_screen_set_heading_cb(nav_screen_heading_cb_t cb);
+
 /* Link/stream state, for the placeholder text. */
 void nav_screen_set_phone(bool connected);
 void nav_screen_set_streaming(bool streaming);

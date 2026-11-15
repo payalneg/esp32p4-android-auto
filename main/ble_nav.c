@@ -102,7 +102,7 @@ typedef enum { RX_TILE, RX_ROUTE, RX_FOUND } rx_kind_t;
 
 typedef enum { EV_TILE, EV_VIEW, EV_STATE, EV_STOP, EV_REJECT,
                EV_DEST, EV_ROUTE, EV_ZOOM, EV_LOOK, EV_SEARCH,
-               EV_FOUND } ev_kind_t;
+               EV_FOUND, EV_REDRAW } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint16_t  seq;
@@ -282,6 +282,18 @@ static void on_zoom_picked(uint8_t zoom)
     nav_evt_t ev = { .kind = EV_ZOOM, .zoom = zoom };
     xQueueSend(s_q, &ev, 0);
     ESP_LOGI(TAG, "zoom %u chosen on the panel", (unsigned)zoom);
+}
+
+/* The rotate button on the panel. It has already changed the camera (the
+ * override is atomic); this only asks the worker for a frame at the new
+ * angle, so the map turns even while the phone is quiet. */
+static void on_heading_changed(int degrees)
+{
+    nav_map_set_heading_override(degrees);
+    if (!s_q) return;
+    nav_evt_t ev = { .kind = EV_REDRAW };
+    xQueueSend(s_q, &ev, 0);
+    ESP_LOGI(TAG, "camera %s", degrees < 0 ? "back on GPS" : "stepped");
 }
 
 /* From the LVGL task when the rider has typed enough to look for. */
@@ -664,6 +676,11 @@ static void worker(void *arg)
                  * tiles we hold, and the phone fills the rest in. */
                 render_view();
                 break;
+            case EV_REDRAW:
+                /* The camera changed on the panel; no wire traffic, just a
+                 * frame at the new angle from the tiles already here. */
+                render_view();
+                break;
             case EV_SEARCH:
                 notify_search(ev.query);
                 break;
@@ -692,6 +709,7 @@ void ble_nav_init(void)
     s_q = xQueueCreate(8, sizeof(nav_evt_t));
     nav_screen_set_dest_cb(on_dest_picked);
     nav_screen_set_zoom_cb(on_zoom_picked);
+    nav_screen_set_heading_cb(on_heading_changed);
     nav_screen_set_look_cb(on_look_changed);
     nav_screen_set_search_cb(on_search_typed);
     nav_tiles_set_evict_cb(on_tile_evicted);

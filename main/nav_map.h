@@ -94,6 +94,7 @@ static inline void nav_map_project(const nav_map_proj_t *p,
 
 /* Bench override: -1 tracks GPS, 0 forces north-up, 1..359 sets the angle. */
 void nav_map_set_heading_override(int degrees);
+int  nav_map_heading_override(void);
 float nav_map_camera_heading(void);
 
 /* The rider's own zoom, from the buttons on the panel. Once set it wins over
