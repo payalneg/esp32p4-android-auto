@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "nav_vector.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -122,6 +124,23 @@ void nav_map_get_view(nav_map_view_t *out);
  * draws rather than waiting. Returns how many of the tiles it wanted were
  * actually there. */
 int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted);
+
+/* Names for the separate, upright layer.
+ *
+ * The map rotates, the labels do not: this is the one part of vector tiles
+ * that must not be baked into the RGB565. nav_map_render collects and places
+ * them (with collision rejection) at the same time as it draws the ground,
+ * and publishes a snapshot the LVGL tick copies. The snapshot is seqlocked,
+ * so the UI task never sees a half-written list. */
+#define NAV_MAP_LABELS_MAX 16
+typedef struct {
+    int16_t  x, y;                    /* where the middle of the label goes */
+    uint8_t  kind;                    /* NAV_V_LABEL_* */
+    uint8_t  rank;
+    char     name[NAV_VECTOR_LABEL_NAME];
+} nav_map_label_t;
+
+int nav_map_copy_labels(nav_map_label_t *out, int max);
 
 /* The tile rectangle the current view covers, for the debug command.
  * Returns false when no view has been set yet. */

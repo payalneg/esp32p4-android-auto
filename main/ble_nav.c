@@ -58,6 +58,7 @@ static const char *TAG = "ble_nav";
 #define NAV_ST_DROPPED  0x14
 #define NAV_ST_ZOOM     0x15
 #define NAV_ST_LOOK     0x18
+#define NAV_ST_SOURCE   0x19
 #define NAV_ST_SEARCH   0x16
 #define NAV_ST_EMPTY    0x17
 
@@ -322,17 +323,28 @@ static void notify_all(uint8_t status, uint8_t a, uint16_t b, uint16_t c)
 static void notify_state(void)
 {
     const bool live = (ui_mode_get() == UI_MODE_NAV);
-    notify_all(NAV_ST_STATE, live ? 1 : 0, live ? 1 : 0, BLE_NAV_MAX_DATA);
+    const bool vector = nav_tile_store_vector_ready();
+    /* Bit 1 of the mode byte says the ground is on the card. Old apps read
+     * the byte as a boolean and see the same "navigator is live" they always
+     * did; a new app stops sending PNGs. */
+    notify_all(NAV_ST_STATE, (uint8_t)((live ? 1 : 0) | (vector ? 2 : 0)),
+               live ? 1 : 0, BLE_NAV_MAX_DATA);
 
     /* And say so when the store is empty. The phone never sends the same tile
-     * twice, so after a reboot it has to be told that what it sent is gone —
+     * twice, so after a reboot it has to be told that what it sent is gone -
      * otherwise the panel sits on a bare map while the position keeps
      * arriving, which is exactly what the bench showed: 248 position updates
      * and `tiles ok=0`. Eviction notices cover losing tiles one at a time;
      * this covers losing all of them at once. */
     nav_tiles_stats_t ts;
     nav_tiles_get_stats(&ts);
-    if (ts.stored == 0) notify_all(NAV_ST_EMPTY, 0, 0, 0);
+    uint8_t zmin = 0, zmax = 0;
+    if (vector) nav_tile_store_vector_zooms(&zmin, &zmax);
+    /* Tell the phone where the ground is coming from. A vector package means
+     * it can stop forwarding PNGs altogether and send only VIEW/ROUTE/GUIDE
+     * — the whole point of the offline package. */
+    notify_all(NAV_ST_SOURCE, vector ? 1 : 0, zmin, zmax);
+    if (ts.stored == 0 && !vector) notify_all(NAV_ST_EMPTY, 0, 0, 0);
 }
 
 static void set_boost(bool on)
@@ -390,6 +402,11 @@ static void render_view(void)
     s_stats.msync_us = (uint32_t)(t2 - t1);
     s_stats.last_have = have;
     s_stats.last_wanted = wanted;
+    /* How many names the frame placed. nav_map_render publishes them on the
+     * way out; copying the small list here is cheaper than plumbing a count
+     * through the compositor's code. */
+    nav_map_label_t labels[NAV_MAP_LABELS_MAX];
+    s_stats.last_labels = nav_map_copy_labels(labels, NAV_MAP_LABELS_MAX);
     s_last_frame_us = esp_timer_get_time();
 }
 
@@ -443,19 +460,27 @@ static void prefetch_pass(void)
     int64_t x0, x1, y0, y1;
     if (!nav_map_view_tiles(&z, &x0, &x1, &y0, &y1)) return;
 
-    /* Widest layer first, sharpest last — the opposite of the order the
+    /* Widest layer first, sharpest last - the opposite of the order the
      * picture is composed in, and on purpose. One tile six levels down covers
      * sixty-four by sixty-four of the detail, so a single read puts a whole
      * blurred map on the screen; the detail then sharpens it over the next
      * few passes. Fetching detail first would leave the rider looking at bare
-     * ground with two sharp squares in it. */
+     * ground with two sharp squares in it.
+     *
+     * An NVT1 package usually starts higher than z-6 (the demo one starts at
+     * z11). Asking for a level outside it is a failed open per tile per
+     * pass, so clamp the fallback sweep to what vector.idx advertises. */
     static const int k_dz[] = { NAV_WIDE_DZ, NAV_COARSE_DZ, 0 };
+    const bool vector = nav_tile_store_vector_ready();
+    uint8_t vzmin = 0, vzmax = 0;
+    if (vector) nav_tile_store_vector_zooms(&vzmin, &vzmax);
     int budget = NAV_SD_PREFETCH_PER_PASS;
     bool got = false;
     for (unsigned i = 0; i < sizeof k_dz / sizeof k_dz[0] && budget > 0; i++) {
         const int dz = k_dz[i];
         if (dz > z) continue;
         const uint8_t lz = (uint8_t)(z - dz);
+        if (vector && (lz < vzmin || lz > vzmax)) continue;
         for (int64_t ty = y0 >> dz; ty <= (y1 >> dz) && budget > 0; ty++) {
             for (int64_t tx = x0 >> dz; tx <= (x1 >> dz) && budget > 0; tx++) {
                 if (tx < 0 || ty < 0) continue;
@@ -716,6 +741,10 @@ void ble_nav_get_stats(ble_nav_stats_t *out)
 {
     if (!out) return;
     *out = s_stats;
+    nav_tiles_stats_t ts;
+    nav_tiles_get_stats(&ts);
+    out->vector_ok = ts.vector_ok;
+    out->vector_last_ms = ts.vector_last_ms;
     /* Worth watching: this task decodes PNGs through libpng and composes the
      * view, so it is the one that would overflow and take the device with it. */
     out->stack_free = s_task

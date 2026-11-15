@@ -84,6 +84,11 @@ class NavStatus {
   /// or put it back. Tiles have to follow what they are looking at, not where
   /// they are. See NAV_ST_LOOK in main/ble_nav.h.
   static const look = 0x18;
+
+  /// The head unit has an NVT1 vector package on its microSD card. Six bytes:
+  /// [status][present][zmin][?][zmax][?]. The STATE byte also carries a
+  /// "vector" bit, which is what the feed reads; this one is for diagnostics.
+  static const source = 0x19;
 }
 
 /// FRAME_ACK results.
@@ -123,6 +128,7 @@ class NavDisplayState {
     required this.navMode,
     required this.visible,
     required this.maxChunk,
+    this.localVector = false,
   });
 
   /// The head unit's full-screen mode is the navigator.
@@ -134,6 +140,12 @@ class NavDisplayState {
   /// Largest DATA write it accepts.
   final int maxChunk;
 
+  /// The ground is on the head unit's own microSD card (NVT1). The phone
+  /// should keep sending position, route and guidance and stop sending PNG
+  /// tiles — they are already there, and they are vector, so they turn with
+  /// the map and carry their own names.
+  final bool localVector;
+
   static const unknown = NavDisplayState(
     navMode: false,
     visible: false,
@@ -141,18 +153,24 @@ class NavDisplayState {
   );
 
   /// Parses a 6-byte STATE notification, or null if it is not one.
+  ///
+  /// Bit 1 of the mode byte is the vector flag. Older firmware leaves it
+  /// clear; older apps treat the byte as a boolean and see the same answer
+  /// they always did.
   static NavDisplayState? parse(List<int> raw) {
     if (raw.length < 6 || raw[0] != NavStatus.state) return null;
     return NavDisplayState(
-      navMode: raw[1] != 0,
+      navMode: (raw[1] & 1) != 0,
       visible: (raw[2] | (raw[3] << 8)) != 0,
       maxChunk: raw[4] | (raw[5] << 8),
+      localVector: (raw[1] & 2) != 0,
     );
   }
 
   @override
   String toString() =>
-      'NavDisplayState(nav: $navMode, visible: $visible, chunk: $maxChunk)';
+      'NavDisplayState(nav: $navMode, visible: $visible, chunk: $maxChunk, '
+      'vector: $localVector)';
 }
 
 /// The head unit's verdict on one frame.

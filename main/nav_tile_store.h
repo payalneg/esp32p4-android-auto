@@ -1,19 +1,14 @@
-/* The tile cache that survives a slot being reused — a microSD card.
+/* The tile cache that survives a slot being reused: a microSD card.
  *
  * nav_tiles.c holds decoded tiles in PSRAM, 96 of them, and has to give a
- * slot up as soon as the ground moves. Today that means telling the phone
- * (it never sends the same tile twice, so it has to hear that one is gone)
- * and getting the tile again over BLE, where a 15 KB PNG costs seconds. A
- * 1.6 km ride evicted 890 tiles — the same ground, over and over.
+ * slot up as soon as the ground moves. With a card in the slot, the original
+ * bytes stay on it: a PNG the phone sent, or an NVT1 vector tile the rider
+ * copied there. Eviction then costs a file read instead of a radio round
+ * trip, and the phone is never asked twice.
  *
- * With a card in the slot the compressed original stays on it, so eviction
- * costs a file read instead of a radio round trip, and the phone is never
- * asked twice. Without a card nothing here does anything and the old
- * behaviour is exactly what happens.
- *
- * The layout is the phone's own: {z}/{x}/{y}.png under /sdcard/navtiles. That
- * is deliberate — the app caches raster tiles in the same shape, so filling
- * this cache can be a copy onto the card rather than a week of BLE.
+ * The layout is `{z}/{x}/{y}.png` (phone cache) and `{z}/{x}/{y}.vtile`
+ * (packer) under /sdcard/navtiles; /sdcard/vtiles is accepted as the older
+ * root for vector packages.
  */
 #pragma once
 
@@ -43,12 +38,28 @@ bool nav_tile_store_save(uint8_t z, uint32_t x, uint32_t y, uint8_t fmt,
 /* Read a tile back, or NULL when the card does not have it. The buffer is
  * PSRAM the caller frees with heap_caps_free. A tile that was not there is
  * remembered for a while, so a view over ground the card does not cover does
- * not pay for a failed open every pass. */
+ * not pay for a failed open every pass.
+ *
+ * A `.vtile` is preferred over a `.png` for the same z/x/y. `fmt` says which
+ * one came back. A vector package may live at either `/sdcard/navtiles` or
+ * the older `/sdcard/vtiles`, so a card prepared for the map prototype works
+ * unchanged. */
 uint8_t *nav_tile_store_read(uint8_t z, uint32_t x, uint32_t y,
                              uint8_t *fmt, size_t *len);
 
+/* Whether the card holds an NVT1 package (`vector.idx` beside the zoom
+ * folders). Cheap after the first answer; a missing marker is re-checked
+ * when the card is remounted, not on every pass. */
+bool nav_tile_store_vector_ready(void);
+
+/* The zooms the package covers. 0/0 when there is no package. The prefetch
+ * uses this to stop asking the card for the z-6 fallback when the package
+ * starts at z11: each miss would be a failed open on the render path. */
+void nav_tile_store_vector_zooms(uint8_t *zmin, uint8_t *zmax);
+
 typedef struct {
     bool     ready;
+    bool     vector;      /* an NVT1 package is present */
     uint32_t saved;       /* tiles written to the card since boot */
     uint32_t loaded;      /* tiles read back */
     uint32_t missing;     /* reads the card could not answer */

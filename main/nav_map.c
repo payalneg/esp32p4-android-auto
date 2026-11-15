@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "esp_timer.h"
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,6 +42,13 @@ static uint8_t s_zoom_override;
 
 /* What the last route draw cost, microseconds (navstat prints it). */
 static uint32_t s_route_us;
+
+/* Labels placed by the last render. Written by the BLE worker, copied by the
+ * LVGL tick; a seqlock keeps the reader from seeing a half-updated list
+ * without making either side take a mutex on the frame path. */
+static nav_map_label_t s_labels[NAV_MAP_LABELS_MAX];
+static atomic_uint s_label_seq;
+static atomic_int  s_label_count;
 
 /* Where the phone last said we are. The drawn view chases this. */
 static int32_t s_target_lat_e7, s_target_lon_e7;
@@ -767,12 +775,221 @@ static int render_north_up(uint16_t *dst, int w, int h, int64_t sl, int64_t st,
     return have;
 }
 
+/* ---- labels ---- */
+
+static void labels_publish(const nav_map_label_t *in, int n)
+{
+    const uint32_t seq = atomic_load_explicit(&s_label_seq, memory_order_relaxed);
+    atomic_store_explicit(&s_label_seq, seq + 1, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
+    if (in && n > 0) {
+        if (n > NAV_MAP_LABELS_MAX) n = NAV_MAP_LABELS_MAX;
+        memcpy(s_labels, in, (size_t)n * sizeof(s_labels[0]));
+    } else {
+        n = 0;
+    }
+    atomic_store_explicit(&s_label_count, n, memory_order_relaxed);
+    atomic_store_explicit(&s_label_seq, seq + 2, memory_order_relaxed);
+}
+
+int nav_map_copy_labels(nav_map_label_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        const uint32_t before =
+            atomic_load_explicit(&s_label_seq, memory_order_acquire);
+        if (before & 1u) continue;
+        int n = atomic_load_explicit(&s_label_count, memory_order_relaxed);
+        if (n > max) n = max;
+        if (n > 0) memcpy(out, s_labels, (size_t)n * sizeof(out[0]));
+        atomic_thread_fence(memory_order_acquire);
+        const uint32_t after =
+            atomic_load_explicit(&s_label_seq, memory_order_acquire);
+        if (before == after) return n;
+    }
+    return 0;
+}
+
+#define LABEL_CAND_MAX 64
+typedef struct {
+    nav_map_label_t lbl;
+    bool            detail;   /* came from the zoom being drawn */
+    int64_t         dist2;    /* from the middle, for tie-breaking */
+} label_cand_t;
+
+static void label_add(label_cand_t *cand, int *n, int max,
+                      const nav_vector_label_t *src, bool detail,
+                      int64_t dx, int64_t dy, float c, float s, int w, int h)
+{
+    if (!src->name[0] || *n >= max) return;
+
+    const float sx = (float)(w / 2) + (float)dx * c + (float)dy * s;
+    const float sy = (float)(h / 2) - (float)dx * s + (float)dy * c;
+    /* A label whose anchor is just off screen is not useful, and one twenty
+     * kilometres away is a bug in the tile range. */
+    if (sx < -64.0f || sx > (float)w + 64.0f ||
+        sy < -64.0f || sy > (float)h + 64.0f) {
+        return;
+    }
+
+    label_cand_t next;
+    next.lbl.kind = src->kind;
+    next.lbl.rank = src->rank;
+    next.lbl.x = (int16_t)lroundf(sx);
+    next.lbl.y = (int16_t)lroundf(sy);
+    memcpy(next.lbl.name, src->name, sizeof(next.lbl.name));
+    next.lbl.name[sizeof(next.lbl.name) - 1] = '\0';
+    next.detail = detail;
+    next.dist2 = dx * dx + dy * dy;
+
+    /* Same name from a detail tile and a fallback tile: the detail one wins
+     * even if the fallback has a lower rank, because its anchor is the one
+     * that actually sits on the road. Same detail level: the better rank
+     * wins. Either way there is one label per name, not two on top of each
+     * other. */
+    for (int i = 0; i < *n; i++) {
+        if (strcmp(cand[i].lbl.name, src->name) != 0) continue;
+        if (cand[i].detail && !detail) return;
+        if (!cand[i].detail && detail) {
+            cand[i] = next;
+            return;
+        }
+        if (cand[i].lbl.rank <= src->rank) return;
+        cand[i] = next;
+        return;
+    }
+    cand[(*n)++] = next;
+}
+
+static int label_cmp(const void *a, const void *b)
+{
+    const label_cand_t *x = a, *y = b;
+    if (x->lbl.rank != y->lbl.rank) return (int)x->lbl.rank - (int)y->lbl.rank;
+    if (x->detail != y->detail) return x->detail ? -1 : 1;
+    return x->dist2 < y->dist2 ? -1 : (x->dist2 > y->dist2 ? 1 : 0);
+}
+
+/* Walk the tiles the view covers and keep the most useful names. This runs
+ * after the ground has been drawn, so a tile the compositor just fetched has
+ * its label array ready in the same slot. */
+static void collect_labels(int w, int h, int64_t wx, int64_t wy,
+                           float c, float s)
+{
+    label_cand_t cand[LABEL_CAND_MAX];
+    int ncand = 0;
+
+    int rx, ry;
+    rotated_extent(w, h, c, s, &rx, &ry);
+    const uint8_t z = s_view.zoom;
+    const int64_t span = (int64_t)1 << z;
+
+    /* Detail first. */
+    const int64_t tx0 = floor_div(wx - rx, NAV_TILE_PX);
+    const int64_t tx1 = floor_div(wx + rx - 1, NAV_TILE_PX);
+    const int64_t ty0 = floor_div(wy - ry, NAV_TILE_PX);
+    const int64_t ty1 = floor_div(wy + ry - 1, NAV_TILE_PX);
+    for (int64_t ty = ty0; ty <= ty1; ty++) {
+        if (ty < 0 || ty >= span) continue;
+        for (int64_t tx = tx0; tx <= tx1; tx++) {
+            int64_t mx = tx % span;
+            if (mx < 0) mx += span;
+            nav_vector_label_t tmp[NAV_TILE_LABELS];
+            const uint8_t n = nav_tiles_get_labels(
+                z, (uint32_t)mx, (uint32_t)ty, tmp, NAV_TILE_LABELS);
+            for (uint8_t i = 0; i < n; i++) {
+                const int64_t dx = tx * NAV_TILE_PX + tmp[i].x - wx;
+                const int64_t dy = ty * NAV_TILE_PX + tmp[i].y - wy;
+                label_add(cand, &ncand, LABEL_CAND_MAX, &tmp[i], true,
+                          dx, dy, c, s, w, h);
+            }
+        }
+    }
+
+    /* Then the blurred layers: enough names to keep a half-filled map from
+     * looking anonymous, with detail winning any duplicate. */
+    static const int k_dz[] = { NAV_COARSE_DZ, NAV_WIDE_DZ };
+    for (unsigned k = 0; k < sizeof k_dz / sizeof k_dz[0]; k++) {
+        const int dz = k_dz[k];
+        if (dz > z) continue;
+        const uint8_t lz = (uint8_t)(z - dz);
+        const int64_t lspan = (int64_t)1 << lz;
+        const int scale = 1 << dz;
+        const int64_t lwx = wx >> dz, lwy = wy >> dz;
+        const int lrx = (rx + scale - 1) >> dz;
+        const int lry = (ry + scale - 1) >> dz;
+        const int64_t lx0 = floor_div(lwx - lrx, NAV_TILE_PX);
+        const int64_t lx1 = floor_div(lwx + lrx - 1, NAV_TILE_PX);
+        const int64_t ly0 = floor_div(lwy - lry, NAV_TILE_PX);
+        const int64_t ly1 = floor_div(lwy + lry - 1, NAV_TILE_PX);
+        for (int64_t ty = ly0; ty <= ly1; ty++) {
+            if (ty < 0 || ty >= lspan) continue;
+            for (int64_t tx = lx0; tx <= lx1; tx++) {
+                int64_t mx = tx % lspan;
+                if (mx < 0) mx += lspan;
+                nav_vector_label_t tmp[NAV_TILE_LABELS];
+                const uint8_t n = nav_tiles_get_labels(
+                    lz, (uint32_t)mx, (uint32_t)ty, tmp, NAV_TILE_LABELS);
+                for (uint8_t i = 0; i < n; i++) {
+                    const int64_t dx =
+                        (int64_t)(tx * NAV_TILE_PX + tmp[i].x) * scale - wx;
+                    const int64_t dy =
+                        (int64_t)(ty * NAV_TILE_PX + tmp[i].y) * scale - wy;
+                    label_add(cand, &ncand, LABEL_CAND_MAX, &tmp[i], false,
+                              dx, dy, c, s, w, h);
+                }
+            }
+        }
+    }
+
+    qsort(cand, (size_t)ncand, sizeof(cand[0]), label_cmp);
+
+    /* Place greedily. A label that would sit on top of a better one is
+     * dropped; a map with six readable names is better than one with twenty
+     * none of which can be read. */
+    nav_map_label_t out[NAV_MAP_LABELS_MAX];
+    int placed = 0;
+    int rect[NAV_MAP_LABELS_MAX][4];
+    for (int i = 0; i < ncand && placed < NAV_MAP_LABELS_MAX; i++) {
+        const int tw = (int)strlen(cand[i].lbl.name) * 12 + 12;
+        const int th = 30;
+        if (tw >= w - 8) continue;
+        int cx = cand[i].lbl.x;
+        int cy = cand[i].lbl.y;
+        if (cx < tw / 2 + 4) cx = tw / 2 + 4;
+        if (cx > w - tw / 2 - 4) cx = w - tw / 2 - 4;
+        if (cy < th / 2 + 4) cy = th / 2 + 4;
+        if (cy > h - th / 2 - 4) cy = h - th / 2 - 4;
+
+        const int x0 = cx - tw / 2, x1 = cx + tw / 2;
+        const int y0 = cy - th / 2, y1 = cy + th / 2;
+        bool clash = false;
+        for (int j = 0; j < placed; j++) {
+            if (x0 - 2 < rect[j][2] && x1 + 2 > rect[j][0] &&
+                y0 - 2 < rect[j][3] && y1 + 2 > rect[j][1]) {
+                clash = true;
+                break;
+            }
+        }
+        if (clash) continue;
+        out[placed] = cand[i].lbl;
+        out[placed].x = (int16_t)cx;
+        out[placed].y = (int16_t)cy;
+        rect[placed][0] = x0;
+        rect[placed][1] = y0;
+        rect[placed][2] = x1;
+        rect[placed][3] = y1;
+        placed++;
+    }
+    labels_publish(out, placed);
+}
+
 int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
 {
     if (out_wanted) *out_wanted = 0;
     if (!dst || w <= 0 || h <= 0) return 0;
     if (!s_view.valid) {
         fill(dst, w, 0, 0, w, h, BG_COLOUR);
+        labels_publish(NULL, 0);
         return 0;
     }
 
@@ -809,5 +1026,11 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
     } else {
         draw_marker(dst, w, h, mx, my);
     }
+
+    /* Names go on a layer of their own so they stay upright; this only
+     * works out where each one belongs and publishes the list. */
+    float hc, hs;
+    camera_axes(&hc, &hs);
+    collect_labels(w, h, wx, wy, hc, hs);
     return have;
 }

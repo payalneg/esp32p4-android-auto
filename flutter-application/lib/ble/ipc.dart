@@ -97,8 +97,9 @@ class IpcEvt {
   /// The UI adopts it so Settings shows both isolates in one list.
   static const log = 'log';
 
-  /// {navMode, visible, maxChunk} — the head unit's navigator screen came up
-  /// or went away. Unsolicited; also sent in reply to [IpcCmd.navHello].
+  /// {navMode, visible, maxChunk, localVector} - the head unit's navigator
+  /// screen came up or went away. `localVector` means its ground is on its own
+  /// microSD card, so the feed must not send tiles. Unsolicited; also sent in reply to [IpcCmd.navHello].
   static const navState = 'navState';
 
   /// {lat, lon} — the rider picked somewhere to go on the head unit's map.

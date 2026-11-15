@@ -31,6 +31,9 @@ class _FakeLink implements HeadUnitLink {
   NavDisplayState get displayState => _state;
 
   @override
+  bool get localVector => _state.localVector;
+
+  @override
   Stream<NavDisplayState> get displayStates => _states.stream;
 
   @override
@@ -45,7 +48,18 @@ class _FakeLink implements HeadUnitLink {
   void drop(TileId t) => _dropped.add((z: t.z, x: t.x, y: t.y));
 
   void setVisible(bool v) {
-    _state = NavDisplayState(navMode: v, visible: v, maxChunk: 509);
+    _state = NavDisplayState(
+        navMode: v,
+        visible: v,
+        maxChunk: 509,
+        localVector: _state.localVector);
+    _states.add(_state);
+  }
+
+  /// The head unit says its ground is on its own microSD card.
+  void setVector(bool v) {
+    _state = NavDisplayState(
+        navMode: true, visible: true, maxChunk: 509, localVector: v);
     _states.add(_state);
   }
 
@@ -155,6 +169,28 @@ void main() {
     expect(link.views.first.lon, closeTo(_krakow.lon, 1e-9));
     expect(link.views.first.zoom, kHeadUnitZoom);
     expect(link.views.first.heading, 91);
+  });
+
+  test('a vector package on the card stops tile traffic', () async {
+    // The head unit has NVT1 on its microSD; the phone must stop forwarding
+    // PNGs and keep sending only the navigation data.
+    final feed = build()..setPosition(_krakow, headingDeg: 12);
+    link.setVector(true);
+    await Future<void>.delayed(Duration.zero);
+    await feed.tick();
+    expect(link.views, hasLength(1));
+    expect(link.tiles, isEmpty);
+    expect(feed.status.value.localVector, isTrue);
+    expect(feed.status.value.tilesPending, 0);
+
+    // ...and a route still goes, because that is drawn over the local ground.
+    feed.setRoute(Object(), <({double lat, double lon})>[
+      (lat: _krakow.lat, lon: _krakow.lon),
+      (lat: _krakow.lat + 0.001, lon: _krakow.lon + 0.001),
+    ]);
+    await feed.tick();
+    expect(link.routes, isNotEmpty);
+    expect(link.tiles, isEmpty);
   });
 
   test('the blurred layers go first, sharpest last', () async {

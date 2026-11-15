@@ -89,6 +89,7 @@ main/aa_selftest.h264
 scripts/mapgen/data
 scripts/mapgen/vtiles
 scripts/mapgen/tiles
+scripts/mapgen/build
 
 # Simulator build output — `make` in Super_VESC_Display*/lvgl-simulator writes
 # these (bin/, object/). The plain `build/` rule above misses the per-size

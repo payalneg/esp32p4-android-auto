@@ -1,19 +1,18 @@
-/* Map tiles the phone has already downloaded, kept on the head unit.
+/* Map tiles the head unit draws, kept in PSRAM.
  *
- * The phone caches raster tiles for offline use anyway; rather than render a
- * picture and send it over and over, it forwards the tiles themselves. They
- * are static, so each one crosses the link once — after that the head unit
- * can redraw the map as often as it likes, from memory, and the phone only
- * has to say where the rider is.
- *
- * Tiles are decoded on arrival and held as RGB565 so a redraw is a plain
- * copy. At 256x256 that is 128 KB each, which is why the store is a
- * least-recently-used ring rather than everything the phone ever sent. */
+ * A tile arrives either as a PNG the phone forwarded, or as an NVT1 vector
+ * tile read from the microSD card (nav_vector.c). Both are held as RGB565, so
+ * a redraw is a plain copy and the compositor does not care which kind of
+ * ground it is drawing. At 256x256 that is 128 KB each, which is why the
+ * store is a least-recently-used ring rather than everything the card or the
+ * phone ever sent. */
 #pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "nav_vector.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,14 +21,24 @@ extern "C" {
 /* Slippy tiles are 256 px square. */
 #define NAV_TILE_PX 256
 
-/* Wire formats a tile can arrive in, as the protocol defines them.
+/* Wire formats a tile can arrive in, as the protocol defines them, plus the
+ * local vector format read from the card.
  *
- * Only PNG is decoded. That is what the phone holds and what it has always
- * sent; the JPEG value stays here because it is part of the wire format, but
- * the hardware decoder behind it was a P4 part and a path nothing exercised,
- * so a tile that arrives as JPEG is now refused rather than decoded. */
-#define NAV_TILE_FMT_PNG  0
-#define NAV_TILE_FMT_JPEG 1
+ * Only PNG is decoded from the wire. The JPEG value stays here because it is
+ * part of the wire format, but the hardware decoder behind it was a P4 part
+ * and a path nothing exercised, so a tile that arrives as JPEG is refused.
+ *
+ * VECTOR is not a wire format at all: it is the NVT1 tile the microSD package
+ * holds (nav_vector.h). It is rasterized here into the same RGB565 slot, so
+ * the compositor does not know or care which kind of ground it is drawing. */
+#define NAV_TILE_FMT_PNG    0
+#define NAV_TILE_FMT_JPEG   1
+#define NAV_TILE_FMT_VECTOR 2
+
+/* Labels carried by a vector tile, in tile-local pixels. A slot keeps them
+ * beside its pixels so the compositor can place names without re-reading or
+ * re-parsing the tile. */
+#define NAV_TILE_LABELS NAV_VECTOR_LABELS_MAX
 
 /* How many decoded tiles to keep.
  *
@@ -96,9 +105,18 @@ bool nav_tiles_have(uint8_t z, uint32_t x, uint32_t y);
  * no card, the card does not have this tile, or it is already in RAM — the
  * caller then leaves it to the phone, as before.
  *
- * Costs a file read plus a decode (tens of milliseconds for a PNG), which is
+ * The card may hold the tile as a PNG (written when it arrived over BLE) or
+ * as an NVT1 vector tile (copied there by scripts/mapgen/navtiles.py). The
+ * vector tile is preferred when both exist: it is smaller, carries labels,
+ * and is the whole point of the offline package. Costs a file read plus
+ * either a PNG decode or a rasterization (tens of milliseconds), which is
  * two orders of magnitude less than the same tile over BLE. Worker task. */
 bool nav_tiles_load_cached(uint8_t z, uint32_t x, uint32_t y);
+
+/* Labels the tile carries, copied into `out`. Returns how many were written
+ * (0 for a PNG tile or a slot that is not there). Worker task. */
+uint8_t nav_tiles_get_labels(uint8_t z, uint32_t x, uint32_t y,
+                             nav_vector_label_t *out, uint8_t max);
 
 /* Forget everything — a new region, or a link that came back after long
  * enough that the phone will resend. */
@@ -116,8 +134,11 @@ typedef struct {
     uint32_t evicted;
     uint32_t evicted_quiet; /* of those, ones the card held — phone not told */
     uint32_t from_sd;      /* tiles brought back from the card */
+    uint32_t vector_ok;    /* vector tiles rasterized since boot */
     uint32_t last_ms;      /* how long the last decode took */
+    uint32_t vector_last_ms; /* how long the last rasterization took */
     uint32_t bytes_last;
+    uint8_t  labels_last;  /* names the last vector tile carried */
 } nav_tiles_stats_t;
 void nav_tiles_get_stats(nav_tiles_stats_t *out);
 

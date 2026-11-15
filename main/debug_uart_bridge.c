@@ -43,6 +43,7 @@
 #include "nav_route.h"
 #include "nav_tiles.h"
 #include "nav_tile_store.h"
+#include "nav_vector.h"
 #endif
 /* LVGL internals: the timer list, for the lvtimers dump below. */
 #include "misc/lv_gc.h"
@@ -531,6 +532,62 @@ static int cmd_navheading(int argc, char **argv)
     return 0;
 }
 
+/* Rasterize one NVT1 tile from the card straight into the panel buffer and
+ * time it. This is the bench command for the vector path: it skips BLE, the
+ * compositor and the cache, so the number is the tile cost itself. */
+static int cmd_navvec(int argc, char **argv)
+{
+    if (argc < 4) {
+        printf("Usage: navvec <z> <x> <y>\n");
+        return 1;
+    }
+    const int z = atoi(argv[1]), x = atoi(argv[2]), y = atoi(argv[3]);
+    if (z < 0 || z > 22 || x < 0 || y < 0) return 1;
+    uint8_t fmt = 0;
+    size_t len = 0;
+    uint8_t *data = nav_tile_store_read((uint8_t)z, (uint32_t)x, (uint32_t)y,
+                                        &fmt, &len);
+    if (!data) {
+        printf("no tile %d/%d/%d on the card\n", z, x, y);
+        return 1;
+    }
+    printf("tile %d/%d/%d: %u bytes, format %u, labels %d\n", z, x, y,
+           (unsigned)len, fmt, nav_vector_label_count(data, len));
+    if (fmt != NAV_TILE_FMT_VECTOR) {
+        printf("not a vector tile\n");
+        heap_caps_free(data);
+        return 1;
+    }
+
+    uint16_t *dst = nav_screen_back_buffer();
+    if (!dst) {
+        printf("no back buffer (navigator screen not up?)\n");
+        heap_caps_free(data);
+        return 1;
+    }
+    nav_vector_label_t labels[NAV_TILE_LABELS];
+    uint8_t nlabels = 0;
+    const int64_t t0 = esp_timer_get_time();
+    const bool ok = nav_vector_rasterize(data, len, dst, labels, &nlabels,
+                                         NAV_TILE_LABELS);
+    const int64_t t1 = esp_timer_get_time();
+    heap_caps_free(data);
+    if (!ok) {
+        printf("rasterize failed\n");
+        return 1;
+    }
+    esp_cache_msync(dst, nav_screen_back_buffer_bytes(),
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    nav_screen_commit();
+    printf("rasterized in %u us, %u label(s)\n",
+           (unsigned)(t1 - t0), (unsigned)nlabels);
+    for (uint8_t i = 0; i < nlabels; i++) {
+        printf("  [%u] %s (%u,%u) kind=%u rank=%u\n", i, labels[i].name,
+               labels[i].x, labels[i].y, labels[i].kind, labels[i].rank);
+    }
+    return 0;
+}
+
 static int cmd_navstat(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -553,13 +610,17 @@ static int cmd_navstat(int argc, char **argv)
            (unsigned)st.tiles_ok, (unsigned)st.tiles_failed,
            (unsigned)ts.stored, (unsigned)ts.capacity, (unsigned)ts.evicted,
            (unsigned)st.tile_last_bytes, (unsigned)st.tile_last_ms);
+    printf("vector ok=%u last=%u ms labels=%d (last tile %u)\n",
+           (unsigned)st.vector_ok, (unsigned)st.vector_last_ms,
+           st.last_labels, (unsigned)ts.labels_last);
     nav_tile_store_stats_t ss;
     nav_tile_store_get_stats(&ss);
-    printf("sd cache %s saved=%u loaded=%u missing=%u errors=%u | "
+    printf("sd cache %s saved=%u loaded=%u missing=%u errors=%u vector=%s | "
            "evictions not re-asked=%u\n",
            ss.ready ? "on" : "no card",
            (unsigned)ss.saved, (unsigned)ss.loaded, (unsigned)ss.missing,
-           (unsigned)ss.errors, (unsigned)ts.evicted_quiet);
+           (unsigned)ss.errors, ss.vector ? "yes" : "no",
+           (unsigned)ts.evicted_quiet);
     printf("frame: compose %u us + cache flush %u us\n",
            (unsigned)st.compose_us, (unsigned)st.msync_us);
     printf("route %u points, last draw %u us\n",
@@ -613,6 +674,9 @@ static void register_cmds(void)
         { .command = "navstat",
           .help = "Navigator frame stream: mode, frames, last frame size/time",
           .hint = NULL, .func = cmd_navstat },
+        { .command = "navvec",
+          .help = "Rasterize one NVT1 tile from the card and time it <z> <x> <y>",
+          .hint = NULL, .func = cmd_navvec },
         { .command = "navheading",
           .help = "Navigator camera heading [auto|0..359]",
           .hint = NULL, .func = cmd_navheading },

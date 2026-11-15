@@ -15,6 +15,10 @@
 static const char *TAG = "nav_tile_store";
 
 #define ROOT  BSP_SD_MOUNT_POINT "/navtiles"
+/* The mapgen README and the earlier Kraków preview put vector tiles here.
+ * Accepted as a fallback so an existing `/sdcard/vtiles` package does not
+ * have to be renamed; newly packed tiles go to ROOT. */
+#define VEC_ROOT BSP_SD_MOUNT_POINT "/vtiles"
 
 /* How often to look for a card while there is none.
  *
@@ -43,6 +47,10 @@ static int      s_fails;
  * this the ENOSPC run would look like a dying card and take the reads with
  * it. */
 static bool     s_full;
+static bool     s_vec_checked;
+static bool     s_vec_ready;
+static uint8_t  s_vec_zmin;
+static uint8_t  s_vec_zmax;
 static uint64_t s_miss[MISS_SLOTS];
 static uint16_t s_miss_head;
 static nav_tile_store_stats_t s_stats;
@@ -82,8 +90,11 @@ static void note_failure(void)
     s_ready = false;
     s_fails = 0;
     s_full = false;
+    s_vec_checked = false;
+    s_vec_ready = false;
     s_retry_us = MOUNT_RETRY_MIN_US;
     s_stats.ready = false;
+    s_stats.vector = false;
     s_next_try_us = esp_timer_get_time() + s_retry_us;
     memset(s_miss, 0, sizeof s_miss);
 }
@@ -109,22 +120,85 @@ bool nav_tile_store_ready(void)
     s_retry_us = MOUNT_RETRY_MIN_US;
     s_ready = true;
     s_full = false;
+    s_vec_checked = false;
+    s_vec_ready = false;
     s_stats.ready = true;
     ESP_LOGI(TAG, "tile cache on the card at %s", ROOT);
     return true;
 }
 
-/* ROOT/z/x/y.png — the same shape the phone's own tile cache uses, so a
- * region can be put on the card with a file copy.
- *
- * PNG only. The wire carries a format per tile and the decoder handles JPEG
- * too, but the app sends PNG and nothing else (kTileFormatPng in
- * head_unit_feed.dart) — so a second extension here would be a path nothing
- * walks, plus a failed open per tile for the privilege. */
-static void tile_path(char *buf, size_t n, uint8_t z, uint32_t x, uint32_t y)
+/* `vector.idx` at the root of the package. Read once per mount: the card is
+ * not expected to grow a whole package mid-ride, and a failed open on every
+ * prefetch pass would be a filesystem call per tile. */
+static void vector_probe(void)
 {
-    snprintf(buf, n, ROOT "/%u/%lu/%lu.png", (unsigned)z, (unsigned long)x,
-             (unsigned long)y);
+    if (s_vec_checked) return;
+    s_vec_checked = true;
+    s_vec_ready = false;
+    if (!s_ready) return;
+
+    FILE *f = fopen(ROOT "/vector.idx", "rb");
+    if (!f) {
+        /* The earlier mapgen layout keeps it under /sdcard/vtiles. */
+        f = fopen(VEC_ROOT "/vector.idx", "rb");
+    }
+    if (!f) return;
+    uint8_t h[32];
+    const size_t n = fread(h, 1, sizeof h, f);
+    fclose(f);
+    if (n < 32 || h[0] != 'N' || h[1] != 'V' || h[2] != 'T' || h[3] != 'I' ||
+        h[4] != 1) {
+        ESP_LOGW(TAG, "vector.idx is not a version-1 index");
+        return;
+    }
+    const uint8_t zmin = h[5], zmax = h[6];
+    if (zmin > zmax || zmin == 0 || zmax > 22) {
+        ESP_LOGW(TAG, "vector.idx zooms %u..%u are not sane", zmin, zmax);
+        return;
+    }
+    s_vec_ready = true;
+    s_vec_zmin = zmin;
+    s_vec_zmax = zmax;
+    s_stats.vector = true;
+    ESP_LOGI(TAG, "vector package on the card, z%u..z%u", zmin, zmax);
+}
+
+bool nav_tile_store_vector_ready(void)
+{
+    if (!nav_tile_store_ready()) return false;
+    vector_probe();
+    return s_vec_ready;
+}
+
+void nav_tile_store_vector_zooms(uint8_t *zmin, uint8_t *zmax)
+{
+    if (!nav_tile_store_vector_ready()) {
+        if (zmin) *zmin = 0;
+        if (zmax) *zmax = 0;
+        return;
+    }
+    if (zmin) *zmin = s_vec_zmin;
+    if (zmax) *zmax = s_vec_zmax;
+}
+
+/* ROOT/z/x/y.png — the same shape the phone's own tile cache uses, so a
+ * region can be put on the card with a file copy. Vector packages use
+ * ROOT/z/x/y.vtile, and VEC_ROOT is accepted as a fallback.
+ *
+ * PNG is the only format written here; vector tiles are copied to the card
+ * by the packer and are read-only to the firmware. */
+static void tile_path(char *buf, size_t n, uint8_t z, uint32_t x, uint32_t y,
+                      const char *ext)
+{
+    snprintf(buf, n, ROOT "/%u/%lu/%lu.%s", (unsigned)z, (unsigned long)x,
+             (unsigned long)y, ext);
+}
+
+static void tile_path_vec_fallback(char *buf, size_t n, uint8_t z, uint32_t x,
+                                   uint32_t y)
+{
+    snprintf(buf, n, VEC_ROOT "/%u/%lu/%lu.vtile", (unsigned)z,
+             (unsigned long)x, (unsigned long)y);
 }
 
 /* Make ROOT/z and ROOT/z/x. Only called after a write failed for want of
@@ -159,7 +233,7 @@ bool nav_tile_store_save(uint8_t z, uint32_t x, uint32_t y, uint8_t fmt,
     if (!nav_tile_store_ready()) return false;
 
     char path[96], tmp[96];
-    tile_path(path, sizeof path, z, x, y);
+    tile_path(path, sizeof path, z, x, y, "png");
     /* Write beside the real name and rename: a card pulled out mid-write
      * then leaves no half tile for the next ride to decode. */
     snprintf(tmp, sizeof tmp, ROOT "/%u/%lu/%lu.tmp", (unsigned)z,
@@ -223,9 +297,31 @@ uint8_t *nav_tile_store_read(uint8_t z, uint32_t x, uint32_t y,
     if (miss_known(key)) return NULL;
 
     char path[96];
-    tile_path(path, sizeof path, z, x, y);
     size_t n = 0;
-    uint8_t *buf = read_file(path, &n);
+
+    /* A vector tile wins when the card has both: it is the offline package
+     * the rider copied there, it carries labels, and it is a few kilobytes
+     * instead of a PNG. Without a package marker, do not pay for two failed
+     * opens on every PNG read. */
+    uint8_t *buf = NULL;
+    if (nav_tile_store_vector_ready()) {
+        tile_path(path, sizeof path, z, x, y, "vtile");
+        buf = read_file(path, &n);
+        if (!buf) {
+            tile_path_vec_fallback(path, sizeof path, z, x, y);
+            buf = read_file(path, &n);
+        }
+        if (buf) {
+            note_success();
+            s_stats.loaded++;
+            *fmt = NAV_TILE_FMT_VECTOR;
+            *len = n;
+            return buf;
+        }
+    }
+
+    tile_path(path, sizeof path, z, x, y, "png");
+    buf = read_file(path, &n);
     if (buf) {
         note_success();
         s_stats.loaded++;

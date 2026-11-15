@@ -83,10 +83,11 @@ class _FakeChannel implements NavChannel {
     _notify.add(<int>[NavStatus.search, t.length, ...t]);
   }
 
-  void state({required bool nav, required bool visible, int maxChunk = 509}) =>
+  void state({required bool nav, required bool visible, int maxChunk = 509,
+          bool vector = false}) =>
       _notify.add(<int>[
         NavStatus.state,
-        nav ? 1 : 0,
+        (nav ? 1 : 0) | (vector ? 2 : 0),
         visible ? 1 : 0,
         0,
         maxChunk & 0xFF,
@@ -176,6 +177,19 @@ void main() {
     expect(seen.first.maxChunk, 509);
     expect(seen.last.navMode, isFalse);
     expect(nav.state.visible, isFalse);
+  });
+
+  test('bit 1 of the STATE mode byte means the map is on the card', () async {
+    ch.state(nav: true, visible: true, vector: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(nav.state.navMode, isTrue);
+    expect(nav.state.localVector, isTrue);
+
+    // A unit with no package behaves exactly like the old boolean.
+    ch.state(nav: true, visible: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(nav.state.navMode, isTrue);
+    expect(nav.state.localVector, isFalse);
   });
 
   test('a rejected frame comes back with the head unit reason', () async {

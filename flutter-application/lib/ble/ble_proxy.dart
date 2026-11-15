@@ -315,6 +315,7 @@ class BleProxy {
       navMode: m['navMode'] as bool? ?? false,
       visible: m['visible'] as bool? ?? false,
       maxChunk: (m['maxChunk'] as num?)?.toInt() ?? 0,
+      localVector: m['localVector'] as bool? ?? false,
     );
     _navStateCtrl.add(_navState);
   }
@@ -360,10 +361,12 @@ class BleProxy {
       navMode: m['navMode'] as bool? ?? false,
       visible: m['navVisible'] as bool? ?? false,
       maxChunk: _navState.maxChunk,
+      localVector: m['localVector'] as bool? ?? _navState.localVector,
     );
     if (wasNav != _supportsNav ||
         navState.navMode != _navState.navMode ||
-        navState.visible != _navState.visible) {
+        navState.visible != _navState.visible ||
+        navState.localVector != _navState.localVector) {
       _navState = navState;
       _navStateCtrl.add(_navState);
     }

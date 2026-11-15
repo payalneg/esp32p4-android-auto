@@ -78,3 +78,33 @@ API** по показанной на карте области и собирае
 и просмотрщик — как есть; C-движок из `krakowmap/c/src` портирован в
 `main/map_*.{c,h}` (роутер переработан: геометрия рёбер не держится в RAM,
 а дочитывается с SD при реконструкции маршрута).
+
+
+## Векторные тайлы для головы (NVT1)
+
+Отдельно от VTL2 (его рисует телефон) есть компактный формат NVT1, который
+растеризует сама ESP32-P4: `navtiles.py` + `nvtile_format.py`. Формат описан в
+`docs/nav-vector-tiles.md`, C-читалка — `main/nav_vector.c`.
+
+```sh
+cd scripts/mapgen
+# офлайновый демо-Краков (Рынок, Вавель, Висла, Планты), без PBF и сети
+python navtiles.py --demo --out build/navtiles --preview build/krakow.png
+
+# реальный участок из PBF (нужен pyosmium)
+python navtiles.py --pbf data/malopolskie-latest.osm.pbf \
+    --bbox 50.075,19.900,50.045,19.985 --zmin 11 --zmax 18 \
+    --out build/navtiles --preview build/krakow.png
+```
+
+Готовую папку `build/navtiles` целиком копируют на карту как
+`/sdcard/navtiles`. Прошивка предпочитает `.vtile` рядом с `.png`, поэтому
+карта со старыми растровыми тайлами продолжает работать. Для проверки на
+устройстве есть консольные команды `navstat` (счётчики и время) и
+`navvec <z> <x> <y>` (растеризация одного тайла с карты прямо в кадр).
+
+Тесты формата и демо-пакета:
+
+```sh
+python -m unittest test_navtiles -v
+```

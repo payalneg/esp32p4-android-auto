@@ -9,6 +9,7 @@
 #include "png.h"
 
 #include "nav_tile_store.h"
+#include "nav_vector.h"
 
 static const char *TAG = "nav_tiles";
 
@@ -21,6 +22,8 @@ typedef struct {
     uint32_t  age;        /* bumped on every touch; smallest is oldest */
     bool      on_sd;      /* the card holds the compressed original */
     uint16_t *px;         /* RGB565, TILE_BYTES */
+    uint8_t   nlabels;
+    nav_vector_label_t labels[NAV_TILE_LABELS];
 } slot_t;
 
 static slot_t s_slots[NAV_TILE_SLOTS];
@@ -113,6 +116,7 @@ static slot_t *claim(void)
         }
         oldest->used = false;
         oldest->on_sd = false;
+        oldest->nlabels = 0;
     }
     return oldest;
 }
@@ -195,19 +199,28 @@ static bool put_common(uint8_t z, uint32_t x, uint32_t y,
     }
 
     const int64_t t0 = esp_timer_get_time();
-    /* PNG and nothing else. The wire still carries a format byte per tile —
-     * the app has always set it to PNG (kTileFormatPng in head_unit_feed.dart)
-     * — but the hardware JPEG engine that used to sit behind the other value
-     * is a P4 part, and a decoder nobody sends work to is a decoder nobody
-     * tests. A tile in any other format is refused here. */
     bool ok;
+    s->nlabels = 0;
     if (fmt == NAV_TILE_FMT_PNG) {
         ok = decode_png(data, len, s->px);
+        s_stats.last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    } else if (fmt == NAV_TILE_FMT_VECTOR) {
+        ok = nav_vector_rasterize(data, len, s->px, s->labels,
+                                  &s->nlabels, NAV_TILE_LABELS);
+        const uint32_t ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+        s_stats.last_ms = ms;
+        s_stats.vector_last_ms = ms;
+        s_stats.labels_last = s->nlabels;
+        if (ok) s_stats.vector_ok++;
     } else {
-        ESP_LOGW(TAG, "tile format %u is not PNG — refused", fmt);
+        /* PNG and the local vector format; nothing else. The wire still
+         * carries a format byte per tile, but the hardware JPEG engine that
+         * used to sit behind the other value is a P4 part and a decoder
+         * nobody sends work to is a decoder nobody tests. */
+        ESP_LOGW(TAG, "tile format %u is not supported — refused", fmt);
         ok = false;
+        s_stats.last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
     }
-    s_stats.last_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
     s_stats.bytes_last = (uint32_t)len;
 
     if (!ok) {
@@ -266,11 +279,23 @@ bool nav_tiles_have(uint8_t z, uint32_t x, uint32_t y)
     return find(z, x, y) != NULL;
 }
 
+uint8_t nav_tiles_get_labels(uint8_t z, uint32_t x, uint32_t y,
+                             nav_vector_label_t *out, uint8_t max)
+{
+    slot_t *s = find(z, x, y);
+    if (!s || !out || max == 0) return 0;
+    s->age = ++s_tick;
+    uint8_t n = s->nlabels < max ? s->nlabels : max;
+    memcpy(out, s->labels, (size_t)n * sizeof(out[0]));
+    return n;
+}
+
 void nav_tiles_clear(void)
 {
     for (int i = 0; i < NAV_TILE_SLOTS; i++) {
         s_slots[i].used = false;
         s_slots[i].on_sd = false;
+        s_slots[i].nlabels = 0;
     }
     s_stats.stored = 0;
 }

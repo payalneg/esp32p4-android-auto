@@ -1,14 +1,15 @@
-/* Navigator frames from the phone over BLE.
+/* Navigator data from the phone over BLE.
  *
- * The companion app renders the map — it has the route, the graph and the
- * tiles — and sends the head unit a small JPEG of what to show. We decode it
- * with the P4's hardware JPEG engine, scale it to the panel with the PPA and
- * hand it to nav_screen.c. The head unit draws no map of its own.
+ * The phone owns GPS, routing and manoeuvres. It used to render the map and
+ * send a JPEG; it now either forwards the raster tiles it already holds or,
+ * when the head unit says it has an NVT1 package on its microSD card, sends
+ * only the position, the route and the turn. The head unit composes the
+ * picture in nav_map.c and shows it through nav_screen.c.
  *
  * Lives on the NotifBridge GATT service (notif_bridge.c owns the chars and
  * routes writes here):
  *   NAV-CTRL CHR 7B4E4F00-...-000B  WRITE | NOTIFY  (phone<->P4 control)
- *   NAV-DATA CHR 7B4E4F00-...-000C  WRITE_NO_RSP    (phone->P4 JPEG bytes)
+ *   NAV-DATA CHR 7B4E4F00-...-000C  WRITE_NO_RSP    (phone->P4 tile bytes)
  *
  * Wire protocol (mirror flutter-application/lib/ble/nav_stream.dart):
  *
@@ -36,7 +37,8 @@
  *     0x0C FOUND_END   : [op][u16 seq]
  *
  *   CTRL notify (P4 -> phone), 6-byte frame [u8 status][u8 a][u16 b][u16 c] LE:
- *     0x10 STATE      a = ui mode (0 other, 1 navigator screen is live)
+ *     0x10 STATE      a = ui mode (bit0 navigator screen is live, bit1 the
+ *                         map ground is on the microSD card)
  *                     b = 1 while the rider is looking at it
  *                     c = largest DATA write we accept
  *     0x11 FRAME_ACK  a = result (NAV_ACK_*), b = seq, c = decode+scale ms
@@ -60,6 +62,11 @@
  *                     mean nothing. Without this the phone keeps fetching
  *                     around the rider and a dragged view runs out of ground
  *                     at the edge of what it had already sent.
+ *     0x19 SOURCE     a = 1 when the head unit has an NVT1 package on the
+ *                     microSD card, b = its lowest zoom, c = its highest.
+ *                     The phone then sends VIEW/ROUTE/GUIDE and no PNG tiles:
+ *                     the ground is already on the card. Absent (or a = 0)
+ *                     means the old tile path.
  *     0x17 EMPTY      the tile store holds nothing — sent alongside STATE, so
  *                     a phone reconnecting to a rebooted head unit knows that
  *                     everything it sent before is gone and starts again.
@@ -137,6 +144,9 @@ typedef struct {
     uint32_t tiles_failed;
     uint32_t tile_last_bytes;
     uint32_t tile_last_ms;
+    uint32_t vector_ok;     /* vector tiles rasterized */
+    uint32_t vector_last_ms;/* cost of the last rasterization */
+    int      last_labels;   /* names placed on the last frame */
     uint32_t views;
     uint32_t renders;
     uint32_t render_last_ms;

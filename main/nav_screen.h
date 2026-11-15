@@ -1,12 +1,14 @@
-/* Navigator screen — the map picture the companion app renders on the phone
- * and streams to us over BLE (see ble_nav.c for the wire side).
+/* Navigator screen — the map the head unit composes itself from tiles the
+ * phone forwards over BLE (see ble_nav.c) or from an NVT1 vector package on
+ * the microSD card (see nav_vector.c).
  *
- * The head unit draws nothing itself: it decodes a JPEG into an RGB565
- * framebuffer and shows it full-screen through a single lv_img. That keeps
- * the notification toast, the 3-finger gesture and every other LVGL citizen
- * working exactly as they do over the dashboard, which a direct-to-panel
- * blit (splash_screen.c / display_video.c) would bypass. At the one frame a
- * second this link can carry, the cost of going through LVGL does not matter.
+ * The panel shows an RGB565 framebuffer through a single lv_img. A PNG tile
+ * is decoded on arrival; a vector tile is rasterized into the same cache. The
+ * compositor then blits or rotates the tiles, draws the route and the rider,
+ * and publishes upright names that this file puts in ordinary LVGL labels.
+ * Keeping the picture as an lv_img is what lets the notification toast, the
+ * 3-finger gesture and every other LVGL citizen work exactly as they do over
+ * the dashboard, which a direct-to-panel blit would bypass.
  *
  * Buffers: two 800x480 RGB565 in PSRAM, front (what lv_img points at) and
  * back (what the BLE worker fills). The worker asks for the back buffer, and

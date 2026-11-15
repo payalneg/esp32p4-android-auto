@@ -141,6 +141,7 @@ class BleTaskHandler extends TaskHandler {
         'supportsNav': _ble.supportsNavStream,
         'navMode': _ble.navStream?.state.navMode ?? false,
         'navVisible': _ble.navStream?.state.visible ?? false,
+        'localVector': _ble.navStream?.state.localVector ?? false,
         // Whether the head unit exposes the NUS bridge is part of the VESC
         // target info now (`headUnitAvailable`) — one source of truth for the
         // LISP editor, which may instead be riding a direct adapter.
@@ -178,6 +179,7 @@ class BleTaskHandler extends TaskHandler {
         'navMode': st.navMode,
         'visible': st.visible,
         'maxChunk': st.maxChunk,
+        'localVector': st.localVector,
       });
     });
     // Somewhere to go, picked by tapping the head unit's own map.

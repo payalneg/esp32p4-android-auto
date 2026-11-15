@@ -40,6 +40,12 @@ static const char *TAG = "nav_screen";
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_img;
+/* Upright names over the turning map. One label object per slot, reused: the
+ * vector tiles publish at most NAV_MAP_LABELS_MAX at a time. */
+static lv_obj_t *s_label_layer;
+static lv_obj_t *s_label_obj[NAV_MAP_LABELS_MAX];
+static int16_t   s_label_w[NAV_MAP_LABELS_MAX];
+static int16_t   s_label_h[NAV_MAP_LABELS_MAX];
 static lv_obj_t *s_status_box;
 static lv_obj_t *s_status_lbl;
 static lv_obj_t *s_speed_lbl;
@@ -630,6 +636,51 @@ static void show_committed_frame(void)
     atomic_store(&s_last_frame_us, esp_timer_get_time());
 }
 
+/* Names the compositor placed on the last frame. The map rotates; these do
+ * not. Doing it with ordinary labels rather than baking text into the frame
+ * is what keeps them horizontal and legible at any heading, and it costs one
+ * position per label per tick — the text changes only when the ground does. */
+static void refresh_labels(void)
+{
+    if (!s_label_layer) return;
+    nav_map_label_t labels[NAV_MAP_LABELS_MAX];
+    const int n = nav_map_copy_labels(labels, NAV_MAP_LABELS_MAX);
+    for (int i = 0; i < NAV_MAP_LABELS_MAX; i++) {
+        lv_obj_t *o = s_label_obj[i];
+        if (!o) continue;
+        if (i >= n) {
+            lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        const char *text = lv_label_get_text(o);
+        if (!text || strcmp(text, labels[i].name) != 0) {
+            lv_label_set_text(o, labels[i].name);
+            uint32_t colour = 0xFFFFFF;
+            switch (labels[i].kind) {
+                case NAV_V_LABEL_WATER:    colour = 0xBFE6F4; break;
+                case NAV_V_LABEL_PARK:     colour = 0xD8F0C8; break;
+                case NAV_V_LABEL_LANDMARK: colour = 0xFFD79A; break;
+                case NAV_V_LABEL_STREET:   colour = 0xE8EEF4; break;
+                default:                   colour = 0xFFFFFF; break;
+            }
+            lv_obj_set_style_text_color(o, lv_color_hex(colour), 0);
+            /* Content-sized text: measure once per change, then position
+             * with the cached size. Measuring every 50 ms tick for sixteen
+             * labels is work the panel does not need to repeat. */
+            lv_obj_update_layout(o);
+            s_label_w[i] = (int16_t)lv_obj_get_width(o);
+            s_label_h[i] = (int16_t)lv_obj_get_height(o);
+        }
+        int w = s_label_w[i], h = s_label_h[i];
+        if (w <= 0 || h <= 0) {
+            w = (int)lv_obj_get_width(o);
+            h = (int)lv_obj_get_height(o);
+        }
+        lv_obj_set_pos(o, labels[i].x - w / 2, labels[i].y - h / 2);
+        lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void tick_cb(lv_timer_t *t)
 {
     (void)t;
@@ -667,6 +718,7 @@ static void tick_cb(lv_timer_t *t)
      * pixels did not change, so a parked bike sends nothing for minutes and
      * the last picture is still the right one. */
     refresh_hud();
+    refresh_labels();
     /* The GPS button sits on top of the charge plate, and that plate is as
      * tall as Antonio 64 makes it — a number this file cannot write down.
      * The fixed offset it used to have was measured against an empty row,
@@ -744,6 +796,30 @@ esp_err_t nav_screen_init(void)
     lv_obj_add_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_img, map_drag_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_img, map_released_cb, LV_EVENT_RELEASED, NULL);
+
+    /* The names sit above the bitmap and below the HUD. The layer itself is
+     * transparent and not clickable, so a drag lands on the map underneath. */
+    s_label_layer = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_label_layer);
+    lv_obj_set_pos(s_label_layer, 0, 0);
+    lv_obj_set_size(s_label_layer, s_scr_w, s_scr_h);
+    lv_obj_clear_flag(s_label_layer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_label_layer, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < NAV_MAP_LABELS_MAX; i++) {
+        lv_obj_t *o = lv_label_create(s_label_layer);
+        lv_obj_set_style_text_font(o, &aabridge_font_24, 0);
+        lv_obj_set_style_text_color(o, lv_color_white(), 0);
+        lv_obj_set_style_bg_color(o, lv_color_hex(HUD_PLATE), 0);
+        lv_obj_set_style_bg_opa(o, LV_OPA_70, 0);
+        lv_obj_set_style_radius(o, 5, 0);
+        lv_obj_set_style_pad_hor(o, 6, 0);
+        lv_obj_set_style_pad_ver(o, 1, 0);
+        lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        lv_label_set_text(o, "");
+        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+        s_label_obj[i] = o;
+        s_label_w[i] = s_label_h[i] = 0;
+    }
 
     /* Placeholder card, centred, drawn over whatever the last picture was. */
     s_status_box = lv_obj_create(s_screen);

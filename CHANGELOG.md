@@ -9,6 +9,24 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+### Navigator: vector tiles from microSD
+
+- The head unit can now draw the map itself from an NVT1 vector package on the
+  microSD card (`scripts/mapgen/navtiles.py`, `main/nav_vector.c`) instead of
+  receiving PNG tiles over BLE. A tile carries roads, water, green, buildings,
+  rail and names; the P4 rasterizes it into the existing RGB565 tile cache.
+- Heading-up rotation and the route/marker overlay are unchanged. Names are a
+  separate LVGL layer, so they stay horizontal while the map turns.
+- `NAV_ST_STATE` bit 1 tells the companion app the ground is local; the app
+  then stops sending tiles and keeps sending VIEW, ROUTE and GUIDE. Older apps
+  see the same boolean they always did.
+- New console commands: `navvec <z> <x> <y>` (rasterize one tile from the card
+  and time it) and extra vector counters in `navstat`.
+- See `docs/nav-vector-tiles.md` for the format, card layout and integration
+  order. First test is without 2x antialiasing, as measured on the bench.
+
 ## v1.3.42 / app 0.3.51 — 2026-11-13
 
 Bug-fix release. Two behaviour fixes on top of 1.3.41; no new screens.

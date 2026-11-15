@@ -91,6 +91,7 @@ class HeadUnitFeedStatus {
     this.viewsSent = 0,
     this.lastTileBytes = 0,
     this.running = false,
+    this.localVector = false,
   });
 
   final int tilesSent;
@@ -99,6 +100,10 @@ class HeadUnitFeedStatus {
   final int viewsSent;
   final int lastTileBytes;
   final bool running;
+
+  /// The head unit draws the ground from its own microSD vector package, so
+  /// no tiles go over the link. Position, route and guidance still do.
+  final bool localVector;
 
   /// Everything the current view needs is over there.
   bool get complete => running && tilesPending == 0;
@@ -111,11 +116,12 @@ class HeadUnitFeedStatus {
       other.tilesFailed == tilesFailed &&
       other.viewsSent == viewsSent &&
       other.lastTileBytes == lastTileBytes &&
-      other.running == running;
+      other.running == running &&
+      other.localVector == localVector;
 
   @override
-  int get hashCode => Object.hash(
-      tilesSent, tilesPending, tilesFailed, viewsSent, lastTileBytes, running);
+  int get hashCode => Object.hash(tilesSent, tilesPending, tilesFailed,
+      viewsSent, lastTileBytes, running, localVector);
 }
 
 /// What the feed needs from the link. Narrow on purpose, so the loop can be
@@ -127,6 +133,10 @@ abstract class HeadUnitLink {
   /// Whether its navigator screen is the one being looked at.
   NavDisplayState get displayState;
   Stream<NavDisplayState> get displayStates;
+
+  /// The head unit says its map ground is on its own card. Convenience for
+  /// the same bit that travels in [displayState].
+  bool get localVector => displayState.localVector;
 
   Future<NavFrameResult> sendTile(
       int z, int x, int y, int format, Uint8List bytes);
@@ -172,6 +182,12 @@ class HeadUnitFeed {
       // A head unit that went away and came back has an empty tile store —
       // and no route or turn either.
       if (!st.visible) _forgetEverythingSent();
+      if (_localVector && !st.localVector) {
+        // The card went away; the head unit will be asking for PNGs again.
+        _forgetEverythingSent();
+      }
+      _localVector = st.localVector;
+      _publish();
     });
     // ...and it says so itself when its store is empty, which is the case a
     // visibility change misses: reconnecting to a head unit that rebooted
@@ -220,6 +236,10 @@ class HeadUnitFeed {
   final _lastAttempt = <TileId, DateTime>{};
 
   LatLon? _where;
+
+  /// The head unit has a vector package on its card. Then the feed sends no
+  /// tiles at all: VIEW, the route and the guidance are the whole job.
+  bool _localVector = false;
 
   /// Where the head unit is looking, when the rider has dragged its map off
   /// their own position. Tiles follow this; VIEW keeps carrying where the
@@ -374,6 +394,7 @@ class HeadUnitFeed {
       _publish();
       return false;
     }
+    _localVector = _link.displayState.localVector;
 
     if (_untilNextView() == Duration.zero) {
       await _link.sendView(at.lat, at.lon, _zoom,
@@ -413,7 +434,13 @@ class HeadUnitFeed {
     }
 
     // Tiles for what the rider is looking at, which is where they are unless
-    // they have dragged the head unit's map somewhere else.
+    // they have dragged the head unit's map somewhere else. A vector package
+    // on the card means there are no tiles to send: the position above is the
+    // whole update, and the panel turns and labels its own ground.
+    if (_localVector) {
+      _publish(pending: 0);
+      return false;
+    }
     final missing = _missingTiles(_lookAt ?? at);
     _publish(pending: missing.length);
     if (missing.isEmpty) return false;
@@ -586,6 +613,7 @@ class HeadUnitFeed {
       viewsSent: _viewsSent,
       lastTileBytes: _lastTileBytes,
       running: _running,
+      localVector: _localVector,
     );
     if (status.value != next) status.value = next;
   }

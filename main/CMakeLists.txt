@@ -137,6 +137,7 @@ if(CONFIG_NAV_ENABLE)
         "nav_screen.c"
         "nav_tiles.c"
         "nav_tile_store.c"
+        "nav_vector.c"
         "nav_map.c"
         "nav_route.c")
 endif()

@@ -1678,6 +1678,9 @@ class _ProxyHeadUnitLink implements HeadUnitLink {
   NavDisplayState get displayState => _ble.navState;
 
   @override
+  bool get localVector => _ble.navState.localVector;
+
+  @override
   Stream<NavDisplayState> get displayStates => _ble.navStates;
 
   @override
