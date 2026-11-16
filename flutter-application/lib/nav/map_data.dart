@@ -23,6 +23,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'geofabrik.dart';
+import 'krakow_tiles.dart';
 import 'pbf_graph.dart';
 import 'rgf2.dart';
 import 'router.dart';
@@ -101,9 +102,49 @@ class MapData extends ChangeNotifier {
       // Not fatal: a generic-looking UA is worse than a versioned one, but
       // failing to start the navigator over it would be sillier.
     }
-    _tiles = TileCache(Directory('${support.path}/tiles/osm'),
-        userAgent: _userAgent);
+    final tileRoot = Directory('${support.path}/tiles/osm');
+    _tiles = TileCache(tileRoot,
+        userAgent: _userAgent, krakow: await _readKrakowTiles());
     await _loadFromDisk();
+  }
+
+  File get _krakowSelection => File('${_dir!.path}/krakow-v1/current');
+
+  Future<KrakowTileSource?> _readKrakowTiles() async {
+    final selection = _krakowSelection;
+    if (!await selection.exists()) return null;
+    final version = (await selection.readAsString()).trim();
+    if (!RegExp(r'^\d+$').hasMatch(version)) return null;
+    final path = '${selection.parent.path}/$version';
+    return await Directory(path).exists()
+        ? KrakowTileSource(path, version)
+        : null;
+  }
+
+  Future<void> _useKrakowTiles(KrakowTileSource? source) async {
+    final cache = _tiles!;
+    final selection = _krakowSelection;
+    if (source == null) {
+      if (await selection.exists()) await selection.delete();
+    } else {
+      final staged = File('${selection.path}.part');
+      await staged.writeAsString(source.version, flush: true);
+      await staged.rename(selection.path);
+    }
+    _tiles = TileCache(cache.root, userAgent: _userAgent, krakow: source);
+    final previous = cache.krakow;
+    if (previous != null && previous.version != source?.version) {
+      await _removeKrakowGeometry(previous);
+    }
+  }
+
+  Future<void> _removeKrakowGeometry(KrakowTileSource source) async {
+    try {
+      final dir = Directory(source.path);
+      if (await dir.exists()) await dir.delete(recursive: true);
+    } on FileSystemException catch (e) {
+      AppLog.e('map', 'could not remove old Krakow geometry: $e');
+    }
   }
 
   Future<void> _loadFromDisk() async {
@@ -145,6 +186,10 @@ class MapData extends ChangeNotifier {
     AppLog.i('map', 'region ${region.name}: downloading ${region.pbfUrl}');
     final pbf = File('${_dir!.path}/region.osm.pbf');
     final client = HttpClient()..userAgent = _userAgent;
+    final version = '${DateTime.now().microsecondsSinceEpoch}';
+    final krakow = region.pbfUrl.path.contains('/malopolskie-')
+        ? KrakowTileSource('${_krakowSelection.parent.path}/$version', version)
+        : null;
     try {
       final clock = Stopwatch()..start();
       await downloadTo(client, region.pbfUrl, pbf, (received, total) {
@@ -169,6 +214,7 @@ class MapData extends ChangeNotifier {
       // boundary, which is not allowed. A static entry point has a context of
       // its own, holding nothing but the path.
       final built = await PbfGraphSource.buildInIsolate(pbf.path,
+          krakowTilePath: krakow?.path,
           onProgress: (p) {
         _stageKey = p.stageKey;
         _stageFraction = p.fraction;
@@ -190,6 +236,7 @@ class MapData extends ChangeNotifier {
       } else {
         await index.writeAsString(built.searchIndexTsv, flush: true);
       }
+      if (krakow != null) await _useKrakowTiles(krakow);
       await _loadFromDisk();
     } on Object catch (e) {
       AppLog.e('map', 'region build failed: $e');
@@ -197,6 +244,9 @@ class MapData extends ChangeNotifier {
     } finally {
       _stageKey = null;
       client.close(force: true);
+      if (krakow != null && _tiles?.krakow != krakow) {
+        await _removeKrakowGeometry(krakow);
+      }
       // The extract is only an input; keeping it would double the footprint.
       if (await pbf.exists()) await pbf.delete();
     }
@@ -306,6 +356,7 @@ class MapData extends ChangeNotifier {
 
   Future<void> deleteAll() async {
     await init();
+    if (_tiles?.krakow != null) await _useKrakowTiles(null);
     for (final f in <File?>[graphFile, indexFile]) {
       if (f != null && await f.exists()) await f.delete();
     }

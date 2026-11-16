@@ -811,6 +811,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
       children: <Widget>[
         if (tiles != null)
           TileLayer(
+            key: ObjectKey(tiles),
             urlTemplate: kOsmTileUrl,
             tileProvider: CachedTileProvider(tiles),
             userAgentPackageName: 'com.aabridge.aa_bridge',

@@ -13,6 +13,7 @@ import 'geo.dart';
 import 'graph_builder.dart';
 import 'osm_ways.dart';
 import 'pbf.dart';
+import 'pbf_krakow.dart';
 
 /// Progress of a build, as a fraction and a stage the UI can name.
 class PbfProgress {
@@ -32,8 +33,17 @@ class PbfGraphSource {
     String path, {
     void Function(PbfProgress)? onProgress,
     bool Function()? cancelled,
+    String? krakowTilePath,
   }) async {
     final file = PbfFile(path);
+    final map = krakowTilePath == null ? null : KrakowPbfSelection();
+    final scanFraction = map == null ? 0.0 : 0.16;
+    if (map != null) {
+      await file.forEachBlock(map.collect, cancelled: cancelled,
+          onProgress: (read, total) => onProgress?.call(
+              PbfProgress('mapdata.pbf.ways', scanFraction * read / total)));
+      if (cancelled?.call() ?? false) return _cancelledResult();
+    }
 
     // Pass one: every routable way, and the ids of the nodes it uses.
     //
@@ -51,15 +61,20 @@ class PbfGraphSource {
     await file.forEachBlock(
       (block) {
         for (final group in block.groups) {
-          _readWays(block, group, ways, needed, addrWays);
+          _readWays(block, group, ways, needed, addrWays, map);
         }
       },
       onProgress: (read, total) => onProgress
-          ?.call(PbfProgress('mapdata.pbf.ways', 0.5 * read / total,
+          ?.call(PbfProgress('mapdata.pbf.ways', scanFraction + (0.5 - scanFraction) * read / total,
               ways.length)),
       cancelled: cancelled,
     );
     if (cancelled?.call() ?? false) return _cancelledResult();
+    if (map != null) {
+      for (final ring in map.finishWays()) {
+        needed.addAll(ring);
+      }
+    }
 
     // A sorted id list plus parallel coordinate arrays: a province's road
     // network is millions of nodes, and a HashMap of them would not fit.
@@ -82,6 +97,7 @@ class PbfGraphSource {
           'mapdata.pbf.nodes', 0.5 + 0.4 * read / total, places.length)),
       cancelled: cancelled,
     );
+    if (cancelled?.call() ?? false) return _cancelledResult();
 
     // Placing the addresses read off outlines is its own stage: on a province
     // it is hundreds of thousands of binary searches, long enough that a
@@ -101,6 +117,14 @@ class PbfGraphSource {
 
     onProgress?.call(
         PbfProgress('mapdata.pbf.graph', 0.95, places.length));
+    if (map != null) {
+      await map.tiles.write(krakowTilePath!, (id) {
+        final i = _indexOf(unique, id);
+        return i < 0 || seen[i] == 0
+            ? null
+            : LatLon(latE7[i] / 1e7, lonE7[i] / 1e7);
+      });
+    }
     return GraphBuilder.build(
       ways: ways,
       nodes: SortedNodeSource(unique, latE7, lonE7, seen),
@@ -112,7 +136,7 @@ class PbfGraphSource {
   /// port — without them the screen sat on "loading" for the several minutes
   /// a province takes, with nothing to say whether it was working or wedged.
   static Future<BuiltGraph> buildInIsolate(String path,
-      {void Function(PbfProgress)? onProgress}) async {
+      {void Function(PbfProgress)? onProgress, String? krakowTilePath}) async {
     final port = ReceivePort();
     final sub = port.listen((Object? message) {
       if (message is List && message.length == 3) {
@@ -121,7 +145,7 @@ class PbfGraphSource {
       }
     });
     try {
-      return await _spawn(path, port.sendPort);
+      return await _spawn(path, port.sendPort, krakowTilePath);
     } finally {
       await sub.cancel();
       port.close();
@@ -137,11 +161,14 @@ class PbfGraphSource {
   /// tree. The isolate refuses all of that with "object is unsendable", and
   /// the region build dies before it reads a byte. In here the context holds
   /// two sendable things and nothing else.
-  static Future<BuiltGraph> _spawn(String path, SendPort send) =>
-      Isolate.run(() => _buildAndReport(path, send));
+  static Future<BuiltGraph> _spawn(
+          String path, SendPort send, String? krakowTilePath) =>
+      Isolate.run(() => _buildAndReport(path, send, krakowTilePath));
 
-  static Future<BuiltGraph> _buildAndReport(String path, SendPort send) =>
+  static Future<BuiltGraph> _buildAndReport(
+          String path, SendPort send, String? krakowTilePath) =>
       buildAsync(path,
+          krakowTilePath: krakowTilePath,
           onProgress: (p) =>
               send.send(<Object>[p.stageKey, p.fraction, p.count]));
 
@@ -172,7 +199,8 @@ class PbfGraphSource {
   }
 
   static void _readWays(PrimitiveBlock block, Uint8List group,
-      List<OsmWay> ways, _IdBuffer needed, List<_AddrWay> addrWays) {
+      List<OsmWay> ways, _IdBuffer needed, List<_AddrWay> addrWays,
+      KrakowPbfSelection? map) {
     final r = ProtoReader(group);
     while (!r.isDone) {
       final (field, wire) = r.readTag();
@@ -181,19 +209,23 @@ class PbfGraphSource {
         continue;
       }
       final way = r.readBytes();
-      _readWay(block, way, ways, needed, addrWays);
+      _readWay(block, way, ways, needed, addrWays, map);
     }
   }
 
   static void _readWay(PrimitiveBlock block, Uint8List bytes,
-      List<OsmWay> ways, _IdBuffer needed, List<_AddrWay> addrWays) {
+      List<OsmWay> ways, _IdBuffer needed, List<_AddrWay> addrWays,
+      KrakowPbfSelection? map) {
     final r = ProtoReader(bytes);
     final keys = <int>[];
     final vals = <int>[];
     final refs = <int>[];
+    var wayId = 0;
     while (!r.isDone) {
       final (field, wire) = r.readTag();
       switch (field) {
+        case 1:
+          wayId = r.readVarint();
         case 2: // packed key indices
           final sub = ProtoReader(r.readBytes());
           while (!sub.isDone) {
@@ -232,6 +264,7 @@ class PbfGraphSource {
       needed.addAll(<int>[refs.first]);
     }
     final wayClass = classifyWay(tags);
+    if (map?.addWay(wayId, tags, refs) == true && wayClass == null) needed.addAll(refs);
     if (wayClass == null) return;
     ways.add(OsmWay(
         wayClass: wayClass, direction: wayDirection(tags), nodeIds: refs));

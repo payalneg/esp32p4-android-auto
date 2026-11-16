@@ -16,6 +16,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'krakow_tile_painter.dart';
+import 'krakow_tiles.dart';
 import 'tile_math.dart';
 
 /// Who is asking for a tile.
@@ -96,11 +98,13 @@ class TileCache {
     this.minGap = const Duration(milliseconds: 100),
     this.maxConcurrent = 2,
     this.requestTimeout = const Duration(seconds: 20),
+    this.krakow,
     HttpClient Function()? clientFactory,
   }) : _clientFactory = clientFactory ?? (() => HttpClient());
 
   /// Directory holding `{z}/{x}/{y}.png`.
   final Directory root;
+  final KrakowTileSource? krakow;
   final String userAgent;
   final Duration minGap;
   final int maxConcurrent;
@@ -141,8 +145,13 @@ class TileCache {
   int failures = 0;
   String? lastError;
 
-  File fileFor(TileId t) =>
-      File('${root.path}/${t.z}/${t.x}/${t.y}.png');
+  File fileFor(TileId t) {
+    final local = krakow;
+    final base = local != null && local.covers(t)
+        ? '${root.path}/krakow-v2/${local.version}'
+        : root.path;
+    return File('$base/${t.z}/${t.x}/${t.y}.png');
+  }
 
   /// Cached bytes, or null when the tile is not stored yet.
   Future<Uint8List?> read(TileId t) async {
@@ -194,6 +203,21 @@ class TileCache {
 
   Future<Uint8List?> _fetchAny(
       TileId t, List<Uri> urls, TilePriority priority, int generation) async {
+    final local = krakow;
+    if (local != null && local.covers(t)) {
+      await _acquireSlot(t, priority, generation);
+      try {
+        final bytes = await renderKrakowTile(local, t);
+        await _store(t, bytes);
+        return bytes;
+      } on Object catch (e) {
+        failures++;
+        lastError = 'Krakow tile $t: $e';
+        return null;
+      } finally {
+        _releaseSlot(priority);
+      }
+    }
     var blocked = 0;
     for (final url in urls) {
       try {

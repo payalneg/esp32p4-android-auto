@@ -232,6 +232,7 @@ class HeadUnitFeed {
   }
 
   final _sentThisSession = <TileId>{};
+  TileCache? _activeTileCache;
   final _attempts = <TileId, int>{};
   final _lastAttempt = <TileId, DateTime>{};
 
@@ -395,6 +396,12 @@ class HeadUnitFeed {
       return false;
     }
     _localVector = _link.displayState.localVector;
+
+    final cache = _tiles();
+    if (_activeTileCache != cache) {
+      _activeTileCache = cache;
+      _forgetEverythingSent();
+    }
 
     if (_untilNextView() == Duration.zero) {
       await _link.sendView(at.lat, at.lon, _zoom,

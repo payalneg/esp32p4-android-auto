@@ -143,8 +143,8 @@ class _CachedTileImage extends ImageProvider<_CachedTileImage> {
 
   @override
   bool operator ==(Object other) =>
-      other is _CachedTileImage && other.tile == tile;
+      other is _CachedTileImage && other.cache == cache && other.tile == tile;
 
   @override
-  int get hashCode => tile.hashCode;
+  int get hashCode => Object.hash(cache, tile);
 }

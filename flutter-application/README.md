@@ -22,6 +22,12 @@ service), independently of the Android Auto link.
     reboots onto the new version.
 - **About** screen — app + bundled-firmware versions.
 
+In **Map data → Download a region**, select **Małopolskie** to build the
+styled offline map for Kraków. Download the region again if you have data
+from an older build. The phone renders the water outlines, buildings, bridges,
+cycleways and street labels from OpenStreetMap and sends the same 256 px PNG
+tiles to the head unit over BLE.
+
 ## Build & run
 
 Use Flutter 3.29.3 / Dart 3.7.2 with the checked-in lock file. Android builds
