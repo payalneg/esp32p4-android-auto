@@ -293,7 +293,7 @@ static void on_heading_changed(int degrees)
     if (!s_q) return;
     nav_evt_t ev = { .kind = EV_REDRAW };
     xQueueSend(s_q, &ev, 0);
-    ESP_LOGI(TAG, "camera %s", degrees < 0 ? "back on GPS" : "stepped");
+    ESP_LOGI(TAG, "camera %s", degrees < 0 ? "heading-up" : "north-up");
 }
 
 /* From the LVGL task when the rider has typed enough to look for. */

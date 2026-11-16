@@ -93,7 +93,6 @@ static lv_timer_t *s_answer_timer;
 static nav_search_hit_t s_hits[NAV_SEARCH_MAX];
 static atomic_int  s_nhits;
 static atomic_bool s_hits_fresh;
-static lv_obj_t *s_zoom_lbl;
 static lv_obj_t *s_rot_lbl;
 static nav_screen_heading_cb_t s_heading_cb;
 /* -1 follows GPS, otherwise the fixed camera heading the rider stepped to. */
@@ -448,72 +447,37 @@ static void zoom_step(int delta)
     int z = (v.valid ? v.zoom : NAV_ZOOM_MAX - 1) + delta;
     if (z < NAV_ZOOM_MIN) z = NAV_ZOOM_MIN;
     if (z > NAV_ZOOM_MAX) z = NAV_ZOOM_MAX;
-    if (s_zoom_cb) s_zoom_cb((uint8_t)z);   /* refresh_zoom() shows the level */
-}
-
-/* The level between the buttons, so it reads right from the first frame
- * rather than only after the rider has pressed something. */
-static void refresh_zoom(void)
-{
-    static int shown = -1;
-    if (!s_zoom_lbl) return;
-    nav_map_view_t v;
-    nav_map_get_view(&v);
-    const int z = v.valid ? (int)v.zoom : -1;
-    if (z == shown) return;
-    shown = z;
-    if (z < 0) {
-        lv_label_set_text(s_zoom_lbl, "");
-        lv_obj_add_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-    char buf[8];
-    snprintf(buf, sizeof buf, "z%d", z);
-    lv_label_set_text(s_zoom_lbl, buf);
-    lv_obj_clear_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
+    if (s_zoom_cb) s_zoom_cb((uint8_t)z);   /* the phone fetches the level */
 }
 
 static void zoom_in_cb(lv_event_t *e)  { (void)e; zoom_step(+1); }
 static void zoom_out_cb(lv_event_t *e) { (void)e; zoom_step(-1); }
 
-/* The camera in 30-degree steps.
+/* Camera: heading-up, or the original north-up view.
  *
- * Continuous heading-up is the normal mode and what the phone drives. This
- * button is for looking at the same ground from a fixed angle: each press
- * advances 0, 30, 60 … 330, then back to AUTO. It changes only the camera —
- * the rider's marker, the route and the HUD keep their own orientation. */
-#define HEADING_STEP 30
-
+ * Heading-up is what the phone drives and what the route wants; north-up is
+ * the "original" map the rider can fall back to when a rotating raster (whose
+ * place names are baked into the picture) is harder to read. Two states, one
+ * button: AUTO follows GPS, NORTH pins the camera at 0 degrees. */
 static void refresh_heading(void)
 {
     const int ov = nav_map_heading_override();
     if (ov != s_heading_step) s_heading_step = ov;
     if (!s_rot_lbl) return;
-    char buf[16];
-    if (s_heading_step < 0) {
-        snprintf(buf, sizeof buf, "AUTO");
-    } else {
-        snprintf(buf, sizeof buf, "%d", s_heading_step);
-    }
-    if (strcmp(buf, lv_label_get_text(s_rot_lbl)) != 0) {
-        lv_label_set_text(s_rot_lbl, buf);
+    const char *text = s_heading_step < 0 ? "AUTO"
+                     : (s_heading_step == 0 ? "NORTH" : "FIX");
+    if (strcmp(text, lv_label_get_text(s_rot_lbl)) != 0) {
+        lv_label_set_text(s_rot_lbl, text);
     }
 }
 
 static void rotate_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_heading_step < 0) {
-        /* Start from the nearest step to where the map is now, so the first
-         * press does not sweep across half a turn. */
-        int current = (int)lroundf(nav_map_camera_heading()) % 360;
-        if (current < 0) current += 360;
-        s_heading_step = ((current + HEADING_STEP / 2) / HEADING_STEP) *
-                         HEADING_STEP % 360;
-    } else {
-        s_heading_step += HEADING_STEP;
-        if (s_heading_step >= 360) s_heading_step = -1;   /* AUTO */
-    }
+    /* AUTO <-> NORTH. The 30-degree steps are gone: they were a bench tool,
+     * and on a raster map every intermediate angle turns the place names
+     * with it. */
+    s_heading_step = s_heading_step < 0 ? 0 : -1;
     nav_map_set_heading_override(s_heading_step);
     refresh_heading();
     if (s_heading_cb) s_heading_cb(s_heading_step);
@@ -779,7 +743,6 @@ static void tick_cb(lv_timer_t *t)
                         -2, -10);
     }
     refresh_guide();
-    refresh_zoom();
     refresh_heading();
     refresh_results();
 
@@ -1010,8 +973,9 @@ esp_err_t nav_screen_init(void)
     lv_keyboard_set_textarea(s_find_kb, s_find_ta);
     lv_obj_add_event_cb(s_find_kb, query_ready_cb, LV_EVENT_READY, NULL);
 
-    /* Zoom buttons down the right edge, above the charge readout, with the
-     * level between them so a press shows what it did. */
+    /* Zoom buttons down the right edge, above the charge readout. The level
+     * itself is deliberately not shown: the map is the whole point, and a
+     * "z17" badge over the ground is clutter. */
     /* Plain ASCII, not LV_SYMBOL_PLUS: the symbols are FontAwesome glyphs and
      * our subsetted font has none of them — on the panel they came out as
      * empty boxes (the same trap as U+2026 in a Montserrat label). */
@@ -1032,8 +996,8 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
         lv_obj_center(l);
     }
-    /* Camera in 30-degree steps, above the zoom buttons. The label beside it
-     * says AUTO or the fixed bearing, so a press is not a guess. */
+    /* Camera toggle, above the zoom buttons. The label beside it says AUTO or
+     * NORTH, so a press is not a guess. */
     {
         lv_obj_t *b = lv_btn_create(s_screen);
         lv_obj_set_size(b, 62, 62);
@@ -1048,7 +1012,13 @@ esp_err_t nav_screen_init(void)
         lv_obj_center(l);
     }
     s_rot_lbl = lv_label_create(s_screen);
-    lv_obj_align(s_rot_lbl, LV_ALIGN_RIGHT_MID, -84, -196);
+    /* Fixed width, not LV_SIZE_CONTENT: an auto-sized label is left-anchored
+     * once aligned, so a longer word ("NORTH" after "AUTO") grows to the
+     * right and slides under the ROT button. The width also keeps the badge
+     * clear of that button whatever the text. */
+    lv_obj_set_width(s_rot_lbl, 96);
+    lv_obj_set_style_text_align(s_rot_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_rot_lbl, LV_ALIGN_RIGHT_MID, -92, -196);
     lv_obj_set_style_text_color(s_rot_lbl, lv_color_white(), 0);
     lv_obj_set_style_text_font(s_rot_lbl, &aabridge_font_24, 0);
     lv_obj_set_style_bg_color(s_rot_lbl, lv_color_hex(HUD_PLATE), 0);
@@ -1077,17 +1047,6 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_text_font(l, &aabridge_font_24, 0);
         lv_obj_center(l);
     }
-
-    s_zoom_lbl = lv_label_create(s_screen);
-    lv_obj_align(s_zoom_lbl, LV_ALIGN_RIGHT_MID, -30, -42);
-    lv_obj_set_style_text_color(s_zoom_lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_zoom_lbl, &aabridge_font_24, 0);
-    lv_obj_set_style_bg_color(s_zoom_lbl, lv_color_hex(HUD_PLATE), 0);
-    lv_obj_set_style_bg_opa(s_zoom_lbl, LV_OPA_60, 0);
-    lv_obj_set_style_pad_all(s_zoom_lbl, 4, 0);
-    lv_obj_set_style_radius(s_zoom_lbl, 8, 0);
-    lv_label_set_text(s_zoom_lbl, "");
-    lv_obj_add_flag(s_zoom_lbl, LV_OBJ_FLAG_HIDDEN);
 
     /* The turn plate: where to go next, and how far. Top left, clear of the
      * destination prompt in the middle. */
