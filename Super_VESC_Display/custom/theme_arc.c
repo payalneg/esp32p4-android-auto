@@ -1,13 +1,16 @@
 /*
     Copyright 2026 Super VESC Display
 
-    "Twin Arc" dashboard — the modern HMI trend: two 270-degree rings frame the
-    ride data (speed left, power right) with a compact battery/range column
-    between them and the usual five-cell telemetry strip along the bottom.
+    "Twin Arc" dashboard — the modern HMI trend: two mirrored 270-degree rings
+    frame the ride data (speed left, power right) with a compact battery/range
+    column between them and the usual five-cell telemetry strip along the
+    bottom. The rings fill outwards from the bottom gap, so the pair stays
+    balanced at any value.
 
     Everything is built from LVGL primitives, so the theme needs no GUI Guider
-    screen and no new symbols beyond the DSEG7 faces the amber theme already
-    compiles. 800x480 only; custom.c registers it only when SVD_WIDE_UI is set.
+    screen. It reuses the cockpit's clean Antonio face (200 px for the speed,
+    64 px for power and battery). 800x480 only; custom.c registers it only
+    when SVD_WIDE_UI is set.
 */
 
 #include "theme_arc.h"
@@ -20,16 +23,14 @@
 #include <stdio.h>
 #include <string.h>
 
-LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_160)
-LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_140)
-LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_120)
-LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_64)
-LV_FONT_DECLARE(lv_font_DSEG7Classic_Regular_50)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_200)
+LV_FONT_DECLARE(lv_font_Antonio_Regular_64)
+LV_IMG_DECLARE(_cruise_control_alpha_38x38)
 
 /* Palette — cool HMI, deliberately different from the cockpit's green and the
  * amber theme's warm 7-seg. */
 #define ARC_BG      lv_color_hex(0x05070A)
-#define ARC_TRACK   lv_color_hex(0x14202A)
+#define ARC_TRACK   lv_color_hex(0x1A2833)
 #define ARC_ORANGE  lv_color_hex(0xFF7A1A)
 #define ARC_CYAN    lv_color_hex(0x2EC5FF)
 #define ARC_REGEN   lv_color_hex(0x8A7BFF)
@@ -45,9 +46,10 @@ static struct {
     lv_obj_t *power_arc, *power_lbl, *power_unit, *power_title, *current_lbl, *power_max_lbl;
     lv_obj_t *batt_title, *batt_pct, *batt_pct_unit, *batt_bar, *ah_lbl;
     lv_obj_t *range_lbl, *range_unit;
-    lv_obj_t *clock_lbl, *bt_lbl, *warn_lbl, *cruise_lbl;
+    lv_obj_t *clock_lbl, *bt_lbl, *warn_lbl, *cruise_lbl, *cruise_img;
     lv_obj_t *music_tile, *song_lbl;
     lv_obj_t *volt_val, *volt_unit, *trip_val, *trip_unit, *odo_val, *odo_unit;
+    lv_obj_t *ride_val;
     lv_obj_t *mtmp_val, *mtmp_unit, *ctmp_val, *ctmp_unit;
 } s;
 
@@ -86,7 +88,8 @@ static void mk_hline(lv_obj_t *parent, lv_coord_t y)
     lv_obj_clear_flag(l, LV_OBJ_FLAG_SCROLLABLE);
 }
 
-static lv_obj_t *mk_arc(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+static lv_obj_t *mk_arc(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
+                        lv_color_t color, bool reverse)
 {
     lv_obj_t *a = lv_arc_create(parent);
     lv_obj_set_size(a, 300, 300);
@@ -94,19 +97,22 @@ static lv_obj_t *mk_arc(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t
     lv_obj_set_style_bg_opa(a, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(a, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(a, 0, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(a, 16, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, 14, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(a, true, LV_PART_MAIN);
     lv_obj_set_style_arc_color(a, ARC_TRACK, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(a, 16, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(a, 14, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(a, color, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(a, 0, LV_PART_KNOB);
     lv_obj_set_style_pad_all(a, 0, LV_PART_KNOB);
     lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
-    /* 270° sweep: start at 135° and go clockwise through 45°. */
+    /* 270° sweep, gap at the bottom (90°). The gauges are mirror images:
+     * the left one fills clockwise from the gap's left edge, the right one
+     * counter-clockwise from its right edge, so both grow outwards. */
     lv_arc_set_bg_angles(a, 135, 45);
     lv_arc_set_range(a, 0, 100);
     lv_arc_set_value(a, 0);
+    if (reverse) lv_arc_set_mode(a, LV_ARC_MODE_REVERSE);
     return a;
 }
 
@@ -178,7 +184,7 @@ static void arc_speed(float kmh)
         set_arc_pct(s.speed_arc, 0.0f);
         return;
     }
-    set_font_if(s.speed_lbl, &lv_font_DSEG7Classic_Regular_120);
+    set_font_if(s.speed_lbl, &lv_font_Antonio_Regular_200);
     int disp = (int)settings_wrapper_speed_to_display(kmh);
     if (disp < 0) disp = 0; else if (disp > 99) disp = 99;
     char text[8];
@@ -201,7 +207,7 @@ static void arc_update_power(void)
         return;
     }
 
-    set_font_if(s.power_lbl, &lv_font_DSEG7Classic_Regular_64);
+    set_font_if(s.power_lbl, &lv_font_Antonio_Regular_64);
     char text[16];
     snprintf(text, sizeof(text), "%.1f", kw);
     dash_label_set(s.power_lbl, text);
@@ -255,7 +261,7 @@ static void arc_battery_proc(float pct)
     }
 
     set_font_if(s.batt_pct, na ? &lv_font_montserrat_24
-                                : &lv_font_DSEG7Classic_Regular_50);
+                                : &lv_font_Antonio_Regular_64);
     if (na) {
         dash_label_set(s.batt_pct, "N/A");
         dash_set_text_color(s.batt_pct, ARC_DIM, LV_PART_MAIN);
@@ -310,6 +316,20 @@ static void arc_odometer(float km)
     dash_label_set(s.odo_val, text);
 }
 
+/* Ride time — trip_persist's uptime, i.e. how long the controller has been
+ * running for this trip. Same H:MM:SS shape the cockpit and amber dashboards
+ * put in their top bar. */
+static void arc_uptime(uint32_t ms)
+{
+    if (!s.ride_val) return;
+    uint32_t v = ms / 1000u;
+    char text[16];
+    snprintf(text, sizeof(text), "%u:%02u:%02u",
+             (unsigned)(v / 3600u), (unsigned)((v % 3600u) / 60u),
+             (unsigned)(v % 60u));
+    dash_label_set(s.ride_val, text);
+}
+
 static void arc_temp_fet(float c)
 {
     if (!s.mtmp_val) return;
@@ -359,9 +379,15 @@ static void arc_hide_mode_text(void)
 static void arc_max_values(float max_speed_kmh, float max_power_kw)
 {
     (void)max_speed_kmh;   /* the left ring shows live speed only */
+    (void)max_power_kw;    /* the label shows the ring's full scale, not the
+                            * observed peak — otherwise "MAX 1.5 kW" next to a
+                            * 1.5 kW reading looks like a full ring while the
+                            * indicator sits at a third. */
     if (s.power_max_lbl) {
+        float scale = settings_wrapper_get_power_max_kw();
+        if (scale <= 0.0f) scale = 4.5f;
         char text[20];
-        snprintf(text, sizeof(text), "MAX %.1f kW", max_power_kw);
+        snprintf(text, sizeof(text), "MAX %.1f", scale);
         dash_label_set(s.power_max_lbl, text);
     }
 }
@@ -426,10 +452,12 @@ static void arc_cruise_control_status(bool active)
     s_cruise_active = active;
     if (!s.cruise_lbl) return;
     if (active) {
+        if (s.cruise_img) lv_obj_clear_flag(s.cruise_img, LV_OBJ_FLAG_HIDDEN);
         if (lv_obj_has_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN))
             lv_obj_clear_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
         dash_label_set(s.cruise_lbl, "CC");
     } else {
+        if (s.cruise_img) lv_obj_add_flag(s.cruise_img, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -464,6 +492,7 @@ static void arc_music_text(const char *text)
 static void arc_units_changed(void)
 {
     dash_label_set(s.speed_unit, settings_wrapper_speed_unit());
+    dash_label_set(s.volt_unit, "V");
     dash_label_set(s.trip_unit, settings_wrapper_dist_unit());
     dash_label_set(s.odo_unit, settings_wrapper_dist_unit());
     dash_label_set(s.range_unit, settings_wrapper_dist_unit());
@@ -494,21 +523,13 @@ static lv_obj_t *arc_create(void)
     lv_obj_t *vesc = mk_label(scr, "VESC", &lv_font_montserrat_20, ARC_TEXT,
                               20, 7, 100, LV_TEXT_ALIGN_LEFT);
     lv_obj_t *stats = mk_label(scr, "STATISTICS", &lv_font_montserrat_20, ARC_TEXT,
-                               170, 7, 180, LV_TEXT_ALIGN_LEFT);
+                               150, 7, 180, LV_TEXT_ALIGN_LEFT);
     s.clock_lbl = mk_label(scr, "14:32", &lv_font_montserrat_20, ARC_TEXT,
-                           370, 7, 100, LV_TEXT_ALIGN_CENTER);
+                           350, 7, 100, LV_TEXT_ALIGN_CENTER);
     lv_obj_t *settings = mk_label(scr, "SETTINGS", &lv_font_montserrat_20, ARC_TEXT,
-                                  500, 7, 120, LV_TEXT_ALIGN_RIGHT);
-    s.cruise_lbl = mk_label(scr, "CC", &lv_font_montserrat_16, ARC_GREEN,
-                            630, 9, 62, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_style_bg_color(s.cruise_lbl, ARC_GREEN, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s.cruise_lbl, LV_OPA_20, LV_PART_MAIN);
-    lv_obj_set_style_radius(s.cruise_lbl, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(s.cruise_lbl, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_ver(s.cruise_lbl, 2, LV_PART_MAIN);
-    lv_obj_add_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
+                                  560, 7, 110, LV_TEXT_ALIGN_RIGHT);
     s.bt_lbl = mk_label(scr, "BT", &lv_font_montserrat_20, ARC_DIM,
-                        700, 7, 60, LV_TEXT_ALIGN_RIGHT);
+                        710, 7, 60, LV_TEXT_ALIGN_RIGHT);
     lv_obj_add_flag(vesc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(stats, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(settings, LV_OBJ_FLAG_CLICKABLE);
@@ -517,49 +538,62 @@ static lv_obj_t *arc_create(void)
     lv_obj_add_event_cb(settings, arc_settings_cb, LV_EVENT_CLICKED, NULL);
     mk_hline(scr, 42);
 
-    /* Two 270° rings. */
-    s.speed_arc = mk_arc(scr, 20, 95, ARC_ORANGE);
-    s.power_arc = mk_arc(scr, 480, 95, ARC_CYAN);
+    /* Two 270° rings, mirrored so they fill towards the outside. */
+    s.speed_arc = mk_arc(scr, 16, 84, ARC_ORANGE, false);
+    s.power_arc = mk_arc(scr, 484, 84, ARC_CYAN, true);
 
-    s.speed_lbl = mk_label(scr, "00", &lv_font_DSEG7Classic_Regular_120, ARC_TEXT,
-                           20, 0, 300, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, -20);
+    /* Cruise status lives next to the speed: a green icon and the target
+     * speed in the strip between the top bar and the speed ring. */
+    s.cruise_img = lv_img_create(scr);
+    lv_img_set_src(s.cruise_img, &_cruise_control_alpha_38x38);
+    lv_obj_set_pos(s.cruise_img, 119, 44);
+    lv_obj_set_style_img_recolor(s.cruise_img, ARC_GREEN, LV_PART_MAIN);
+    lv_obj_set_style_img_recolor_opa(s.cruise_img, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(s.cruise_img, LV_OBJ_FLAG_HIDDEN);
+    s.cruise_lbl = mk_label(scr, "CC", &lv_font_montserrat_18, ARC_GREEN,
+                            163, 52, 80, LV_TEXT_ALIGN_LEFT);
+    lv_obj_add_flag(s.cruise_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    s.speed_lbl = mk_label(scr, "00", &lv_font_Antonio_Regular_200, ARC_TEXT,
+                           16, 0, 300, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align_to(s.speed_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, -29);
     s.speed_unit = mk_label(scr, settings_wrapper_speed_unit(), &lv_font_montserrat_20,
                             ARC_ORANGE, 0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_unit, s.speed_arc, LV_ALIGN_CENTER, 0, 72);
+    lv_obj_align_to(s.speed_unit, s.speed_arc, LV_ALIGN_CENTER, 0, 78);
     s.speed_title = mk_label(scr, "SPEED", &lv_font_montserrat_16, ARC_DIM,
                              0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.speed_title, s.speed_arc, LV_ALIGN_CENTER, 0, 94);
+    lv_obj_align_to(s.speed_title, s.speed_arc, LV_ALIGN_CENTER, 0, 100);
     s.mode_lbl = mk_label(scr, "MODE 1", &lv_font_montserrat_16, ARC_ORANGE,
                           0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 116);
+    lv_obj_set_style_text_opa(s.mode_lbl, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_align_to(s.mode_lbl, s.speed_arc, LV_ALIGN_CENTER, 0, 120);
 
-    s.power_lbl = mk_label(scr, "0.0", &lv_font_DSEG7Classic_Regular_64, ARC_CYAN,
-                           480, 0, 300, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.power_lbl, s.power_arc, LV_ALIGN_CENTER, 0, -52);
+    s.power_lbl = mk_label(scr, "0.0", &lv_font_Antonio_Regular_64, ARC_CYAN,
+                           484, 0, 300, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align_to(s.power_lbl, s.power_arc, LV_ALIGN_CENTER, 0, -45);
     s.power_unit = mk_label(scr, "kW", &lv_font_montserrat_20, ARC_CYAN,
                             0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.power_unit, s.power_arc, LV_ALIGN_CENTER, 0, 12);
+    lv_obj_align_to(s.power_unit, s.power_arc, LV_ALIGN_CENTER, 0, 19);
     s.power_title = mk_label(scr, "POWER", &lv_font_montserrat_16, ARC_DIM,
                              0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.power_title, s.power_arc, LV_ALIGN_CENTER, 0, 38);
-    s.current_lbl = mk_label(scr, "0.0 A", &lv_font_montserrat_18, ARC_DIM,
-                             0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.current_lbl, s.power_arc, LV_ALIGN_CENTER, 0, 66);
-    s.power_max_lbl = mk_label(scr, "MAX 0.0 kW", &lv_font_montserrat_16, ARC_DIM,
-                               0, 0, 0, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align_to(s.power_max_lbl, s.power_arc, LV_ALIGN_CENTER, 0, 96);
+    lv_obj_align_to(s.power_title, s.power_arc, LV_ALIGN_CENTER, 0, 43);
+    s.current_lbl = mk_label(scr, "0.0 A", &lv_font_montserrat_14, ARC_DIM,
+                             0, 0, 64, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_align_to(s.current_lbl, s.power_arc, LV_ALIGN_CENTER, -36, 65);
+    s.power_max_lbl = mk_label(scr, "MAX 0.0", &lv_font_montserrat_14, ARC_DIM,
+                               0, 0, 64, LV_TEXT_ALIGN_LEFT);
+    lv_obj_align_to(s.power_max_lbl, s.power_arc, LV_ALIGN_CENTER, 36, 65);
 
     /* Centre column: battery %, remaining Ah, range. */
     s.batt_title = mk_label(scr, "BATTERY", &lv_font_montserrat_16, ARC_DIM,
-                            330, 108, 140, LV_TEXT_ALIGN_CENTER);
-    s.batt_pct = mk_label(scr, "0", &lv_font_DSEG7Classic_Regular_50, ARC_GREEN,
-                          330, 132, 92, LV_TEXT_ALIGN_CENTER);
+                            320, 100, 160, LV_TEXT_ALIGN_CENTER);
+    s.batt_pct = mk_label(scr, "0", &lv_font_Antonio_Regular_64, ARC_GREEN,
+                          328, 122, 92, LV_TEXT_ALIGN_RIGHT);
     s.batt_pct_unit = mk_label(scr, "%", &lv_font_montserrat_20, ARC_DIM,
-                               424, 152, 26, LV_TEXT_ALIGN_LEFT);
+                               422, 150, 26, LV_TEXT_ALIGN_LEFT);
     s.batt_bar = lv_bar_create(scr);
-    lv_obj_set_size(s.batt_bar, 130, 8);
-    lv_obj_set_pos(s.batt_bar, 335, 198);
+    lv_obj_set_size(s.batt_bar, 132, 8);
+    lv_obj_set_pos(s.batt_bar, 334, 192);
     lv_bar_set_range(s.batt_bar, 0, 100);
     lv_bar_set_value(s.batt_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s.batt_bar, ARC_TRACK, LV_PART_MAIN);
@@ -568,22 +602,22 @@ static lv_obj_t *arc_create(void)
     lv_obj_set_style_bg_color(s.batt_bar, ARC_GREEN, LV_PART_INDICATOR);
     lv_obj_set_style_radius(s.batt_bar, 4, LV_PART_INDICATOR);
     s.ah_lbl = mk_label(scr, "0.0 Ah", &lv_font_montserrat_18, ARC_DIM,
-                        330, 214, 140, LV_TEXT_ALIGN_CENTER);
+                        320, 208, 160, LV_TEXT_ALIGN_CENTER);
     lv_obj_t *range_title = mk_label(scr, "RANGE", &lv_font_montserrat_16, ARC_DIM,
-                                     330, 252, 140, LV_TEXT_ALIGN_CENTER);
+                                     320, 244, 160, LV_TEXT_ALIGN_CENTER);
     (void)range_title;
     s.range_lbl = mk_label(scr, "0.0", &lv_font_montserrat_24, ARC_TEXT,
-                           330, 272, 92, LV_TEXT_ALIGN_RIGHT);
+                           320, 264, 86, LV_TEXT_ALIGN_RIGHT);
     s.range_unit = mk_label(scr, settings_wrapper_dist_unit(), &lv_font_montserrat_16,
-                            ARC_DIM, 424, 280, 40, LV_TEXT_ALIGN_LEFT);
+                            ARC_DIM, 410, 272, 40, LV_TEXT_ALIGN_LEFT);
 
     /* Now-playing card in the centre gap. On the device the app attaches
      * music_info_view here (album art + scrolling title/artist); the dark card
      * and demo label below are only what the headless simulator shows, because
      * it has no notif_bridge/media poller. */
     s.music_tile = lv_obj_create(scr);
-    lv_obj_set_pos(s.music_tile, 324, 300);
-    lv_obj_set_size(s.music_tile, 152, 92);
+    lv_obj_set_pos(s.music_tile, 328, 302);
+    lv_obj_set_size(s.music_tile, 144, 76);
     lv_obj_clear_flag(s.music_tile, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(s.music_tile, lv_color_hex(0x0B141B), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s.music_tile, LV_OPA_COVER, LV_PART_MAIN);
@@ -592,19 +626,23 @@ static lv_obj_t *arc_create(void)
     lv_obj_set_style_radius(s.music_tile, 10, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s.music_tile, 0, LV_PART_MAIN);
 
-    s.song_lbl = mk_label(s.music_tile, "", &lv_font_montserrat_18, ARC_TEXT,
-                          0, 0, 140, LV_TEXT_ALIGN_CENTER);
+    s.song_lbl = mk_label(s.music_tile, "", &lv_font_montserrat_16, ARC_TEXT,
+                          0, 0, 132, LV_TEXT_ALIGN_CENTER);
     lv_label_set_long_mode(s.song_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_align(s.song_lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(s.song_lbl, LV_OBJ_FLAG_HIDDEN);
 
     /* Bottom five-cell telemetry strip. */
     mk_hline(scr, 399);
-    mk_cell(scr, 80,  "VOLTAGE", &s.volt_val, &s.volt_unit);
-    mk_cell(scr, 240, "TRIP",    &s.trip_val, &s.trip_unit);
-    mk_cell(scr, 400, "ODO",     &s.odo_val,  &s.odo_unit);
-    mk_cell(scr, 560, "M.TEMP",  &s.mtmp_val, &s.mtmp_unit);
-    mk_cell(scr, 720, "C.TEMP",  &s.ctmp_val, &s.ctmp_unit);
+    mk_cell(scr, 67,  "VOLTAGE", &s.volt_val, &s.volt_unit);
+    mk_cell(scr, 200, "TRIP",    &s.trip_val, &s.trip_unit);
+    (void)mk_label(scr, "RIDE", &lv_font_montserrat_16, ARC_DIM,
+                   333 - 70, 406, 140, LV_TEXT_ALIGN_CENTER);
+    s.ride_val = mk_label(scr, "0:00:00", &lv_font_montserrat_20, ARC_TEXT,
+                          333 - 80, 425, 160, LV_TEXT_ALIGN_CENTER);
+    mk_cell(scr, 467, "ODO",     &s.odo_val,  &s.odo_unit);
+    mk_cell(scr, 600, "M.TEMP",  &s.mtmp_val, &s.mtmp_unit);
+    mk_cell(scr, 733, "C.TEMP",  &s.ctmp_val, &s.ctmp_unit);
 
     /* Dead-link banner (hidden until the ESC link drops). */
     s.warn_lbl = mk_label(scr, "ESC OFFLINE", &lv_font_montserrat_16, ARC_WARN,
@@ -641,6 +679,7 @@ static const dashboard_theme_ops_t arc_ops = {
     .range                 = arc_range,
     .odometer              = arc_odometer,
     .amp_hours             = arc_amp_hours,
+    .uptime                = arc_uptime,
     .mode_text             = arc_mode_text,
     .hide_mode_text        = arc_hide_mode_text,
     .cur_time              = arc_cur_time,
@@ -653,7 +692,7 @@ static const dashboard_theme_ops_t arc_ops = {
     .music_text            = arc_music_text,
     .max_values            = arc_max_values,
     .units_changed         = arc_units_changed,
-    /* uptime / fps / cruise_* / navigation_* / music_* / brightness: not shown */
+    /* fps / navigation_* / music_* / brightness: not shown */
 };
 
 static lv_obj_t *arc_music_tile(void)

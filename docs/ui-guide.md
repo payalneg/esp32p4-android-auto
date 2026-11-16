@@ -151,18 +151,23 @@ The battery percentage remains a tap target for the battery monitor (§7.3).
 
 ![Twin Arc dashboard](images/ui/dashboard-twin-arc.png)
 
-Two 270° rings frame the ride: speed on the left, power on the right. The centre
-column is the battery block; the card below it shows the phone's now-playing
-track.
+Two mirrored 270° rings frame the ride: speed on the left, power on the right.
+Both fill outwards from the gap at the bottom, so a low reading stays at the
+outer edge and the pair reads symmetrically at any value. The centre column is
+the battery block; the card below it shows the phone's now-playing track.
 
 | Area | Contents |
 | --- | --- |
-| Top bar | `VESC`, `STATISTICS`, clock, `SETTINGS`, `BT`, and a green `CC nn` badge while cruise control is active |
-| Speed ring | `KM/H` or `MPH`, the speed digits, `SPEED` and `MODE n`; the ring fills against a 0–60 km/h scale |
-| Power ring | Instantaneous `kW`, `POWER`, current in A and the session's `MAX n.n kW` |
+| Top bar | `VESC`, `STATISTICS`, the phone's clock (pushed over BLE), `SETTINGS`, `BT` |
+| Speed ring | `KM/H` or `MPH`, the speed digits, `SPEED` and `MODE n`; the ring fills against a 0–60 km/h scale. When cruise control is engaged, the green cruise icon and target speed appear just above the ring |
+| Power ring | Instantaneous `kW`, `POWER`, current in A and the ring's full-scale `MAX n.n` (the same scale as Settings → Bike → `Power max`) |
 | Centre column | Battery percentage, level bar, remaining Ah and estimated range |
 | Now-playing card | Track title and artist from the phone |
-| Bottom strip | Voltage, trip, odometer, motor temperature, controller temperature |
+| Bottom strip | Voltage, trip, ride time, odometer, motor temperature, controller temperature |
+
+The clock is the companion app's time over BLE. It hides itself after 30 s
+without a fresh push (phone gone or BLE dropped); the ride time in the bottom
+strip is the controller's persisted uptime, so it keeps counting regardless.
 
 The battery percentage opens the battery monitor (§7.3). In `JK-BMS (BLE)` mode
 an offline pack reads `N/A`.

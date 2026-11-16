@@ -25,7 +25,24 @@ the one recorded in the release commit.
 - New console commands: `navvec <z> <x> <y>` (rasterize one tile from the card
   and time it) and extra vector counters in `navstat`.
 - See `docs/nav-vector-tiles.md` for the format, card layout and integration
-  order. First test is without 2x antialiasing, as measured on the bench.
+  order. First test is without 2× antialiasing, as measured on the bench.
+
+### Twin Arc redrawn
+
+- The two rings are now mirror images: both fill outwards from the bottom gap
+  (left clockwise, right counter-clockwise), so a low reading sits on the outer
+  edge instead of crowding the centre column.
+- Hero readouts use the cockpit's Antonio face — 200 px for speed, 64 px for
+  power — instead of the same-size DSEG7 pair, so speed dominates and the power
+  number is clearly secondary.
+- The power ring's `MAX` label now shows the ring's full scale (the same value
+  as Settings → Bike → `Power max`) rather than the session peak, which made a
+  third-full ring sit next to "MAX 1.5 kW".
+- The centre column was re-spaced (battery digits no longer collide with the
+  level bar), the bottom strip gained its missing `V` unit and a **ride time**
+  cell, and the cruise badge no longer touches `SETTINGS`.
+- Cruise status moved out of the top bar: the cruise icon and the target speed
+  now sit just above the speed ring, where the eye already is.
 
 ## v1.3.42 / app 0.3.51 — 2026-11-13
 

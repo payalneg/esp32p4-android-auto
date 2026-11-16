@@ -1,10 +1,11 @@
 /*
     Copyright 2026 Super VESC Display
 
-    "Twin Arc" dashboard theme — the modern HMI trend: two large 270° arcs
-    (speed left, power right) framing a compact battery/range column, with the
-    same top status bar and bottom telemetry strip as the cockpit. Hand-written
-    in LVGL; no GUI Guider screen and no new fonts.
+    "Twin Arc" dashboard theme — the modern HMI trend: two large mirrored 270°
+    arcs (speed left, power right) framing a compact battery/range column, with
+    the same top status bar and bottom telemetry strip as the cockpit. Hand-
+    written in LVGL; no GUI Guider screen. Reuses the cockpit's Antonio faces
+    (200 px speed, 64 px power/battery).
 
     800x480 only (registered from custom.c under SVD_WIDE_UI).
 */

@@ -26,8 +26,9 @@
  *   menu <id>         open a code-built screen: trips, vesc, pas, speed,
  *                     lisp, lispedit, rt
  *   set <field> <v>   feed telemetry: speed, current, voltage, battery, ah,
- *                     trip, range, odo, temp_fet, temp_motor, mode, cruise,
- *                     clock, esc, bt, music ("Title | Artist"); "set cruise_off"
+ *                     trip, range, odo, uptime, temp_fet, temp_motor, mode,
+ *                     cruise, clock, esc, bt, music ("Title | Artist");
+ *                     "set cruise_off"
  *                     clears the CC badge
  *   tap <x> <y>       tap at a pixel
  *   tap "<text>"      tap the centre of the widget showing that text
@@ -769,6 +770,7 @@ static void set_field(const char *name, const char *val)
     else if (!strcmp(name, "trip"))        update_trip(f);
     else if (!strcmp(name, "range"))       update_range(f);
     else if (!strcmp(name, "odo"))         update_odometer(f);
+    else if (!strcmp(name, "uptime"))      update_uptime((uint32_t)(f * 1000.0f));
     else if (!strcmp(name, "temp_fet"))    update_temp_fet(f);
     else if (!strcmp(name, "temp_motor"))  update_temp_motor(f);
     else if (!strcmp(name, "mode"))        update_mode_text((uint8_t)atoi(val));
