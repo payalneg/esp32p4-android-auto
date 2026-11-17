@@ -1,34 +1,24 @@
-# Firmware 1.3.42 / Android app 0.3.51
+# Firmware 1.3.47 / Android app 0.3.56
 
 Built with ESP-IDF 5.5.6. The APK contains an OTA image for every profile below.
 
-## What changed since 1.3.41
+## What changed since 1.3.46 / 0.3.55
 
-Bug-fix release; the 1.3.41 feature set is unchanged.
-
-- **Fixed: the Twin Arc white screen** — the dashboard could freeze on a white
-  screen right after the boot splash, most reliably on **Twin Arc**. The music
-  info poller hides its surrounding `music_info` container while no track is
-  playing (a trick for the GUI-Guider themes); Twin Arc parents its music tile
-  directly on the screen, so the poller hid the **whole dashboard screen** —
-  and LVGL drops every invalidation on a hidden object, so nothing could
-  repaint. The toggle is now skipped when the tile's parent is the screen.
-  Verified on a Waveshare 4.3" board: Twin Arc renders steadily (~10 fps)
-  where 1.3.41 froze at 0 fps.
-- **Android Auto auto-connect is now off by default** — the "Reconnect to last
-  phone on power-on" setting (Settings → Connection) starts disabled on a
-  fresh or erased device. A previously saved choice is kept. The manual
-  **Connect** button always works.
-
-Carried from 1.3.40/1.3.41:
-
-- Cockpit (Amber) and Twin Arc on the 800×480 head units; Cockpit and Classic
-  Max remain the defaults, and the 480×480 S3 build keeps those two.
-- The JK-BMS pack as a dashboard battery source (JK02 frames, 24S/32S layouts,
-  16S packs on the 32S layout). SOC and remaining Ah feed the dashboard, AA HUD
-  and range estimate; an offline pack reads **N/A**.
-- The screen-by-screen guide: [`docs/ui-guide.md`](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/ui-guide.md) /
-  [`docs/ui-guide.ru.md`](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/ui-guide.ru.md).
+- **Offline vector maps on the head unit** — the navigator can now draw Kraków
+  from a compact NVT1 package on the microSD card instead of forwarding every
+  map PNG over BLE. The package carries roads, water, parks, buildings and
+  place names; the head unit rasterizes it directly into the existing RGB565
+  tile cache and keeps street names on a separate upright layer.
+- **Heading-up or north-up from the panel** — `ROT` now toggles between `AUTO`
+  (the map turns with the rider's course) and `NORTH` (the original north-up
+  map). The old 30-degree bench steps are gone.
+- **No more zoom badge** — the `z16` / `z17` plate over the map was removed;
+  the `+` / `−` buttons still change the level.
+- **Kraków offline layer in the companion app** — when the Małopolskie region
+  is built, the app also stores the local vector geometry and serves it to the
+  navigator without a tile download.
+- **Twin Arc redrawn** — mirror-image rings, Antonio hero readouts, a correct
+  `MAX` scale, a ride-time cell and the cruise badge moved above the speed ring.
 
 | Profile in filename / app | Hardware |
 | --- | --- |
@@ -43,14 +33,14 @@ The helper checks the P4 revision before writing and requires stable esptool
 
 - `*-merged.bin`: complete USB image, written at **0x0**.
 - The `.bin` without `-merged`: application image for OTA.
-- `aa_bridge-0.3.51.apk`: one app for all profiles. It selects the firmware using
+- `aa_bridge-0.3.56.apk`: one app for all profiles. It selects the firmware using
   the device's reported profile and blocks a detected revision/profile mismatch.
 - `SHA256SUMS.txt`: checksums of the firmware images and APK.
 
 For a P4 v3.2 board, choose **waveshare-rev3**. Do not use `--force` to install
 a v1.x image. See [recovery details](https://github.com/payalneg/esp32p4-android-auto/blob/main/docs/esp32p4-rev3.md).
 
-The APK uses the same signing certificate as 0.3.42, so it can update that app
+The APK uses the same signing certificate as 0.3.55, so it can update that app
 without uninstalling it. Built using Flutter 3.29.3 / Dart 3.7.2 and Android
 compile SDK 36.
 
