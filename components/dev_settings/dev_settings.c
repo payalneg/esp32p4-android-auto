@@ -41,6 +41,7 @@ static struct {
     bool                 second_head_enabled;
     bool                 brightness_gesture_enabled;
     bool                 music_widget_enabled;
+    bool                 music_buttons_enabled;
     uint8_t              second_head_id;
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
@@ -59,6 +60,7 @@ static settings_target_id_cb_t     s_target_id_cb;
 static settings_controller_id_cb_t s_controller_id_cb;
 static settings_aa_autoconnect_cb_t s_aa_autoconnect_cb;
 static settings_vesc_link_cb_t     s_vesc_link_cb;
+static settings_music_buttons_cb_t s_music_buttons_cb;
 
 /* Validate a kbps value (read from NVS / passed by callers). Bad values
  * fall back to the Kconfig default. The UI dropdown can only produce one
@@ -113,6 +115,7 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "sh_en",       &u8 ) == ESP_OK) s_cache.second_head_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "br_gest_en",  &u8 ) == ESP_OK) s_cache.brightness_gesture_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "music_wdg",   &u8 ) == ESP_OK) s_cache.music_widget_enabled = (u8 != 0);
+    if (nvs_get_u8 (h, "music_btn",   &u8 ) == ESP_OK) s_cache.music_buttons_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "sh_id",       &u8 ) == ESP_OK) s_cache.second_head_id    = u8;
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
@@ -180,6 +183,7 @@ void settings_init(void) {
     s_cache.second_head_enabled = false;
     s_cache.brightness_gesture_enabled = true;
     s_cache.music_widget_enabled = true;
+    s_cache.music_buttons_enabled = true;
     s_cache.second_head_id    = 11;
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
@@ -214,6 +218,7 @@ bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fa
 bool                settings_get_second_head_enabled(void) { return s_cache.second_head_enabled; }
 bool                settings_get_brightness_gesture_enabled(void) { return s_cache.brightness_gesture_enabled; }
 bool                settings_get_music_widget_enabled(void) { return s_cache.music_widget_enabled; }
+bool                settings_get_music_buttons_enabled(void) { return s_cache.music_buttons_enabled; }
 uint8_t             settings_get_second_head_id(void)    { return s_cache.second_head_id; }
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
@@ -341,6 +346,17 @@ void settings_set_music_widget_enabled(bool on) {
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "music_wdg", on ? 1 : 0);
     commit(h);
+}
+
+void settings_set_music_buttons_enabled(bool on) {
+    if (s_cache.music_buttons_enabled == on) return;
+    s_cache.music_buttons_enabled = on;
+    nvs_handle_t h;
+    if (open_rw(&h) == ESP_OK) {
+        nvs_set_u8(h, "music_btn", on ? 1 : 0);
+        commit(h);
+    }
+    if (s_music_buttons_cb) s_music_buttons_cb(on);
 }
 
 void settings_set_second_head_id(uint8_t id) {
@@ -575,6 +591,12 @@ void settings_set_music_widget_enabled_volatile(bool on) {
     s_cache.music_widget_enabled = on;
 }
 
+void settings_set_music_buttons_enabled_volatile(bool on) {
+    if (s_cache.music_buttons_enabled == on) return;
+    s_cache.music_buttons_enabled = on;
+    if (s_music_buttons_cb) s_music_buttons_cb(on);
+}
+
 void settings_persist_brightness_gesture_enabled(void) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
@@ -586,6 +608,13 @@ void settings_persist_music_widget_enabled(void) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "music_wdg", s_cache.music_widget_enabled ? 1 : 0);
+    commit(h);
+}
+
+void settings_persist_music_buttons_enabled(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "music_btn", s_cache.music_buttons_enabled ? 1 : 0);
     commit(h);
 }
 
@@ -621,6 +650,7 @@ void settings_register_target_id_cb(settings_target_id_cb_t cb)         { s_targ
 void settings_register_controller_id_cb(settings_controller_id_cb_t cb) { s_controller_id_cb = cb; }
 void settings_register_aa_autoconnect_cb(settings_aa_autoconnect_cb_t cb) { s_aa_autoconnect_cb = cb; }
 void settings_register_vesc_link_cb(settings_vesc_link_cb_t cb)           { s_vesc_link_cb = cb; }
+void settings_register_music_buttons_cb(settings_music_buttons_cb_t cb)  { s_music_buttons_cb = cb; }
 
 /* ---------------- firmware-version info ----------------
  * Pure RAM, no NVS. Race-tolerant in practice: setters fire once at boot

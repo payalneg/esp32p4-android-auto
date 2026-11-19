@@ -77,6 +77,7 @@ static char s_last_artist[128];
 static int  s_last_playing = -1;
 static uint32_t s_last_art_hash;
 static int  s_current_layout = -1; /* -1 = uninit, 0 = music, 1 = video */
+static bool s_buttons_enabled = true;
 
 static lv_img_dsc_t s_art_dsc;
 
@@ -171,8 +172,23 @@ static void apply_layout(bool is_video, bool force)
     if (is_video) {
         /* Video Mode (16:9, e.g. YouTube):
          * Full-bleed background art, dark overlay, title & artist anchored
-         * along the bottom across full width. Transport controls hidden. */
-        if (s_btn_row) lv_obj_add_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+         * along the bottom across full width. Transport controls stay on top
+         * in a small translucent pill: the rider should not lose prev/play/next
+         * just because the app sent a wide thumbnail. */
+        if (s_btn_row) {
+            lv_obj_clear_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_width(s_btn_row, LV_SIZE_CONTENT);
+            lv_obj_align(s_btn_row, LV_ALIGN_TOP_RIGHT, -8, 8);
+            lv_obj_set_style_bg_color(s_btn_row, lv_color_hex(0x000000), 0);
+            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_40, 0);
+            lv_obj_set_style_radius(s_btn_row, 10, 0);
+            lv_obj_set_style_pad_hor(s_btn_row, 6, 0);
+            lv_obj_set_style_pad_ver(s_btn_row, 2, 0);
+            lv_obj_move_foreground(s_btn_row);
+            if (!s_buttons_enabled) {
+                lv_obj_add_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         if (s_art_box) lv_obj_add_flag(s_art_box, LV_OBJ_FLAG_HIDDEN);
         if (s_card) {
             lv_obj_set_style_bg_opa(s_card, LV_OPA_TRANSP, 0);
@@ -291,8 +307,14 @@ static void apply_layout(bool is_video, bool force)
         if (s_btn_row) {
             lv_obj_set_width(s_btn_row, right_w);
             lv_obj_align(s_btn_row, LV_ALIGN_TOP_LEFT, left_pad, btn_y);
+            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_hor(s_btn_row, 0, 0);
+            lv_obj_set_style_pad_ver(s_btn_row, 0, 0);
             lv_obj_clear_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(s_btn_row);
+            if (!s_buttons_enabled) {
+                lv_obj_add_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
 }
@@ -730,4 +752,12 @@ void music_info_view_destroy(void)
     if (s_poll) { lv_timer_del(s_poll); s_poll = NULL; }
     if (s_card) { lv_obj_del(s_card); s_card = NULL; }
     music_info_view_detach();
+}
+
+void music_info_view_set_buttons_visible(bool on)
+{
+    s_buttons_enabled = on;
+    if (!s_btn_row) return;
+    if (on) lv_obj_clear_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
 }

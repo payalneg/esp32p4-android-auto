@@ -32,6 +32,11 @@ void music_info_view_detach(void);
  * when nothing is attached. */
 void music_info_view_destroy(void);
 
+/* Show/hide the prev/play/next row inside the card. The card, album art and
+ * title/artist are untouched. Safe before attach: the state is kept and applied
+ * when the view is created. */
+void music_info_view_set_buttons_visible(bool on);
+
 #ifdef __cplusplus
 }
 #endif

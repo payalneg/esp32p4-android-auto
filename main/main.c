@@ -255,11 +255,19 @@ static void on_dashboard_theme_switched(lv_obj_t *screen, lv_obj_t *music_tile)
     if (!music_tile) return;
     if (settings_get_music_widget_enabled()) {
         lv_obj_clear_flag(music_tile, LV_OBJ_FLAG_HIDDEN);
+        music_info_view_set_buttons_visible(settings_get_music_buttons_enabled());
         music_info_view_attach(music_tile);
     } else {
         /* Off: leave the theme's reserved tile empty and out of hit-testing. */
         lv_obj_add_flag(music_tile, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+/* Settings → Display → "Music buttons": hide/show prev/play/next without
+ * rebuilding the card (album art stays). */
+static void on_music_buttons_changed(bool on)
+{
+    music_info_view_set_buttons_visible(on);
 }
 
 /* settings_set_controller_id → here. Reinit TWAI so STATUS_* frames go
@@ -482,6 +490,7 @@ void app_main(void)
      * draws. Brightness callback persists future changes from the slider. */
     bsp_display_brightness_set(settings_get_screen_brightness());
     settings_register_brightness_cb(on_brightness_changed);
+    settings_register_music_buttons_cb(on_music_buttons_changed);
 
     /* Boot splash GIF (if /vescfs/splash.gif exists). Top-layer overlay that
      * covers the ~5 s dashboard build below; hidden once the dashboard is up
