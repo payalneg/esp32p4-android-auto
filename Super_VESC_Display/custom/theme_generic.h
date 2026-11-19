@@ -122,6 +122,8 @@ typedef struct {
     lv_obj_t *temp_mot_bar;
     lv_obj_t *temp_esc_bar;
     lv_obj_t *power_bar;
+    /* Attach point for the media/music tile (NULL if screen has none). */
+    lv_obj_t *music_tile;
     /* Invisible full-screen brightness drag slider, hidden when the user turns
      * the gesture off in Settings. Not a render target — see
      * dashboard_theme_ops_t.brightness_gesture. */

@@ -468,6 +468,8 @@ static lv_obj_t *settings_show_fps_switch = NULL;
 static lv_obj_t *settings_show_fps_label = NULL;
 static lv_obj_t *settings_brightness_gesture_switch = NULL;
 static lv_obj_t *settings_brightness_gesture_label = NULL;
+static lv_obj_t *settings_music_widget_switch = NULL;
+static lv_obj_t *settings_music_widget_label = NULL;
 static lv_obj_t *settings_demo_mode_switch = NULL;
 static lv_obj_t *settings_demo_mode_label = NULL;
 static lv_obj_t *settings_vesc_emulator_switch = NULL;
@@ -1609,6 +1611,7 @@ static debounced_commit_t s_brightness_commit;
  * brightness VALUE and the gesture FLAG would drop whichever write was armed
  * first. */
 static debounced_commit_t s_brightness_gesture_commit;
+static debounced_commit_t s_music_widget_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
 static debounced_commit_t s_theme_commit;
@@ -2025,6 +2028,19 @@ static void brightness_gesture_switch_event_cb(lv_event_t *e) {
         debounced_commit_schedule(&s_brightness_gesture_commit,
                                   settings_wrapper_persist_brightness_gesture_enabled);
         dashboard_brightness_gesture_refresh();
+    }
+}
+
+// Music widget switch: attach/detach the album-art / transport card without
+// rebuilding the dashboard. The theme stays as it is; only the chrome hook runs.
+static void music_widget_switch_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        bool checked = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+        settings_wrapper_set_music_widget_enabled_volatile(checked);
+        debounced_commit_schedule(&s_music_widget_commit,
+                                  settings_wrapper_persist_music_widget_enabled);
+        dashboard_theme_reapply_chrome();
     }
 }
 
@@ -2580,6 +2596,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_display_flip(false); // normal orientation
         settings_wrapper_set_phone_screen(0);     // 3-finger gesture shows AA
         settings_wrapper_set_brightness_gesture_enabled(true);
+        settings_wrapper_set_music_widget_enabled(true);
 
         /* Update UI elements. Target VESC ID, the second head, the display's
          * own CAN id and the bus speed live on the VESC link screen now — it
@@ -2601,6 +2618,9 @@ static void reset_button_event_cb(lv_event_t *e) {
         }
         if (settings_brightness_gesture_switch) {
             lv_obj_add_state(settings_brightness_gesture_switch, LV_STATE_CHECKED);
+        }
+        if (settings_music_widget_switch) {
+            lv_obj_add_state(settings_music_widget_switch, LV_STATE_CHECKED);
         }
         dashboard_theme_set(0);   // live-switch back to cockpit
         /* dashboard_theme_set no-ops when cockpit is already active, so push the
@@ -3314,6 +3334,22 @@ void settings_ui_init(lv_ui *ui) {
     lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
     lv_obj_set_style_bg_color(settings_brightness_gesture_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(settings_brightness_gesture_switch, brightness_gesture_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    y_pos += SETTINGS_ROW_H;
+
+    // ========== Music Widget Switch ==========
+    settings_music_widget_label =
+        settings_heading_create(parent, y_pos, "Music widget");
+
+    settings_music_widget_switch = lv_switch_create(parent);
+    lv_obj_set_pos(settings_music_widget_switch, SETTINGS_SWITCH_X, y_pos + 15);
+    lv_obj_set_size(settings_music_widget_switch, SETTINGS_SW_W, SETTINGS_SW_H);
+    if (settings_wrapper_get_music_widget_enabled()) {
+        lv_obj_add_state(settings_music_widget_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(settings_music_widget_switch, lv_color_hex(0x2a3440), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(settings_music_widget_switch, lv_color_hex(0x00a9ff), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(settings_music_widget_switch, music_widget_switch_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     y_pos += SETTINGS_ROW_H;
 

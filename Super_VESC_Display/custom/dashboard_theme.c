@@ -71,6 +71,11 @@ static void fire_switch_cb(int idx)
     s_switch_cb(guider_ui.dashboard_Classic, t->music_tile ? t->music_tile() : NULL);
 }
 
+void dashboard_theme_reapply_chrome(void)
+{
+    if (s_active >= 0 && s_active < s_count) fire_switch_cb(s_active);
+}
+
 void dashboard_theme_adopt(int idx)
 {
     if (s_count == 0) return;

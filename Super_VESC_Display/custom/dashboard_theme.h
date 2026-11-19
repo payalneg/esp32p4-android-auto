@@ -143,6 +143,11 @@ int  dashboard_theme_active_index(void);
 lv_obj_t *dashboard_theme_active_screen(void);
 void dashboard_theme_set_switch_cb(dashboard_theme_switch_cb_t cb);
 
+/* Re-run the switch hook on the active theme without rebuilding it. Used when
+ * something the hook attaches (the music widget) was toggled in Settings: the
+ * screen and its widgets stay exactly as they are, only the chrome changes. */
+void dashboard_theme_reapply_chrome(void);
+
 /* Build the theme at idx and make it active. Used on device (vesc_ui_init)
  * with the NVS-saved index; calls the theme's create(). idx is clamped into
  * [0, count). No-op if no theme is registered. */

@@ -141,13 +141,39 @@ def emit_screen(out, screen, fields):
         if n:
             out.append(f"    w->{member}_n = {n};")
     emit_speed_gauge(out, screen, fields)
+    if f"{screen}_music_info_tile" in fields:
+        out.append(f"    w->music_tile = guider_ui.{screen}_music_info_tile;")
+    elif f"{screen}_music_info" in fields:
+        out.append(f"    w->music_tile = guider_ui.{screen}_music_info;")
+    elif ident == "Classic_Max":
+        out.append("    /* Music tileview dynamically created between Speed and Max block */")
+        out.append("    lv_coord_t w_w = (UI_W < 640) ? 260 : 434;")
+        out.append("    lv_coord_t w_h = (UI_W < 640) ? 90 : 106;")
+        out.append("    lv_coord_t w_x = (UI_W < 640) ? 108 : 183;")
+        out.append("    lv_coord_t w_y = 260;")
+        out.append(f"    lv_obj_t *tv = lv_tileview_create(guider_ui.{screen});")
+        out.append("    lv_obj_set_pos(tv, w_x, w_y);")
+        out.append("    lv_obj_set_size(tv, w_w, w_h);")
+        out.append("    lv_obj_set_scrollbar_mode(tv, LV_SCROLLBAR_MODE_OFF);")
+        out.append("    lv_obj_set_style_bg_opa(tv, 0, LV_PART_MAIN);")
+        out.append("    lv_obj_set_style_border_width(tv, 0, LV_PART_MAIN);")
+        out.append("    lv_obj_set_style_pad_all(tv, 0, LV_PART_MAIN);")
+        out.append("    lv_obj_t *tile = lv_tileview_add_tile(tv, 0, 0, LV_DIR_RIGHT);")
+        out.append("    lv_obj_set_style_bg_opa(tile, 0, LV_PART_MAIN);")
+        out.append("    lv_obj_set_style_border_width(tile, 0, LV_PART_MAIN);")
+        out.append("    lv_obj_set_style_pad_all(tile, 0, LV_PART_MAIN);")
+        out.append("    w->music_tile = tile;")
     out.append("    dashboard_generic_set_active(w);")
     out.append(f"    return guider_ui.{screen};")
+    out.append("}")
+    out.append(f"static lv_obj_t *music_tile_{ident}(void) {{")
+    out.append(f"    return s_w_{ident}.music_tile;")
     out.append("}")
     out.append(f"static const dashboard_theme_t theme_{ident} = {{")
     out.append(f'    .id = "{suffix}",')
     out.append(f'    .name = "{name}",')
     out.append(f"    .create = create_{ident},")
+    out.append(f"    .music_tile = music_tile_{ident},")
     out.append("    .ops = &dashboard_generic_ops,")
     out.append("};")
     out.append("")
@@ -178,6 +204,7 @@ def main():
         '#include "gui_guider.h"',
         '#include "dashboard_theme.h"',
         '#include "theme_generic.h"',
+        '#include "ui_geom.h"',
         "",
     ]
     idents = [emit_screen(out, s, fields) for s in discovered]

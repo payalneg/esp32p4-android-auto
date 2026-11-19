@@ -48,6 +48,21 @@ menu "Android Auto Head Unit"
             the firmware is the VESC dashboard alone — Wi-Fi, BLE, CAN, the web
             UI and OTA all stay, so this option only removes AA itself.
 
+    # Symbols the ESP-Hosted component manager expects to exist while it solves
+    # its dependency graph. They are not features of this project; declaring
+    # them here keeps the solver from crashing on a registry condition error.
+    config ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST"
+        default n
+
+    config ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST"
+        default n
+
+    config ESP_HOSTED_HOST_USB_RNDIS_MANIFEST
+        bool "ESP_HOSTED_HOST_USB_RNDIS_MANIFEST"
+        default n
+
     config NAV_ENABLE
         bool "Phone navigator screen"
         default y

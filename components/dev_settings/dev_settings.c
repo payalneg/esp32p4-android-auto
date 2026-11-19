@@ -40,6 +40,7 @@ static struct {
     bool                 use_fahrenheit;
     bool                 second_head_enabled;
     bool                 brightness_gesture_enabled;
+    bool                 music_widget_enabled;
     uint8_t              second_head_id;
     uint8_t              dashboard_theme;
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
@@ -111,6 +112,7 @@ static void load_from_nvs(void) {
     if (nvs_get_u8 (h, "use_fahr",    &u8 ) == ESP_OK) s_cache.use_fahrenheit    = (u8 != 0);
     if (nvs_get_u8 (h, "sh_en",       &u8 ) == ESP_OK) s_cache.second_head_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "br_gest_en",  &u8 ) == ESP_OK) s_cache.brightness_gesture_enabled = (u8 != 0);
+    if (nvs_get_u8 (h, "music_wdg",   &u8 ) == ESP_OK) s_cache.music_widget_enabled = (u8 != 0);
     if (nvs_get_u8 (h, "sh_id",       &u8 ) == ESP_OK) s_cache.second_head_id    = u8;
     if (nvs_get_u8 (h, "dash_theme",  &u8 ) == ESP_OK) s_cache.dashboard_theme   = u8;
     if (nvs_get_u8 (h, "splash_loops",&u8 ) == ESP_OK) s_cache.splash_loops      = u8;
@@ -177,6 +179,7 @@ void settings_init(void) {
     s_cache.use_fahrenheit    = false;
     s_cache.second_head_enabled = false;
     s_cache.brightness_gesture_enabled = true;
+    s_cache.music_widget_enabled = true;
     s_cache.second_head_id    = 11;
     s_cache.dashboard_theme   = 0;   /* index into the dashboard-theme registry */
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
@@ -210,6 +213,7 @@ bool                settings_get_use_imperial(void)      { return s_cache.use_im
 bool                settings_get_use_fahrenheit(void)    { return s_cache.use_fahrenheit; }
 bool                settings_get_second_head_enabled(void) { return s_cache.second_head_enabled; }
 bool                settings_get_brightness_gesture_enabled(void) { return s_cache.brightness_gesture_enabled; }
+bool                settings_get_music_widget_enabled(void) { return s_cache.music_widget_enabled; }
 uint8_t             settings_get_second_head_id(void)    { return s_cache.second_head_id; }
 uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashboard_theme; }
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
@@ -327,6 +331,15 @@ void settings_set_brightness_gesture_enabled(bool on) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "br_gest_en", on ? 1 : 0);
+    commit(h);
+}
+
+void settings_set_music_widget_enabled(bool on) {
+    if (s_cache.music_widget_enabled == on) return;
+    s_cache.music_widget_enabled = on;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "music_wdg", on ? 1 : 0);
     commit(h);
 }
 
@@ -557,10 +570,22 @@ void settings_set_brightness_gesture_enabled_volatile(bool on) {
     s_cache.brightness_gesture_enabled = on;
 }
 
+void settings_set_music_widget_enabled_volatile(bool on) {
+    if (s_cache.music_widget_enabled == on) return;
+    s_cache.music_widget_enabled = on;
+}
+
 void settings_persist_brightness_gesture_enabled(void) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "br_gest_en", s_cache.brightness_gesture_enabled ? 1 : 0);
+    commit(h);
+}
+
+void settings_persist_music_widget_enabled(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_u8(h, "music_wdg", s_cache.music_widget_enabled ? 1 : 0);
     commit(h);
 }
 

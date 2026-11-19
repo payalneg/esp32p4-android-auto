@@ -181,11 +181,14 @@ static void install_lvgl_touch_indev(void)
     }
 }
 
-/* Re-assembled VESC packets land here. Forwards to the RT-data parser,
- * (if enabled) the LISP poll parser, and the BLE NUS bridge so VESC Tool
- * over BLE sees CAN responses. All three filter / gate on their own state
- * (RT/LISP on the leading COMM_PACKET_ID byte, NUS on connection state)
- * so the fan-out is unconditional. */
+/* Re-assembled VESC packets land here: the RT-data parser, the LISP / IO /
+ * config / panel handlers, and the BLE NUS bridge so VESC Tool over BLE sees
+ * the answers to its own requests. Every handler gates on its own state (the
+ * leading COMM_PACKET_ID byte, connection state, an in-flight operation), so
+ * the fan-out itself is unconditional. The bridge is the exception: it must
+ * also know who asked — ble_nus_forward_response() drops the replies to the
+ * dashboard's own polls, which VESC Tool would otherwise decode as its own
+ * data (speed and Ah collapsing to zero once a second on a BLE link). */
 static void vesc_packet_dispatch(const uint8_t *data, unsigned int len)
 {
     vesc_rt_data_process_response(data, len);
@@ -249,7 +252,9 @@ static void on_dashboard_theme_switched(lv_obj_t *screen, lv_obj_t *music_tile)
 {
     (void)screen;
     music_info_view_detach();
-    if (music_tile) music_info_view_attach(music_tile);
+    if (music_tile && settings_get_music_widget_enabled()) {
+        music_info_view_attach(music_tile);
+    }
 }
 
 /* settings_set_controller_id → here. Reinit TWAI so STATUS_* frames go
