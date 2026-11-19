@@ -30,6 +30,17 @@ class IpcCmd {
   static const navFound = 'navFound'; // {hits: [{lat, lon, name}]} → {ack}
   static const bleRestart = 'bleRestart'; // force a clean reconnect
 
+  /// The UI isolate is awake and feeding the head unit (true) or going to
+  /// sleep (false). When false the service isolate takes over the nav feed.
+  static const navUiActive = 'navUiActive'; // {active}
+
+  /// Hand the service the ride the UI was guiding, so it can continue while
+  /// the UI sleeps. {route: [lat,lon,...]?, guide: {...}?, zoom, look: {...}?}
+  static const navHandoff = 'navHandoff';
+
+  /// The rider's "stream to display" switch, mirrored into the service.
+  static const navStreamEnabled = 'navStreamEnabled'; // {on}
+
   // File manager.
   static const fileList = 'fileList'; // {path}
   static const fileDownload = 'fileDownload'; // {path} → reply {tmpPath}

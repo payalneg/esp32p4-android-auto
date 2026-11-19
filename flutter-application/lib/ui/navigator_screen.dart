@@ -171,7 +171,17 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     _huSearchSub = BleProxy.instance.navSearches.listen(_onHeadUnitSearch);
     // A head unit that connects while the phone is in a pocket is a reason to
     // have the receiver on; one that goes away is a reason to let it go.
-    _huLinkSub = BleProxy.instance.state.listen((_) => _reviewBackgroundFixes());
+    _huLinkSub = BleProxy.instance.state.listen((_) {
+      _reviewBackgroundFixes();
+      // The service may have (re)started while we were away; re-assert who
+      // owns the feed so the two never send at once.
+      BleProxy.instance.setNavUiActive(!_appHidden);
+    });
+    // The service isolate keeps the head unit fed while this UI sleeps; tell
+    // it we are awake and feeding now, and mirror the stream switch.
+    BleProxy.instance.setNavUiActive(true);
+    BleProxy.instance
+        .setNavStreamEnabled(NavSettings.instance.streamToDisplay);
     _syncStreamer();
     unawaited(_locateOnOpen());
   }
@@ -197,6 +207,8 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // Hand the head unit back to the service isolate before this feed dies.
+    BleProxy.instance.setNavUiActive(false);
     unawaited(_feed?.dispose());
     _feed = null;
     MapData.instance.removeListener(_onMapDataChanged);
@@ -588,6 +600,8 @@ class _NavigatorScreenState extends State<NavigatorScreen>
                   case 'stream':
                     NavSettings.instance.setStreamToDisplay(
                         !NavSettings.instance.streamToDisplay);
+                    BleProxy.instance.setNavStreamEnabled(
+                        NavSettings.instance.streamToDisplay);
                     _syncStreamer();
                 }
               },
@@ -1237,10 +1251,49 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     _appHidden = hidden;
     if (hidden) {
       _gpsWanted = _controller.gpsActive;
+      // The UI is about to sleep: hand the ride to the service isolate and
+      // stop our own feed so the two never send at once.
+      _handoffToService();
+      BleProxy.instance.setNavUiActive(false);
+      unawaited(_feed?.stop());
       _reviewBackgroundFixes();
-    } else if (_gpsWanted && !_controller.gpsActive) {
-      unawaited(_ensureGps());
+    } else {
+      BleProxy.instance.setNavUiActive(true);
+      _syncStreamer();
+      if (_gpsWanted && !_controller.gpsActive) {
+        unawaited(_ensureGps());
+      }
     }
+  }
+
+  /// Give the service isolate the route / guide / zoom / look we were holding,
+  /// so the head unit keeps its line and turns while the phone is in a pocket.
+  void _handoffToService() {
+    final feed = _feed;
+    if (feed == null) return;
+    final route = _controller.route;
+    final g = _controller.guidance;
+    final look = feed.lookAt;
+    BleProxy.instance.sendNavHandoff(
+      route: route == null
+          ? null
+          : <({double lat, double lon})>[
+              for (final p in route.points) (lat: p.lat, lon: p.lon),
+            ],
+      guide: g == null
+          ? null
+          : (
+              turn: kNavTurnOrder.indexOf(g.next.type.name).clamp(0, 8),
+              distM: g.nextDistM.round(),
+              remainingM: g.remainingM.round(),
+              remainingS: g.remainingS.round(),
+              offRoute: g.offRoute,
+            ),
+      zoom: feed.zoom,
+      look: look == null
+          ? null
+          : (following: false, lat: look.lat, lon: look.lon),
+    );
   }
 
   /// Whether the receiver should be running right now, while hidden.

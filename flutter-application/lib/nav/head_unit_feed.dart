@@ -247,6 +247,7 @@ class HeadUnitFeed {
   /// rider actually is, because that is what draws their marker and places
   /// the route. Null means the two are the same.
   LatLon? _lookAt;
+  LatLon? get lookAt => _lookAt;
   double? _headingDeg;
   double _speedMs = 0;
 

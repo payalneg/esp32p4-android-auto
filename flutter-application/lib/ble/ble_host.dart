@@ -26,11 +26,13 @@ import '../coordinator.dart';
 import '../firmware/firmware_updater.dart';
 import '../helper/helper_protocol.dart';
 import '../helper/helper_service.dart';
+import '../nav/geo.dart';
 import 'ble_service.dart';
 import 'file_manager.dart';
 import 'file_ops.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
+import 'nav_background.dart';
 import 'nav_stream.dart';
 import 'uuids.dart';
 import 'vesc/vesc_link.dart';
@@ -65,6 +67,7 @@ class BleTaskHandler extends TaskHandler {
   StreamSubscription<void>? _navEmptySub;
   Timer? _navIdleTimer;
   bool _navFast = false;
+  NavBackground? _navBg;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -112,6 +115,8 @@ class BleTaskHandler extends TaskHandler {
     _statsTimer?.cancel();
     _consoleTimer?.cancel();
     _navIdleTimer?.cancel();
+    await _navBg?.dispose();
+    _navBg = null;
     await _navSub?.cancel();
     await _navDestSub?.cancel();
     await _navDroppedSub?.cancel();
@@ -169,11 +174,19 @@ class BleTaskHandler extends TaskHandler {
       _navIdleTimer?.cancel();
       _navIdleTimer = null;
       _navFast = false;
+      unawaited(_navBg?.dispose());
+      _navBg = null;
       return;
     }
     final nav = _ble.navStream;
     if (nav == null) return;
+    // The awake half of the app owns the nav feed while the UI sleeps. It
+    // stands down whenever the UI says it is feeding (see navUiActive).
+    final bg = NavBackground(nav);
+    _navBg = bg;
+    bg.setVisible(nav.state.navMode && nav.state.visible);
     _navSub = nav.states.listen((st) {
+      _navBg?.setVisible(st.navMode && st.visible);
       FlutterForegroundTask.sendDataToMain({
         't': IpcEvt.navState,
         'navMode': st.navMode,
@@ -221,11 +234,49 @@ class BleTaskHandler extends TaskHandler {
     });
   }
 
+  /// The UI went to sleep and handed us the ride it was guiding. Continue it
+  /// from the service isolate so the head unit keeps its line and turns.
+  void _applyHandoff(Map<String, dynamic> m) {
+    final bg = _navBg;
+    if (bg == null) return;
+    List<({double lat, double lon})>? route;
+    final flat = m['route'] as List?;
+    if (flat != null) {
+      final pts = flat.cast<num>();
+      route = <({double lat, double lon})>[
+        for (var i = 0; i + 1 < pts.length; i += 2)
+          (lat: pts[i].toDouble(), lon: pts[i + 1].toDouble()),
+      ];
+    }
+    ({int turn, int distM, int remainingM, int remainingS, bool offRoute})?
+        guide;
+    final g = m['guide'] as Map?;
+    if (g != null) {
+      guide = (
+        turn: (g['turn'] as num).toInt(),
+        distM: (g['dist'] as num).round(),
+        remainingM: (g['remM'] as num).round(),
+        remainingS: (g['remS'] as num).round(),
+        offRoute: g['off'] as bool? ?? false,
+      );
+    }
+    LatLon? look;
+    final l = m['look'] as Map?;
+    if (l != null && !(l['following'] as bool? ?? true)) {
+      look = LatLon((l['lat'] as num).toDouble(), (l['lon'] as num).toDouble());
+    }
+    bg.handoff(
+      route: route,
+      guide: guide,
+      zoom: (m['zoom'] as num?)?.toInt(),
+      lookAt: look,
+    );
+  }
+
   /// Frames want the fast connection interval, but only while they are
   /// actually moving — the rider may leave the navigator open and parked for
   /// an hour. Ten seconds of quiet hands the radio back.
-  void _navFrameSent() {
-    if (!_navFast) {
+  void _navFrameSent() {    if (!_navFast) {
       _navFast = true;
       unawaited(_ble.setLinkSpeed(fast: true));
     }
@@ -460,6 +511,18 @@ class BleTaskHandler extends TaskHandler {
 
         case IpcCmd.navHello:
           await _ble.navStream?.hello();
+          break;
+
+        case IpcCmd.navUiActive:
+          _navBg?.setUiActive(m['active'] as bool? ?? true);
+          break;
+
+        case IpcCmd.navStreamEnabled:
+          _navBg?.setStreamEnabled(m['on'] as bool? ?? true);
+          break;
+
+        case IpcCmd.navHandoff:
+          _applyHandoff(m);
           break;
 
         case IpcCmd.navStop:

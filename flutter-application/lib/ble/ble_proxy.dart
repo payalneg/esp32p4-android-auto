@@ -578,6 +578,47 @@ class BleProxy {
   /// Tell the head unit we stopped rendering, so it can say so.
   void navStop() => _fireAndForget(IpcCmd.navStop, const {});
 
+  /// Tell the service isolate whether the UI is awake and feeding the head
+  /// unit. When the UI goes to sleep the service takes over the nav feed.
+  void setNavUiActive(bool active) =>
+      _fireAndForget(IpcCmd.navUiActive, {'active': active});
+
+  /// Mirror the rider's "stream to display" switch into the service.
+  void setNavStreamEnabled(bool on) =>
+      _fireAndForget(IpcCmd.navStreamEnabled, {'on': on});
+
+  /// Hand the service the ride the UI was guiding so it can continue while the
+  /// UI sleeps. All fields optional; a null route clears the line.
+  void sendNavHandoff({
+    List<({double lat, double lon})>? route,
+    ({int turn, int distM, int remainingM, int remainingS, bool offRoute})?
+        guide,
+    int? zoom,
+    ({bool following, double lat, double lon})? look,
+  }) =>
+      _fireAndForget(IpcCmd.navHandoff, {
+        'route': route == null
+            ? null
+            : <double>[for (final p in route) ...<double>[p.lat, p.lon]],
+        'guide': guide == null
+            ? null
+            : <String, Object?>{
+                'turn': guide.turn,
+                'dist': guide.distM,
+                'remM': guide.remainingM,
+                'remS': guide.remainingS,
+                'off': guide.offRoute,
+              },
+        'zoom': zoom,
+        'look': look == null
+            ? null
+            : <String, Object?>{
+                'following': look.following,
+                'lat': look.lat,
+                'lon': look.lon,
+              },
+      });
+
   // ---- file manager helpers (used by FileManagerProxy) ----
 
   Future<Map<String, dynamic>> fileRequest(
