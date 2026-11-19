@@ -60,6 +60,11 @@ static void bms_battery_get(bms_telem_t *t)
     t->cell_max = 3.329f;
     t->cell_delta = 0.002f;
     t->cell_count = 16;
+    t->cell_min_index = 3;
+    t->cell_max_index = 11;
+    for (int i = 0; i < 16; i++) {
+        t->cells[i] = 3.327f + (i % 3) * 0.001f;
+    }
     t->cycles = 3;
     t->soh = 100;
     t->charging_mos = true;
@@ -96,6 +101,13 @@ static bool        s_alive;
 /* live labels */
 static lv_obj_t *s_status, *s_soc, *s_rem, *s_full, *s_volt, *s_curr, *s_power,
                 *s_temps, *s_cells, *s_cycles, *s_mos, *s_model;
+
+/* tabs: Pack (the existing readout) and Cells (per-cell voltage) */
+static lv_obj_t *s_tab_pack, *s_tab_cells;
+static lv_obj_t *s_pack_list, *s_cells_list;
+static lv_obj_t *s_cell_lbl[BMS_BATTERY_MAX_CELLS];
+static lv_obj_t *s_cells_head;
+static bool      s_cells_active;
 
 /* scan results (written on the NimBLE host task) */
 #if defined(LV_REALDEVICE) || defined(LV_SIMSHIM)
@@ -257,6 +269,32 @@ static void forget_cb(lv_event_t *e)
 #endif
 }
 
+/* ---- tabs ---- */
+
+static void style_tab(lv_obj_t *b, bool on)
+{
+    lv_obj_set_style_bg_color(b, lv_color_hex(on ? COL_ACCENT : COL_BTN), 0);
+    lv_obj_set_style_text_color(b, lv_color_hex(on ? 0x000000 : COL_TEXT), 0);
+}
+
+static void show_tab(bool cells)
+{
+    s_cells_active = cells;
+    if (s_pack_list) {
+        if (cells) lv_obj_add_flag(s_pack_list, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(s_pack_list, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_cells_list) {
+        if (cells) lv_obj_clear_flag(s_cells_list, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_add_flag(s_cells_list, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_tab_pack)  style_tab(s_tab_pack, !cells);
+    if (s_tab_cells) style_tab(s_tab_cells, cells);
+}
+
+static void tab_pack_cb(lv_event_t *e)  { (void)e; show_tab(false); }
+static void tab_cells_cb(lv_event_t *e) { (void)e; show_tab(true); }
+
 /* ---- live updater ---- */
 
 static void update_cb(lv_timer_t *t)
@@ -343,6 +381,35 @@ static void update_cb(lv_timer_t *t)
 
     if (tm.model[0]) set_text(s_model, tm.model);
     else             set_text(s_model, "--");
+
+    /* Per-cell tab. Only repaint the voltages while it is the visible one. */
+    if (s_cells_active && s_cells_list) {
+        char hb[64];
+        if (tm.connected && tm.cell_count > 0) {
+            snprintf(hb, sizeof hb, "%d cells, delta %.0f mV",
+                     tm.cell_count, (double)(tm.cell_delta * 1000.0f));
+        } else snprintf(hb, sizeof hb, "--");
+        set_text(s_cells_head, hb);
+
+        for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) {
+            lv_obj_t *l = s_cell_lbl[i];
+            if (!l) continue;
+            if (i >= tm.cell_count || !tm.connected) {
+                lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+                continue;
+            }
+            lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
+            char cb[24];
+            const float v = tm.cells[i];
+            if (isfinite(v)) snprintf(cb, sizeof cb, "%02d  %.3f", i + 1, (double)v);
+            else             snprintf(cb, sizeof cb, "%02d  --", i + 1);
+            set_text(l, cb);
+            uint32_t col = COL_TEXT;
+            if (i == tm.cell_min_index)      col = COL_AMBER;
+            else if (i == tm.cell_max_index) col = COL_ACCENT;
+            lv_obj_set_style_text_color(l, lv_color_hex(col), 0);
+        }
+    }
 }
 
 /* ---- lifecycle ---- */
@@ -365,6 +432,13 @@ static void screen_unloaded_cb(lv_event_t *e)
     if (s_timer) { lv_timer_del(s_timer); s_timer = NULL; }
     if (s_screen) { lv_obj_del_async(s_screen); s_screen = NULL; }
     s_scan_list = NULL;
+    s_pack_list = NULL;
+    s_cells_list = NULL;
+    s_cells_head = NULL;
+    s_tab_pack = NULL;
+    s_tab_cells = NULL;
+    for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) s_cell_lbl[i] = NULL;
+    s_cells_active = false;
 }
 
 void show_bms_settings(void)
@@ -398,10 +472,38 @@ void show_bms_settings(void)
     lv_obj_set_style_text_color(title, lv_color_hex(COL_TEXT), 0);
     lv_obj_set_style_text_font(title, UI_FONT_MENU, 0);
 
-    /* scrollable content */
+    /* tab row: Pack / Cells */
+    lv_obj_t *tabs = lv_obj_create(s_screen);
+    lv_obj_set_pos(tabs, 8, 52);
+    lv_obj_set_size(tabs, UI_W - 16, 40);
+    lv_obj_set_style_bg_opa(tabs, 0, 0);
+    lv_obj_set_style_border_width(tabs, 0, 0);
+    lv_obj_set_style_pad_all(tabs, 0, 0);
+    lv_obj_set_style_pad_column(tabs, 8, 0);
+    lv_obj_set_flex_flow(tabs, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(tabs, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_tab_pack = lv_btn_create(tabs);
+    lv_obj_set_size(s_tab_pack, 120, 36);
+    lv_obj_set_style_radius(s_tab_pack, 6, 0);
+    lv_obj_t *tpl = lv_label_create(s_tab_pack);
+    lv_label_set_text(tpl, "Pack");
+    lv_obj_center(tpl);
+    lv_obj_add_event_cb(s_tab_pack, tab_pack_cb, LV_EVENT_CLICKED, NULL);
+
+    s_tab_cells = lv_btn_create(tabs);
+    lv_obj_set_size(s_tab_cells, 120, 36);
+    lv_obj_set_style_radius(s_tab_cells, 6, 0);
+    lv_obj_t *tcl = lv_label_create(s_tab_cells);
+    lv_label_set_text(tcl, "Cells");
+    lv_obj_center(tcl);
+    lv_obj_add_event_cb(s_tab_cells, tab_cells_cb, LV_EVENT_CLICKED, NULL);
+
+    /* scrollable content: the Pack readout */
     lv_obj_t *list = lv_obj_create(s_screen);
-    lv_obj_set_pos(list, 8, 56);
-    lv_obj_set_size(list, UI_W - 16, UI_H - 64);
+    s_pack_list = list;
+    lv_obj_set_pos(list, 8, 96);
+    lv_obj_set_size(list, UI_W - 16, UI_H - 104);
     lv_obj_set_style_bg_color(list, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 6, 0);
@@ -479,6 +581,45 @@ void show_bms_settings(void)
     lv_obj_set_style_pad_all(s_scan_list, 2, 0);
     lv_obj_set_flex_flow(s_scan_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(s_scan_list, LV_DIR_VER);
+
+    /* ---- Cells tab: one tile per cell, wrapping into columns ---- */
+    s_cells_list = lv_obj_create(s_screen);
+    lv_obj_set_pos(s_cells_list, 8, 96);
+    lv_obj_set_size(s_cells_list, UI_W - 16, UI_H - 104);
+    lv_obj_set_style_bg_color(s_cells_list, lv_color_hex(COL_PANEL), 0);
+    lv_obj_set_style_border_width(s_cells_list, 0, 0);
+    lv_obj_set_style_radius(s_cells_list, 6, 0);
+    lv_obj_set_style_pad_all(s_cells_list, 8, 0);
+    lv_obj_set_style_pad_column(s_cells_list, 6, 0);
+    lv_obj_set_style_pad_row(s_cells_list, 6, 0);
+    lv_obj_set_flex_flow(s_cells_list, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_scroll_dir(s_cells_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_cells_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_cells_list, LV_OBJ_FLAG_HIDDEN);
+
+    s_cells_head = lv_label_create(s_cells_list);
+    lv_obj_set_width(s_cells_head, lv_pct(100));
+    lv_label_set_text(s_cells_head, "--");
+    lv_obj_set_style_text_color(s_cells_head, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_text_font(s_cells_head, &lv_font_montserratMedium_16, 0);
+
+    for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) {
+        lv_obj_t *c = lv_obj_create(s_cells_list);
+        lv_obj_set_size(c, 118, 40);
+        lv_obj_set_style_bg_color(c, lv_color_hex(COL_BTN), 0);
+        lv_obj_set_style_radius(c, 6, 0);
+        lv_obj_set_style_border_width(c, 0, 0);
+        lv_obj_set_style_pad_all(c, 2, 0);
+        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *l = lv_label_create(c);
+        lv_label_set_text(l, "--");
+        lv_obj_center(l);
+        lv_obj_set_style_text_font(l, &lv_font_montserratMedium_16, 0);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
+        s_cell_lbl[i] = l;
+    }
+
+    show_tab(false);
 
     lv_obj_add_event_cb(s_screen, screen_unloaded_cb,
                         LV_EVENT_SCREEN_UNLOADED, NULL);
