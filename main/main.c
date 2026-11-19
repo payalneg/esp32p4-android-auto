@@ -251,9 +251,14 @@ static void on_brightness_changed(uint8_t pct)
 static void on_dashboard_theme_switched(lv_obj_t *screen, lv_obj_t *music_tile)
 {
     (void)screen;
-    music_info_view_detach();
-    if (music_tile && settings_get_music_widget_enabled()) {
+    music_info_view_destroy();
+    if (!music_tile) return;
+    if (settings_get_music_widget_enabled()) {
+        lv_obj_clear_flag(music_tile, LV_OBJ_FLAG_HIDDEN);
         music_info_view_attach(music_tile);
+    } else {
+        /* Off: leave the theme's reserved tile empty and out of hit-testing. */
+        lv_obj_add_flag(music_tile, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

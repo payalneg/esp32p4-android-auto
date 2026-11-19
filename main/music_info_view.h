@@ -26,6 +26,12 @@ esp_err_t music_info_view_attach(lv_obj_t *parent);
  * music_info_view_attach() on the new theme's tile. */
 void music_info_view_detach(void);
 
+/* Detach AND remove the widgets the view created. Used when the rider turns
+ * the music widget off in Settings: the hosting screen stays, the card must
+ * actually disappear (detach alone only drops our references). Safe to call
+ * when nothing is attached. */
+void music_info_view_destroy(void);
+
 #ifdef __cplusplus
 }
 #endif

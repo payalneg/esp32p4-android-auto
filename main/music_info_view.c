@@ -704,8 +704,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
 
 void music_info_view_detach(void)
 {
-    if (s_poll) { lv_timer_del(s_poll); s_poll = NULL; }
-    s_root            = NULL;
+    if (s_poll) { lv_timer_del(s_poll); s_poll = NULL; }    s_root            = NULL;
     s_card            = NULL;
     s_video_art_img   = NULL;
     s_art_box         = NULL;
@@ -724,4 +723,11 @@ void music_info_view_detach(void)
     s_last_playing    = -1;
     s_last_art_hash   = 0;
     s_current_layout  = -1;
+}
+
+void music_info_view_destroy(void)
+{
+    if (s_poll) { lv_timer_del(s_poll); s_poll = NULL; }
+    if (s_card) { lv_obj_del(s_card); s_card = NULL; }
+    music_info_view_detach();
 }
