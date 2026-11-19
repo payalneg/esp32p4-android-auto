@@ -180,7 +180,10 @@ static void apply_layout(bool is_video, bool force)
             lv_obj_set_width(s_btn_row, LV_SIZE_CONTENT);
             lv_obj_align(s_btn_row, LV_ALIGN_TOP_RIGHT, -8, 8);
             lv_obj_set_style_bg_color(s_btn_row, lv_color_hex(0x000000), 0);
-            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_40, 0);
+            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_90, 0);
+            lv_obj_set_style_border_width(s_btn_row, 1, 0);
+            lv_obj_set_style_border_color(s_btn_row, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_border_opa(s_btn_row, LV_OPA_20, 0);
             lv_obj_set_style_radius(s_btn_row, 10, 0);
             lv_obj_set_style_pad_hor(s_btn_row, 6, 0);
             lv_obj_set_style_pad_ver(s_btn_row, 2, 0);
@@ -264,24 +267,14 @@ static void apply_layout(bool is_video, bool force)
          * Arc card and on top of each other. */
         if (right_w < 0) right_w = 0;
 
-        lv_coord_t title_y, artist_y, btn_y;
-        if (compact) {
-            title_y  = 2;
-            artist_y = 19;
-            btn_y    = 36;
-        } else if (s_tile_h < 100) {
-            title_y  = 3;
-            artist_y = 25;
-            btn_y    = 50;
-        } else if (s_tile_h < 120) {
-            title_y  = 6;
-            artist_y = 30;
-            btn_y    = 60;
-        } else {
-            title_y  = 6;
-            artist_y = 32;
-            btn_y    = 72;
-        }
+        /* Buttons are anchored to the tile, not to the text column: the same
+         * top-right pill in both music and video mode. When the wide album art
+         * arrives the layout switches modes, and the controls must not jump
+         * across the card. Text starts below that pill. */
+        lv_coord_t btn_band = compact ? 38
+                            : ((s_tile_h < 120) ? 52 : 60);
+        lv_coord_t title_y  = btn_band;
+        lv_coord_t artist_y = btn_band + (compact ? 16 : 22);
 
         if (s_title_lbl) {
             lv_obj_set_style_text_font(s_title_lbl,
@@ -305,11 +298,16 @@ static void apply_layout(bool is_video, bool force)
         }
 
         if (s_btn_row) {
-            lv_obj_set_width(s_btn_row, right_w);
-            lv_obj_align(s_btn_row, LV_ALIGN_TOP_LEFT, left_pad, btn_y);
-            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_pad_hor(s_btn_row, 0, 0);
-            lv_obj_set_style_pad_ver(s_btn_row, 0, 0);
+            lv_obj_set_width(s_btn_row, LV_SIZE_CONTENT);
+            lv_obj_align(s_btn_row, LV_ALIGN_TOP_RIGHT, -8, 8);
+            lv_obj_set_style_bg_color(s_btn_row, lv_color_hex(0x000000), 0);
+            lv_obj_set_style_bg_opa(s_btn_row, LV_OPA_90, 0);
+            lv_obj_set_style_border_width(s_btn_row, 1, 0);
+            lv_obj_set_style_border_color(s_btn_row, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_border_opa(s_btn_row, LV_OPA_20, 0);
+            lv_obj_set_style_radius(s_btn_row, 10, 0);
+            lv_obj_set_style_pad_hor(s_btn_row, 6, 0);
+            lv_obj_set_style_pad_ver(s_btn_row, 2, 0);
             lv_obj_clear_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(s_btn_row);
             if (!s_buttons_enabled) {
@@ -624,7 +622,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
         btn_gap   = 5;
         side_w    = 20;
         play_w    = 24;
-        play_h    = 24;
+        play_h    = 22;
         btn_font  = &lv_font_montserratMedium_16;
     } else if (s_tile_h < 100) {
         btn_gap   = 10;
@@ -669,7 +667,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
     lv_obj_add_event_cb(s_btn_prev, btn_prev_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *lbl_prev = lv_label_create(s_btn_prev);
-    lv_obj_set_style_text_color(lbl_prev, lv_color_hex(0x8ca0a2), 0);
+    lv_obj_set_style_text_color(lbl_prev, lv_color_white(), 0);
     lv_obj_set_style_text_color(lbl_prev, lv_color_hex(0xb5ff00), LV_STATE_PRESSED);
     lv_obj_set_style_text_font(lbl_prev, btn_font, 0);
     lv_label_set_text(lbl_prev, LV_SYMBOL_PREV);
@@ -708,7 +706,7 @@ esp_err_t music_info_view_attach(lv_obj_t *parent)
     lv_obj_add_event_cb(s_btn_next, btn_next_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *lbl_next = lv_label_create(s_btn_next);
-    lv_obj_set_style_text_color(lbl_next, lv_color_hex(0x8ca0a2), 0);
+    lv_obj_set_style_text_color(lbl_next, lv_color_white(), 0);
     lv_obj_set_style_text_color(lbl_next, lv_color_hex(0xb5ff00), LV_STATE_PRESSED);
     lv_obj_set_style_text_font(lbl_next, btn_font, 0);
     lv_label_set_text(lbl_next, LV_SYMBOL_NEXT);
