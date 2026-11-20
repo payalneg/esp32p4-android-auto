@@ -7,6 +7,30 @@ frame; the existing two-buffer handoff applies backpressure when a frame takes
 longer. Prediction stops after 1.5 seconds without VIEW updates, and reconnecting
 does not extrapolate across the disconnected interval.
 
+The worker waits only for the remainder of the 60 ms interval after composing,
+with at least one RTOS tick to yield on overruns. Unchanged view/camera/marker
+poses do not trigger another map bitmap; tile and route arrivals still force
+redraws. Fresh VIEW messages keep the link active even while a parked map is
+not producing frames.
+
+Map buffers become reusable after LVGL's refresh-complete monitor callback,
+rather than after an extra screen timer tick. The producer is blocked before
+the pending flag is cleared for the swap. HUD styles and object visibility
+are updated only when their state changes; LVGL v8 invalidates even when
+clearing HIDDEN on an already-visible label.
+
+JC4880 bench verification on 2026-11-20 compared the original installed
+1.3.47 firmware with 1.3.49 after rebooting both: empty RAM tile cache, the
+same 25 NVT1 tiles, 169 route points and 160 identical position/course/speed
+inputs at nominal 2 Hz, 5 m/s and 1x time over real Bluetooth. Map-frame
+counter rates increased from 3.4 to 9.9 FPS in NORTH and from 4.4 to 7.7 FPS
+during the AUTO turn. Identical stationary poses stopped producing map frames.
+Seven screen return cycles, clearing the route while NAV was hidden, a moving
+GPS gap and screenshot CRC validation also passed. The phone navigation stack
+was bypassed in this replay; these short runs do not establish real-road or
+overnight endurance, per-frame p95 latency or a video-based tearing assessment.
+Other P4 profiles were compiled but not tested on hardware.
+
 Route colours on both the phone and head unit:
 
 | Colour | Graph classes |

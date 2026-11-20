@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "nav_screen.h"
 
 static const char *TAG = "display_init";
 
@@ -57,6 +58,9 @@ static void display_monitor_cb(lv_disp_drv_t *drv, uint32_t time_ms, uint32_t px
 {
     (void)drv;
     s_flush_seq++;
+#if CONFIG_NAV_ENABLE
+    nav_screen_refresh_complete();
+#endif
 #if DISPLAY_PERF_LOG
     s_perf_frames++;
     s_perf_time_sum_ms += time_ms;

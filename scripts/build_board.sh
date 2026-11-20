@@ -26,7 +26,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # Boards with a sdkconfig.defaults.<board> overlay. Keep in sync with release.sh.
-BOARDS=(waveshare waveshare-rev3 jc4880 s3touch4)
+BOARDS=(waveshare waveshare-rev3 jc4880)
 
 # board -> chip. Anything not listed here is an ESP32-P4 head unit.
 board_target() {

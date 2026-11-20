@@ -59,6 +59,10 @@ void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
  * position updates. */
 void nav_map_set_speed(uint16_t cm_per_s);
 
+/* Whether the visible pose differs from the last composed frame. This does
+ * not track tiles/routes: their arrival must still request a redraw. */
+bool nav_map_pose_changed(void);
+
 /* How to turn a position near the view into a pixel on it.
  *
  * Mercator is a logarithm and a tangent, and doing it per point cost forty

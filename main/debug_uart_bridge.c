@@ -114,9 +114,9 @@ static bool ensure_resources(bool need_jpeg)
 static void send_frame(const char *fmt, int w, int h,
                        const uint8_t *data, size_t len)
 {
-    /* zlib-compatible CRC32 (host: zlib.crc32). Treated as advisory host-side
-     * in case the ROM CRC convention differs across chips. */
-    uint32_t crc = ~esp_rom_crc32_le(~0u, data, (uint32_t)len);
+    /* The ROM API already handles the CRC complements, as zlib does.
+     * Complementing it again reported false corruption on every capture. */
+    uint32_t crc = esp_rom_crc32_le(0, data, (uint32_t)len);
     int chunks = (int)((len + CHUNK_RAW - 1) / CHUNK_RAW);
 
     esp_log_level_t prev = esp_log_level_get("*");

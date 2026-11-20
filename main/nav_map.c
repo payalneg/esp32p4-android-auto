@@ -62,6 +62,33 @@ static int32_t s_target_lat_e7, s_target_lon_e7;
 static bool s_panned;
 static bool    s_have_target;
 
+/* Last composed pose, not last GPS packet. Comparing here also catches zoom,
+ * recenter and marker changes while browsing without redrawing a parked map. */
+static nav_map_view_t s_drawn_view;
+static float s_drawn_camera_heading, s_drawn_marker_heading;
+static bool s_drawn_arrow, s_drawn_panned;
+static int32_t s_drawn_target_lat, s_drawn_target_lon;
+
+static bool marker_is_arrow(void)
+{
+    return s_marker_has_heading && s_view.heading_deg < 360 && s_speed_ms > 0.5f;
+}
+
+bool nav_map_pose_changed(void)
+{
+    const bool arrow = marker_is_arrow();
+    return s_view.valid != s_drawn_view.valid ||
+           s_view.lat_e7 != s_drawn_view.lat_e7 ||
+           s_view.lon_e7 != s_drawn_view.lon_e7 ||
+           s_view.zoom != s_drawn_view.zoom ||
+           nav_map_camera_heading() != s_drawn_camera_heading ||
+           arrow != s_drawn_arrow ||
+           (arrow && s_marker_heading != s_drawn_marker_heading) ||
+           s_panned != s_drawn_panned ||
+           (s_panned && (s_target_lat_e7 != s_drawn_target_lat ||
+                         s_target_lon_e7 != s_drawn_target_lon));
+}
+
 /* Time-based easing stays consistent when a slow frame changes the cadence. */
 #define POSITION_EASE_MS 350.0f
 
@@ -1018,6 +1045,13 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
         return 0;
     }
 
+    /* Save the pose BEFORE composing. A new phone fix can arrive during the
+     * render; retaining that newer pose here would wrongly mark it drawn. */
+    const nav_map_view_t drawn_view = s_view;
+    const float drawn_marker_heading = s_marker_heading;
+    const bool drawn_arrow = marker_is_arrow(), drawn_panned = s_panned;
+    const int32_t drawn_target_lat = s_target_lat_e7;
+    const int32_t drawn_target_lon = s_target_lon_e7;
     const int64_t wx = world_x_px(s_view.lon_e7, s_view.zoom);
     const int64_t wy = world_y_px(s_view.lat_e7, s_view.zoom);
     const float heading = nav_map_camera_heading();
@@ -1046,7 +1080,7 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
             mx = my = -10000;   /* nothing to draw */
         }
     }
-    if (s_marker_has_heading && s_view.heading_deg < 360 && s_speed_ms > 0.5) {
+    if (marker_is_arrow()) {
         draw_arrow(dst, w, h, mx, my, s_marker_heading - heading);
     } else {
         draw_marker(dst, w, h, mx, my);
@@ -1057,5 +1091,12 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
     float hc, hs;
     camera_axes(&hc, &hs);
     collect_labels(w, h, wx, wy, hc, hs);
+    s_drawn_view = drawn_view;
+    s_drawn_camera_heading = heading;
+    s_drawn_marker_heading = drawn_marker_heading;
+    s_drawn_arrow = drawn_arrow;
+    s_drawn_panned = drawn_panned;
+    s_drawn_target_lat = drawn_target_lat;
+    s_drawn_target_lon = drawn_target_lon;
     return have;
 }

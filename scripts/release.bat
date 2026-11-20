@@ -14,7 +14,7 @@ for %%D in ("%~dp0..") do set "ROOT=%%~fD"
 cd /d "%ROOT%" || exit /b 1
 
 :: Keep in sync with build_board.bat / release.sh.
-set BOARDS=waveshare waveshare-rev3 jc4880 s3touch4
+set BOARDS=waveshare waveshare-rev3 jc4880
 
 call "%ROOT%\scripts\app_env.bat" release
 if errorlevel 1 exit /b 1

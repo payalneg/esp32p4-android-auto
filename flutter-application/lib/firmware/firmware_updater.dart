@@ -50,11 +50,12 @@ class FirmwareUpdater {
   /// and the user hasn't picked one manually.
   static const defaultModel = 'waveshare';
 
+  /// S3 support is paused; only P4 images are bundled.
   /// Boards the APK ships an image for. Slugs match the firmware's
   /// BOARD_MODEL_ID (main/board.h) and the staged asset names
   /// (scripts/stage_firmware_asset.sh). Drives the manual firmware picker.
   static const boards = <String>[
-    'waveshare', 'waveshare-rev3', 'jc4880', 's3touch4',
+    'waveshare', 'waveshare-rev3', 'jc4880',
   ];
 
   /// Human-readable product name for a board slug (untranslated — these are

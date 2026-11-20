@@ -18,10 +18,9 @@ controller while the dashboard is running.
 protocol — pair your phone over Bluetooth and Google Maps / Spotify /
 Cycleway projects onto the same screen. No phone app required.
 
-Three boards build from this tree: two 800×480 ESP32-P4 head units
-(Waveshare 4.3" and Guition JC4880P443C) and a square 480×480
-**ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
-[Hardware](#-hardware).
+Current app bundles and default builds target the ESP32-P4 head units
+(Waveshare 4.3" and Guition JC4880P443C). **ESP32-S3 support is temporarily
+paused**; its sources and explicit developer build remain available.
 
 **Firmware 1.3.48 / Android companion app 0.3.57:** files in [release/](release/).
 Release details, navigation bench results and remaining limitations: [release notes](release/README.md).

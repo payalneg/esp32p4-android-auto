@@ -1,5 +1,8 @@
 # Waveshare ESP32-S3-Touch-LCD-4 (`s3touch4`)
 
+Support is temporarily paused. S3 is excluded from the app, default builds and
+new releases. Sources and explicit `build_board` commands remain available.
+
 The dashboard-only board: same firmware tree, same VESC dashboard, no Android
 Auto. Written down here because the two hardware revisions differ in a way that
 looks like a dead display if you guess wrong.

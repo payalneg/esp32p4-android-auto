@@ -9,6 +9,18 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased
+
+- Count map composition time inside the frame interval instead of sleeping a
+  full interval after each render. Skip identical stationary map frames while
+  keeping tile/route redraws and the phone activity timeout independent.
+- Release map buffers on LVGL refresh completion, update HUD styles and label
+  visibility only on changes, and force a fresh map when re-entering navigation.
+- Correct the UART screenshot CRC to match the host's zlib calculation.
+- Temporarily pause S3 support: omit it from the app firmware picker, APK assets,
+  default builds and releases. Keep its sources and explicit developer build.
+- Use short English navigator activity messages with explicit loading status.
+
 ## v1.3.48 / app 0.3.57 — 2026-11-20
 
 ### Navigator: smoother motion, route types and activity

@@ -1,7 +1,7 @@
 name: aa_bridge
 description: "Notification + media BLE bridge to ESP32-P4 head unit."
 publish_to: 'none'
-version: 0.3.57+119
+version: 0.3.58+122
 
 environment:
   sdk: ^3.7.2
@@ -53,7 +53,6 @@ flutter:
     - assets/firmware/esp32p4_android_auto-waveshare.bin
     - assets/firmware/esp32p4_android_auto-waveshare-rev3.bin
     - assets/firmware/esp32p4_android_auto-jc4880.bin
-    - assets/firmware/esp32p4_android_auto-s3touch4.bin
     - assets/firmware/version.txt
     # VESC BLE Helper (ESP32-C3) firmware, so it can be flashed with no network.
     # Fetched from that project's GitHub releases by

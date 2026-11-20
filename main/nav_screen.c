@@ -25,15 +25,18 @@
 
 static const char *TAG = "nav_screen";
 
+static void set_hidden(lv_obj_t *obj, bool hidden)
+{
+    if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == hidden) return;
+    if (hidden) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+}
+
 /* Poll committed frames often enough to preserve the composer's 60 ms cadence. */
 #define TICK_PERIOD_MS 25
 
-/* Ticks the just-retired front buffer stays off limits after a swap. LVGL
- * renders the image into the panel framebuffer asynchronously (and twice, once
- * per framebuffer in DOUBLE_DIRECT), so handing it straight back to the BLE
- * worker's DMA would tear the picture being drawn. One 25 ms tick is enough
- * — a full-screen image flushes in about 7 ms in this render mode. */
-#define SWAP_COOLDOWN_TICKS 1
+/* Retired map pixels remain busy until LVGL's refresh-complete callback.
+ * Timer ticks are not completion signals: a slow refresh delays them too. */
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_img;
@@ -112,10 +115,10 @@ static size_t    s_fb_bytes;
 static int       s_front;          /* index of the buffer lv_img points at */
 static lv_img_dsc_t s_dsc;
 
-/* Written by the BLE worker, read by the LVGL tick (and the other way round
- * for the cooldown) — one flag each way, so plain atomics are enough. */
+/* Pending goes worker -> LVGL; retired_busy goes LVGL -> worker and is
+ * released only after the refresh no longer reads the retired map pixels. */
 static atomic_bool s_pending;
-static atomic_int  s_cooldown;
+static atomic_bool s_retired_busy;
 
 static atomic_bool s_active;
 static atomic_bool s_phone;
@@ -246,15 +249,21 @@ static void refresh_hud(void)
     if (strcmp(buf, lv_label_get_text(s_batt_lbl)) != 0) {
         lv_label_set_text(s_batt_lbl, buf);
     }
-    /* Antonio 64 is digit-subsetted; "N/A" needs a full-ASCII face. */
-    lv_obj_set_style_text_font(s_batt_lbl,
-                               batt_known ? &lv_font_Antonio_Regular_64
-                                          : &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_batt_lbl,
-                                lv_color_hex(batt_known ? 0xFFFFFF : 0x8A9499), 0);
+    /* LVGL refreshes style/layout even when a setter receives the same value.
+     * Doing this every 25 ms kept repainting the HUD over a parked map. */
+    static int batt_style_known = -1;
+    if (batt_style_known != (int)batt_known) {
+        batt_style_known = batt_known;
+        /* Antonio 64 is digit-subsetted; N/A needs a full-ASCII face. */
+        lv_obj_set_style_text_font(s_batt_lbl,
+                                   batt_known ? &lv_font_Antonio_Regular_64
+                                              : &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_batt_lbl,
+                                    lv_color_hex(batt_known ? 0xFFFFFF : 0x8A9499), 0);
+    }
     if (s_batt_unit) {
-        if (batt_known) lv_obj_clear_flag(s_batt_unit, LV_OBJ_FLAG_HIDDEN);
-        else            lv_obj_add_flag(s_batt_unit, LV_OBJ_FLAG_HIDDEN);
+        if (batt_known) set_hidden(s_batt_unit, false);
+        else            set_hidden(s_batt_unit, true);
     }
 
     /* Cruise comes from the LISP dash packet, which has its own pump — it can
@@ -262,8 +271,8 @@ static void refresh_hud(void)
     vlp_dash_t dash;
     const bool cc = vesc_lisp_panel_get_dash(&dash) && dash.cruise_active;
     if (s_cc_img) {
-        if (cc) lv_obj_clear_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
-        else    lv_obj_add_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
+        if (cc) set_hidden(s_cc_img, false);
+        else    set_hidden(s_cc_img, true);
     }
 }
 
@@ -313,7 +322,7 @@ static void answer_timeout_cb(lv_timer_t *t)
     s_answer_timer = NULL;      /* one-shot */
     if (!s_find_hint) return;
     lv_label_set_text(s_find_hint, "No answer from the phone");
-    lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_find_hint, false);
 }
 
 static void find_close(void)
@@ -326,7 +335,7 @@ static void find_close(void)
         lv_timer_del(s_answer_timer);
         s_answer_timer = NULL;
     }
-    if (s_find_box) lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_find_box) set_hidden(s_find_box, true);
 }
 
 /* Ask the phone. It owns the offline search index that came with its map, so
@@ -341,7 +350,7 @@ static void send_query(lv_timer_t *t)
     if (!q || strlen(q) < FIND_MIN_CHARS) return;
     if (s_find_hint) {
         lv_label_set_text(s_find_hint, "Looking...");
-        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_find_hint, false);
     }
     if (s_answer_timer) lv_timer_del(s_answer_timer);
     s_answer_timer = lv_timer_create(answer_timeout_cb, FIND_ANSWER_MS, NULL);
@@ -359,7 +368,7 @@ static void query_changed_cb(lv_event_t *e)
         lv_obj_clean(s_find_list);
         atomic_store(&s_nhits, 0);
         lv_label_set_text(s_find_hint, "Type a street or a place");
-        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_find_hint, false);
     }
     if (s_query_timer) lv_timer_del(s_query_timer);
     s_query_timer = lv_timer_create(send_query, FIND_DEBOUNCE_MS, NULL);
@@ -384,8 +393,8 @@ static void find_open_cb(lv_event_t *e)
     lv_textarea_set_text(s_find_ta, "");
     lv_obj_clean(s_find_list);
     lv_label_set_text(s_find_hint, "Type a street or a place");
-    lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_find_hint, false);
+    set_hidden(s_find_box, false);
     lv_obj_move_foreground(s_find_box);   /* over the zoom buttons */
     /* Letters again, whatever it was last time. The number pad sticking
      * around was caught by a soak: every search after one coordinate lookup
@@ -434,10 +443,10 @@ static void refresh_results(void)
     const int n = atomic_load(&s_nhits);
     if (n <= 0) {
         lv_label_set_text(s_find_hint, "Nothing found");
-        lv_obj_clear_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_find_hint, false);
         return;
     }
-    lv_obj_add_flag(s_find_hint, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_find_hint, true);
     for (int i = 0; i < n; i++) {
         lv_obj_t *b = lv_btn_create(s_find_list);
         lv_obj_set_size(b, lv_pct(100), 46);
@@ -560,7 +569,7 @@ static void map_drag_cb(lv_event_t *e)
     lv_indev_get_vect(indev, &v);
     if (v.x == 0 && v.y == 0) return;
     nav_map_pan(v.x, v.y);
-    if (s_recentre_btn) lv_obj_clear_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_recentre_btn) set_hidden(s_recentre_btn, false);
 }
 
 static void map_released_cb(lv_event_t *e)
@@ -576,7 +585,7 @@ static void recentre_cb(lv_event_t *e)
 {
     (void)e;
     nav_map_pan_reset();
-    if (s_recentre_btn) lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_recentre_btn) set_hidden(s_recentre_btn, true);
     if (s_look_cb) s_look_cb(true, 0, 0);
 }
 
@@ -589,17 +598,21 @@ static void refresh_guide(void)
     nav_guide_t g;
     nav_route_get_guide(&g);
     if (!g.valid || nav_route_count() < 2) {
-        lv_obj_add_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_turn_box, true);
+        set_hidden(s_remain_lbl, true);
         return;
     }
-    lv_obj_clear_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_turn_box, false);
+    set_hidden(s_remain_lbl, false);
 
     /* Off the route is the one state worth shouting about. */
-    lv_obj_set_style_bg_color(s_turn_box,
-                              lv_color_hex(g.off_route ? 0xB3261E : HUD_PLATE), 0);
-    lv_obj_set_style_bg_opa(s_turn_box, g.off_route ? LV_OPA_90 : LV_OPA_70, 0);
+    static int shown_off_route = -1;
+    if (shown_off_route != (int)g.off_route) {
+        shown_off_route = g.off_route;
+        lv_obj_set_style_bg_color(s_turn_box,
+                                  lv_color_hex(g.off_route ? 0xB3261E : HUD_PLATE), 0);
+        lv_obj_set_style_bg_opa(s_turn_box, g.off_route ? LV_OPA_90 : LV_OPA_70, 0);
+    }
 
     char buf[32];
     set_arrow(g.turn);
@@ -639,11 +652,11 @@ static void set_status(const char *text)
     s_status_text = text;
     if (!s_status_box) return;
     if (text == NULL) {
-        lv_obj_add_flag(s_status_box, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_status_box, true);
         return;
     }
     lv_label_set_text(s_status_lbl, text);
-    lv_obj_clear_flag(s_status_box, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_status_box, false);
 }
 
 static void show_committed_frame(void)
@@ -677,7 +690,7 @@ static void refresh_labels(void)
         lv_obj_t *o = s_label_obj[i];
         if (!o) continue;
         if (i >= n) {
-            lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+            set_hidden(o, true);
             continue;
         }
         const char *text = lv_label_get_text(o);
@@ -705,7 +718,7 @@ static void refresh_labels(void)
             h = (int)lv_obj_get_height(o);
         }
         lv_obj_set_pos(o, labels[i].x - w / 2, labels[i].y - h / 2);
-        lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(o, false);
     }
 }
 
@@ -726,19 +739,19 @@ static void tick_cb(lv_timer_t *t)
     if (atomic_exchange(&s_recentre_req, false)) {
         if (nav_map_is_panned()) {
             nav_map_pan_reset();
-            /* The phone sends tiles around what we said we are looking at
-             * — it has to hear that this is the rider again. */
-            if (s_look_cb) s_look_cb(true, 0, 0);
         }
-        if (s_recentre_btn) lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+        /* Re-entering NAV must also redraw tiles received while it was
+         * hidden, even if the rider is parked and the pose is unchanged.
+         * Publishing follow mode queues that redraw on the worker. */
+        if (s_look_cb) s_look_cb(true, 0, 0);
+        if (s_recentre_btn) set_hidden(s_recentre_btn, true);
     }
 
-    int cd = atomic_load(&s_cooldown);
-    if (cd > 0) atomic_store(&s_cooldown, cd - 1);
-
-    if (atomic_exchange(&s_pending, false)) {
+    if (atomic_load(&s_pending)) {
+        /* Block the producer BEFORE exposing pending=false and swapping. */
+        atomic_store(&s_retired_busy, true);
+        atomic_store(&s_pending, false);
         show_committed_frame();
-        atomic_store(&s_cooldown, SWAP_COOLDOWN_TICKS);
     }
 
     /* A caption only when there is nothing to look at, or when the phone
@@ -765,19 +778,19 @@ static void tick_cb(lv_timer_t *t)
 
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
-        set_status("Нет телефона");
+        set_status("No phone");
     } else if (!atomic_load(&s_streaming)) {
-        set_status("Жду навигатор");
+        set_status("Waiting for app");
     } else if (esp_timer_get_time() < atomic_load(&s_activity_until_us)) {
         set_status(atomic_load(&s_activity));
     } else if (!have_frame) {
-        set_status("Жду карту");
+        set_status("Loading map...");
     } else if (esp_timer_get_time() - atomic_load(&s_last_position_us) > 1500000) {
-        set_status("Жду GPS");
+        set_status("Waiting for GPS");
     } else if (atomic_load(&s_map_missing)) {
-        set_status("Жду карту");
+        set_status("Loading map...");
     } else {
-        set_status(nav_route_count() >= 2 ? "Навигация" : "Карта готова");
+        set_status(nav_route_count() >= 2 ? "Navigating" : "Map ready");
     }
 }
 
@@ -850,7 +863,7 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_pad_ver(o, 1, 0);
         lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
         lv_label_set_text(o, "");
-        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(o, true);
         s_label_obj[i] = o;
         s_label_w[i] = s_label_h[i] = 0;
     }
@@ -874,8 +887,8 @@ esp_err_t nav_screen_init(void)
     lv_obj_center(s_status_lbl);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_white(), 0);
     lv_obj_set_style_text_font(s_status_lbl, &aabridge_font_24, 0);
-    lv_label_set_text(s_status_lbl, "Нет телефона");
-    s_status_text = "Нет телефона";
+    lv_label_set_text(s_status_lbl, "No phone");
+    s_status_text = "No phone";
 
     lv_obj_t *left = hud_row_create(s_screen, LV_ALIGN_BOTTOM_LEFT, 10, -8);
     /* Cruise sits to the left of the digits, as it does in Android Auto, so
@@ -884,7 +897,7 @@ esp_err_t nav_screen_init(void)
     lv_img_set_src(s_cc_img, &_cruise_control_alpha_38x38);
     lv_obj_set_style_img_recolor(s_cc_img, lv_color_hex(CC_COLOUR), 0);
     lv_obj_set_style_img_recolor_opa(s_cc_img, LV_OPA_COVER, 0);
-    lv_obj_add_flag(s_cc_img, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_cc_img, true);
     s_speed_lbl = hud_text(left, &lv_font_Antonio_Regular_64, 0xFFFFFF);
     s_speed_unit = hud_text(left, &lv_font_Antonio_Regular_22, 0xC8D0D8);
 
@@ -927,7 +940,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_radius(s_find_box, 0, 0);
     lv_obj_set_style_pad_all(s_find_box, 0, 0);
     lv_obj_clear_flag(s_find_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_find_box, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_find_box, true);
 
     s_find_ta = lv_textarea_create(s_find_box);
     lv_obj_set_size(s_find_ta, UI_SX(460), 56);
@@ -1053,7 +1066,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_bg_opa(s_recentre_btn, LV_OPA_70, 0);
     lv_obj_set_style_radius(s_recentre_btn, 14, 0);
     lv_obj_add_event_cb(s_recentre_btn, recentre_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_flag(s_recentre_btn, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_recentre_btn, true);
     {
         /* Plain ASCII, like the zoom glyphs and FIND: the panel's font carries
          * Latin, Cyrillic and punctuation, and nothing from LVGL's symbol
@@ -1068,7 +1081,7 @@ esp_err_t nav_screen_init(void)
      * destination prompt in the middle. */
     s_turn_box = hud_row_create(s_screen, LV_ALIGN_TOP_LEFT, 10, 10);
     lv_obj_set_style_pad_column(s_turn_box, 10, 0);
-    lv_obj_add_flag(s_turn_box, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_turn_box, true);
 
     s_turn_arrow = lv_line_create(s_turn_box);
     lv_obj_set_size(s_turn_arrow, 60, 66);
@@ -1092,7 +1105,7 @@ esp_err_t nav_screen_init(void)
     lv_obj_set_style_pad_ver(s_remain_lbl, 3, 0);
     lv_obj_set_style_radius(s_remain_lbl, 8, 0);
     lv_label_set_text(s_remain_lbl, "");
-    lv_obj_add_flag(s_remain_lbl, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_remain_lbl, true);
 
     s_tick = lv_timer_create(tick_cb, TICK_PERIOD_MS, NULL);
 
@@ -1111,13 +1124,18 @@ uint16_t *nav_screen_back_buffer(void)
 {
     if (!s_fb[0] || !s_fb[1]) return NULL;
     if (atomic_load(&s_pending)) return NULL;
-    if (atomic_load(&s_cooldown) > 0) return NULL;
+    if (atomic_load(&s_retired_busy)) return NULL;
     return s_fb[s_front ^ 1];
 }
 
 size_t nav_screen_back_buffer_bytes(void) { return s_fb_bytes; }
 
 void nav_screen_commit(void) { atomic_store(&s_pending, true); }
+
+void nav_screen_refresh_complete(void)
+{
+    atomic_store(&s_retired_busy, false);
+}
 
 void nav_screen_set_active(bool active)
 {

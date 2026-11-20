@@ -447,7 +447,9 @@ static void step_view(void)
     const uint32_t dt = elapsed_ms > 250 ? NAV_STEP_MS : (uint32_t)elapsed_ms;
     s_last_step_us = now;
     nav_map_dead_reckon(dt);
-    render_view();
+    /* Tile/route arrivals force their own redraw. A stationary pose does not
+     * need another full-screen bitmap just because the frame clock fired. */
+    if (nav_map_pose_changed()) render_view();
 }
 
 /* How many tiles one idle pass may lift off the microSD card.
@@ -506,7 +508,7 @@ static void prefetch_pass(void)
         }
     }
     if (got) {
-        nav_screen_set_activity("Карта: SD");
+        nav_screen_set_activity("Loading SD map");
         render_view();
     }
 }
@@ -534,7 +536,7 @@ static void handle_tile(const nav_evt_t *ev)
         render_view();
     } else {
         s_stats.tiles_failed++;
-        nav_screen_set_activity("Ошибка карты");
+        nav_screen_set_activity("Map error");
     }
     notify(NAV_ST_TILE_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
 }
@@ -599,9 +601,21 @@ static void worker(void *arg)
         nav_evt_t ev;
         /* A render we owe is worth waking up for sooner than the idle
          * cadence — the buffer frees within a screen tick or two. */
-        const TickType_t wait = atomic_load(&s_render_owed)
-                                    ? pdMS_TO_TICKS(NAV_RENDER_RETRY_MS)
-                                    : pdMS_TO_TICKS(NAV_FRAME_MS);
+        uint32_t wait_ms = NAV_FRAME_MS;
+        if (atomic_load(&s_render_owed)) {
+            wait_ms = NAV_RENDER_RETRY_MS;
+        } else if (s_stats.streaming && s_last_view_us != 0) {
+            /* The cadence is start-to-start. Waiting a whole frame AFTER
+             * composing turned 23 ms of work + 60 ms sleep into 12 fps,
+             * and 60 ms of work + 60 ms sleep into only 8 fps. */
+            const int64_t remaining_us = NAV_STEP_MS * 1000LL -
+                                        (esp_timer_get_time() - s_last_step_us);
+            wait_ms = remaining_us > 0 ? (uint32_t)((remaining_us + 999) / 1000) : 0;
+            if (wait_ms > NAV_FRAME_MS) wait_ms = NAV_FRAME_MS;
+        }
+        TickType_t wait = pdMS_TO_TICKS(wait_ms);
+        /* Yield even when composition overruns; never spin ahead of LVGL. */
+        if (wait == 0) wait = 1;
         if (xQueueReceive(s_q, &ev, wait) != pdTRUE) {
             const int64_t now = esp_timer_get_time();
             /* An owed render still has to happen: tiles land while the rider
@@ -610,8 +624,12 @@ static void worker(void *arg)
             /* Idle sweep: the app stopped without saying so (screen off, out
              * of range, killed) — stop claiming we are streaming and hand the
              * radio back to its normal duty cycle. */
-            if (s_stats.streaming && s_last_frame_us != 0 &&
-                now - s_last_frame_us > NAV_IDLE_US) {
+            /* A parked map now skips identical frames. Fresh VIEW packets
+             * still mean the phone is active even when no pixels changed. */
+            const int64_t last_activity = s_last_view_us > s_last_frame_us
+                                           ? s_last_view_us : s_last_frame_us;
+            if (s_stats.streaming && last_activity != 0 &&
+                now - last_activity > NAV_IDLE_US) {
                 s_stats.streaming = false;
                 /* Only the radio is stood down — the picture on screen is
                  * still current, so the placeholder stays away. */
@@ -884,7 +902,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_seq = seq;
             s_rx_kind = RX_ROUTE;
             s_state = ST_RECEIVING;
-            nav_screen_set_activity("Маршрут: Bluetooth");
+            nav_screen_set_activity("Loading BT route");
             break;
         }
 
@@ -952,7 +970,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_seq = seq;
             s_rx_kind = RX_TILE;
             s_state = ST_RECEIVING;
-            nav_screen_set_activity("Карта: Bluetooth");
+            nav_screen_set_activity("Loading BT map");
             break;
         }
 
@@ -993,8 +1011,8 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
 void ble_nav_data_write(const uint8_t *data, uint16_t len)
 {
     if (s_state != ST_RECEIVING || !s_stage || len == 0) return;
-    if (s_rx_kind == RX_TILE) nav_screen_set_activity("Карта: Bluetooth");
-    if (s_rx_kind == RX_ROUTE) nav_screen_set_activity("Маршрут: Bluetooth");
+    if (s_rx_kind == RX_TILE) nav_screen_set_activity("Loading BT map");
+    if (s_rx_kind == RX_ROUTE) nav_screen_set_activity("Loading BT route");
     if (s_got + len > s_expect) {
         /* More than promised: the sender and we disagree about this one, so
          * drop it rather than decode a mixture of two. */

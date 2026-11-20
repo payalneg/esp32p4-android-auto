@@ -58,6 +58,9 @@ size_t    nav_screen_back_buffer_bytes(void);
  * BLE worker task only. */
 void nav_screen_commit(void);
 
+/* LVGL monitor callback, after it has finished reading map image pixels. */
+void nav_screen_refresh_complete(void);
+
 /* Whether the Navigator screen is the one the rider is looking at. Set by
  * ui_mode_set; read by the BLE side to tell the phone whether to stream. */
 void nav_screen_set_active(bool active);
