@@ -656,6 +656,9 @@ static lv_obj_t *arc_create(void)
     lv_obj_add_flag(s.warn_lbl, LV_OBJ_FLAG_HIDDEN);
 
     bms_screen_attach_percent(s.batt_pct);
+    /* Tap the voltage cell to reveal the real pack voltage for 10 s when the
+     * Settings "voltage offset" is masking it (see dashboard_theme.c). */
+    dashboard_voltage_attach_reveal(s.volt_val);
     arc_units_changed();
     return scr;
 }

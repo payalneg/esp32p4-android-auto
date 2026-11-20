@@ -109,6 +109,7 @@ typedef struct num_field {
 
 static num_field_t s_battery_capacity_field;
 static num_field_t s_power_max_field;
+static num_field_t s_voltage_offset_field;
 static num_field_t s_clock_hour_field;
 static num_field_t s_clock_min_field;
 
@@ -751,6 +752,10 @@ static void cockpit_screen_init(lv_ui *ui)
      * the "%" beside it to see JK-BMS SOC / Ah / cells / temps. */
     bms_screen_attach_percent(ui->dashboard_Classic_Battery_proc_text);
     bms_screen_attach_percent(ui->dashboard_Classic_battery_pct);
+
+    /* Voltage readout: tap reveals the true pack voltage for 10 s when the
+     * Settings "voltage offset" is masking it (see dashboard_theme.c). */
+    dashboard_voltage_attach_reveal(ui->dashboard_Classic_Voltage_text);
 
     // Initialize cruise-active widgets as hidden (shown when CC engages).
     if (ui->dashboard_Classic_cruise_control_img != NULL) {
@@ -1617,6 +1622,7 @@ static debounced_commit_t s_music_widget_commit;
 static debounced_commit_t s_music_buttons_commit;
 static debounced_commit_t s_battery_capacity_commit;
 static debounced_commit_t s_power_max_commit;
+static debounced_commit_t s_voltage_offset_commit;
 static debounced_commit_t s_theme_commit;
 
 /* Dashboard theme dropdown. Live-switches the dashboard (no restart) and
@@ -1769,6 +1775,29 @@ static void power_max_plus_btn_event_cb(lv_event_t *e) {
 
 static void power_max_minus_btn_event_cb(lv_event_t *e) {
     for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_power_max_field);
+}
+
+/* Voltage offset — stored as int tenths of a volt (e.g. 200 → 20.0 V). Volts
+ * subtracted from the pack voltage on the dashboard; 0 turns the feature off.
+ * Same volatile + debounced-persist pattern as the other steppers. */
+static void voltage_offset_on_change(num_field_t *f) {
+    settings_wrapper_set_voltage_offset_volatile((float)f->value / 10.0f);
+    debounced_commit_schedule(&s_voltage_offset_commit,
+                              settings_wrapper_persist_voltage_offset);
+    if (settings_info_label) {
+        lv_label_set_text(settings_info_label,
+                          f->value == 0
+                              ? "Voltage offset off - showing the real pack voltage"
+                              : "Voltage offset set - tap the voltage on the dashboard to reveal");
+    }
+}
+
+static void voltage_offset_plus_btn_event_cb(lv_event_t *e) {
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_inc(&s_voltage_offset_field);
+}
+
+static void voltage_offset_minus_btn_event_cb(lv_event_t *e) {
+    for (int n = step_btn_steps(e); n > 0; n--) num_field_dec(&s_voltage_offset_field);
 }
 
 static void clock_apply_from_fields(void) {
@@ -2607,6 +2636,7 @@ static void reset_button_event_cb(lv_event_t *e) {
         settings_wrapper_set_wheel_diameter_mm(200); // 200mm
         settings_wrapper_set_motor_poles(7); // Standard for VESC
         settings_wrapper_set_power_max_kw(4.5f);
+        settings_wrapper_set_voltage_offset(0.0f);  // show the real voltage
         settings_wrapper_set_dashboard_theme(0); // Cockpit
         settings_wrapper_set_splash_loops(1);     // play boot splash once
         settings_wrapper_set_display_flip(false); // normal orientation
@@ -2663,6 +2693,7 @@ static void reset_button_event_cb(lv_event_t *e) {
             lv_spinbox_set_value(settings_motor_poles_spinbox, 7); // Standard for VESC
         }
         if (s_power_max_field.label)        num_field_set(&s_power_max_field, 45); // 4.5 kW
+        if (s_voltage_offset_field.label)   num_field_set(&s_voltage_offset_field, 0); // real voltage
         cockpit_refresh_power_max_label();
 
         /* Cockpit: fps_text removed — nothing to toggle visibility on. */
@@ -2946,6 +2977,33 @@ void settings_ui_init(lv_ui *ui) {
     settings_battery_capacity_plus_btn = settings_step_btn_create(parent,
         SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff, battery_capacity_plus_btn_event_cb);
     y_pos += SETTINGS_ROW_H;
+
+    // ========== Hidden voltage (offset) ==========
+    // The dashboard draws the pack voltage minus this many volts; 0 = off.
+    // Tapping the voltage readout reveals the real value for 10 s.
+    settings_heading_create(parent, y_pos, "Voltage offset (V):");
+    s_voltage_offset_field = (num_field_t){
+        .value = (int)(settings_wrapper_get_voltage_offset() * 10.0f + 0.5f),
+        .min = 0, .max = 1000, .step = 5, .decimals = 1,
+        .on_change = voltage_offset_on_change,
+    };
+    settings_step_btn_create(parent, SETTINGS_MINUS_X, y_pos + 5, "-", 0xff4444,
+                             voltage_offset_minus_btn_event_cb);
+    settings_value_label_init(parent, &s_voltage_offset_field, y_pos + 5, 0xffa500);
+    settings_step_btn_create(parent, SETTINGS_PLUS_X, y_pos + 5, "+", 0x00a9ff,
+                             voltage_offset_plus_btn_event_cb);
+
+    {
+        lv_obj_t *voff_hint = lv_label_create(parent);
+        lv_label_set_text(voff_hint,
+                          "0 = off. Tap the voltage on the dashboard to show the real value for 10 s");
+        lv_label_set_long_mode(voff_hint, LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(voff_hint, SETTINGS_MARGIN, y_pos + 54);
+        lv_obj_set_width(voff_hint, SETTINGS_FULL_W);
+        lv_obj_set_style_text_color(voff_hint, lv_color_hex(0x999999), 0);
+        lv_obj_set_style_text_font(voff_hint, &lv_font_montserrat_14, 0);
+    }
+    y_pos += SETTINGS_ROW_H + 18;
     
     // ========== Battery Calculation Mode Dropdown ==========
     settings_battery_calc_mode_label = settings_heading_create(parent, y_pos, "Battery Calculation:");

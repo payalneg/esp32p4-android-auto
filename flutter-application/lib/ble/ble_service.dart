@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 
@@ -17,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/foreground_bridge.dart';
 import '../firmware/ble_ota.dart';
 import '../firmware/ota_info.dart';
+import '../firmware/recovery.dart';
 import 'messages.dart';
 import 'nav_stream.dart';
 import 'protocol.dart';
@@ -49,6 +51,7 @@ class BleService {
   BluetoothCharacteristic? _otaInfo;
   // Optional — null when the firmware predates BLE OTA (...0007/...0008).
   // Present together; drive the over-BLE firmware flash (see bleOta).
+  BluetoothCharacteristic? _recovery;
   BluetoothCharacteristic? _otaCtrl;
   BluetoothCharacteristic? _otaData;
   // Optional — null when the firmware predates the file manager (...0009/...000a).
@@ -288,6 +291,7 @@ class BleService {
     _time = null;
     _otaInfo = null;
     _otaCtrl = null;
+    _recovery = null;
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;
@@ -297,12 +301,28 @@ class BleService {
       final u = c.uuid.toString().toLowerCase();
       if (u == NotifBridgeUuids.charTime) _time = c;
       if (u == NotifBridgeUuids.charOtaInfo) _otaInfo = c;
+      if (u == '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e0020') _recovery = c;
       if (u == NotifBridgeUuids.charOtaCtrl) _otaCtrl = c;
       if (u == NotifBridgeUuids.charOtaData) _otaData = c;
       if (u == NotifBridgeUuids.charFileCtrl) _fileCtrl = c;
       if (u == NotifBridgeUuids.charFileData) _fileData = c;
       if (u == NotifBridgeUuids.charNavCtrl) _navCtrl = c;
       if (u == NotifBridgeUuids.charNavData) _navData = c;
+    }
+    // Recovery keeps the OTA link but has no renderer/filesystem workers.
+    final recovery = _recovery;
+    if (recovery != null) {
+      try {
+        final status = RecoveryStatus.parse(await recovery.read());
+        if (status.recovery) {
+          _navCtrl = null;
+          _navData = null;
+          _fileCtrl = null;
+          _fileData = null;
+        }
+      } catch (_) {
+        // Optional metadata must not prevent connecting for a firmware update.
+      }
     }
     // Separate NUS service (VESC-Tool bridge) for the LISP editor — optional.
     _nusRx = null;
@@ -361,6 +381,28 @@ class BleService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Optional recovery status; absent on firmware before 1.3.50.
+  Future<Map<String, dynamic>?> readRecovery() async {
+    final ch = _recovery;
+    if (ch == null || _state != BleConnState.connected) {
+      return null;
+    }
+    final bytes = await ch.read();
+    RecoveryStatus.parse(bytes); // Reject unsupported/malformed status.
+    return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+  }
+
+  Future<void> recoveryCommand(int op, int nonce) async {
+    final ch = _recovery;
+    final raw = await readRecovery();
+    if (ch == null || raw == null) throw StateError('Recovery unavailable');
+    final status = RecoveryStatus(raw);
+    if (status.nonce != nonce) {
+      throw StateError('Device restarted; refresh status');
+    }
+    await ch.write(status.command(op), withoutResponse: false);
   }
 
   /// Whether the connected head unit can be flashed straight over BLE
@@ -694,6 +736,7 @@ class BleService {
     _time = null;
     _otaInfo = null;
     _otaCtrl = null;
+    _recovery = null;
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;

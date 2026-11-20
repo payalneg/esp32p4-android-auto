@@ -126,6 +126,11 @@ void    settings_wrapper_set_music_buttons_enabled(bool on);
 uint8_t settings_wrapper_get_dashboard_theme(void);
 void    settings_wrapper_set_dashboard_theme(uint8_t theme);
 
+/* Hidden battery voltage: volts subtracted from the value drawn on the
+ * dashboard, 0 = off. See dashboard_voltage_reveal() (dashboard_theme.h). */
+float settings_wrapper_get_voltage_offset(void);
+void  settings_wrapper_set_voltage_offset(float volts);
+
 /* Boot-splash repeats: 0 = off, N = play the animated splash N times at boot. */
 uint8_t settings_wrapper_get_splash_loops(void);
 void    settings_wrapper_set_splash_loops(uint8_t loops);
@@ -158,6 +163,7 @@ void settings_wrapper_set_music_widget_enabled_volatile(bool on);
 void settings_wrapper_set_music_buttons_enabled_volatile(bool on);
 void settings_wrapper_set_dashboard_theme_volatile(uint8_t theme);
 void settings_wrapper_set_wheel_diameter_mm_volatile(uint16_t diameter_mm);
+void settings_wrapper_set_voltage_offset_volatile(float volts);
 
 void settings_wrapper_persist_target_vesc_id(void);
 void settings_wrapper_persist_brightness(void);
@@ -170,6 +176,7 @@ void settings_wrapper_persist_music_widget_enabled(void);
 void settings_wrapper_persist_music_buttons_enabled(void);
 void settings_wrapper_persist_dashboard_theme(void);
 void settings_wrapper_persist_wheel_diameter_mm(void);
+void settings_wrapper_persist_voltage_offset(void);
 
 /* Apply pending mode change by rebooting the device. On the device this
  * calls esp_restart() and does not return; in the simulator it just logs

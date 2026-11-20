@@ -1,3 +1,5 @@
+#include "boot_guard.h"
+#include "nimble/nimble_npl.h"
 #include "ble_host.h"
 
 #include <string.h>
@@ -149,7 +151,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                          (unsigned)s_periph_links);
             }
             s_connected = true;
-            ble_nus_on_connect(event->connect.conn_handle);
+            if (!boot_guard_recovery()) ble_nus_on_connect(event->connect.conn_handle);
             notif_bridge_on_connect(event->connect.conn_handle);
             /* NimBLE stops advertising on connect; keep advertising while a
              * second peripheral slot is free so VESC Tool can connect
@@ -168,7 +170,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                  (unsigned)event->disconnect.conn.conn_handle,
                  event->disconnect.reason, (unsigned)s_periph_links);
         s_connected = s_periph_links > 0;
-        ble_nus_on_disconnect(event->disconnect.conn.conn_handle);
+        if (!boot_guard_recovery()) ble_nus_on_disconnect(event->disconnect.conn.conn_handle);
         notif_bridge_on_disconnect(event->disconnect.conn.conn_handle);
         start_advertising();
         return 0;
@@ -192,7 +194,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         /* Gate NUS forwarding on a real subscription so a notifications-only
          * peer doesn't get spammed with VESC RT-poll responses. Ignored for
          * non-NUS handles (NotifBridge). */
-        ble_nus_on_subscribe(event->subscribe.conn_handle,
+        if (!boot_guard_recovery()) ble_nus_on_subscribe(event->subscribe.conn_handle,
                              event->subscribe.attr_handle,
                              event->subscribe.cur_notify);
         return 0;
@@ -282,6 +284,14 @@ static void on_reset_cb(int reason)
     ESP_LOGW(TAG, "host reset, reason=%d", reason);
 }
 
+static struct ble_npl_callout s_health_callout;
+static void health_event(struct ble_npl_event *event)
+{
+    (void)event;
+    boot_guard_ble_tick();
+    ble_npl_callout_reset(&s_health_callout, ble_npl_time_ms_to_ticks32(1000));
+}
+
 static void on_sync_cb(void)
 {
     int rc = ble_hs_util_ensure_addr(0);
@@ -301,6 +311,7 @@ static void on_sync_cb(void)
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
 
     start_advertising();
+    if (boot_guard_recovery()) return;
 
     /* Dual-role: now that the stack is synced and the own address type is
      * known, let the sensor central clients (re)connect to their bound
@@ -371,11 +382,13 @@ esp_err_t ble_host_init(void)
     ble_svc_gatt_init();
 
     notif_bridge_init();
-    ble_arb_init();
-    ble_cadence_client_init();
-    ble_speed_client_init();
-    ble_vesc_client_init();
-    ble_bms_client_init();
+    if (!boot_guard_recovery()) {
+        ble_arb_init();
+        ble_cadence_client_init();
+        ble_speed_client_init();
+        ble_vesc_client_init();
+        ble_bms_client_init();
+    }
 
     const struct ble_gatt_svc_def *nus_svcs   = ble_nus_get_svcs();
     const struct ble_gatt_svc_def *bridge_svcs = notif_bridge_get_svcs();
@@ -405,6 +418,9 @@ esp_err_t ble_host_init(void)
         ESP_LOGW(TAG, "device_name_set rc=%d", rc);
     }
 
+    ble_npl_callout_init(&s_health_callout, nimble_port_get_dflt_eventq(), health_event, NULL);
+    boot_guard_ble_tick();
+    ble_npl_callout_reset(&s_health_callout, ble_npl_time_ms_to_ticks32(1000));
     nimble_port_freertos_init(host_task);
     s_started = true;
     ESP_LOGI(TAG, "NimBLE host started");

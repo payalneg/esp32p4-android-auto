@@ -1,4 +1,6 @@
+#include "boot_guard.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "bsp/esp-bsp.h"
 #include "esp_app_desc.h"
@@ -394,6 +396,7 @@ void app_main(void)
     /* Install the PSRAM-backed log ring buffer before anything else
      * logs, so the Logs screen in Settings can show the full boot
      * sequence (PMU register dumps, NVS contents, BLE init, …). */
+    boot_guard_start();
     log_capture_init();
 
 #if CONFIG_AA_ENABLE
@@ -418,6 +421,7 @@ void app_main(void)
         case ESP_RST_INT_WDT:  name = "INT_WDT";  break;
         case ESP_RST_TASK_WDT: name = "TASK_WDT"; break;
         case ESP_RST_WDT:      name = "WDT";      break;
+        case ESP_RST_CPU_LOCKUP:name = "CPU_LOCKUP"; break;
         case ESP_RST_BROWNOUT: name = "BROWNOUT"; break;
         case ESP_RST_EXT:      name = "EXT";      break;
         case ESP_RST_DEEPSLEEP:name = "DEEPSLEEP";break;
@@ -452,6 +456,15 @@ void app_main(void)
 #endif
 
     init_nvs();
+    boot_guard_load();
+    if (boot_guard_recovery()) {
+        boot_guard_stage("recovery Bluetooth");
+        ble_nus_init();
+        ESP_ERROR_CHECK(ble_host_init());
+        boot_guard_ready();
+        ESP_LOGW(TAG, "Recovery: connect from phone; display and motor services skipped");
+        return;
+    }
     /* Settings cache is now ready for both the UI (settings_ui_init pulls
      * via settings_wrapper_init → settings_init) and our callback wiring
      * below. settings_init is idempotent. */
@@ -479,11 +492,13 @@ void app_main(void)
 #if CONFIG_IDF_TARGET_ESP32P4
     /* Bump CPU to 400 MHz before any peripheral / WiFi init so APB ratio
      * stays consistent. No-op unless CONFIG_AA_OVERCLOCK_400 is set. */
-    aa_overclock_400mhz_apply();
+    if (!boot_guard_safe_display()) aa_overclock_400mhz_apply();
 #endif
 
+    boot_guard_stage("display");
     if (display_init() != ESP_OK) {
-        ESP_LOGW(TAG, "display init failed — UI disabled");
+        ESP_LOGE(TAG, "display init failed; rebooting for recovery detection");
+        abort();
     }
     /* display_init lights the backlight at 100% — apply the saved brightness
      * once the panel is up so user preference takes hold before any UI
@@ -573,6 +588,7 @@ void app_main(void)
     /* Debug bridge over UART0 console: host-driven screenshot + touch
      * injection for UI test automation. No-op stub unless built with
      * CONFIG_DEBUG_UART_BRIDGE. Needs the display + indev up (done above). */
+    boot_guard_stage("services");
 #if CONFIG_DEBUG_UART_BRIDGE
     debug_uart_bridge_init();
 #endif
@@ -677,6 +693,7 @@ void app_main(void)
      * NimBLE so the first reply that lands during VESC Tool's handshake
      * already has somewhere to queue without back-pressuring the CAN
      * task. */
+    boot_guard_stage("Bluetooth");
     ble_nus_init();
     if (ble_host_init() != ESP_OK) {
         ESP_LOGW(TAG, "BLE host init failed — VESC Tool over BLE unavailable");
@@ -720,12 +737,14 @@ void app_main(void)
     ESP_LOGI(TAG, "HEAP_PROBE: pre-wifi INTERNAL+8BIT free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    boot_guard_stage("Wi-Fi");
     ESP_ERROR_CHECK(wifi_manager_start());
     if (wifi_manager_wait_ready(30000) != ESP_OK) {
         ESP_LOGE(TAG, "wifi setup failed, halting");
 #if CONFIG_AA_ENABLE
         idle_screen_show("Android Auto", "Wi-Fi setup failed");
 #endif
+        boot_guard_ready();
         return;
     }
 
@@ -853,4 +872,5 @@ void app_main(void)
                  IP2STR(&ip_info.ip), CONFIG_WEB_MDNS_HOSTNAME);
     }
 #endif  /* CONFIG_AA_ENABLE */
+    boot_guard_ready();
 }

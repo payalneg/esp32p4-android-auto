@@ -1,4 +1,5 @@
 #include "ui_mode.h"
+#include "boot_guard.h"
 
 #include <stdatomic.h>
 
@@ -140,6 +141,7 @@ void ui_mode_set(ui_mode_t mode)
          * 800×480 that pause() times out, leaving the AA path stuck in
          * 2 s/frame mode after every AA→VESC→AA toggle. */
         atomic_store(&s_mode, mode);
+        boot_guard_ui_required(true);
 #if CONFIG_NAV_ENABLE
         nav_screen_set_active(mode == UI_MODE_NAV);
 #endif

@@ -20,28 +20,50 @@ Stream<GeoFix> simulateRide(
   double speedMs = kBikeSpeedMs,
   double speedup = kSimSpeedup,
   Duration tick = kSimTick,
+  /// Monotonic elapsed time; injectable for delayed-timer regression tests.
+  Duration Function()? elapsed,
 }) {
   var along = 0.0;
   late StreamController<GeoFix> controller;
   Timer? timer;
+  final clock = Stopwatch();
+  Duration previousTick = Duration.zero;
+  var began = false;
+  Duration now() => elapsed?.call() ?? clock.elapsed;
 
   void stop() {
     timer?.cancel();
     timer = null;
+    clock.stop();
   }
 
   void start() {
+    clock.start();
+    previousTick = now();
+    if (!began) {
+      began = true;
+      controller.add(GeoFix(
+        position: guide.positionAt(0),
+        speedMs: speedMs * speedup,
+        headingDeg: bearingDeg(guide.positionAt(0), guide.positionAt(1)),
+      ));
+    }
     timer = Timer.periodic(tick, (_) {
-      final step = speedMs * speedup * tick.inMilliseconds / 1000.0;
+      final current = now();
+      final delta = current - previousTick;
+      previousTick = current;
+      if (delta <= Duration.zero) return;
+      final step = speedMs * speedup * delta.inMicroseconds / 1000000.0;
       final previous = guide.positionAt(along);
       along += step;
       final position = guide.positionAt(along);
+      final arrived = along >= guide.totalM;
       controller.add(GeoFix(
         position: position,
-        speedMs: speedMs * speedup,
+        speedMs: arrived ? 0 : speedMs * speedup,
         headingDeg: bearingDeg(previous, position),
       ));
-      if (along >= guide.totalM) {
+      if (arrived) {
         stop();
         controller.close();
       }

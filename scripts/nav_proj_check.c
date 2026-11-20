@@ -1,21 +1,18 @@
-/* Does the navigator's projection still agree with double precision?
+/* Check the actual production centre projection and the local float
+ * projection against an independent double reference. The absolute centre
+ * must retain pixel precision while moving, not merely stay within a loose
+ * error tolerance at a handful of static coordinates.
  *
- * main/nav_map.c places the map with integers and single precision, because
- * this chip emulates double in software and a per-point Mercator in double
- * cost 40 ms of a frame. This keeps the formulas honest: the same code as the
- * firmware, next to the double version it replaced.
- *
- *   cc -O2 -o /tmp/nav_proj_check scripts/nav_proj_check.c -lm && /tmp/nav_proj_check
- *
- * It caught a real bug on the first run — the e7-degrees-to-radians constant
- * was ten times too large, which sent the latitude past pi/2 and made the
- * whole thing NaN. Expected output: under a pixel of disagreement for the
- * view centre (1.8 px at zoom 18, where a float can no longer hold 67 million
- * pixels exactly), and exactly zero for everything placed relative to it. */
+ * cc -O2 -o /tmp/nav_proj_check scripts/nav_proj_check.c -lm
+ */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../main/nav_projection.h"
+#ifdef __TINYC__
+float cosf(float x) { return (float)cos(x); }
+#endif
 
 #define NAV_TILE_PX 256
 #define E7_TO_RAD   1.74532925e-9f
@@ -25,10 +22,7 @@ static int64_t world_x_px(int32_t lon_e7, uint8_t zoom) {
     return ((int64_t)lon_e7 + 1800000000LL) * n / 3600000000LL;
 }
 static int64_t world_y_px(int32_t lat_e7, uint8_t zoom) {
-    const float r = (float)lat_e7 * E7_TO_RAD;
-    const float my = logf(tanf(r) + 1.0f / cosf(r));
-    const float t = (1.0f - my * (float)M_1_PI) * 0.5f;
-    return (int64_t)llroundf(t * (float)((int64_t)NAV_TILE_PX << zoom));
+    return nav_world_y_px(lat_e7, zoom);
 }
 /* the double reference the firmware used to run */
 static double ref_x(double lon, uint8_t z) {
@@ -55,7 +49,7 @@ int main(void) {
             if (ey > worst_y) worst_y = ey;
         }
         printf("zoom %2d: worst x %.2f px, worst y %.2f px\n", zi, worst_x, worst_y);
-        if (worst_x > 1.0 || worst_y > 4.0) fails++;
+        if (worst_x > 1.0 || worst_y > 0.55) fails++;
     }
 
     /* And the local projection: a point a screen away from the centre must

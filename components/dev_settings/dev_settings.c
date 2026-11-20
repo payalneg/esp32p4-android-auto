@@ -1,5 +1,6 @@
 #include "dev_settings.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
@@ -47,6 +48,8 @@ static struct {
     uint8_t              splash_loops;     /* boot-splash repeats; 0 = off */
     bool                 display_flip;     /* 180° flip for upside-down mount */
     uint8_t              phone_screen;     /* 0 = Android Auto, 1 = Navigator */
+    /* Volts subtracted from the displayed pack voltage; 0 = show the truth. */
+    float                voltage_offset;
 } s_cache;
 
 /* The BLE backend lives in main/ and re-runs its adapter probe when the route
@@ -74,6 +77,15 @@ static can_speed_t sanitize_can_speed(uint16_t v) {
         case 1000: return CAN_SPEED_1000_KBPS;
         default:   return (can_speed_t)CONFIG_VESC_CAN_SPEED_KBPS;
     }
+}
+
+/* 0 turns the masked-voltage feature off; 100 V is already more than any pack
+ * this dashboard is meant to drive, and a bogus NVS value must not make the
+ * readout negative or silent. */
+static float sanitize_voltage_offset(float v) {
+    if (!isfinite(v) || v < 0.0f) return 0.0f;
+    if (v > 100.0f) return 100.0f;
+    return v;
 }
 
 static void load_from_nvs(void) {
@@ -134,6 +146,11 @@ static void load_from_nvs(void) {
     if (nvs_get_blob(h, "pwr_max", &fv, &sz) == ESP_OK && sz == sizeof(float)) {
         s_cache.power_max_kw = fv;
     }
+    sz = sizeof(float);
+    if (nvs_get_blob(h, "volt_off", &fv, &sz) == ESP_OK && sz == sizeof(float) &&
+        isfinite(fv) && fv >= 0.0f && fv <= 100.0f) {
+        s_cache.voltage_offset = fv;
+    }
 
     nvs_close(h);
 }
@@ -189,6 +206,7 @@ void settings_init(void) {
     s_cache.splash_loops      = 1;   /* play the boot splash once; 0 = off */
     s_cache.display_flip      = false;
     s_cache.phone_screen      = 0;   /* the 3-finger gesture shows Android Auto */
+    s_cache.voltage_offset    = 0.0f; /* display the real pack voltage */
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -224,6 +242,7 @@ uint8_t             settings_get_dashboard_theme(void)   { return s_cache.dashbo
 uint8_t             settings_get_splash_loops(void)       { return s_cache.splash_loops; }
 bool                settings_get_display_flip(void)       { return s_cache.display_flip; }
 uint8_t             settings_get_phone_screen(void)       { return s_cache.phone_screen; }
+float               settings_get_voltage_offset(void)     { return s_cache.voltage_offset; }
 
 /* ---------------- setters ---------------- */
 
@@ -402,6 +421,16 @@ void settings_set_display_flip(bool on) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "disp_flip", on ? 1 : 0);
+    commit(h);
+}
+
+void settings_set_voltage_offset(float volts) {
+    volts = sanitize_voltage_offset(volts);
+    if (s_cache.voltage_offset == volts) return;
+    s_cache.voltage_offset = volts;
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    nvs_set_blob(h, "volt_off", &volts, sizeof(volts));
     commit(h);
 }
 
@@ -627,6 +656,20 @@ void settings_persist_dashboard_theme(void) {
     nvs_handle_t h;
     if (open_rw(&h) != ESP_OK) return;
     nvs_set_u8(h, "dash_theme", s_cache.dashboard_theme);
+    commit(h);
+}
+
+void settings_set_voltage_offset_volatile(float volts) {
+    float v = sanitize_voltage_offset(volts);
+    if (s_cache.voltage_offset == v) return;
+    s_cache.voltage_offset = v;
+}
+
+void settings_persist_voltage_offset(void) {
+    nvs_handle_t h;
+    if (open_rw(&h) != ESP_OK) return;
+    float v = s_cache.voltage_offset;
+    nvs_set_blob(h, "volt_off", &v, sizeof(v));
     commit(h);
 }
 

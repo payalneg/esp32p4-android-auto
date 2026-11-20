@@ -207,12 +207,101 @@ void update_current(float a)
     if (o && o->current) o->current(a);
 }
 
+/* ---- hidden battery voltage -------------------------------------------- *
+ * Settings → Bike → "Voltage offset (V)" makes the dashboard draw the pack
+ * voltage minus that many volts (a 65 V pack reading 45 V = 20). 0 turns the
+ * whole thing off. Tapping the voltage readout on any dashboard reveals the
+ * true value for 10 s, then the offset comes back — the one way to ask the
+ * device what the battery is really doing without going into Settings.
+ *
+ * The masked value is produced here, in the dispatcher, so every theme and
+ * every future theme gets it for free, and the theme's own power figure keeps
+ * agreeing with the number on screen (both use the value handed down).
+ * The reveal is deliberately RAM-only and short-lived: a reboot or a theme
+ * switch shows the masked value again, which is the point of the feature.
+ * LVGL thread only (tap event + the 10 Hz data pump both run there). */
+#define DASHBOARD_VOLTAGE_REVEAL_MS 10000
+
+static uint32_t    s_voltage_reveal_until;
+static bool        s_voltage_revealed;
+static lv_timer_t *s_voltage_reveal_tmr;
+
+static bool voltage_reveal_active(void)
+{
+    return s_voltage_revealed &&
+           (int32_t)(s_voltage_reveal_until - lv_tick_get()) > 0;
+}
+
+/* Push the value the dashboard should show right now: the real one while a
+ * reveal is running (or when the feature is off), real-minus-offset otherwise. */
+static void voltage_push(void)
+{
+    const dashboard_theme_ops_t *o = active_ops();
+    if (!o || !o->battery_voltage) return;
+
+    float v   = s_last_voltage_v;
+    float off = settings_wrapper_get_voltage_offset();
+    if (off > 0.0f && !voltage_reveal_active()) {
+        v -= off;
+        if (v < 0.0f) v = 0.0f;       /* offset larger than the pack: show 0 */
+    }
+    o->battery_voltage(v);
+}
+
+static void voltage_reveal_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    /* Runs before LVGL deletes the one-shot timer (repeat_count == 1), so the
+     * pointer has to be cleared here — a later lv_timer_reset() on it would
+     * otherwise touch freed memory. */
+    s_voltage_reveal_tmr = NULL;
+    s_voltage_revealed   = false;
+    voltage_push();                    /* put the masked value back */
+}
+
+void dashboard_voltage_reveal(void)
+{
+    if (settings_wrapper_get_voltage_offset() <= 0.0f) return;
+
+    s_voltage_revealed    = true;
+    s_voltage_reveal_until = lv_tick_get() + DASHBOARD_VOLTAGE_REVEAL_MS;
+
+    if (s_voltage_reveal_tmr) {
+        lv_timer_reset(s_voltage_reveal_tmr);
+    } else {
+        s_voltage_reveal_tmr = lv_timer_create(voltage_reveal_timer_cb,
+                                               DASHBOARD_VOLTAGE_REVEAL_MS, NULL);
+        if (s_voltage_reveal_tmr) {
+            lv_timer_set_repeat_count(s_voltage_reveal_tmr, 1);
+        }
+    }
+    /* Repaint now instead of waiting for the next STATUS frame: the label must
+     * react to the tap even while the ESC link is silent (the reveal then shows
+     * the last real reading, which is the honest number to show). */
+    voltage_push();
+}
+
+static void voltage_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    dashboard_voltage_reveal();
+}
+
+void dashboard_voltage_attach_reveal(lv_obj_t *label)
+{
+    if (!label) return;
+    /* A plain label ignores input; CLICKABLE plus a slightly grown hit area
+     * keeps the small voltage readout easy to hit with a gloved thumb. */
+    lv_obj_add_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(label, 8);
+    lv_obj_add_event_cb(label, voltage_label_clicked_cb, LV_EVENT_CLICKED, NULL);
+}
+
 void update_battery_voltage(float v)
 {
     s_last_voltage_v = v;
     note_power();
-    const dashboard_theme_ops_t *o = active_ops();
-    if (o && o->battery_voltage) o->battery_voltage(v);
+    voltage_push();
 }
 
 DISPATCH1(update_battery_proc,          battery_proc,          float)

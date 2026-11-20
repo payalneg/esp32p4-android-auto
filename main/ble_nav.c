@@ -6,6 +6,7 @@
  * inside a GATT access callback. */
 
 #include "ble_nav.h"
+#include "boot_guard.h"
 
 #include <math.h>
 #include <stdatomic.h>
@@ -109,6 +110,7 @@ typedef struct {
     int32_t   lat_e7;   /* EV_DEST */
     int32_t   lon_e7;
     uint8_t   zoom;     /* EV_ZOOM */
+    int64_t   at_us;    /* EV_STOP: ignore a stop older than a resumed VIEW */
     bool      following; /* EV_LOOK: back on the rider, ignore lat/lon */
     char      query[NAV_SEARCH_QUERY];   /* EV_SEARCH */
 } nav_evt_t;
@@ -139,6 +141,17 @@ static bool     s_boosted;
 static int64_t  s_last_frame_us;
 static int64_t  s_last_view_us;   /* last position from the phone */
 static int64_t  s_last_step_us;   /* last dead-reckoning step */
+
+/* The host only publishes one latest observation. Map state belongs to the
+ * worker: a packet must not replace the centre halfway through composition. */
+static portMUX_TYPE s_view_mux = portMUX_INITIALIZER_UNLOCKED;
+static struct {
+    int32_t lat, lon;
+    uint8_t zoom;
+    uint16_t heading, speed;
+    int64_t at_us;
+    bool pending;
+} s_latest_view;
 
 static ble_nav_stats_t s_stats;
 
@@ -422,6 +435,27 @@ static void render_view(void)
     s_last_frame_us = esp_timer_get_time();
 }
 
+static void apply_latest_view(void)
+{
+    portENTER_CRITICAL(&s_view_mux);
+    const int32_t lat = s_latest_view.lat, lon = s_latest_view.lon;
+    const uint8_t zoom = s_latest_view.zoom;
+    const uint16_t heading = s_latest_view.heading, speed = s_latest_view.speed;
+    const int64_t at_us = s_latest_view.at_us;
+    const bool pending = s_latest_view.pending;
+    s_latest_view.pending = false;
+    portEXIT_CRITICAL(&s_view_mux);
+    if (!pending) return;
+    nav_map_set_view(lat, lon, zoom, heading);
+    nav_map_set_speed(speed);
+    nav_screen_position_received();
+    s_stats.views++;
+    s_stats.streaming = true;
+    s_last_view_us = at_us;
+    nav_screen_set_streaming(true);
+    set_boost(true);
+}
+
 /* Carry the view forward and redraw, so the map glides instead of stepping
  * twice a second.
  *
@@ -444,7 +478,7 @@ static void step_view(void)
     if (now - s_last_step_us < NAV_STEP_MS * 1000) return;
     const int64_t elapsed_ms = (now - s_last_step_us) / 1000;
     /* A resumed link must not travel the whole time it was disconnected. */
-    const uint32_t dt = elapsed_ms > 250 ? NAV_STEP_MS : (uint32_t)elapsed_ms;
+    const uint32_t dt = elapsed_ms > 250 ? 250 : (uint32_t)elapsed_ms;
     s_last_step_us = now;
     nav_map_dead_reckon(dt);
     /* Tile/route arrivals force their own redraw. A stationary pose does not
@@ -599,6 +633,7 @@ static void worker(void *arg)
 
     for (;;) {
         nav_evt_t ev;
+        boot_guard_nav_tick();
         /* A render we owe is worth waking up for sooner than the idle
          * cadence — the buffer frees within a screen tick or two. */
         uint32_t wait_ms = NAV_FRAME_MS;
@@ -616,7 +651,9 @@ static void worker(void *arg)
         TickType_t wait = pdMS_TO_TICKS(wait_ms);
         /* Yield even when composition overruns; never spin ahead of LVGL. */
         if (wait == 0) wait = 1;
-        if (xQueueReceive(s_q, &ev, wait) != pdTRUE) {
+        const BaseType_t received = xQueueReceive(s_q, &ev, wait);
+        apply_latest_view();
+        if (received != pdTRUE) {
             const int64_t now = esp_timer_get_time();
             /* An owed render still has to happen: tiles land while the rider
              * is parked too, and nothing else would ever put them on screen. */
@@ -652,12 +689,9 @@ static void worker(void *arg)
                 handle_route(&ev);
                 break;
             case EV_VIEW:
-                s_stats.views++;
-                s_stats.streaming = true;
-                s_last_view_us = esp_timer_get_time();
-                nav_screen_set_streaming(true);
-                set_boost(true);
-                /* No render here on purpose. Drawing both on arrival and on
+                /* The newest VIEW was applied above, even if its wake event
+                 * could not fit in the queue. No render here on purpose.
+                 * Drawing both on arrival and on
                  * the frame timer made the gaps between frames uneven, and
                  * uneven gaps with a steady dead-reckoning step is exactly
                  * what a stuttering map looks like. The timer draws; this
@@ -669,6 +703,7 @@ static void worker(void *arg)
                        ev.reason, ev.seq, 0);
                 break;
             case EV_STOP:
+                if (ev.at_us < s_last_view_us) break;
                 s_state = ST_IDLE;
                 s_stats.streaming = false;
                 nav_screen_set_streaming(false);
@@ -812,7 +847,7 @@ void ble_nav_on_disconnect(void)
     s_stats.streaming = false;
     nav_screen_set_phone(false);
     if (s_q) {
-        nav_evt_t ev = { .kind = EV_STOP };
+        nav_evt_t ev = { .kind = EV_STOP, .at_us = esp_timer_get_time() };
         xQueueSend(s_q, &ev, 0);
     }
 }
@@ -985,16 +1020,22 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
              * does not send it simply gets no dead reckoning. */
             const uint16_t speed_cms = (len >= NAV_VIEW_LEN_SPEED)
                 ? (uint16_t)data[12] | ((uint16_t)data[13] << 8) : 0;
-            nav_map_set_view(lat_e7, lon_e7, zoom, heading);
-            nav_map_set_speed(speed_cms);
-            nav_screen_position_received();
+            portENTER_CRITICAL(&s_view_mux);
+            s_latest_view.lat = lat_e7;
+            s_latest_view.lon = lon_e7;
+            s_latest_view.zoom = zoom;
+            s_latest_view.heading = heading;
+            s_latest_view.speed = speed_cms;
+            s_latest_view.at_us = esp_timer_get_time();
+            s_latest_view.pending = true;
+            portEXIT_CRITICAL(&s_view_mux);
             nav_evt_t ev = { .kind = EV_VIEW };
             xQueueSend(s_q, &ev, 0);
             break;
         }
         case NAV_OP_STOP: {
             s_state = ST_IDLE;
-            nav_evt_t ev = { .kind = EV_STOP };
+            nav_evt_t ev = { .kind = EV_STOP, .at_us = esp_timer_get_time() };
             xQueueSend(s_q, &ev, 0);
             break;
         }

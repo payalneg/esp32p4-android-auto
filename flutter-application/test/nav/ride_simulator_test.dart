@@ -28,6 +28,27 @@ RouteGuide _straightRoute(double metres) {
 }
 
 void main() {
+  test('delayed timer displacement agrees with advertised speed', () async {
+    var elapsed = Duration.zero;
+    var samples = 0;
+    final fixes = await simulateRide(_straightRoute(100),
+            speedMs: 5, speedup: 1, tick: const Duration(milliseconds: 1),
+            elapsed: () => elapsed)
+        .map((fix) {
+          samples++;
+          if (samples == 1) elapsed = const Duration(milliseconds: 500);
+          if (samples == 2) elapsed = const Duration(milliseconds: 1500);
+          return fix;
+        })
+        .take(3)
+        .toList();
+    final travelled = fixes.map((f) => (f.position.lat - 50) / _mLat).toList();
+    expect(travelled[0], closeTo(0, .02));
+    expect(travelled[1], closeTo(2.5, .02));
+    expect(travelled[2], closeTo(7.5, .02));
+    expect(fixes.map((f) => f.speedMs), everyElement(5));
+  });
+
   test('walks the route and closes at the end', () async {
     final guide = _straightRoute(300);
     final fixes = await simulateRide(guide,
@@ -56,7 +77,10 @@ void main() {
       final h = f.headingDeg!;
       expect(math.min(h, 360 - h), lessThan(5));
     }
-    expect(fixes.last.speedMs, greaterThan(0));
+    expect(fixes.skip(1).take(fixes.length - 2).map((f) => f.speedMs),
+        everyElement(greaterThan(0)));
+    expect(fixes.last.speedMs, 0,
+        reason: 'the head unit must not predict past the simulated destination');
   });
 
   test('guidance consumes simulated fixes exactly like real ones', () async {

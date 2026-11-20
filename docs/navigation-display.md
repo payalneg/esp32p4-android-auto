@@ -7,6 +7,25 @@ frame; the existing two-buffer handoff applies backpressure when a frame takes
 longer. Prediction stops after 1.5 seconds without VIEW updates, and reconnecting
 does not extrapolate across the disconnected interval.
 
+From firmware 1.3.51, repeated VIEW coordinates are keepalives, not a new GPS
+anchor: resetting a moving prediction to the same old fix twice per second
+caused periodic braking/backward corrections with a 1 Hz GPS source. Distinct
+positions reset the anchor; repeating one position cannot renew the 1.5-second
+prediction distance budget. An explicit zero speed eases back to the last fix.
+Fractional e7 travel is retained between frames rather than rounded away.
+
+The absolute Mercator centre now uses double precision once per projection;
+route/label points still use local float differences. At zoom 18 the old float
+centre advanced in multi-pixel steps even for continuously moving input.
+Native regression tests reproduce the old stair steps and repeated-fix rewind
+in `tools/tests/test_nav_motion.c`; `scripts/nav_proj_check.c` calls the actual
+production centre projection rather than retaining a copied old formula.
+
+VIEW state is published in a protected latest-value slot and consumed by the
+map worker. A full event queue cannot discard the newest pose, and BLE cannot
+replace the map centre halfway through composition. A queued STOP older than
+a resumed VIEW does not stop the new stream.
+
 The worker waits only for the remainder of the 60 ms interval after composing,
 with at least one RTOS tick to yield on overruns. Unchanged view/camera/marker
 poses do not trigger another map bitmap; tile and route arrivals still force

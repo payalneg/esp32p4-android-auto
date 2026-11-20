@@ -50,6 +50,7 @@ static struct {
     uint8_t phone_screen;
     bool vesc_link_ble;
     uint8_t vesc_ble_route;
+    float voltage_offset;
 } sim_settings = {
     .target_vesc_id = 10,
     .can_speed_index = 3,  // 1000 kbps
@@ -76,6 +77,7 @@ static struct {
     .splash_loops = 1,
     .display_flip = false,
     .phone_screen = 0,
+    .voltage_offset = 0.0f,
 };
 #endif
 
@@ -624,6 +626,36 @@ void settings_wrapper_set_phone_screen(uint8_t which) {
     sim_settings.phone_screen = which;
 #else
     settings_set_phone_screen(which);
+#endif
+}
+
+float settings_wrapper_get_voltage_offset(void) {
+#if SIMULATOR_MODE
+    return sim_settings.voltage_offset;
+#else
+    return settings_get_voltage_offset();
+#endif
+}
+
+void settings_wrapper_set_voltage_offset(float volts) {
+#if SIMULATOR_MODE
+    sim_settings.voltage_offset = volts;
+#else
+    settings_set_voltage_offset(volts);
+#endif
+}
+
+void settings_wrapper_set_voltage_offset_volatile(float volts) {
+#if SIMULATOR_MODE
+    sim_settings.voltage_offset = volts;
+#else
+    settings_set_voltage_offset_volatile(volts);
+#endif
+}
+
+void settings_wrapper_persist_voltage_offset(void) {
+#if !SIMULATOR_MODE
+    settings_persist_voltage_offset();
 #endif
 }
 

@@ -610,6 +610,10 @@ static void amber_screen_init(lv_ui *ui)
      * the painters then just set bg_color per frame. */
     amber_setup_bars_flat();
 
+    /* Tap the voltage readout to reveal the real pack voltage for 10 s when
+     * the Settings "voltage offset" is masking it (see dashboard_theme.c). */
+    dashboard_voltage_attach_reveal(ui->dashboard_Amber_Voltage_text);
+
     amber_refresh_power_max_label();
     amber_units_changed();
 }

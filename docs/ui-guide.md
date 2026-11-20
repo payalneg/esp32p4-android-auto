@@ -78,6 +78,7 @@ saved the moment it is changed.
 | Tap outside the Quick-actions drawer | Close it |
 | Drag horizontally on the dashboard background | Adjust display brightness — only while **Brightness gesture** is enabled (§4.2) |
 | Tap the battery percentage on the dashboard | Open the battery monitor (§7.3) |
+| Tap the voltage number on the dashboard | Show the real pack voltage for 10 s while `Voltage offset` is masking it (§4.3) |
 | Tap anywhere outside a dialog | Close the dialog without saving |
 
 > **Note.** Gestures are disabled while Android Auto is on screen; they are
@@ -216,6 +217,7 @@ only adds the automatic reconnection at boot.
 | Element | Description |
 | --- | --- |
 | `Battery Capacity (Ah)` | Pack size used for the percentage and range estimate |
+| `Voltage offset (V)` | Volts subtracted from the voltage drawn on the dashboard, 0 = off. Set 20 to show a 65 V pack as 45 V; tapping the voltage readout on the dashboard shows the real value for 10 s (§2). Only the display is affected — the VESC, BMS and trip log keep the true voltage |
 | `Battery Calculation` | `Direct from Controller` — use the VESC's own percentage; `Smart Calculation` — count Ah in and out against the capacity, with charge detection; `JK-BMS (BLE)` — read SOC, remaining Ah and range from a paired Jikong pack |
 | `Battery monitor (JK-BMS) → Open` | Battery pack screen: live state, cells, temperatures and Bluetooth pairing (§7.3) |
 | `Pedal assist (PAS) → Open` | Pedal-assist screen (§7.1) |

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'recovery_screen.dart';
 
 import '../ble/ble_proxy.dart';
 import '../firmware/firmware_updater.dart';
@@ -129,7 +130,9 @@ class _FirmwareUpdateScreenState extends State<FirmwareUpdateScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(t(context, 'fw.title'))),
+      appBar: AppBar(title: Text(t(context, 'fw.title')), actions: [
+        IconButton(tooltip: 'Recovery', onPressed: _busy ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RecoveryScreen())), icon: const Icon(Icons.health_and_safety_outlined)),
+      ]),
       // SafeArea keeps the bottom "Flash" button clear of the system
       // navigation bar / gesture pill (the Column pins it to the bottom with a
       // Spacer, so without this it sits under the nav buttons).

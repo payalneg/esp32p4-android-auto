@@ -183,6 +183,18 @@ void dashboard_max_reset(void);
  * the setting so the change lands without a reboot. LVGL thread only. */
 void dashboard_brightness_gesture_refresh(void);
 
+/* ---- hidden battery voltage --------------------------------------------- *
+ * The dashboard draws the pack voltage minus the Settings "voltage offset"
+ * (0 = off). Every theme builds its voltage readout, so each one attaches this
+ * tap handler to that label; tapping reveals the real voltage for 10 s and
+ * then goes back to the masked value. Must run on the LVGL thread. Safe with
+ * NULL. Defined in dashboard_theme.c.
+ *
+ * dashboard_voltage_reveal() is the tap action on its own (the label helper
+ * calls it); useful from other UI if the readout moves somewhere else. */
+void dashboard_voltage_attach_reveal(lv_obj_t *label);
+void dashboard_voltage_reveal(void);
+
 #ifdef __cplusplus
 }
 #endif

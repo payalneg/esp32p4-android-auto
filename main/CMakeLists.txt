@@ -8,6 +8,8 @@
 # by the #if.
 set(MAIN_SRCS
     "main.c"
+    "boot_guard.c"
+    "boot_guard_settings.c"
     "wifi_manager.c"
     "mdns_advertise.c"
     "display_init.c"

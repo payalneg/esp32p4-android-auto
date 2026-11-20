@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 /* NotifBridge GATT service.
  *
  * Coexists with ble_nus inside ble_host. We share the GAP/connection
@@ -52,6 +53,11 @@ static const char *TAG = "notif_bridge";
 #define NB_UUID_TAIL_LE                                              \
     0x01, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,                  \
     0x2A, 0x4D, 0x8E, 0x3F, /* byte 12 */ 0x00, 0x4F, 0x4E, 0x7B
+
+static const ble_uuid128_t NB_RECOVERY_UUID = BLE_UUID128_INIT(
+    0x20, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+static uint16_t s_recovery_handle;
 
 static const ble_uuid128_t NB_SVC_UUID = BLE_UUID128_INIT(
     0x01, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
@@ -507,10 +513,12 @@ static bool bridge_bind(uint16_t conn, bool insist)
     s_conn_handle = conn;
     s_last_bridge_write_us = now;
     ble_ota_set_link(conn, s_ota_ctrl_handle);
-    ble_files_set_link(conn, s_file_ctrl_handle);
+    if (!boot_guard_recovery()) {
+        ble_files_set_link(conn, s_file_ctrl_handle);
 #if CONFIG_NAV_ENABLE
-    ble_nav_set_link(conn, s_nav_ctrl_handle);
+        ble_nav_set_link(conn, s_nav_ctrl_handle);
 #endif
+    }
     return true;
 }
 
@@ -548,6 +556,27 @@ static int access_cb(uint16_t conn, uint16_t attr,
 {
     (void)arg;
     if (!s_host_task) s_host_task = xTaskGetCurrentTaskHandle();
+    if (attr == s_recovery_handle) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            char status[240];
+            int n = boot_guard_status(status, sizeof(status));
+            if (n < 0 || n >= sizeof(status)) return BLE_ATT_ERR_UNLIKELY;
+            return os_mbuf_append(ctxt->om, status, n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            uint8_t command[6];
+            uint16_t n = 0;
+            if (OS_MBUF_PKTLEN(ctxt->om) != sizeof(command) ||
+                ble_hs_mbuf_to_flat(ctxt->om, command, sizeof(command), &n) != 0)
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            return boot_guard_command(command, n) == ESP_OK ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+    }
+    /* Headless recovery accepts only recovery/OTA traffic, plus harmless time sync. */
+    if (boot_guard_recovery() && ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
+        attr != s_ota_ctrl_handle && attr != s_ota_data_handle && attr != s_time_handle)
+        return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         /* Whoever is drawing the panel outranks whoever is sending
          * notifications: a navigator write takes the bridge on the spot,
@@ -751,6 +780,12 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .val_handle = &s_nav_data_handle,
             },
 #endif /* CONFIG_NAV_ENABLE */
+            {
+                .uuid = &NB_RECOVERY_UUID.u,
+                .access_cb = access_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                .val_handle = &s_recovery_handle,
+            },
             { 0 },
         },
     },
@@ -781,10 +816,12 @@ void notif_bridge_on_disconnect(uint16_t conn) {
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_last_bridge_write_us = 0;
     ble_ota_on_disconnect();
-    ble_files_on_disconnect();
+    if (!boot_guard_recovery()) {
+        ble_files_on_disconnect();
 #if CONFIG_NAV_ENABLE
-    ble_nav_on_disconnect();
+        ble_nav_on_disconnect();
 #endif
+    }
     reasm_reset();
 }
 
@@ -884,6 +921,7 @@ void notif_bridge_init(void)
     s_out_q = xQueueCreate(8, sizeof(outbound_cmd_t));
     xTaskCreatePinnedToCore(out_task, "notif_out", 4096, NULL, 5, &s_out_task, 0);
     ble_ota_init();
+    if (boot_guard_recovery()) return;
     ble_files_init();
 #if CONFIG_NAV_ENABLE
     ble_nav_init();

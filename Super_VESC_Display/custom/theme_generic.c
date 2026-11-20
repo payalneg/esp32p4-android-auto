@@ -17,6 +17,7 @@
 */
 
 #include "theme_generic.h"
+#include "dashboard_theme.h"
 #include "settings_wrapper.h"
 #include "ui_geom.h"
 
@@ -106,6 +107,10 @@ void dashboard_generic_set_active(const dashboard_widgets_t *w)
     /* Battery percentage is the way into the pack detail screen on every
      * convention-bound dashboard, same as the cockpit. */
     bms_screen_attach_percent(w ? w->batt_pct_text : NULL);
+
+    /* Voltage readout reveals the real pack voltage for 10 s when the Settings
+     * "voltage offset" is masking it (see dashboard_theme.c). */
+    dashboard_voltage_attach_reveal(w ? w->voltage_text : NULL);
 
     /* Phantom-touch hardening for the invisible brightness drag slider — the
      * same fix the cockpit theme carries in custom.c. GUI Guider styles the

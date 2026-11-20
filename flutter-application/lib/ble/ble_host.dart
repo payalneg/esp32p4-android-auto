@@ -543,6 +543,14 @@ class BleTaskHandler extends TaskHandler {
               m['kind'] as String, base64Decode(m['b64'] as String));
           break;
 
+        case IpcCmd.readRecovery:
+          _reply(id, {'status': await _ble.readRecovery()});
+          break;
+        case IpcCmd.recoveryCommand:
+          await _ble.recoveryCommand(m['op'] as int, m['nonce'] as int);
+          _reply(id, {'ok': true});
+          break;
+
         case IpcCmd.readOtaInfo:
           final info = await _ble.readOtaInfo();
           _reply(id, {

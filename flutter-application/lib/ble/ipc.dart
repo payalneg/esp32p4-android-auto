@@ -16,6 +16,8 @@ class IpcCmd {
   static const forget = 'forget';
   static const send = 'send'; // {kind, b64} — fire-and-forget media/notif/icon
   static const readOtaInfo = 'readOtaInfo';
+  static const readRecovery = 'readRecovery';
+  static const recoveryCommand = 'recoveryCommand';
   static const bleOta = 'bleOta'; // {model}
   static const reloadFilter = 'reloadFilter';
 

@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 #include "ota_http.h"
 
 #include "sdkconfig.h"
@@ -242,7 +243,9 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
                       "chunks arrive", remaining);
         ota_screen_show("Erasing flash - screen may flicker");
         ota_screen_set_status("Don't power off");
+        boot_guard_flash_begin();
         err = esp_ota_begin(next, remaining, &handle);
+        boot_guard_flash_end();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
             ota_screen_set_status_error("Erase failed");
@@ -332,6 +335,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     ota_screen_set_status("Don't power off");
     ota_screen_set_progress(0, written);
 
+    boot_guard_flash_begin();
     err = esp_ota_begin(next, written, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
@@ -339,6 +343,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
         heap_caps_free(stage);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "esp_ota_begin failed");
+        boot_guard_flash_end();
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "flushing %d bytes to flash...", written);
@@ -356,6 +361,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
             heap_caps_free(stage);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                 "flash write failed");
+            boot_guard_flash_end();
             return ESP_FAIL;
         }
         off += chunk;
@@ -370,6 +376,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
              (esp_timer_get_time() - t_flush_us) / 1000);
 
 staged:
+    if (streaming) boot_guard_flash_begin();
     ota_screen_show("Verifying");
     err = esp_ota_end(handle);
     if (err != ESP_OK) {
@@ -377,6 +384,7 @@ staged:
         ota_screen_set_status_error("Verify failed");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "image verify failed");
+        boot_guard_flash_end();
         return ESP_FAIL;
     }
     err = esp_ota_set_boot_partition(next);
@@ -385,6 +393,7 @@ staged:
         ota_screen_set_status_error("Commit failed");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "set_boot_partition failed");
+        boot_guard_flash_end();
         return ESP_FAIL;
     }
 

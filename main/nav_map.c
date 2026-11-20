@@ -1,4 +1,6 @@
 #include "nav_map.h"
+#include "nav_motion.h"
+#include "nav_projection.h"
 
 #include "lvgl.h"
 
@@ -32,6 +34,7 @@
 
 static nav_map_view_t s_view;
 static float s_speed_ms;
+static nav_motion_t s_motion;
 static float s_camera_heading;
 static bool s_camera_has_heading;
 static float s_marker_heading;
@@ -90,7 +93,6 @@ bool nav_map_pose_changed(void)
 }
 
 /* Time-based easing stays consistent when a slow frame changes the cadence. */
-#define POSITION_EASE_MS 350.0f
 
 /* Fixed conversions, so the frame path has no named constants to divide by.
  *   e7 degrees -> radians : pi/180 * 1e-7
@@ -124,27 +126,14 @@ static int64_t world_x_px(int32_t lon_e7, uint8_t zoom)
 
 static int64_t world_y_px(int32_t lat_e7, uint8_t zoom)
 {
-    /* The only logarithm left on the frame path: once, for the centre.
-     *
-     * Single precision carries about seven digits, and the result here runs
-     * to sixty-seven million pixels at zoom 18 — so this can be up to three
-     * pixels out (about a metre and a half on the ground). It is a systematic
-     * offset, not jitter: the same position always gives the same answer, and
-     * everything on screen — tiles, line, marker — shifts together, because
-     * every other point is placed relative to this one. A double here would
-     * be exact and would also put a software floating-point routine on the
-     * frame path; the metre and a half is the better trade. */
-    const float r = (float)lat_e7 * E7_TO_RAD;
-    const float my = logf(tanf(r) + 1.0f / cosf(r));
-    const float t = (1.0f - my * (float)M_1_PI) * 0.5f;
-    return (int64_t)llroundf(t * (float)((int64_t)NAV_TILE_PX << zoom));
+    return nav_world_y_px(lat_e7, zoom);
 }
 
 void nav_map_set_view(int32_t lat_e7, int32_t lon_e7, uint8_t zoom,
                      uint16_t heading_deg)
 {
-    s_target_lat_e7 = lat_e7;
-    s_target_lon_e7 = lon_e7;
+    nav_motion_observe(&s_motion, lat_e7, lon_e7,
+                       &s_target_lat_e7, &s_target_lon_e7);
     s_have_target = true;
     s_view.zoom = s_zoom_override ? s_zoom_override : zoom;
     /* The cache protects the blurred layers relative to this. */
@@ -236,6 +225,10 @@ void nav_map_unproject(int x, int y, int w, int h,
 
 void nav_map_set_speed(uint16_t cm_per_s)
 {
+    if (cm_per_s == 0 && s_speed_ms > 0 && s_motion.valid) {
+        s_target_lat_e7 = s_motion.lat;
+        s_target_lon_e7 = s_motion.lon;
+    }
     s_speed_ms = (float)cm_per_s * 0.01f;
 }
 
@@ -272,26 +265,10 @@ void nav_map_dead_reckon(uint32_t dt_ms)
         }
     }
 
-    if (s_speed_ms > 0.1f && s_view.heading_deg < 360) {
-        const float metres = s_speed_ms * ((float)dt_ms * 0.001f);
-        const float bearing = (float)s_view.heading_deg * DEG_TO_RAD;
-        /* Flat-earth step: at a few metres a tick the error is far below a
-         * pixel, and the easing below takes out whatever it gets wrong. */
-        const float lat_rad = (float)s_view.lat_e7 * E7_TO_RAD;
-        const int32_t dlat = (int32_t)lroundf(metres * cosf(bearing) * M_TO_E7);
-        const int32_t dlon = (int32_t)lroundf(metres * sinf(bearing) * M_TO_E7 / cosf(lat_rad));
-        s_view.lat_e7 += dlat;
-        s_view.lon_e7 += dlon;
-        /* Chase a moving estimate, not the old GPS fix: pulling towards a
-         * stationary target every frame used to cancel the forward travel. */
-        s_target_lat_e7 += dlat;
-        s_target_lon_e7 += dlon;
-    }
-
     if (s_have_target) {
-        const float weight = 1.0f - expf(-(float)dt_ms / POSITION_EASE_MS);
-        s_view.lat_e7 += (int32_t)lroundf((s_target_lat_e7 - s_view.lat_e7) * weight);
-        s_view.lon_e7 += (int32_t)lroundf((s_target_lon_e7 - s_view.lon_e7) * weight);
+        nav_motion_step(&s_motion, &s_view.lat_e7, &s_view.lon_e7,
+                        &s_target_lat_e7, &s_target_lon_e7,
+                        s_speed_ms, s_view.heading_deg, dt_ms);
     }
 }
 

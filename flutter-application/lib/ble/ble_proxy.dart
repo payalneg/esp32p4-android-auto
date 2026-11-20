@@ -430,6 +430,16 @@ class BleProxy {
 
   void reloadFilter() => _fireAndForget(IpcCmd.reloadFilter);
 
+  Future<Map<String, dynamic>?> readRecovery() async {
+    final response = await _request(IpcCmd.readRecovery, null, const Duration(seconds: 15));
+    final status = response['status'] as Map?;
+    return status == null ? null : Map<String, dynamic>.from(status);
+  }
+
+  Future<void> recoveryCommand(int op, int nonce) async {
+    await _request(IpcCmd.recoveryCommand, {'op': op, 'nonce': nonce}, const Duration(seconds: 15));
+  }
+
   Future<OtaInfo?> readOtaInfo() async {
     final r = await _request(IpcCmd.readOtaInfo);
     final info = r['info'] as Map?;

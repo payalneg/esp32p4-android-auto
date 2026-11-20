@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 #include "display_video.h"
 
 #include <string.h>
@@ -390,6 +391,7 @@ esp_err_t display_video_init(void)
 
 void display_video_yield_panel(void)
 {
+    boot_guard_ui_required(true);
     /* Let a frame that is mid-PPA/draw on the display task finish, and make
      * every frame still queued (or submitted from now on under the old
      * generation) a no-op — otherwise a stale video frame could land on the
@@ -513,6 +515,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         /* Reset the once-per-session pause gate so the next AA entry
          * gets one fresh attempt. */
         s_pause_attempted = false;
+        boot_guard_ui_required(true);
         /* AA path naturally yields inside PPA + DPI flush; the drop path
          * doesn't, and h264_pipe keeps slamming us with frames as fast as
          * the decoder produces them. Without yielding here, IDLE0 starves
@@ -561,6 +564,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
         }
         s_pause_attempted = true;
+        boot_guard_ui_required(false);
     }
 
     int idx = s_fb_idx;
@@ -1238,6 +1242,7 @@ static bool take_panel_for_video(void)
             ESP_LOGI(TAG, "LVGL owns the panel — resumed its worker, frames dropped");
         }
         s_pause_attempted = false;
+        boot_guard_ui_required(true);
         /* Drop path does no blocking work; yield a tick so IDLE0 never
          * starves under a flood of dropped frames (TWDT, observed). */
         vTaskDelay(1);
@@ -1252,6 +1257,7 @@ static bool take_panel_for_video(void)
             ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
         }
         s_pause_attempted = true;
+        boot_guard_ui_required(false);
     }
     return true;
 }

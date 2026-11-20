@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 #include "ble_nus.h"
 
 #include <string.h>
@@ -176,7 +177,7 @@ static void lisp_transfer_touch(void)
 
 static void rx_packet_complete(const uint8_t *payload, uint16_t len)
 {
-    if (len == 0) return;
+    if (len == 0 || boot_guard_recovery()) return;
     switch (payload[0]) {
     case COMM_LISP_READ_CODE:
     case COMM_LISP_WRITE_CODE:

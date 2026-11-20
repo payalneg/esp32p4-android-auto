@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 #include "display_init.h"
 
 #include "sdkconfig.h"
@@ -126,6 +127,12 @@ static void display_perf_timer_cb(void *arg)
  * the full repaint goes through the PART_COPY path into BOTH framebuffers,
  * which also scrubs any stale-FB ghosting as a side effect. */
 #define RENDER_WDT_TICKS 40   /* 40 × 50 ms = 2 s without a refresh */
+
+static void health_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    boot_guard_ui_tick();
+}
 
 static void scr_scrub_timer_cb(lv_timer_t *t)
 {
@@ -339,6 +346,11 @@ esp_err_t display_init(void)
 
     /* Scrub stale framebuffer regions left by screen-load animations (see
      * scr_scrub_timer_cb). Runs on the LVGL task; created under the lock. */
+    if (!lv_timer_create(health_timer_cb, 500, NULL)) {
+        bsp_display_unlock();
+        return ESP_ERR_NO_MEM;
+    }
+    boot_guard_ui_tick();
     lv_timer_create(scr_scrub_timer_cb, SCR_SCRUB_PERIOD_MS, NULL);
 
     bsp_display_unlock();

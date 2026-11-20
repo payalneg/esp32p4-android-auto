@@ -22,8 +22,8 @@ extern "C" {
  * a second by dead reckoning, and it is the accumulation that decides whether
  * the marker glides or grinds. There is also no double-precision hardware on
  * this chip, so a double here is a software routine on the frame path; the
- * projection below is arranged so single precision is enough everywhere it is
- * used. */
+ * projection below uses single precision for local differences. Only the
+ * absolute Mercator centre is computed in double to avoid pixel stair steps. */
 typedef struct {
     int32_t  lat_e7, lon_e7;   /* the rider */
     uint8_t  zoom;          /* slippy zoom of the tiles to compose from */

@@ -1,3 +1,4 @@
+#include "boot_guard.h"
 /* BLE OTA for the P4 main firmware — see ble_ota.h for the wire protocol.
  *
  * Design mirrors ota_http.c: the full image is staged in PSRAM during the
@@ -243,6 +244,7 @@ static void do_finalize(void)
     ota_screen_set_status("Don't power off");
     ota_screen_set_progress(0, s_total);
 
+    boot_guard_flash_begin();
     esp_ota_handle_t h = 0;
     esp_err_t err = esp_ota_begin(next, s_total, &h);
     if (err != ESP_OK) {
@@ -251,6 +253,7 @@ static void do_finalize(void)
         notify_status(OTA_ST_ERROR, OTA_ERR_BEGIN);
         stage_free();
         s_state = ST_IDLE;
+        boot_guard_flash_end();
         return;
     }
 
@@ -267,6 +270,7 @@ static void do_finalize(void)
             notify_status(OTA_ST_ERROR, OTA_ERR_WRITE);
             stage_free();
             s_state = ST_IDLE;
+            boot_guard_flash_end();
             return;
         }
         off += chunk;
@@ -287,6 +291,7 @@ static void do_finalize(void)
         notify_status(OTA_ST_ERROR, OTA_ERR_END);
         stage_free();
         s_state = ST_IDLE;
+        boot_guard_flash_end();
         return;
     }
     err = esp_ota_set_boot_partition(next);
@@ -296,6 +301,7 @@ static void do_finalize(void)
         notify_status(OTA_ST_ERROR, OTA_ERR_BOOT);
         stage_free();
         s_state = ST_IDLE;
+        boot_guard_flash_end();
         return;
     }
 
