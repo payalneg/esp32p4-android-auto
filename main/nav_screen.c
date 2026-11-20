@@ -647,7 +647,16 @@ static void refresh_guide(void)
      * is set in 64 px digits, and "500 M" is taller than the 82 px the fixed
      * offset assumed — so the two overlapped as soon as a turn came close. */
     lv_obj_update_layout(s_turn_box);
-    lv_obj_align_to(s_remain_lbl, s_turn_box, LV_ALIGN_OUT_BOTTOM_LEFT, 4, 8);
+    /* align_to always sets LV_STYLE_ALIGN in LVGL 8, even at the same
+     * position. Calling it on every 25 ms tick invalidates the plate and
+     * steals render time from the map. Both objects share the screen parent. */
+    const lv_coord_t remain_x = lv_obj_get_x(s_turn_box) + 4;
+    const lv_coord_t remain_y = lv_obj_get_y(s_turn_box) +
+                                lv_obj_get_height(s_turn_box) + 8;
+    if (lv_obj_get_x(s_remain_lbl) != remain_x ||
+        lv_obj_get_y(s_remain_lbl) != remain_y) {
+        lv_obj_align_to(s_remain_lbl, s_turn_box, LV_ALIGN_OUT_BOTTOM_LEFT, 4, 8);
+    }
 }
 
 static void set_status(const char *text)

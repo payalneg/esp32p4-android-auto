@@ -217,6 +217,23 @@ void main() {
       expect(c.navigating, isFalse);
       expect(c.messageKey, 'nav.guide.arrived');
       expect(said.last.kind, AnnouncementKind.arrived);
+      expect(c.lastFix!.speedMs, 5, reason: 'real GPS speed is not replaced');
+    });
+
+    test('simulated arrival publishes zero speed before cancelling fixes', () async {
+      c.simulating = true;
+      c.attachFixes(gps.stream);
+      c.startNavigation();
+      gps.add(_fix(50.0029, 20.0)); // arrival precedes the terminal simulator fix
+      await settle();
+      expect(c.guidance!.arrived, isTrue);
+      expect(c.lastFix!.speedMs, 0);
+      expect(c.simulating, isFalse);
+      final stopped = c.lastFix;
+      gps.add(_fix(50.003, 20.0));
+      await settle();
+      expect(identical(c.lastFix, stopped), isTrue,
+          reason: 'the source was cancelled after publishing the stop');
     });
   });
 }

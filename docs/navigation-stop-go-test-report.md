@@ -64,8 +64,50 @@ and the UART log repeatedly showed `bridge re-bound, conn=1` followed by
 were **not** counted as a successful motion/FPS test. The screen mode was
 returned to VESC and the PC connection closed.
 
-**NOT RUN:** uncontended replay of the fix, actual LCD frame intervals/video,
-real Android GPS ride, NORTH/AUTO turns on the new firmware and cold-cache
-stress. The user was asked to stop the phone feed before these dependent tests.
-No new firmware was flashed during this run. Builds and native tests do not
-establish absence of pauses on the physical screen.
+After the user stopped the feed, `before-exclusive` completed on 1.3.50:
+112 VIEW packets, GPS coordinates updated at 1 Hz and repeated at 2 Hz,
+5 m/s, stationary/NORTH/AUTO-turn/stopped phases and a six-second packet gap.
+There was no ownership flapping during this run. This was a Windows BLE
+display replay, bypassing Android; the RAM tile cache was not empty, so it is
+not a controlled cold-cache or video comparison.
+
+A subsequent reboot resumed the phone's navigation feed automatically. The
+attempt to collect baseline framebuffer images (`before-captured`) again
+encountered ownership flapping and TRUNCATED route setup. No frames from that
+attempt are counted as evidence of smoothness.
+
+### Installed firmware
+
+The incomplete BLE OTA upload was cancelled during RAM staging, before END;
+it did not program a firmware image. For the faster USB update, the actual
+partition table and OTA data were read first. They selected `ota_0` at 0x20000.
+Its entire 5 MiB image was saved as `installed-1.3.50-slot0.bin`; esptool
+validated version 1.3.50, its checksum and validation hash.
+
+Firmware 1.3.51 was written to **ota_1 at 0x520000** over USB; esptool verified
+the programmed hash. ESP-IDF's `otatool.py` selected slot 1. The old application
+in slot 0 was retained. No bootloader, partition table, settings or trip-log
+partition was written by these commands.
+
+Post-boot BLE reads (`running-after.json`) confirmed version **1.3.51**, board
+JC4880, running slot `ota_1`, other image 1.3.50, recovery false, safe defaults
+false and failure counter 0. The board remained running beyond two minutes.
+`after-1.3.51-dashboard.png` is a valid CRC-checked 800×480 framebuffer snapshot
+showing the normal dashboard; it does not demonstrate navigation smoothness.
+
+**Historical status before the Android runs below — NOT RUN:** uncontended motion replay of the new firmware, actual LCD frame
+intervals/video, real Android GPS ride, NORTH/AUTO turns on the fix and
+cold-cache stress. A read-only link check still showed two peripheral links
+with the PC connected and one after it disconnected. The user was asked to
+turn off Bluetooth on the phone, since stopping guidance did not prevent its
+automatic feed from restarting. These dependent comparisons await that setup.
+Builds, native tests and a dashboard snapshot do not establish absence of
+pauses on the physical navigation screen.
+
+## Subsequent physical phone testing
+
+The Samsung-to-JC4880 runs, rejected attempts, background-producer defect,
+arrival correction and measured 1.3.52 / 0.3.63 results are recorded in the
+[phone test report](navigation-phone-test-report.md). That report supersedes
+the pending Android checks above; LCD camera recording, overnight endurance
+and other-board hardware validation remain outside the completed scope.

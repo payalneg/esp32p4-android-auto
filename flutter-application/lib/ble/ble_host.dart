@@ -33,6 +33,7 @@ import 'file_ops.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
 import 'nav_background.dart';
+import 'nav_background_owner.dart';
 import 'nav_stream.dart';
 import 'uuids.dart';
 import 'vesc/vesc_link.dart';
@@ -67,7 +68,8 @@ class BleTaskHandler extends TaskHandler {
   StreamSubscription<void>? _navEmptySub;
   Timer? _navIdleTimer;
   bool _navFast = false;
-  NavBackground? _navBg;
+  final _navOwner = NavBackgroundOwner<NavBackground>(NavBackground.new);
+  NavBackground? get _navBg => _navOwner.current;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -115,8 +117,7 @@ class BleTaskHandler extends TaskHandler {
     _statsTimer?.cancel();
     _consoleTimer?.cancel();
     _navIdleTimer?.cancel();
-    await _navBg?.dispose();
-    _navBg = null;
+    await _navOwner.dispose();
     await _navSub?.cancel();
     await _navDestSub?.cancel();
     await _navDroppedSub?.cancel();
@@ -156,6 +157,9 @@ class BleTaskHandler extends TaskHandler {
   /// Follow the head unit's navigator screen across reconnects: the frame
   /// channel is rebuilt on every handshake, so the subscription has to be too.
   void _rewireNav(BleConnState s) {
+    final nav = s == BleConnState.connected ? _ble.navStream : null;
+    // Repeated connected pushes must not leave an orphan GPS producer alive.
+    if (!_navOwner.bind(nav)) return;
     unawaited(_navSub?.cancel());
     _navSub = null;
     unawaited(_navDestSub?.cancel());
@@ -174,16 +178,12 @@ class BleTaskHandler extends TaskHandler {
       _navIdleTimer?.cancel();
       _navIdleTimer = null;
       _navFast = false;
-      unawaited(_navBg?.dispose());
-      _navBg = null;
       return;
     }
-    final nav = _ble.navStream;
     if (nav == null) return;
     // The awake half of the app owns the nav feed while the UI sleeps. It
     // stands down whenever the UI says it is feeding (see navUiActive).
-    final bg = NavBackground(nav);
-    _navBg = bg;
+    final bg = _navBg!;
     bg.setVisible(nav.state.navMode && nav.state.visible);
     _navSub = nav.states.listen((st) {
       _navBg?.setVisible(st.navMode && st.visible);
@@ -516,11 +516,11 @@ class BleTaskHandler extends TaskHandler {
           break;
 
         case IpcCmd.navUiActive:
-          _navBg?.setUiActive(m['active'] as bool? ?? true);
+          _navOwner.setUiActive(m['active'] as bool? ?? true);
           break;
 
         case IpcCmd.navStreamEnabled:
-          _navBg?.setStreamEnabled(m['on'] as bool? ?? true);
+          _navOwner.setStreamEnabled(m['on'] as bool? ?? true);
           break;
 
         case IpcCmd.navHandoff:

@@ -68,7 +68,10 @@ const double kPrefetchStepM = 200;
 
 
 class NavigatorScreen extends StatefulWidget {
-  const NavigatorScreen({super.key});
+  const NavigatorScreen({super.key, this.controller});
+
+  /// Optional source for physical ride replay; disposed with this screen.
+  final NavController? controller;
 
   @override
   State<NavigatorScreen> createState() => _NavigatorScreenState();
@@ -86,7 +89,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   HeadUnitFeed? _feed;
   /// Set once the head-unit map has been laid out, so a camera move before
   /// that does not throw.
-  final _controller = NavController();
+  late final NavController _controller;
   final _location = LocationService();
   final _camera = NavCamera();
   final Voice _voice = TtsVoice();
@@ -175,6 +178,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   @override
   void initState() {
     super.initState();
+    _controller = widget.controller ?? NavController();
     WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _announceSub = _controller.announcements.listen(_onAnnouncement);
@@ -228,6 +232,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   /// with the platform's cached position, so the marker normally lands in
   /// the same frame as the map rather than a fix later.
   Future<void> _locateOnOpen() async {
+    if (_controller.simulating) return;
     if (_controller.gpsActive) {
       _controller.setFollow(true);
       return;

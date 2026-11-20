@@ -14,7 +14,10 @@ import 'nav/map_data.dart';
 import 'settings/agent_settings.dart';
 import 'settings/nav_settings.dart';
 
-Future<void> main() async {
+Future<void> main() => launchAaBridgeApp();
+
+/// Shared startup for the production app and the physical navigation harness.
+Future<void> launchAaBridgeApp({Widget? appOverride}) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Must run before addTaskDataCallback / sendDataToTask can reach the
   // background BLE isolate.
@@ -74,7 +77,7 @@ Future<void> main() async {
     key: appCaptureKey,
     child: LocaleScope(
       notifier: locale,
-      child: const AaBridgeApp(),
+      child: appOverride ?? const AaBridgeApp(),
     ),
   ));
 }

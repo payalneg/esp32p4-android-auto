@@ -1,0 +1,63 @@
+{
+  "phone-before-1.3.50-r3": {
+    "pairs": 180,
+    "backward": 11,
+    "stationary": 16,
+    "far": 0,
+    "commonWindowMapFramesPerSecond": 4.6783625991908435,
+    "composeMedianMs": 53.642
+  },
+  "phone-final-1.3.52-app-0.3.63": {
+    "pairs": 182,
+    "backward": 0,
+    "stationary": 2,
+    "far": 0,
+    "commonWindowMapFramesPerSecond": 6.67520472959098,
+    "composeMedianMs": 44.731
+  },
+  "reconnect": {
+    "samples": 94,
+    "maxPositionDifferenceM": 0.004487404767283444,
+    "seconds": 40
+  },
+  "conditions": {
+    "phone": "Samsung Galaxy A23 5G",
+    "head": "JC4880",
+    "gpsHz": 1,
+    "speedMs": 5,
+    "speedup": 1,
+    "viewZoom": 17,
+    "source": "simulateRide -> NavController -> HeadUnitFeed -> IPC/service -> BLE -> physical head",
+    "comparisonWindowsSeconds": [
+      [
+        15,
+        29
+      ],
+      [
+        76,
+        88
+      ]
+    ],
+    "backwardThresholdM": -0.05,
+    "stationaryThresholdM": 0.025,
+    "comparisonCadence": "about 7 Hz navstat; screenshots disabled in these intervals"
+  },
+  "finalRun": {
+    "unexpectedFarSamples": 0,
+    "motionSourceValid": true,
+    "inputFixes": 121,
+    "inputIntervalMinS": 0.9949750900268555,
+    "inputIntervalMaxS": 1.0064198970794678,
+    "headSamples": 701,
+    "movingHighFrequencyPairs": 384,
+    "backwardsPairs": 0,
+    "nearStationaryPairs": 5,
+    "medianProgressSpeedMs": 4.822875193863865,
+    "shownFramesPerSecond": 6.429161261326254,
+    "composeMedianMs": 43.822,
+    "composeMaxMs": 141.023,
+    "errors": [],
+    "complete": true
+  },
+  "appSha256": "d8b40e1efd17224a8e28e4960fa6f022592345dfbbeaabe0bf530479006da0e9"
+}

@@ -27,6 +27,7 @@ import '../nav/krakow_tiles.dart';
 import '../nav/location_service.dart';
 import '../nav/tile_cache.dart';
 import 'nav_stream.dart';
+import 'nav_background_owner.dart';
 
 /// A [HeadUnitLink] straight over the service's [NavStream] — no IPC hop, the
 /// radio is in this isolate.
@@ -85,7 +86,7 @@ class _DirectLink implements HeadUnitLink {
       );
 }
 
-class NavBackground {
+class NavBackground implements NavBackgroundControl {
   NavBackground(NavStream nav) : _feed = HeadUnitFeed(
           tiles: () => _cache,
           link: _DirectLink(nav),
@@ -114,6 +115,7 @@ class NavBackground {
   }
 
   /// The UI isolate is awake and feeding (true) or asleep (false).
+  @override
   void setUiActive(bool active) {
     if (_uiActive == active) return;
     _uiActive = active;
@@ -121,6 +123,7 @@ class NavBackground {
   }
 
   /// The rider's "stream to display" switch, forwarded from the UI.
+  @override
   void setStreamEnabled(bool on) {
     if (_streamEnabled == on) return;
     _streamEnabled = on;
@@ -165,12 +168,19 @@ class NavBackground {
     await _ensureCache();
     if (_disposed || !_shouldRun) return;
     // Only the receiver while we are actually the ones feeding.
-    if (_fixSub == null && await LocationService().hasPermission()) {
-      _fixSub = LocationService().fixes().listen((f) {
-        _feed.setPosition(f.position,
-            headingDeg: f.headingDeg, speedMs: f.speedMs);
-      });
+    if (_fixSub == null) {
+      final allowed = await LocationService().hasPermission();
+      // Ownership can change while the platform permission query is pending.
+      if (_disposed || !_shouldRun) return;
+      if (allowed && _fixSub == null) {
+        _fixSub = LocationService().fixes().listen((f) {
+          if (!_shouldRun) return;
+          _feed.setPosition(f.position,
+              headingDeg: f.headingDeg, speedMs: f.speedMs);
+        });
+      }
     }
+    if (_disposed || !_shouldRun) return;
     _feed.start();
     AppLog.i('nav', 'background feed on (head unit visible, UI asleep)');
   }
@@ -218,6 +228,7 @@ class NavBackground {
     }
   }
 
+  @override
   Future<void> dispose() async {
     _disposed = true;
     await _stop();

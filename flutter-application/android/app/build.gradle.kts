@@ -37,7 +37,11 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.aabridge.aa_bridge"
+        applicationId = providers.gradleProperty("navTestApplicationId")
+            .orElse(providers.environmentVariable("NAV_TEST_APPLICATION_ID"))
+            .getOrElse("com.aabridge.aa_bridge")
+        manifestPlaceholders["appLabel"] = if (applicationId?.endsWith(".navtest") == true)
+            "VESC Navigator Test" else "VESC Display Tool"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // 24, not Flutter's default 21: flutter_tts (spoken turn-by-turn in

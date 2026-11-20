@@ -22,7 +22,7 @@ Current app bundles and default builds target the ESP32-P4 head units
 (Waveshare 4.3" and Guition JC4880P443C). **ESP32-S3 support is temporarily
 paused**; its sources and explicit developer build remain available.
 
-**Firmware 1.3.48 / Android companion app 0.3.57:** files in [release/](release/).
+**Firmware 1.3.52 / Android companion app 0.3.63:** files in [release/](release/).
 Release details, navigation bench results and remaining limitations: [release notes](release/README.md).
 
 Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
@@ -34,14 +34,17 @@ and the limitations below remain.
 
 ## Hardware validation and remaining limitations
 
-The navigation changes were bench-tested on a **JC4880** before release
-packaging: real Bluetooth route/tile/position reception, firmware boot and
-AUTO/NORTH button layout. Rotated-map composition took **55–70 ms** under
-diagnostic load. This is not a complete vehicle or overnight endurance test.
+Navigation was tested through a **Samsung phone and a JC4880 over real BLE**.
+On matching instrumented route intervals, map updates rose from **4.7 to 6.7/s**;
+backward camera steps fell from **11/180 to 0/182**. Simulated arrival and a
+head-unit restart/reconnect passed. See the [phone test report](docs/navigation-phone-test-report.md)
+for inputs, measurements and limits. This is not an LCD refresh-rate, vehicle
+or overnight endurance test.
 
 - The live overnight replay stopped after three Bluetooth timeouts.
-- Simulated arrival can retain a nonzero speed; repeated VIEW messages can
-  hide stale GPS input from the head unit timeout. Both remain open.
+- Simulated arrival now publishes zero speed. Position prediction is bounded
+  to 1.5 seconds, but repeated VIEW messages can still hide stale GPS input
+  from the activity caption.
 - The CAN/NUS bridge changes need hardware verification. The earlier S3 CAN
   investigation saw no acknowledged frames despite checking wiring, termination,
   bitrate and controller ID; do not assume that board communicates with a VESC.

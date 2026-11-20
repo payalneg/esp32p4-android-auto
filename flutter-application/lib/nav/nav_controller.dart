@@ -25,8 +25,8 @@ enum TapMode { none, start, finish }
 
 class NavController extends ChangeNotifier {
   NavController({MapData? mapData, NavSettings? settings})
-      : _mapData = mapData ?? MapData.instance,
-        _settings = settings ?? NavSettings.instance {
+    : _mapData = mapData ?? MapData.instance,
+      _settings = settings ?? NavSettings.instance {
     _profile = _settings.profile;
     trackUp = _settings.trackUp;
   }
@@ -95,9 +95,10 @@ class NavController extends ChangeNotifier {
     } else {
       reset(keepFixes: true);
       tapMode = lastFix == null ? TapMode.start : TapMode.finish;
-      messageKey = tapMode == TapMode.start
-          ? 'nav.route.tapStart'
-          : 'nav.route.tapFinish';
+      messageKey =
+          tapMode == TapMode.start
+              ? 'nav.route.tapStart'
+              : 'nav.route.tapFinish';
     }
     notifyListeners();
   }
@@ -197,8 +198,10 @@ class NavController extends ChangeNotifier {
     final result = await router.route(from, to, _profile);
     lastRouteTime = sw.elapsed;
     if (kDebugMode) {
-      debugPrint('nav: route in ${sw.elapsedMilliseconds} ms '
-          '(${result == null ? "none" : "${result.lengthM.round()} m"})');
+      debugPrint(
+        'nav: route in ${sw.elapsedMilliseconds} ms '
+        '(${result == null ? "none" : "${result.lengthM.round()} m"})',
+      );
     }
 
     routing = false;
@@ -288,10 +291,13 @@ class NavController extends ChangeNotifier {
   /// Subscribes to a fix stream, replacing any current one.
   void attachFixes(Stream<GeoFix> stream) {
     _fixes?.cancel();
-    _fixes = stream.listen(_onFix, onDone: () {
-      simulating = false;
-      notifyListeners();
-    });
+    _fixes = stream.listen(
+      _onFix,
+      onDone: () {
+        simulating = false;
+        notifyListeners();
+      },
+    );
     notifyListeners();
   }
 
@@ -317,6 +323,17 @@ class NavController extends ChangeNotifier {
       if (gd.arrived) {
         messageKey = 'nav.guide.arrived';
         navigating = false;
+        // Arrival can happen before the simulator's final sample. Publish a
+        // stopped fix before cancelling it, otherwise the head keeps the last
+        // positive speed. Real GPS remains live and retains its measured speed.
+        if (simulating) {
+          lastFix = GeoFix(
+            position: fix.position,
+            speedMs: 0,
+            headingDeg: fix.headingDeg,
+            accuracyM: fix.accuracyM,
+          );
+        }
         stopSim();
       }
     }

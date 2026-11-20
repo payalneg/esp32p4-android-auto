@@ -31,7 +31,7 @@
         xmlns:tools="http://schemas.android.com/tools"/>
 
     <application
-        android:label="VESC Display Tool"
+        android:label="${appLabel}"
         android:name=".AaBridgeApplication"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">

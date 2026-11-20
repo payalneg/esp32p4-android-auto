@@ -11,6 +11,24 @@ the one recorded in the release commit.
 
 ## Unreleased
 
+## 1.3.52 — 2026-11-20 (Android app 0.3.63+127)
+
+- Keep one background navigation producer per BLE channel, preserve UI
+  ownership and stream settings across connection setup, and dispose retired
+  producers. Repeated connected-state notifications no longer leave a second
+  real-GPS feed competing with the foreground navigator.
+- Publish zero speed when simulated arrival cancels the fix source before its
+  terminal sample. Real GPS keeps its measured speed.
+- Avoid repeating LVGL guide-row alignment every 25 ms; identical alignment
+  writes invalidated the row and consumed map-render time.
+- Preserve fractional dead-reckoning steps, ignore repeated raw GPS anchors,
+  and use a precise Mercator centre. Apply incoming VIEWs on the map worker.
+- Add boot-health/watchdog recovery and the Android recovery screen, retaining
+  compatibility with installed bootloaders. Recovery policy has native tests;
+  forced panic/hang recovery still needs hardware fault-injection testing.
+- Add an isolated Android physical-drive entry point, route fixture, regression
+  tests and a measured phone-to-head report. S3 stays outside release bundles.
+
 ### Performance / footprint (`perf/optimization-batch`)
 
 - Build the P4 firmware with `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`) instead
