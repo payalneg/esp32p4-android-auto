@@ -509,13 +509,15 @@ class BleProxy {
 
   /// Hand the head unit the route line to draw. Never throws.
   Future<NavFrameResult> sendNavRoute(
-      List<({double lat, double lon})> pts) async {
+      List<({double lat, double lon})> pts, {
+    List<int>? segmentTypes,
+  }) async {
     try {
       final flat = <double>[
         for (final p in pts) ...<double>[p.lat, p.lon],
       ];
-      final r = await _request(
-          IpcCmd.navRoute, {'pts': flat}, const Duration(seconds: 15));
+      final r = await _request(IpcCmd.navRoute,
+          {'pts': flat, 'segmentTypes': segmentTypes}, const Duration(seconds: 15));
       return NavFrameResult(
           (r['ack'] as num?)?.toInt() ?? NavAck.timeout, 0, 0);
     } catch (_) {
@@ -590,6 +592,7 @@ class BleProxy {
   /// Hand the service the ride the UI was guiding so it can continue while the
   /// UI sleeps. All fields optional; a null route clears the line.
   void sendNavHandoff({
+    List<int>? segmentTypes,
     List<({double lat, double lon})>? route,
     ({int turn, int distM, int remainingM, int remainingS, bool offRoute})?
         guide,
@@ -597,6 +600,7 @@ class BleProxy {
     ({bool following, double lat, double lon})? look,
   }) =>
       _fireAndForget(IpcCmd.navHandoff, {
+        'segmentTypes': segmentTypes,
         'route': route == null
             ? null
             : <double>[for (final p in route) ...<double>[p.lat, p.lon]],

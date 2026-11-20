@@ -9,7 +9,68 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## v1.3.48 / app 0.3.57 — 2026-11-20
+
+### Navigator: smoother motion, route types and activity
+
+- The rider arrow now eases its bearing over the shortest arc, including the
+  transition through north. Position correction is based on elapsed time and
+  follows a moving prediction between phone updates. Prediction stops after
+  1.5 seconds without VIEW messages and does not include a disconnected interval.
+- Routes carry a type for every geometry segment: blue for ordinary roads,
+  green for cycleways, orange for pedestrian ways and purple for other paths
+  and tracks. Types survive reverse traversal and the phone/service handoff.
+  STATE bit 2 negotiates the extended route format; older firmware receives
+  the original uncoloured line.
+- A short activity badge shows Bluetooth map/route reception, SD reads,
+  missing tiles and phone/app/GPS waits.
+- FIND, the AUTO/NORTH camera button and the zoom buttons now share one
+  vertical layout. The former separate mode badge overlapped FIND/ROT.
+  AUTO and NORTH were checked on the JC4880 after flashing.
+- Validation: 80 navigation/BLE tests and 20 real-graph virtual trips passed.
+  The JC4880 received routes, vector tiles and positions over real Bluetooth.
+  A rotated frame took 55–70 ms to compose under diagnostic load; the longer
+  live run later stopped after three BLE timeouts, so overnight hardware
+  stability is not claimed. Other board profiles have build validation only.
+- Known limitations remain: simulated arrival can retain a nonzero last speed,
+  and repeated VIEW messages can hide a pause in the GPS source from the head
+  unit's timeout. These two diagnostic failures are not fixed in this release.
+
+
+### Windows release tooling
+
+- `release.bat` now loads the ESP-IDF environment when `idf.py` is present but
+  `ESP_IDF_VERSION` / `ESP_ROM_ELF_DIR` are missing. Without that environment,
+  Wi-Fi Remote silently skipped its IDF-specific Kconfig files and the firmware
+  build failed on missing `CONFIG_WIFI_RMT_*` symbols.
+- Use the installed compiler cache when available unless explicitly disabled.
+
+### VESC Tool through the display: no more jumping values
+
+- **The NUS bridge answered the phone with everything the VESC said**, including
+  the replies to the dashboard's own polls. VESC Tool parses every payload by
+  its command byte and publishes it as a complete dataset, so a reply to the
+  display's 10 Hz `COMM_GET_VALUES_SETUP_SELECTIVE` poll cleared every setup
+  value the display had not asked for, and on a BLE link the second head's
+  temperature poll (`COMM_GET_VALUES_SELECTIVE` with both temperature bits and
+  nothing else, once a second) landed in VESC Tool's MC-values handler with an
+  almost empty mask. Speed and drawn Ah dropped to 0 about once a second and
+  jumped back — the reported symptom. The bridge now forwards only the answer
+  to a request the phone actually made (plus unsolicited `COMM_PRINT` /
+  `COMM_LISP_PRINT` output): `vesc_link_send_from_phone()` tags the request at
+  the transport, `vesc_link_reply_for_phone()` tells
+  `ble_nus_forward_response()` whether the packet in hand is that answer.
+- **On CAN the bridge had a second conversation running at the same time as the
+  dashboard's polls.** A reply longer than 6 bytes is reassembled in a buffer
+  keyed by the sender's CAN id alone, so the phone's request and the display's
+  poll overwrote each other's fragments and both died on the
+  `PROCESS_RX_BUFFER` CRC — a lost sample for VESC Tool on every collision. The
+  bridge's requests now take the same single-request rail as the polls.
+- A payload VESC Tool already addressed itself (`COMM_FORWARD_CAN`, which it
+  starts sending after you pick a node in its CAN scan) is no longer wrapped in
+  a second `COMM_FORWARD_CAN` on the BLE link.
+
+## v1.3.47 / app 0.3.56
 
 ### Navigator: vector tiles from microSD
 

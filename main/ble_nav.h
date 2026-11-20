@@ -26,6 +26,10 @@
  *                        points x [i32 lat_e7][i32 lon_e7]. **points = 0
  *                        clears the route** — no DATA follows, and the line
  *                        and the manoeuvre plate come off the screen.
+ *                        Optional sixth byte = 1 selects typed points:
+ *                        [i32 lat][i32 lon][u8 outgoing_type], where type is
+ *                        0 road, 1 cycleway, 2 footway, 3 other. Send this
+ *                        only if STATE mode bit2 advertises support.
  *     0x09 ROUTE_END   : [op][u16 seq]
  *     0x0A GUIDE       : [op][u8 turn][u16 dist_m][u32 remaining_m]
  *                        [u16 remaining_s][u8 flags]  (bit0 = off route)
@@ -39,6 +43,7 @@
  *   CTRL notify (P4 -> phone), 6-byte frame [u8 status][u8 a][u16 b][u16 c] LE:
  *     0x10 STATE      a = ui mode (bit0 navigator screen is live, bit1 the
  *                         map ground is on the microSD card)
+ *                         bit2 = typed route points supported
  *                     b = 1 while the rider is looking at it
  *                     c = largest DATA write we accept
  *     0x11 FRAME_ACK  a = result (NAV_ACK_*), b = seq, c = decode+scale ms

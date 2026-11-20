@@ -74,17 +74,16 @@ static const char *TAG = "ble_nav";
 /* How often the map is redrawn between the phone's position updates. The
  * phone speaks twice a second, which as a step is plainly visible; the head
  * unit knows the speed and heading, so in between it carries the view
- * forward itself and redraws. 120 ms is about eight frames a second, and a
- * compose costs under 20 ms. */
-#define NAV_FRAME_MS 120
+ * forward itself and redraws. Aim for a frame every 60 ms; buffer backpressure
+ * automatically limits this when composing or displaying takes longer. */
+#define NAV_FRAME_MS 60
 /* How often the view is carried forward between the phone's position
  * messages. Those arrive twice a second, which is a visible hop if the map
  * only moves when one lands; in between, the rider's own speed and heading
- * say where they have got to. Ten a second is as fast as the panel swaps
- * buffers, and composing a frame costs about 20 ms of one core. */
-#define NAV_STEP_MS 100
+ * say where they have got to. Match the render cadence. */
+#define NAV_STEP_MS 60
 /* How soon to come back for a render the buffer was too busy to take. The
- * screen swaps on a 50 ms tick and holds the buffer one tick after that, so
+ * screen swaps on a 25 ms tick and holds the buffer one tick after that, so
  * anything under that is a wasted wake-up and much over it is a visible
  * stall. */
 #define NAV_RENDER_RETRY_MS 25
@@ -130,6 +129,7 @@ static uint32_t  s_expect;
 static uint32_t  s_got;
 static uint16_t  s_seq;
 static rx_kind_t s_rx_kind;
+static bool s_route_typed;
 static uint8_t   s_tile_z, s_tile_fmt;
 static uint32_t  s_tile_x, s_tile_y;
 
@@ -339,7 +339,7 @@ static void notify_state(void)
     /* Bit 1 of the mode byte says the ground is on the card. Old apps read
      * the byte as a boolean and see the same "navigator is live" they always
      * did; a new app stops sending PNGs. */
-    notify_all(NAV_ST_STATE, (uint8_t)((live ? 1 : 0) | (vector ? 2 : 0)),
+    notify_all(NAV_ST_STATE, (uint8_t)((live ? 1 : 0) | (vector ? 2 : 0) | 4),
                live ? 1 : 0, BLE_NAV_MAX_DATA);
 
     /* And say so when the store is empty. The phone never sends the same tile
@@ -399,6 +399,7 @@ static void render_view(void)
     int wanted = 0;
     const int have = nav_map_render(dst, nav_screen_width(),
                                     nav_screen_height(), &wanted);
+    nav_screen_set_map_coverage(have, wanted);
     const int64_t t1 = esp_timer_get_time();
     /* Push the frame out of the cache before LVGL's DMA reads it. Timed
      * separately because it is 768 KB of write-back and therefore a fixed
@@ -407,7 +408,6 @@ static void render_view(void)
                     ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     const int64_t t2 = esp_timer_get_time();
     nav_screen_commit();
-    nav_screen_set_streaming(true);
     s_stats.renders++;
     s_stats.render_last_ms = (uint32_t)((t2 - t0) / 1000);
     s_stats.compose_us = (uint32_t)(t1 - t0);
@@ -437,12 +437,14 @@ static void step_view(void)
 {
     const int64_t now = esp_timer_get_time();
     if (!s_stats.streaming || s_last_view_us == 0 ||
-        now - s_last_view_us >= NAV_IDLE_US) {
+        now - s_last_view_us >= 1500 * 1000) {
+        s_last_step_us = now;
         return;
     }
-    if (nav_map_is_panned()) return;
     if (now - s_last_step_us < NAV_STEP_MS * 1000) return;
-    const uint32_t dt = (uint32_t)((now - s_last_step_us) / 1000);
+    const int64_t elapsed_ms = (now - s_last_step_us) / 1000;
+    /* A resumed link must not travel the whole time it was disconnected. */
+    const uint32_t dt = elapsed_ms > 250 ? NAV_STEP_MS : (uint32_t)elapsed_ms;
     s_last_step_us = now;
     nav_map_dead_reckon(dt);
     render_view();
@@ -503,7 +505,10 @@ static void prefetch_pass(void)
             }
         }
     }
-    if (got) render_view();
+    if (got) {
+        nav_screen_set_activity("Карта: SD");
+        render_view();
+    }
 }
 
 static void handle_tile(const nav_evt_t *ev)
@@ -529,6 +534,7 @@ static void handle_tile(const nav_evt_t *ev)
         render_view();
     } else {
         s_stats.tiles_failed++;
+        nav_screen_set_activity("Ошибка карты");
     }
     notify(NAV_ST_TILE_ACK, ack, ev->seq, (uint16_t)(ms > 0xFFFF ? 0xFFFF : ms));
 }
@@ -539,7 +545,7 @@ static void handle_route(const nav_evt_t *ev)
     if (s_got != s_expect) {
         ack = NAV_ACK_TRUNCATED;
     } else {
-        ack = nav_route_set(s_stage, s_got) ? NAV_ACK_OK : NAV_ACK_BAD_PARAM;
+        ack = nav_route_set(s_stage, s_got, s_route_typed) ? NAV_ACK_OK : NAV_ACK_BAD_PARAM;
     }
     s_state = ST_IDLE;
     if (ack == NAV_ACK_OK) render_view();
@@ -620,6 +626,7 @@ static void worker(void *arg)
         switch (ev.kind) {
             case EV_TILE:
                 s_stats.streaming = true;
+                nav_screen_set_streaming(true);
                 set_boost(true);
                 handle_tile(&ev);
                 break;
@@ -855,7 +862,9 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             const uint16_t n   = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
             const uint16_t seq = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
             if (s_state == ST_DECODING) { reject(seq, NAV_ACK_BUSY); return; }
-            const uint32_t tot = (uint32_t)n * 8u;
+            s_route_typed = len >= 6 && data[5] == 1;
+            if (len >= 6 && data[5] > 1) { reject(seq, NAV_ACK_BAD_PARAM); return; }
+            const uint32_t tot = (uint32_t)n * (s_route_typed ? 9u : 8u);
             if (n == 0) {
                 /* No points means the ride is over — the phone has no route
                  * to draw any more. Without this the head unit kept the last
@@ -875,6 +884,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_seq = seq;
             s_rx_kind = RX_ROUTE;
             s_state = ST_RECEIVING;
+            nav_screen_set_activity("Маршрут: Bluetooth");
             break;
         }
 
@@ -942,6 +952,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
             s_seq = seq;
             s_rx_kind = RX_TILE;
             s_state = ST_RECEIVING;
+            nav_screen_set_activity("Карта: Bluetooth");
             break;
         }
 
@@ -958,6 +969,7 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
                 ? (uint16_t)data[12] | ((uint16_t)data[13] << 8) : 0;
             nav_map_set_view(lat_e7, lon_e7, zoom, heading);
             nav_map_set_speed(speed_cms);
+            nav_screen_position_received();
             nav_evt_t ev = { .kind = EV_VIEW };
             xQueueSend(s_q, &ev, 0);
             break;
@@ -981,6 +993,8 @@ void ble_nav_ctrl_write(const uint8_t *data, uint16_t len)
 void ble_nav_data_write(const uint8_t *data, uint16_t len)
 {
     if (s_state != ST_RECEIVING || !s_stage || len == 0) return;
+    if (s_rx_kind == RX_TILE) nav_screen_set_activity("Карта: Bluetooth");
+    if (s_rx_kind == RX_ROUTE) nav_screen_set_activity("Маршрут: Bluetooth");
     if (s_got + len > s_expect) {
         /* More than promised: the sender and we disagree about this one, so
          * drop it rather than decode a mixture of two. */

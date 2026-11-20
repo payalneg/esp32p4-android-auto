@@ -154,4 +154,38 @@ void main() {
     expect(await r.route(const LatLon(10, 10), goal, RideProfile.bicycle),
         isNull);
   });
+test('span types follow geometry and reverse with travel direction',
+      () async {
+    final graph = RouteGraph.parse(packGraph(
+      <(double, double)>[(50, 20), (50.001, 20), (50.002, 20), (50.003, 20)],
+      <TestEdge>[
+        TestEdge(
+            from: 0,
+            to: 1,
+            lenDm: 1112,
+            wayClass: _cls('residential'),
+            points: const [(50.0, 20.0), (50.0005, 20.0), (50.001, 20.0)]),
+        TestEdge(
+            from: 1,
+            to: 2,
+            lenDm: 1112,
+            wayClass: _cls('cycleway'),
+            points: const [(50.001, 20.0), (50.002, 20.0)]),
+        TestEdge(
+            from: 2,
+            to: 3,
+            lenDm: 1112,
+            wayClass: _cls('footway'),
+            points: const [(50.002, 20.0), (50.003, 20.0)]),
+      ],
+    ));
+    final router = Router(graph);
+    final forward = (await router.route(start, goal, RideProfile.bicycle))!;
+    final reverse = (await router.route(goal, start, RideProfile.bicycle))!;
+    expect(forward.segmentTypes, <int>[0, 0, 1, 2]);
+    expect(forward.segmentTypes.length, forward.points.length - 1);
+    expect(reverse.segmentTypes, <int>[2, 1, 0, 0]);
+    expect(reverse.segmentTypes.length, reverse.points.length - 1);
+  }
+);
 }

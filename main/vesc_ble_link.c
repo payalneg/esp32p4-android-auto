@@ -95,7 +95,7 @@ typedef struct {
     uint8_t  wait;          /* a caller is blocked in send_sync */
     uint8_t  route;         /* TX_ROUTE_* */
     uint8_t  kind;          /* TX_KIND_* */
-    uint8_t  pad_;
+    uint8_t  from_bridge;   /* came from the phone's NUS bridge */
     uint16_t timeout_ms;
     uint16_t len;
     uint32_t queued_ms;
@@ -171,6 +171,11 @@ static volatile uint8_t         s_probe_tries;
  * behind the config menu's or the phone's own FW_VERSION, and a flag raised
  * at queue time would have claimed THEIR answer as the probe's. */
 static volatile uint8_t s_inflight_kind;
+/* The request in flight came from the phone's NUS bridge, and the command byte
+ * its answer will carry. Read by on_packet() to decide what may be forwarded
+ * back: only this request's answer, never the dashboard's own poll replies. */
+static volatile bool    s_inflight_from_bridge;
+static volatile uint8_t s_inflight_cmd;
 /* The id probe timed out but its answer may still turn up; swallow that one
  * frame when it does instead of letting the RT parser stamp it as fresh. */
 static volatile bool    s_probe_late_id;
@@ -311,14 +316,22 @@ static void on_packet(const uint8_t *data, uint16_t len)
     if (len == 0) return;
 
     /* Unsolicited output from the running LISP script arrives whenever the
-     * script prints, including between a request and its reply — completing
-     * the wait on one of these would let the next request go out while the
-     * real answer is still in flight, and every reply after that would be
-     * matched to the wrong request. */
-    bool is_async = (data[0] == COMM_LISP_PRINT || data[0] == COMM_PRINT);
+     * script prints, and the plotter streams samples, including between a
+     * request and its reply — completing the wait on one of these would let
+     * the next request go out while the real answer is still in flight, and
+     * every reply after that would be matched to the wrong request. */
+    bool is_async = (data[0] == COMM_LISP_PRINT || data[0] == COMM_PRINT ||
+                     data[0] == COMM_PLOT_DATA);
+
+    /* Is this the answer to the request the TX task has out right now, and did
+     * that request come from the phone? Both halves are needed: a reply to a
+     * request that already timed out can arrive inside the next request's
+     * window, and it must not be handed to the phone as its own answer. */
+    bool for_phone = s_awaiting && s_inflight_from_bridge && !is_async &&
+                     data[0] == s_inflight_cmd;
 
     bool mine = probe_capture(data, len);
-    if (!mine) vesc_link_deliver(data, len);
+    if (!mine) vesc_link_deliver_tagged(data, len, for_phone);
 
     if (!is_async && s_awaiting) {
         portENTER_CRITICAL(&s_mux);
@@ -370,9 +383,22 @@ static void tx_task(void *arg)
         uint16_t       tmo     = it->timeout_ms;
         uint8_t        target  = it->target;
         uint8_t        kind    = it->kind;
+        bool           bridge  = it->from_bridge != 0;
+        /* VESC Tool addresses nodes itself once you pick one in its CAN scan,
+         * i.e. the payload already starts with COMM_FORWARD_CAN. Wrapping that
+         * again would send the inner request on a second hop — to whatever
+         * node the phone named, from a device that is not the one we think we
+         * are polling — and the answer would be attributed to the wrong
+         * request. Pass a pre-addressed payload through untouched. */
+        bool           pre_routed = (plen > 0 && payload[0] == COMM_FORWARD_CAN);
+        /* The command byte the answer will carry (the inner one when the
+         * request is wrapped), for matching it to this request. */
+        uint8_t        reply_cmd = plen ? payload[0] : 0;
+        if (reply_cmd == COMM_FORWARD_CAN && plen >= 3) reply_cmd = payload[2];
         /* Decided here, at send time, with whatever the probe knows by now —
          * not at queue time, when it may not have resolved yet. */
-        bool           wrap    = (it->route == TX_ROUTE_AUTO) && route_wraps(target);
+        bool           wrap    = !pre_routed && (it->route == TX_ROUTE_AUTO) &&
+                                 route_wraps(target);
 
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         if (mode == 3 && (uint32_t)(now_ms - it->queued_ms) > FIRE_AND_FORGET_STALE_MS) {
@@ -415,7 +441,9 @@ static void tx_task(void *arg)
          * so the poll task never reads a probe result recorded for a later
          * request. */
         if (kind == TX_KIND_PROBE_ID) s_probe_late_id = false;
-        s_inflight_kind = kind;
+        s_inflight_cmd         = reply_cmd;
+        s_inflight_from_bridge = bridge;
+        s_inflight_kind        = kind;
         s_awaiting = (mode != 3);
         portENTER_CRITICAL(&s_mux);
         s_requests++;
@@ -438,8 +466,10 @@ static void tx_task(void *arg)
          * early on a stale reply to the request before it. Its own reply may
          * still turn up; see probe_capture(). */
         if (kind == TX_KIND_PROBE_ID && !s_probe_id_valid) s_probe_late_id = true;
-        s_awaiting      = false;
-        s_inflight_kind = TX_KIND_NORMAL;
+        s_awaiting             = false;
+        s_inflight_kind        = TX_KIND_NORMAL;
+        s_inflight_from_bridge = false;
+        s_inflight_cmd         = 0;
 
         if (wait) xSemaphoreGive(s_caller_sem);
     }
@@ -447,7 +477,7 @@ static void tx_task(void *arg)
 
 static void enqueue(uint8_t target, const uint8_t *data, unsigned int len,
                     uint8_t send_mode, uint32_t timeout_ms, bool wait,
-                    uint8_t route, uint8_t kind)
+                    uint8_t route, uint8_t kind, bool from_bridge)
 {
     if (!s_tx_rb || len == 0) return;
     if (len > TX_PAYLOAD_MAX) {
@@ -472,15 +502,15 @@ static void enqueue(uint8_t target, const uint8_t *data, unsigned int len,
     }
 
     tx_hdr_t *h = (tx_hdr_t *)item;
-    h->target     = target;
-    h->send_mode  = send_mode;
-    h->wait       = wait ? 1 : 0;
-    h->route      = route;
-    h->kind       = kind;
-    h->pad_       = 0;
-    h->timeout_ms = (uint16_t)(timeout_ms > UINT16_MAX ? UINT16_MAX : timeout_ms);
-    h->len        = (uint16_t)len;
-    h->queued_ms  = (uint32_t)(esp_timer_get_time() / 1000);
+    h->target      = target;
+    h->send_mode   = send_mode;
+    h->wait        = wait ? 1 : 0;
+    h->route       = route;
+    h->kind        = kind;
+    h->from_bridge = from_bridge ? 1 : 0;
+    h->timeout_ms  = (uint16_t)(timeout_ms > UINT16_MAX ? UINT16_MAX : timeout_ms);
+    h->len         = (uint16_t)len;
+    h->queued_ms   = (uint32_t)(esp_timer_get_time() / 1000);
     memcpy(item + sizeof(tx_hdr_t), data, len);
 
     /* Never block a producer: the phone bridge calls this from the NimBLE host
@@ -536,7 +566,7 @@ static void send_sync_raw(uint8_t target, const uint8_t *data, unsigned int len,
 {
     if (!s_caller_sem) return;
     xSemaphoreTake(s_caller_sem, 0);            /* drop a stale completion */
-    enqueue(target, data, len, send_mode, timeout_ms, true, route, kind);
+    enqueue(target, data, len, send_mode, timeout_ms, true, route, kind, false);
     xSemaphoreTake(s_caller_sem, pdMS_TO_TICKS(timeout_ms + 100));
 }
 
@@ -544,7 +574,17 @@ static void ops_send(uint8_t target, const uint8_t *data, unsigned int len,
                      uint8_t send_mode)
 {
     enqueue(target, data, len, send_mode, CONFIG_VESC_BLE_SYNC_TIMEOUT_MS, false,
-            TX_ROUTE_AUTO, TX_KIND_NORMAL);
+            TX_ROUTE_AUTO, TX_KIND_NORMAL, false);
+}
+
+/* A request the phone made through the NUS bridge. Same queue as the polls, so
+ * the link still carries one request at a time; the flag only decides whether
+ * the answer goes back to the phone or stays here. */
+static void ops_send_from_phone(uint8_t target, const uint8_t *data,
+                                unsigned int len, uint8_t send_mode)
+{
+    enqueue(target, data, len, send_mode, CONFIG_VESC_BLE_SYNC_TIMEOUT_MS, false,
+            TX_ROUTE_AUTO, TX_KIND_NORMAL, true);
 }
 
 static void ops_send_sync(uint8_t target, const uint8_t *data, unsigned int len,
@@ -736,10 +776,11 @@ void vesc_ble_link_route_changed(void)
 }
 
 static const vesc_link_ops_t s_ops = {
-    .send        = ops_send,
-    .send_sync   = ops_send_sync,
-    .is_up       = ops_is_up,
-    .health_text = ops_health_text,
+    .send            = ops_send,
+    .send_sync       = ops_send_sync,
+    .send_from_phone = ops_send_from_phone,
+    .is_up           = ops_is_up,
+    .health_text     = ops_health_text,
 };
 
 /* ---- public API ---- */

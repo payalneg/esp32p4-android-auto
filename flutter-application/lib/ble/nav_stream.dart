@@ -129,6 +129,7 @@ class NavDisplayState {
     required this.visible,
     required this.maxChunk,
     this.localVector = false,
+    this.typedRoutes = false,
   });
 
   /// The head unit's full-screen mode is the navigator.
@@ -145,6 +146,9 @@ class NavDisplayState {
   /// tiles — they are already there, and they are vector, so they turn with
   /// the map and carry their own names.
   final bool localVector;
+
+  /// Supports per-span road, cycleway and footway colours.
+  final bool typedRoutes;
 
   static const unknown = NavDisplayState(
     navMode: false,
@@ -164,6 +168,7 @@ class NavDisplayState {
       visible: (raw[2] | (raw[3] << 8)) != 0,
       maxChunk: raw[4] | (raw[5] << 8),
       localVector: (raw[1] & 2) != 0,
+      typedRoutes: (raw[1] & 4) != 0,
     );
   }
 
@@ -449,9 +454,15 @@ class NavStream {
   /// An EMPTY list clears it — the head unit drops the line and the manoeuvre
   /// plate. It has no other way of learning that a ride has ended, and
   /// without it kept drawing the last one.
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) async {
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
+      {List<int>? segmentTypes}) async {
     if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
-    if (pts.length == 1) return const NavFrameResult(NavAck.badParam, 0, 0);
+    if (pts.length == 1 || pts.length > 2000) {
+      return const NavFrameResult(NavAck.badParam, 0, 0);
+    }
+    final typed = _state.typedRoutes && segmentTypes != null &&
+        segmentTypes.length == pts.length - 1;
+    final stride = typed ? 9 : 8;
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
     try {
@@ -459,19 +470,23 @@ class NavStream {
           .firstWhere((r) => r.seq == seq)
           .timeout(kNavAckTimeout);
 
-      final begin = Uint8List(5);
+      final begin = Uint8List(typed ? 6 : 5);
       begin[0] = NavOp.routeBegin;
+      if (typed) begin[5] = 1;
       final bh = ByteData.sublistView(begin);
       bh.setUint16(1, pts.length, Endian.little);
       bh.setUint16(3, seq, Endian.little);
       await _channel.writeCtrl(begin);
       if (pts.isEmpty) return await acked;   // a clear carries no points
 
-      final body = Uint8List(pts.length * 8);
+      final body = Uint8List(pts.length * stride);
       final bd = ByteData.sublistView(body);
       for (var i = 0; i < pts.length; i++) {
-        bd.setInt32(i * 8, (pts[i].lat * 1e7).round(), Endian.little);
-        bd.setInt32(i * 8 + 4, (pts[i].lon * 1e7).round(), Endian.little);
+        bd.setInt32(i * stride, (pts[i].lat * 1e7).round(), Endian.little);
+        bd.setInt32(i * stride + 4, (pts[i].lon * 1e7).round(), Endian.little);
+        if (typed) {
+          body[i * stride + 8] = i < segmentTypes.length ? segmentTypes[i] : 0;
+        }
       }
       final chunk = chunkSize;
       for (var off = 0; off < body.length; off += chunk) {

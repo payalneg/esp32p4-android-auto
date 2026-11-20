@@ -202,8 +202,16 @@ static void rx_packet_complete(const uint8_t *payload, uint16_t len)
      *
      * Never blocks: this runs on the NimBLE host task, and in BLE mode the
      * reply arrives on that same task — waiting for it here would deadlock.
-     * vesc_link_send() is enqueue-and-return on both transports. */
-    vesc_link_send(settings_get_target_vesc_id(), payload, len, 0);
+     * vesc_link_send_from_phone() is enqueue-and-return on BLE; on CAN it
+     * queues the request behind the dashboard's own polls so the two replies
+     * cannot share (and corrupt) the one reassembly slot that node has.
+     *
+     * The "from phone" tag is what keeps this side of the bridge transparent:
+     * only the answer to THIS request goes back to the phone. The display's
+     * own polls answer into the same NUS characteristic otherwise, and VESC
+     * Tool decodes their partial datasets as its own — see
+     * ble_nus_forward_response(). */
+    vesc_link_send_from_phone(settings_get_target_vesc_id(), payload, len, 0);
 }
 
 static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -464,6 +472,35 @@ void ble_nus_forward_response(const uint8_t *data, uint16_t len)
      * this very call path (the CAN dispatch task). */
     if (!s_tx_subscribed) return;
     if (len == 0) return;
+
+    /* Only what this peer actually asked for.
+     *
+     * This used to forward every payload the VESC sent us, the dashboard's
+     * own poll replies included. VESC Tool parses each one by its command
+     * byte, against the mask it gets from the same packet, and then publishes
+     * it as a complete dataset: a reply to the display's
+     * COMM_GET_VALUES_SETUP_SELECTIVE poll (10 Hz on CAN) clears every setup
+     * value the display did not include (Ah charged, tachometer, …), and on
+     * BLE the second head's temperature poll — COMM_GET_VALUES_SELECTIVE with
+     * both temperature bits and nothing else, 1 Hz — lands in VESC Tool's
+     * MC_VALUES handler with an almost empty mask. The visible result is speed
+     * and drawn Ah collapsing to 0 about once a second and jumping back.
+     *
+     * A bridge is transparent or it is not one: forward the answer to the
+     * request the phone made and nothing else. The exceptions are the streams
+     * that are not answers to one request — script output (COMM_PRINT /
+     * COMM_LISP_PRINT) and plot samples (one COMM_PLOT_INIT produces a stream
+     * of COMM_PLOT_DATA) — so the terminal and the plotter keep working. */
+    switch (data[0]) {
+    case COMM_PRINT:
+    case COMM_LISP_PRINT:
+    case COMM_PLOT_DATA:
+        break;                       /* unsolicited stream — always pass */
+    default:
+        if (!vesc_link_reply_for_phone()) return;
+        break;
+    }
+
     if (!s_tx_rb) {
         ESP_LOGW(TAG, "forward called before init — dropping %u B", len);
         return;

@@ -20,7 +20,10 @@ call "%ROOT%\scripts\app_env.bat" release
 if errorlevel 1 exit /b 1
 
 call idf.py --version >nul 2>nul
-if not errorlevel 1 goto idf_ready
+rem Finding idf.py alone is insufficient: Wi-Fi Remote's Kconfig selects its
+rem IDF-specific files through ESP_IDF_VERSION, and GDB needs ESP_ROM_ELF_DIR.
+rem A partially prepared PATH otherwise configures without the Wi-Fi symbols.
+if not errorlevel 1 if defined ESP_IDF_VERSION if defined ESP_ROM_ELF_DIR goto idf_ready
 
 rem Prefer the project's ESP-IDF version in the local Espressif installation.
 if not defined IDF_PATH (
@@ -44,6 +47,10 @@ if errorlevel 1 (
 )
 
 :idf_ready
+if not defined IDF_CCACHE_ENABLE (
+    where /q ccache
+    if not errorlevel 1 set IDF_CCACHE_ENABLE=1
+)
 set NEW_FW=%1
 set NEW_APP=%2
 

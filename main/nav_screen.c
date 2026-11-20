@@ -25,17 +25,14 @@
 
 static const char *TAG = "nav_screen";
 
-/* How often the LVGL side looks for a committed frame. Frames arrive around
- * once a second; a short tick only costs a flag read and keeps the "waiting"
- * text honest. */
-#define TICK_PERIOD_MS 50
+/* Poll committed frames often enough to preserve the composer's 60 ms cadence. */
+#define TICK_PERIOD_MS 25
 
 /* Ticks the just-retired front buffer stays off limits after a swap. LVGL
  * renders the image into the panel framebuffer asynchronously (and twice, once
  * per framebuffer in DOUBLE_DIRECT), so handing it straight back to the BLE
- * worker's DMA would tear the picture being drawn. One 50 ms tick is enough
- * — a full-screen image flushes in about 7 ms in this render mode — and it
- * lets the map move at the eight frames a second the head unit can compose. */
+ * worker's DMA would tear the picture being drawn. One 25 ms tick is enough
+ * — a full-screen image flushes in about 7 ms in this render mode. */
 #define SWAP_COOLDOWN_TICKS 1
 
 static lv_obj_t *s_screen;
@@ -130,6 +127,26 @@ static _Atomic int64_t s_last_frame_us;
 /* Text currently on the placeholder, so a tick that changes nothing does not
  * touch LVGL at all. */
 static const char *s_status_text;
+static _Atomic(const char *) s_activity;
+static _Atomic int64_t s_activity_until_us;
+static _Atomic int64_t s_last_position_us;
+static atomic_bool s_map_missing;
+
+void nav_screen_set_map_coverage(int have, int wanted)
+{
+    atomic_store(&s_map_missing, wanted > 0 && have < wanted);
+}
+
+void nav_screen_set_activity(const char *text)
+{
+    atomic_store(&s_activity, text);
+    atomic_store(&s_activity_until_us, esp_timer_get_time() + 1200000);
+}
+
+void nav_screen_position_received(void)
+{
+    atomic_store(&s_last_position_us, esp_timer_get_time());
+}
 
 /* The same two readouts Android Auto gets painted over its video, in the same
  * typeface: Antonio 64 for the number, Antonio 22 for the unit. Over there
@@ -748,13 +765,19 @@ static void tick_cb(lv_timer_t *t)
 
     const bool have_frame = atomic_load(&s_frames) > 0;
     if (!atomic_load(&s_phone)) {
-        set_status("Phone not connected");
-    } else if (!have_frame) {
-        set_status("Waiting for the navigator app...");
+        set_status("Нет телефона");
     } else if (!atomic_load(&s_streaming)) {
-        set_status("Navigator app stopped streaming");
+        set_status("Жду навигатор");
+    } else if (esp_timer_get_time() < atomic_load(&s_activity_until_us)) {
+        set_status(atomic_load(&s_activity));
+    } else if (!have_frame) {
+        set_status("Жду карту");
+    } else if (esp_timer_get_time() - atomic_load(&s_last_position_us) > 1500000) {
+        set_status("Жду GPS");
+    } else if (atomic_load(&s_map_missing)) {
+        set_status("Жду карту");
     } else {
-        set_status(NULL);
+        set_status(nav_route_count() >= 2 ? "Навигация" : "Карта готова");
     }
 }
 
@@ -832,10 +855,11 @@ esp_err_t nav_screen_init(void)
         s_label_w[i] = s_label_h[i] = 0;
     }
 
-    /* Placeholder card, centred, drawn over whatever the last picture was. */
+    /* One short line between the speed and battery plates. */
     s_status_box = lv_obj_create(s_screen);
-    lv_obj_set_size(s_status_box, UI_SX(420), 64);
-    lv_obj_align(s_status_box, LV_ALIGN_CENTER, 0, 0);
+    const int status_width = s_scr_w < 600 ? 244 : 280;
+    lv_obj_set_size(s_status_box, status_width, 38);
+    lv_obj_align(s_status_box, LV_ALIGN_BOTTOM_MID, 0, s_scr_w < 600 ? -110 : -10);
     lv_obj_set_style_bg_color(s_status_box, lv_color_hex(0x1c2530), 0);
     lv_obj_set_style_bg_opa(s_status_box, LV_OPA_80, 0);
     lv_obj_set_style_border_width(s_status_box, 0, 0);
@@ -843,19 +867,15 @@ esp_err_t nav_screen_init(void)
     lv_obj_clear_flag(s_status_box, LV_OBJ_FLAG_SCROLLABLE);
 
     s_status_lbl = lv_label_create(s_status_box);
-    /* A caption, not a headline: it says why there is no map, and the map is
-     * what the rider came for. At 32 px it filled a third of the screen and
-     * read as an error. Wrapped and centred so the longer ones ("Waiting for
-     * the navigator app...") stay inside the card instead of running out of
-     * it. */
-    lv_obj_set_width(s_status_lbl, UI_SX(420) - 32);
-    lv_label_set_long_mode(s_status_lbl, LV_LABEL_LONG_WRAP);
+    /* A fixed single line keeps activity messages clear of the map controls. */
+    lv_obj_set_width(s_status_lbl, status_width - 16);
+    lv_label_set_long_mode(s_status_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(s_status_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(s_status_lbl);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_white(), 0);
     lv_obj_set_style_text_font(s_status_lbl, &aabridge_font_24, 0);
-    lv_label_set_text(s_status_lbl, "Phone not connected");
-    s_status_text = "Phone not connected";
+    lv_label_set_text(s_status_lbl, "Нет телефона");
+    s_status_text = "Нет телефона";
 
     lv_obj_t *left = hud_row_create(s_screen, LV_ALIGN_BOTTOM_LEFT, 10, -8);
     /* Cruise sits to the left of the digits, as it does in Android Auto, so
@@ -873,11 +893,21 @@ esp_err_t nav_screen_init(void)
     s_batt_unit = hud_text(s_batt_row, &lv_font_Antonio_Regular_22, 0xC8D0D8);
     lv_label_set_text(s_batt_unit, "%");
 
-    /* "FIND" opens the keyboard. Top right, above the zoom buttons — plain
-     * ASCII on purpose, like the zoom glyphs. */
-    lv_obj_t *find = lv_btn_create(s_screen);
-    lv_obj_set_size(find, 96, 54);
-    lv_obj_align(find, LV_ALIGN_TOP_RIGHT, -12, 10);
+    /* One column owns the control spacing on both panel sizes. Independent
+     * top/right and middle/right anchors put FIND on top of ROT at 480 px. */
+    lv_obj_t *controls = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(controls);
+    lv_obj_set_size(controls, 96, LV_SIZE_CONTENT);
+    lv_obj_align(controls, LV_ALIGN_TOP_RIGHT, -12, 10);
+    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(controls, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(controls, 12, 0);
+    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    /* "FIND" opens the keyboard. */
+    lv_obj_t *find = lv_btn_create(controls);
+    lv_obj_set_size(find, 96, 56);
     lv_obj_set_style_bg_color(find, lv_color_hex(HUD_PLATE), 0);
     lv_obj_set_style_bg_opa(find, LV_OPA_70, 0);
     lv_obj_set_style_radius(find, 12, 0);
@@ -979,14 +1009,31 @@ esp_err_t nav_screen_init(void)
     /* Plain ASCII, not LV_SYMBOL_PLUS: the symbols are FontAwesome glyphs and
      * our subsetted font has none of them — on the panel they came out as
      * empty boxes (the same trap as U+2026 in a Montserrat label). */
-    struct { const char *text; lv_event_cb_t cb; int dy; } zbtns[] = {
-        { "+", zoom_in_cb,  -104 },
-        { "-", zoom_out_cb,   14 },
+    /* The camera mode is the button caption, so AUTO/NORTH never needs an
+     * extra badge beside FIND. Keep it wide enough for NORTH. */
+    {
+        lv_obj_t *b = lv_btn_create(controls);
+        lv_obj_set_size(b, 96, 56);
+        lv_obj_set_style_bg_color(b, lv_color_hex(HUD_PLATE), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
+        lv_obj_set_style_radius(b, 14, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_add_event_cb(b, rotate_cb, LV_EVENT_CLICKED, NULL);
+        s_rot_lbl = lv_label_create(b);
+        lv_obj_set_width(s_rot_lbl, lv_pct(100));
+        lv_label_set_long_mode(s_rot_lbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_align(s_rot_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(s_rot_lbl, &aabridge_font_24, 0);
+        lv_label_set_text(s_rot_lbl, "AUTO");
+        lv_obj_center(s_rot_lbl);
+    }
+    struct { const char *text; lv_event_cb_t cb; } zbtns[] = {
+        { "+", zoom_in_cb },
+        { "-", zoom_out_cb },
     };
     for (unsigned i = 0; i < sizeof zbtns / sizeof zbtns[0]; i++) {
-        lv_obj_t *b = lv_btn_create(s_screen);
+        lv_obj_t *b = lv_btn_create(controls);
         lv_obj_set_size(b, 62, 62);
-        lv_obj_align(b, LV_ALIGN_RIGHT_MID, -12, zbtns[i].dy);
         lv_obj_set_style_bg_color(b, lv_color_hex(HUD_PLATE), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
         lv_obj_set_style_radius(b, 14, 0);
@@ -996,37 +1043,6 @@ esp_err_t nav_screen_init(void)
         lv_obj_set_style_text_font(l, &aabridge_font_32, 0);
         lv_obj_center(l);
     }
-    /* Camera toggle, above the zoom buttons. The label beside it says AUTO or
-     * NORTH, so a press is not a guess. */
-    {
-        lv_obj_t *b = lv_btn_create(s_screen);
-        lv_obj_set_size(b, 62, 62);
-        lv_obj_align(b, LV_ALIGN_RIGHT_MID, -12, -196);
-        lv_obj_set_style_bg_color(b, lv_color_hex(HUD_PLATE), 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_70, 0);
-        lv_obj_set_style_radius(b, 14, 0);
-        lv_obj_add_event_cb(b, rotate_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, "ROT");
-        lv_obj_set_style_text_font(l, &aabridge_font_24, 0);
-        lv_obj_center(l);
-    }
-    s_rot_lbl = lv_label_create(s_screen);
-    /* Fixed width, not LV_SIZE_CONTENT: an auto-sized label is left-anchored
-     * once aligned, so a longer word ("NORTH" after "AUTO") grows to the
-     * right and slides under the ROT button. The width also keeps the badge
-     * clear of that button whatever the text. */
-    lv_obj_set_width(s_rot_lbl, 96);
-    lv_obj_set_style_text_align(s_rot_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_rot_lbl, LV_ALIGN_RIGHT_MID, -92, -196);
-    lv_obj_set_style_text_color(s_rot_lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_rot_lbl, &aabridge_font_24, 0);
-    lv_obj_set_style_bg_color(s_rot_lbl, lv_color_hex(HUD_PLATE), 0);
-    lv_obj_set_style_bg_opa(s_rot_lbl, LV_OPA_70, 0);
-    lv_obj_set_style_pad_hor(s_rot_lbl, 6, 0);
-    lv_obj_set_style_pad_ver(s_rot_lbl, 3, 0);
-    lv_obj_set_style_radius(s_rot_lbl, 8, 0);
-    lv_label_set_text(s_rot_lbl, "AUTO");
     /* Back to the rider. Only there when the map has been dragged away from
      * them — on a screen this size an always-present button would be one more
      * thing between the rider and the map. */

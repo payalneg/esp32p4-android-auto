@@ -77,11 +77,14 @@ class _FakeLink implements HeadUnitLink {
   }
 
   final routes = <int>[];      // point counts
+  final routeTypes = <List<int>?>[];
   final guides = <int>[];      // turn kinds
 
   @override
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) async {
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
+      {List<int>? segmentTypes}) async {
     routes.add(pts.length);
+    routeTypes.add(segmentTypes);
     return NavFrameResult(ack, 0, 1);
   }
 
@@ -359,12 +362,13 @@ void main() {
     feed.setRoute('route-1', <({double lat, double lon})>[
       (lat: 50.06, lon: 19.93),
       (lat: 50.07, lon: 19.94),
-    ]);
+    ], segmentTypes: <int>[1]);
     feed.setGuide(
         turn: 3, distM: 80, remainingM: 700, remainingS: 120, offRoute: false);
 
     await feed.tick();
     expect(link.routes, <int>[2]);
+    expect(link.routeTypes.single, <int>[1]);
     expect(link.tiles, isEmpty, reason: 'the line came first');
 
     await feed.tick();

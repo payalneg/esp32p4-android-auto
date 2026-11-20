@@ -60,6 +60,11 @@ typedef struct {
                  uint8_t send_mode);
     void (*send_sync)(uint8_t target, const uint8_t *data, unsigned int len,
                       uint8_t send_mode, uint32_t timeout_ms);
+    /* Same as send, but the request came from the phone-side NUS bridge: the
+     * answer is flagged for forwarding back and nothing else is (see
+     * vesc_link_send_from_phone). */
+    void (*send_from_phone)(uint8_t target, const uint8_t *data,
+                            unsigned int len, uint8_t send_mode);
     bool (*is_up)(void);
     /* One line for the Settings screen, e.g. "BLE: connected, -62 dBm".
      * Returns false when there is nothing to say. */
@@ -78,6 +83,20 @@ bool vesc_link_is_up(void);
 
 void vesc_link_send(uint8_t target, const uint8_t *data, unsigned int len,
                     uint8_t send_mode);
+
+/* Send a request that arrived from the phone over the NUS bridge (VESC Tool
+ * talking through this device). On CAN it also queues behind the dashboard's
+ * own polls; on BLE it is just a tagged enqueue, since that transport already
+ * carries one request at a time.
+ *
+ * The tag matters on the way back: only the answer to such a request is
+ * forwarded to the phone. Forwarding *every* payload the VESC sends us — the
+ * dashboard's 10 Hz COMM_GET_VALUES_SETUP_SELECTIVE reply and, on BLE, the
+ * second head's temperatures-only COMM_GET_VALUES_SELECTIVE reply — makes VESC
+ * Tool decode a partial dataset: the fields the display did not ask for come
+ * out zero, so speed and drawn Ah collapse once a second and jump back. */
+void vesc_link_send_from_phone(uint8_t target, const uint8_t *data,
+                               unsigned int len, uint8_t send_mode);
 
 /* Blocks until the reply has been delivered to the packet handler, or the
  * timeout expires. The serialisation rule that came with the CAN transport
@@ -102,6 +121,17 @@ void vesc_link_set_packet_handler(vesc_link_packet_handler_t handler);
 /* Feed a reassembled payload to the registered handler. Called by the CAN
  * decode task and by the BLE backend's RX task. */
 void vesc_link_deliver(const uint8_t *data, unsigned int len);
+
+/* Same, with the bridge tag carried explicitly. The BLE backend uses this
+ * (its TX task knows which queued request the answer belongs to); the CAN
+ * branch of vesc_link_deliver() gets the tag from comm_can. */
+void vesc_link_deliver_tagged(const uint8_t *data, unsigned int len,
+                              bool reply_for_phone);
+
+/* True only while the packet handler runs for the answer to a request sent
+ * through vesc_link_send_from_phone(). Everything else the VESC answers —
+ * the dashboard's own polls, unsolicited output — is false. */
+bool vesc_link_reply_for_phone(void);
 
 bool vesc_link_health_text(char *buf, size_t n);
 

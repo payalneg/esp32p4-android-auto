@@ -20,13 +20,15 @@ static const char *TAG = "nav_route";
 static int32_t *s_pts;         /* lat/lon pairs, 1e7 fixed point */
 static int32_t *s_px;          /* screen pixels, recomputed per frame */
 static uint8_t *s_on;          /* near the screen this frame */
+static uint8_t s_types[NAV_ROUTE_MAX_POINTS];
 static size_t   s_count;
 static nav_guide_t s_guide;
 
-bool nav_route_set(const uint8_t *points, size_t bytes)
+bool nav_route_set(const uint8_t *points, size_t bytes, bool typed)
 {
-    const size_t n = bytes / 8;
-    if (n == 0 || n > NAV_ROUTE_MAX_POINTS) {
+    const size_t stride = typed ? 9 : 8;
+    const size_t n = bytes / stride;
+    if (!points || bytes % stride || n < 2 || n > NAV_ROUTE_MAX_POINTS) {
         ESP_LOGW(TAG, "route of %u points rejected", (unsigned)n);
         return false;
     }
@@ -35,7 +37,10 @@ bool nav_route_set(const uint8_t *points, size_t bytes)
                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_pts) return false;
     }
-    memcpy(s_pts, points, n * 8);
+    for (size_t i = 0; i < n; i++) {
+        memcpy(s_pts + i * 2, points + i * stride, 8);
+        s_types[i] = typed ? points[i * stride + 8] : 0;
+    }
     s_count = n;
     ESP_LOGI(TAG, "route of %u points", (unsigned)n);
     return true;
@@ -196,9 +201,13 @@ void nav_route_draw(uint16_t *dst, int w, int h)
      * two never interleave at the joins. */
     for (int pass = 0; pass < 2; pass++) {
         const int half = pass == 0 ? ROUTE_HALF + 1 : ROUTE_HALF;
-        const uint16_t c = pass == 0 ? CASING_COLOUR : ROUTE_COLOUR;
         for (size_t i = 0; i + 1 < s_count; i++) {
             if (!s_on[i] && !s_on[i + 1]) continue;
+            /* Road blue, cycleway green, footway orange, other purple. */
+            static const uint16_t colours[] = { ROUTE_COLOUR, 0x2D49, 0xFD20, 0xA2DC };
+            const uint8_t type = s_types[i];
+            const uint16_t c = pass == 0 ? CASING_COLOUR
+                : colours[type < 4 ? type : 0];
             draw_span(dst, w, h, px[i * 2], px[i * 2 + 1],
                       px[(i + 1) * 2], px[(i + 1) * 2 + 1], half, c);
         }

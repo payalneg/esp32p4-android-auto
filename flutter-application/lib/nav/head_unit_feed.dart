@@ -145,7 +145,8 @@ abstract class HeadUnitLink {
       {double speedMs});
 
   /// The route line, once per route.
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts);
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
+      {List<int>? segmentTypes});
 
   /// Where the next turn is and what is left of the ride.
   Future<void> sendGuide({
@@ -254,6 +255,7 @@ class HeadUnitFeed {
   /// The route to draw and the turn to announce. Held rather than pushed
   /// straight through, so the loop can send them in its own order.
   List<({double lat, double lon})>? _route;
+  List<int>? _routeTypes;
   Object? _routeSource;
   bool _routeSent = false;
   bool _clearRoute = false;
@@ -295,10 +297,12 @@ class HeadUnitFeed {
 
   /// A new route to draw on the head unit. [source] identifies it, so the
   /// same route is never sent twice; null clears the line.
-  void setRoute(Object? source, List<({double lat, double lon})>? points) {
+  void setRoute(Object? source, List<({double lat, double lon})>? points,
+      {List<int>? segmentTypes}) {
     if (identical(source, _routeSource)) return;
     _routeSource = source;
     _route = points;
+    _routeTypes = segmentTypes;
     _routeSent = false;
     // Telling it to forget is as important as telling it to draw. The head
     // unit has no idea a ride ended, so it kept the last line and the last
@@ -425,7 +429,7 @@ class HeadUnitFeed {
       return true;
     }
     if (route != null && !_routeSent && route.length >= 2) {
-      final r = await _link.sendRoute(route);
+      final r = await _link.sendRoute(route, segmentTypes: _routeTypes);
       if (r.ok) _routeSent = true;
       return true;
     }

@@ -43,7 +43,9 @@ typedef struct {
 
 /* Replace the line. Points are lat/lon in 1e7 fixed point, as they arrive on
  * the wire. Worker task only. */
-bool nav_route_set(const uint8_t *points, size_t bytes);
+/* Optional ninth byte: outgoing segment type, 0 road, 1 cycle, 2 foot,
+ * 3 other. Legacy points keep their eight-byte layout. */
+bool nav_route_set(const uint8_t *points, size_t bytes, bool typed);
 void nav_route_clear(void);
 size_t nav_route_count(void);
 

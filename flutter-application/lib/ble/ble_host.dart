@@ -266,6 +266,7 @@ class BleTaskHandler extends TaskHandler {
       look = LatLon((l['lat'] as num).toDouble(), (l['lon'] as num).toDouble());
     }
     bg.handoff(
+      segmentTypes: (m['segmentTypes'] as List?)?.cast<int>(),
       route: route,
       guide: guide,
       zoom: (m['zoom'] as num?)?.toInt(),
@@ -475,7 +476,8 @@ class BleTaskHandler extends TaskHandler {
             for (var i = 0; i + 1 < flat.length; i += 2)
               (lat: flat[i].toDouble(), lon: flat[i + 1].toDouble()),
           ];
-          final rr = await nav.sendRoute(pts);
+          final rr = await nav.sendRoute(pts,
+              segmentTypes: (m['segmentTypes'] as List?)?.cast<int>());
           _navFrameSent();
           _reply(id, {'ack': rr.ack});
           break;

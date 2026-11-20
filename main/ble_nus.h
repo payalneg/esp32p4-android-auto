@@ -53,8 +53,17 @@ void ble_nus_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
 
 /* Push a reassembled VESC payload back to the phone over the NUS TX
  * characteristic (frames it with packet_build_frame and chunks by MTU-3).
- * No-op if no peer is connected. Safe to call from comm_can's RX task
- * (NimBLE serializes through the host task internally). */
+ * No-op if no peer is connected.
+ *
+ * Forwards only the answer to a request the phone made through this bridge
+ * (tagged by vesc_link_send_from_phone; see vesc_link_reply_for_phone), plus
+ * unsolicited COMM_PRINT / COMM_LISP_PRINT output. Everything else — the
+ * dashboard's own poll replies — is dropped here on purpose: handing VESC Tool
+ * a partial selective-values reply makes it publish zeros for the fields the
+ * display did not ask for, which shows up as speed and Ah jumping.
+ *
+ * Safe to call from comm_can's RX task (NimBLE serializes through the host
+ * task internally). */
 void ble_nus_forward_response(const uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus

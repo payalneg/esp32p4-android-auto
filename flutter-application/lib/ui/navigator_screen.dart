@@ -106,6 +106,39 @@ class _NavigatorScreenState extends State<NavigatorScreen>
 
   List<LatLng> _routeLine = const <LatLng>[];
 
+  List<Polyline<Object>> _routePolylines = const <Polyline<Object>>[];
+
+  void _colourRoute(RouteResult? route) {
+    final lines = <Polyline<Object>>[];
+    const colours = <Color>[
+      Color(0xFF1E64DC),
+      Color(0xFF28AA50),
+      Color(0xFFFFA500),
+      Color(0xFFA55AE5),
+    ];
+    var start = 0;
+    while (start + 1 < _routeLine.length) {
+      final types = route?.segmentTypes ?? const <int>[];
+      final type = start < types.length ? types[start] : 0;
+      var end = start + 1;
+      while (end + 1 < _routeLine.length &&
+          (end < types.length ? types[end] : 0) == type) {
+        end++;
+      }
+      lines.add(
+        Polyline<Object>(
+          points: _routeLine.sublist(start, end + 1),
+          color: colours[type >= 0 && type < colours.length ? type : 0],
+          strokeWidth: 6,
+          borderColor: Colors.white,
+          borderStrokeWidth: 2,
+        ),
+      );
+      start = end;
+    }
+    _routePolylines = lines;
+  }
+
   /// The route the line was built from. Identity, not length: two different
   /// routes can have the same number of points, and comparing the lists
   /// themselves on every GPS fix would be pointless work.
@@ -241,6 +274,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
           : route.points
               .map((p) => LatLng(p.lat, p.lon))
               .toList(growable: false);
+      _colourRoute(route);
       // Not mid-ride: a reroute must not yank the camera out to the whole
       // route while the rider is looking at the next junction.
       if (_routeLine.isNotEmpty && !_controller.navigating) {
@@ -254,7 +288,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
               ? null
               : <({double lat, double lon})>[
                   for (final p in route.points) (lat: p.lat, lon: p.lon),
-                ]);
+                ], segmentTypes: route?.segmentTypes);
     }
     final fix = _controller.lastFix;
     if (fix != null) {
@@ -849,15 +883,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
           ),
         if (_routeLine.isNotEmpty)
           PolylineLayer<Object>(
-            polylines: <Polyline<Object>>[
-              Polyline<Object>(
-                points: _routeLine,
-                color: const Color(0xFF1E64DC),
-                strokeWidth: 6,
-                borderColor: Colors.white,
-                borderStrokeWidth: 2,
-              ),
-            ],
+            polylines: _routePolylines,
           ),
         MarkerLayer(
           markers: <Marker>[
@@ -1275,6 +1301,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     final g = _controller.guidance;
     final look = feed.lookAt;
     BleProxy.instance.sendNavHandoff(
+      segmentTypes: route?.segmentTypes,
       route: route == null
           ? null
           : <({double lat, double lon})>[
@@ -1749,8 +1776,9 @@ class _ProxyHeadUnitLink implements HeadUnitLink {
       _ble.sendNavTile(z, x, y, format, bytes);
 
   @override
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) =>
-      _ble.sendNavRoute(pts);
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
+          {List<int>? segmentTypes}) =>
+      _ble.sendNavRoute(pts, segmentTypes: segmentTypes);
 
   @override
   Future<void> sendGuide({

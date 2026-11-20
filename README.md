@@ -23,7 +23,9 @@ Three boards build from this tree: two 800×480 ESP32-P4 head units
 **ESP32-S3-Touch-LCD-4**, which runs everything except Android Auto — see
 [Hardware](#-hardware).
 
-**Firmware 1.3.42 / Android companion app 0.3.51:** files in [release/](release/).
+**Firmware 1.3.48 / Android companion app 0.3.57:** files in [release/](release/).
+Release details, navigation bench results and remaining limitations: [release notes](release/README.md).
+
 Waveshare has separate P4 v1.x (`waveshare`) and v3.x / v3.2 (`waveshare-rev3`)
 images. The app selects the image using the board's reported profile.
 See [v3.2 recovery instructions](docs/esp32p4-rev3.md).
@@ -31,44 +33,25 @@ The Twin Arc white-screen freeze is fixed and verified on hardware in 1.3.42;
 the new dashboards and the JK-BMS path still need validation on a real vehicle,
 and the limitations below remain.
 
-## ⚠️ FIRMWARE 1.3.42 IS NOT FULLY TESTED ON HARDWARE ⚠️
+## Hardware validation and remaining limitations
 
-**Read this before flashing anything.** Firmware 1.3.42 / app 0.3.51 compiles
-for all three boards and its numbers were measured on a host, but the new
-dashboards and the JK-BMS path have not been run on a real vehicle — the
-1.3.42 fix for the Twin Arc white screen was verified on a bench board only. The
-hardware caveats below were found during the 1.3.33 investigation and still
-apply.
+The navigation changes were bench-tested on a **JC4880** before release
+packaging: real Bluetooth route/tile/position reception, firmware boot and
+AUTO/NORTH button layout. Rotated-map composition took **55–70 ms** under
+diagnostic load. This is not a complete vehicle or overnight endurance test.
 
-What that means, point by point:
+- The live overnight replay stopped after three Bluetooth timeouts.
+- Simulated arrival can retain a nonzero speed; repeated VIEW messages can
+  hide stale GPS input from the head unit timeout. Both remain open.
+- The CAN/NUS bridge changes need hardware verification. The earlier S3 CAN
+  investigation saw no acknowledged frames despite checking wiring, termination,
+  bitrate and controller ID; do not assume that board communicates with a VESC.
+- Other board profiles, the newer dashboards and the JK-BMS path still need
+  vehicle validation. The earlier Twin Arc white-screen fix was verified on a
+  Waveshare bench board.
 
-- **CAN on the ESP32-S3 board does not work, and the cause is unknown.** The
-  dashboard boots and the driver comes up (`TWAI up: TX=6 RX=0 ID=2 500 kbps`),
-  but not one frame is ever acknowledged: the controller counter pins at
-  `tx_err=128` and the bus drops off roughly once a second, 21 times in the
-  first 25 seconds. Nothing is received. Wiring, on-board termination (120 Ω
-  reads correctly at the connector), bus speed and the board's own CAN id were
-  all checked and none of them explains it. Do not assume the S3 board talks to
-  a VESC.
-- **The CAN task fix is unproven.** `comm_can.c` now checks whether its receive
-  tasks were actually created and falls back to a PSRAM stack — on the S3 board
-  internal RAM runs out (the navigator worker already hits this: 8.9 KB free,
-  7.2 KB largest block). The fix compiles and the boot log shows the path is
-  live, but it was never the thing that was broken, so it has never fired for
-  CAN in anger.
-- **Problem reports** (panel screenshot + log pulled over BLE into a share
-  sheet) are verified by compilation only — the phone and the head unit were
-  never connected to each other with this build.
-- **Route quality** (the penalties that stop a route sawing between a road and
-  its pavement) is measured on a host against the real Kraków graph: 1.58 → 0.58
-  changes of line per km. Nobody has ridden it.
-- **The LV_USE_* Kconfig stubs** exist only to let the build configure at all
-  (the registry asks for LVGL 9 options we do not have). They are proven by the
-  build system and by nothing else.
-- **The two P4 boards were not powered on for this release at all.** Their
-  images build; that is the whole of the evidence.
-
-Earlier releases were ridden. This one was not.
+See [release notes](release/README.md) for the exact validation scope and
+[the changelog](CHANGELOG.md) for the changes.
 
 ![VESC dashboard — battery, speed, voltage, odometer, motor / controller temps](docs/images/hero.jpg)
 

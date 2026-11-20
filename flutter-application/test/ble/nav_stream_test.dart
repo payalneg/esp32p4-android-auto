@@ -361,4 +361,39 @@ void main() {
     ch.ack(NavAck.ok, seq, 0);
     expect((await f).ok, isTrue);
   });
+for (final typed in <bool>[false, true]) {
+    test('route span types use negotiated wire layout: typed=$typed', () async {
+      ch._notify.add(<int>[NavStatus.state, 1 | (typed ? 4 : 0), 1, 0, 253, 1]);
+      await Future<void>.delayed(Duration.zero);
+      final f = nav.sendRoute(<({double lat, double lon}
+)>[
+        (lat: 50.0, lon: 20.0),
+        (lat: 50.001, lon: 20.001),
+        (lat: 50.002, lon: 20.002),
+        (lat: 50.003, lon: 20.003),
+      ], segmentTypes: <int>[
+        0,
+        1,
+        2
+      ]);
+      await Future<void>.delayed(Duration.zero);
+      final begin = ch.ctrl.first;
+      expect(begin.length, typed ? 6 : 5);
+      if (typed) expect(begin[5], 1);
+      final body = Uint8List.fromList(ch.data.expand((b) => b).toList());
+      final stride = typed ? 9 : 8;
+      expect(body.length, 4 * stride);
+      final bd = ByteData.sublistView(body);
+      expect(bd.getInt32(stride, Endian.little), 500010000);
+      expect(bd.getInt32(stride + 4, Endian.little), 200010000);
+      if (typed) {
+        expect(<int>[for (var i = 0; i < 4; i++) body[i * 9 + 8]],
+            <int>[0, 1, 2, 0]);
+      }
+      expect(ch.ctrl.last[0], NavOp.routeEnd);
+      ch.ack(NavAck.ok, begin[3] | (begin[4] << 8), 0,
+          status: NavStatus.tileAck);
+      expect((await f).ok, isTrue);
+    });
+  }
 }

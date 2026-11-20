@@ -90,6 +90,9 @@ typedef enum {
     COMM_GET_VALUES_SETUP           = 47,
     COMM_GET_VALUES_SELECTIVE       = 50,
     COMM_GET_VALUES_SETUP_SELECTIVE = 51,
+    /* Plot samples: the answer to COMM_PLOT_INIT (75) is a *stream* of these,
+     * so a bridge cannot count them as one reply to one request. */
+    COMM_PLOT_DATA                  = 76,
     COMM_LISP_READ_CODE             = 130,
     COMM_LISP_WRITE_CODE            = 131,
     COMM_LISP_ERASE_CODE            = 132,

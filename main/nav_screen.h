@@ -63,6 +63,11 @@ void nav_screen_commit(void);
 void nav_screen_set_active(bool active);
 bool nav_screen_active(void);
 
+/* Brief activity badge. Text must be a string literal; safe from any task. */
+void nav_screen_set_activity(const char *text);
+void nav_screen_position_received(void);
+void nav_screen_set_map_coverage(int have, int wanted);
+
 /* Called when the rider has picked somewhere to go — today by typing an
  * address or coordinates and choosing a result. Tapping the map used to do it
  * too; it was in the way of moving the map and a pocket could trigger it.

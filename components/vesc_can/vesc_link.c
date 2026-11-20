@@ -23,6 +23,9 @@ static const char *TAG = "vesc_link";
 static vesc_link_mode_t           s_mode = VESC_LINK_MODE_CAN;
 static const vesc_link_ops_t     *s_ble;
 static vesc_link_packet_handler_t s_handler;
+/* Set by the transports around the handler call; read by the NUS bridge from
+ * inside it (vesc_link_reply_for_phone). */
+static volatile bool              s_reply_for_phone;
 
 void vesc_link_register_ble(const vesc_link_ops_t *ops)
 {
@@ -63,6 +66,21 @@ void vesc_link_send(uint8_t target, const uint8_t *data, unsigned int len,
     comm_can_send_buffer(target, data, len, send_mode);
 }
 
+void vesc_link_send_from_phone(uint8_t target, const uint8_t *data,
+                               unsigned int len, uint8_t send_mode)
+{
+    if (s_mode == VESC_LINK_MODE_BLE) {
+        if (s_ble && s_ble->send_from_phone) {
+            s_ble->send_from_phone(target, data, len, send_mode);
+        } else if (s_ble && s_ble->send) {
+            s_ble->send(target, data, len, send_mode);
+        }
+        return;
+    }
+    comm_can_send_buffer_from_phone(target, data, len, send_mode,
+                                    CAN_SYNC_TIMEOUT_MS);
+}
+
 void vesc_link_send_sync(uint8_t target, const uint8_t *data, unsigned int len,
                          uint8_t send_mode, uint32_t timeout_ms)
 {
@@ -101,9 +119,29 @@ void vesc_link_set_packet_handler(vesc_link_packet_handler_t handler)
     comm_can_set_packet_handler(vesc_link_deliver);
 }
 
+void vesc_link_deliver_tagged(const uint8_t *data, unsigned int len,
+                              bool reply_for_phone)
+{
+    bool prev = s_reply_for_phone;
+    s_reply_for_phone = reply_for_phone;
+    if (s_handler) s_handler(data, len);
+    s_reply_for_phone = prev;
+}
+
 void vesc_link_deliver(const uint8_t *data, unsigned int len)
 {
-    if (s_handler) s_handler(data, len);
+    bool for_phone = false;
+    /* On CAN the decode task knows which request the answer belongs to; on
+     * BLE the backend calls vesc_link_deliver_tagged() directly. */
+    if (s_mode == VESC_LINK_MODE_CAN) {
+        for_phone = comm_can_take_reply_from_bridge();
+    }
+    vesc_link_deliver_tagged(data, len, for_phone);
+}
+
+bool vesc_link_reply_for_phone(void)
+{
+    return s_reply_for_phone;
 }
 
 bool vesc_link_health_text(char *buf, size_t n)

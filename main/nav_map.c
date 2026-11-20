@@ -34,6 +34,8 @@ static nav_map_view_t s_view;
 static float s_speed_ms;
 static float s_camera_heading;
 static bool s_camera_has_heading;
+static float s_marker_heading;
+static bool s_marker_has_heading;
 static int s_heading_override = -1;
 
 /* The rider's choice from the panel's zoom buttons, or 0 while they have not
@@ -60,11 +62,8 @@ static int32_t s_target_lat_e7, s_target_lon_e7;
 static bool s_panned;
 static bool    s_have_target;
 
-/* How much of the remaining error to take out per frame, as a divisor: a
- * quarter converges within a couple of updates and never overshoots. A shift
- * rather than a multiply because the position is an integer, which is what
- * keeps eight steps a second from drifting. */
-#define CATCH_UP_DIV 4
+/* Time-based easing stays consistent when a slow frame changes the cadence. */
+#define POSITION_EASE_MS 350.0f
 
 /* Fixed conversions, so the frame path has no named constants to divide by.
  *   e7 degrees -> radians : pi/180 * 1e-7
@@ -215,7 +214,21 @@ void nav_map_set_speed(uint16_t cm_per_s)
 
 void nav_map_dead_reckon(uint32_t dt_ms)
 {
-    if (!s_view.valid || s_panned) return;
+    if (!s_view.valid) return;
+    /* The marker needs its own continuous bearing, including in north-up
+     * and while browsing the map. Always take the short arc through north. */
+    if (s_view.heading_deg < 360 && s_speed_ms > 0.5f) {
+        const float target = (float)s_view.heading_deg;
+        if (!s_marker_has_heading) {
+            s_marker_heading = target;
+            s_marker_has_heading = true;
+        } else {
+            const float weight = 1.0f - expf(-(float)dt_ms / 250.0f);
+            s_marker_heading += remainderf(target - s_marker_heading, 360.0f) * weight;
+            s_marker_heading = fmodf(s_marker_heading + 360.0f, 360.0f);
+        }
+    }
+    if (s_panned) return;
 
     if (s_speed_ms >= 1.5f && s_view.heading_deg < 360) {
         const float target = (float)s_view.heading_deg;
@@ -232,20 +245,26 @@ void nav_map_dead_reckon(uint32_t dt_ms)
         }
     }
 
-    if (s_speed_ms > 0.1f && s_view.heading_deg <= 360) {
+    if (s_speed_ms > 0.1f && s_view.heading_deg < 360) {
         const float metres = s_speed_ms * ((float)dt_ms * 0.001f);
         const float bearing = (float)s_view.heading_deg * DEG_TO_RAD;
         /* Flat-earth step: at a few metres a tick the error is far below a
          * pixel, and the easing below takes out whatever it gets wrong. */
         const float lat_rad = (float)s_view.lat_e7 * E7_TO_RAD;
-        s_view.lat_e7 += (int32_t)lroundf(metres * cosf(bearing) * M_TO_E7);
-        s_view.lon_e7 += (int32_t)lroundf(metres * sinf(bearing) * M_TO_E7 /
-                                          cosf(lat_rad));
+        const int32_t dlat = (int32_t)lroundf(metres * cosf(bearing) * M_TO_E7);
+        const int32_t dlon = (int32_t)lroundf(metres * sinf(bearing) * M_TO_E7 / cosf(lat_rad));
+        s_view.lat_e7 += dlat;
+        s_view.lon_e7 += dlon;
+        /* Chase a moving estimate, not the old GPS fix: pulling towards a
+         * stationary target every frame used to cancel the forward travel. */
+        s_target_lat_e7 += dlat;
+        s_target_lon_e7 += dlon;
     }
 
     if (s_have_target) {
-        s_view.lat_e7 += (s_target_lat_e7 - s_view.lat_e7) / CATCH_UP_DIV;
-        s_view.lon_e7 += (s_target_lon_e7 - s_view.lon_e7) / CATCH_UP_DIV;
+        const float weight = 1.0f - expf(-(float)dt_ms / POSITION_EASE_MS);
+        s_view.lat_e7 += (int32_t)lroundf((s_target_lat_e7 - s_view.lat_e7) * weight);
+        s_view.lon_e7 += (int32_t)lroundf((s_target_lon_e7 - s_view.lon_e7) * weight);
     }
 }
 
@@ -1027,8 +1046,8 @@ int nav_map_render(uint16_t *dst, int w, int h, int *out_wanted)
             mx = my = -10000;   /* nothing to draw */
         }
     }
-    if (s_view.heading_deg <= 360 && s_speed_ms > 0.5) {
-        draw_arrow(dst, w, h, mx, my, (float)s_view.heading_deg - heading);
+    if (s_marker_has_heading && s_view.heading_deg < 360 && s_speed_ms > 0.5) {
+        draw_arrow(dst, w, h, mx, my, s_marker_heading - heading);
     } else {
         draw_marker(dst, w, h, mx, my);
     }

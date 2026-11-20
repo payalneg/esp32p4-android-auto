@@ -31,10 +31,14 @@ class RouteResult {
     required this.timeS,
     required this.legs,
     required this.profile,
+    this.segmentTypes = const <int>[],
   });
 
   /// Full geometry, start to finish, following the curve of every street.
   final List<LatLon> points;
+
+  /// Outgoing span type: road=0, cycle=1, foot=2, other=3.
+  final List<int> segmentTypes;
   final double lengthM;
 
   /// Time actually spent riding — length over the profile's speed, summed per
@@ -161,6 +165,7 @@ class Router {
     // Walk back from the goal, gluing each edge's geometry on the front. The
     // last point of one edge is the first of the next, so drop the seam.
     var points = <LatLon>[];
+    var segmentTypes = <int>[];
     final legs = <({int wayClass, int lenDm})>[];
     var lengthDm = 0;
     var travelS = 0.0;
@@ -174,6 +179,10 @@ class Router {
       travelS += graph.edgeLenDm[e] / 10.0 / speeds[graph.edgeClass[e]];
       legs.add((wayClass: graph.edgeClass[e], lenDm: graph.edgeLenDm[e]));
       final seg = graph.edgePoints(e, forward);
+      final cls = graph.edgeClass[e];
+      final type = cls == 0 ? 1
+          : (cls >= 8 && cls <= 12 ? 2 : (cls == 6 || cls == 7 ? 3 : 0));
+      segmentTypes = <int>[...List.filled(seg.length - 1, type), ...segmentTypes];
       points = points.isEmpty
           ? seg
           : <LatLon>[...seg.sublist(0, seg.length - 1), ...points];
@@ -181,6 +190,7 @@ class Router {
     }
     return RouteResult(
       points: points,
+      segmentTypes: segmentTypes,
       lengthM: lengthDm / 10.0,
       timeS: travelS,
       legs: legs.reversed.toList(growable: false),

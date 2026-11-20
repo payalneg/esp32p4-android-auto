@@ -52,12 +52,31 @@ static SemaphoreHandle_t s_send_mutex;
 /* Completion signal for reply-expecting polls. The VESC streams its reply back
  * as a FILL_RX_BUFFER…PROCESS_RX_BUFFER sequence that we reassemble into a
  * per-sender slot keyed only by CAN id; two such replies in flight from the
- * same node clobber each other's slot → CRC mismatch and a dropped packet. We
- * avoid that not with a lock but by keeping ALL continuous polls on a single
- * task (vesc_rt_data's rt_task): it sends one request, waits on this semaphore
- * until the reply is reassembled and delivered, then fires the next. So this is
- * a "reply arrived" signal, not a mutex. (See comm_can_send_buffer_sync.) */
+ * same node clobber each other's slot → CRC mismatch and a dropped packet.
+ * The continuous polls avoid that by living on a single task (vesc_rt_data's
+ * rt_task) which sends one request, waits on this semaphore until the reply is
+ * reassembled and delivered, then fires the next. So this is a "reply arrived"
+ * signal, not a mutex. (See comm_can_send_buffer_sync.) */
 static SemaphoreHandle_t s_rx_done_sem;
+/* The one-request-in-flight rail. The poll task serialises itself through
+ * s_rx_done_sem alone, but the phone bridge sends from the NimBLE host task,
+ * so without this a bridge request could be in flight at the same time as a
+ * poll — two multi-frame replies from the same node into one reassembly slot.
+ * Both comm_can_send_buffer_sync() and comm_can_send_buffer_from_phone() hold
+ * it for the whole send→reply cycle. */
+static SemaphoreHandle_t s_req_mutex;
+
+/* Answer to the request comm_can_send_buffer_from_phone() put on the wire.
+ * Armed at send time, claimed by decode_msg when a payload with the expected
+ * command byte is delivered, and dropped by age so a request that was never
+ * answered cannot claim some later reply. */
+#define BRIDGE_REPLY_WINDOW_MS 2000u
+static volatile bool     s_bridge_pending;
+static volatile uint8_t  s_bridge_cmd;
+static volatile uint32_t s_bridge_sent_ms;
+/* Set by decode_msg around the handler call, read by
+ * comm_can_take_reply_from_bridge() from inside it. */
+static volatile bool     s_delivering_bridge_reply;
 static volatile HW_TYPE  s_ping_hw_last = HW_TYPE_VESC;
 
 /* Identity served to a COMM_FW_VERSION request from the bus (VESC Tool's CAN
@@ -171,6 +190,7 @@ esp_err_t comm_can_start(int pin_tx, int pin_rx,
         s_ping_sem    = xSemaphoreCreateBinary();
         s_send_mutex  = xSemaphoreCreateMutex();
         s_rx_done_sem = xSemaphoreCreateBinary();
+        s_req_mutex   = xSemaphoreCreateMutex();
         /* 4096: the dispatch chain fans out to every *_process_response handler
          * (RT data, LISP stats, IO, config, LISP code, quick-action panel); a
          * couple of them parse multi-hundred-byte frames. 3072 was marginal. */
@@ -359,22 +379,86 @@ void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
                           send_buffer, ind);
 }
 
+/* Which command byte the answer to a bridge request will carry. Normally the
+ * reply echoes the request's command; a request VESC Tool already addressed
+ * with COMM_FORWARD_CAN comes back as the inner command. */
+static uint8_t bridge_reply_cmd(const uint8_t *data, unsigned int len)
+{
+    if (len == 0) return 0;
+    if (data[0] == COMM_FORWARD_CAN && len >= 3) return data[2];
+    return data[0];
+}
+
+static bool bridge_take_if_match(const uint8_t *data, unsigned int len)
+{
+    if (!s_bridge_pending || len == 0) return false;
+
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now - s_bridge_sent_ms > BRIDGE_REPLY_WINDOW_MS) {
+        s_bridge_pending = false;
+        return false;
+    }
+    if (data[0] != s_bridge_cmd) return false;
+
+    s_bridge_pending = false;
+    return true;
+}
+
+bool comm_can_take_reply_from_bridge(void)
+{
+    bool v = s_delivering_bridge_reply;
+    s_delivering_bridge_reply = false;
+    return v;
+}
+
 void comm_can_send_buffer_sync(uint8_t controller_id, const uint8_t *data,
                                unsigned int len, uint8_t send,
                                uint32_t reply_timeout_ms)
 {
-    if (!s_init_done || !s_rx_done_sem) {
+    if (!s_init_done || !s_rx_done_sem || !s_req_mutex) {
         comm_can_send_buffer(controller_id, data, len, send);
         return;
     }
-    /* Call ONLY from the single CAN poll task (vesc_rt_data's rt_task) — that
-     * single-threadedness is what serialises requests; there is no lock here.
-     * Drain any stale completion, send, then wait (bounded) for this request's
+    /* Drain any stale completion, send, then wait (bounded) for this request's
      * reply to be reassembled and delivered before returning, so the caller
-     * won't fire the next poll while this reply is still streaming in. */
+     * won't fire the next poll while this reply is still streaming in. The
+     * request lock is shared with the phone bridge, whose requests arrive on
+     * another task (see comm_can_send_buffer_from_phone). */
+    xSemaphoreTake(s_req_mutex, portMAX_DELAY);
     xSemaphoreTake(s_rx_done_sem, 0);
     comm_can_send_buffer(controller_id, data, len, send);
     xSemaphoreTake(s_rx_done_sem, pdMS_TO_TICKS(reply_timeout_ms));
+    xSemaphoreGive(s_req_mutex);
+}
+
+void comm_can_send_buffer_from_phone(uint8_t controller_id, const uint8_t *data,
+                                     unsigned int len, uint8_t send,
+                                     uint32_t reply_timeout_ms)
+{
+    if (!s_init_done || !s_req_mutex || !s_rx_done_sem) {
+        comm_can_send_buffer(controller_id, data, len, send);
+        return;
+    }
+
+    /* Take the same rail as the dashboard polls: at most one request — and so
+     * one reply stream — from this node can be in flight at a time. */
+    xSemaphoreTake(s_req_mutex, portMAX_DELAY);
+    xSemaphoreTake(s_rx_done_sem, 0);
+
+    s_bridge_cmd     = bridge_reply_cmd(data, len);
+    s_bridge_sent_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_bridge_pending = true;
+
+    comm_can_send_buffer(controller_id, data, len, send);
+    BaseType_t got = xSemaphoreTake(s_rx_done_sem, pdMS_TO_TICKS(reply_timeout_ms));
+    if (got != pdTRUE && s_bridge_pending) {
+        /* No answer (the SET_* family has none, or the reply was lost). Drop
+         * the tag: leaving it armed would let the display's next poll reply of
+         * the same command — a selective dataset with a different mask — be
+         * handed to the phone as if it had asked for it. */
+        s_bridge_pending = false;
+    }
+    xSemaphoreGive(s_req_mutex);
 }
 
 uint8_t comm_can_get_local_id(void)
@@ -441,6 +525,19 @@ static bool serve_request(const uint8_t *data, unsigned int len, uint8_t sender_
     ESP_LOGI(TAG, "answered FW_VERSION to id %u as \"%s\" %u.%02u",
              sender_id, s_fw_hw_name, s_fw_major, s_fw_minor);
     return true;
+}
+
+/* Hand a reassembled payload to the packet handler, tagging it when it is the
+ * answer to the phone bridge's request. Requests addressed to us (the CAN-scan
+ * FW_VERSION probe) are served here and never reach the handler. */
+static void deliver_payload(const uint8_t *data, unsigned int len,
+                            uint8_t sender_id)
+{
+    if (serve_request(data, len, sender_id)) return;
+
+    s_delivering_bridge_reply = bridge_take_if_match(data, len);
+    if (s_packet_handler) s_packet_handler(data, len);
+    s_delivering_bridge_reply = false;
 }
 
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type)
@@ -624,10 +721,8 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
 
             if (crc16(s_rx_buffer[buf_ind], rxbuf_len) ==
                 ((unsigned short)crc_high << 8 | (unsigned short)crc_low)) {
-                if (!serve_request(s_rx_buffer[buf_ind], rxbuf_len, last_id) &&
-                    s_packet_handler) {
-                    s_packet_handler(s_rx_buffer[buf_ind], rxbuf_len);
-                }
+                deliver_payload(s_rx_buffer[buf_ind], (unsigned int)rxbuf_len,
+                                last_id);
             } else {
                 ESP_LOGW(TAG, "PROCESS_RX_BUFFER CRC mismatch (id=%u len=%d)", id, rxbuf_len);
             }
@@ -646,10 +741,7 @@ static void decode_msg(uint32_t eid, uint8_t *data8, int len)
             }
             s_rx_buffer_response_type = (commands_send == 3) ? 0 : 1;
 
-            if (!serve_request(data8 + ind, len - ind, last_id) &&
-                s_packet_handler) {
-                s_packet_handler(data8 + ind, len - ind);
-            }
+            deliver_payload(data8 + ind, (unsigned int)(len - ind), last_id);
             if (s_rx_done_sem) xSemaphoreGive(s_rx_done_sem);
         } break;
 

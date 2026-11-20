@@ -51,13 +51,35 @@ void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
  * VESC's reply has been reassembled and delivered. Use for continuous CAN
  * polls so two multi-frame replies from the same node can't interleave in the
  * shared per-id reassembly buffer (which corrupts both → PROCESS_RX_BUFFER CRC
- * mismatch). MUST be called only from the single CAN poll task (vesc_rt_data's
- * rt_task): there is no lock — serialisation comes from every continuous poll
- * (RT data, LISP stats, IO decode, the quick-action panel) living on that one
- * task and waiting here for each reply before sending the next. Use `send`=0. */
+ * mismatch). The continuous polls live on one task (vesc_rt_data's rt_task)
+ * and take turns through an internal request lock, which the phone bridge's
+ * requests also take — see comm_can_send_buffer_from_phone(). Use `send`=0. */
 void comm_can_send_buffer_sync(uint8_t controller_id, const uint8_t *data,
                                unsigned int len, uint8_t send,
                                uint32_t reply_timeout_ms);
+
+/* Send a request that came from the phone-side NUS bridge (VESC Tool talking
+ * through this display), and hold the request lock until its answer is back.
+ *
+ * Why the wait: a reply longer than 6 bytes is reassembled in a buffer keyed
+ * by the *sender* id only, so a bridge request fired while a dashboard poll
+ * is still streaming takes both replies down on the PROCESS_RX_BUFFER CRC.
+ * Sharing the poll rail makes the two conversations take turns instead.
+ *
+ * Unlike comm_can_send_buffer_sync this may be called from the NimBLE host
+ * task: the answer arrives on the CAN process task, so the bounded wait here
+ * (reply_timeout_ms) cannot deadlock. A command that has no answer at all
+ * (COMM_ALIVE, the SET_* family) simply costs the timeout once. */
+void comm_can_send_buffer_from_phone(uint8_t controller_id, const uint8_t *data,
+                                     unsigned int len, uint8_t send,
+                                     uint32_t reply_timeout_ms);
+
+/* One-shot for the packet handler: true when the payload being delivered right
+ * now is the answer to the request comm_can_send_buffer_from_phone() sent.
+ * The bridge uses it to forward that answer back to the phone and to drop the
+ * dashboard's own poll replies, which the phone never asked for. Only valid
+ * inside the handler — decode_msg clears it as soon as the handler returns. */
+bool comm_can_take_reply_from_bridge(void);
 
 bool comm_can_ping(uint8_t controller_id, HW_TYPE *hw_type);
 

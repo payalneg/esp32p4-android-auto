@@ -63,8 +63,10 @@ class _DirectLink implements HeadUnitLink {
       _nav.sendView(lat, lon, zoom, headingDeg, speedMs: speedMs);
 
   @override
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts) =>
-      _nav.sendRoute(pts);
+  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts, {
+    List<int>? segmentTypes,
+  }) =>
+      _nav.sendRoute(pts, segmentTypes: segmentTypes);
 
   @override
   Future<void> sendGuide({
@@ -127,6 +129,7 @@ class NavBackground {
 
   /// Continue a ride the UI was guiding when it went to sleep.
   void handoff({
+    List<int>? segmentTypes,
     List<({double lat, double lon})>? route,
     ({int turn, int distM, int remainingM, int remainingS, bool offRoute})?
         guide,
@@ -135,7 +138,7 @@ class NavBackground {
   }) {
     if (zoom != null) _feed.setZoom(zoom);
     _feed.setLookAt(lookAt);
-    _feed.setRoute(route, route);
+    _feed.setRoute(route, route, segmentTypes: segmentTypes);
     if (guide != null) {
       _feed.setGuide(
         turn: guide.turn,
