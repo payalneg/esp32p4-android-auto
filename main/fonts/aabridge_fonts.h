@@ -19,7 +19,6 @@ extern "C" {
 
 LV_FONT_DECLARE(aabridge_font_24);
 LV_FONT_DECLARE(aabridge_font_32);
-LV_FONT_DECLARE(aabridge_font_38);
 LV_FONT_DECLARE(aabridge_font_48);
 
 #ifdef __cplusplus

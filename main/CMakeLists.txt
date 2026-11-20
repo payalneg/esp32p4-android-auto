@@ -37,7 +37,6 @@ set(MAIN_SRCS
     "music_info_view.c"
     "fonts/aabridge_font_24.c"
     "fonts/aabridge_font_32.c"
-    "fonts/aabridge_font_38.c"
     "fonts/aabridge_font_48.c"
     "touch_input.c"
     "ui_mode.c"

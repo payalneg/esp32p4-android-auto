@@ -6,6 +6,8 @@
 #include "esp_log.h"
 #include "esp_private/esp_cache_private.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "png.h"
 
 #include "nav_tile_store.h"
@@ -38,6 +40,15 @@ static uint8_t s_detail_z;
 static uint32_t s_tick;
 static bool s_inited;
 static size_t s_cache_line = 64;
+
+/* RGB scratch for libpng, allocated on first use and kept. A 192 KB
+ * malloc/free per tile both fragments PSRAM (the notification bridge needs
+ * one 192 KB block) and costs more than the RGB→565 conversion itself.
+ * Guarded because nav_tiles_put/load_cached are file-scope APIs and the
+ * "only the BLE worker decodes" assumption should not be load-bearing. */
+static uint8_t          *s_png_rgb;
+static size_t            s_png_rgb_bytes;
+static SemaphoreHandle_t s_decode_lock;
 
 static nav_tiles_stats_t s_stats;
 static nav_tiles_evict_cb_t s_evict_cb;
@@ -145,8 +156,15 @@ static bool decode_png(const uint8_t *data, size_t len, uint16_t *out)
      * than the inflate it just did. */
     img.format = PNG_FORMAT_RGB;
     const size_t rgb_bytes = (size_t)PNG_IMAGE_SIZE(img);
-    uint8_t *rgb = heap_caps_malloc(rgb_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_decode_lock) xSemaphoreTake(s_decode_lock, portMAX_DELAY);
+    if (rgb_bytes > s_png_rgb_bytes) {
+        heap_caps_free(s_png_rgb);
+        s_png_rgb = heap_caps_malloc(rgb_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_png_rgb_bytes = s_png_rgb ? rgb_bytes : 0;
+    }
+    uint8_t *rgb = s_png_rgb;
     if (!rgb) {
+        if (s_decode_lock) xSemaphoreGive(s_decode_lock);
         png_image_free(&img);
         return false;
     }
@@ -161,7 +179,7 @@ static bool decode_png(const uint8_t *data, size_t len, uint16_t *out)
                                  (p[2] >> 3));
         }
     }
-    heap_caps_free(rgb);
+    if (s_decode_lock) xSemaphoreGive(s_decode_lock);
     return ok;
 }
 
@@ -177,6 +195,7 @@ void nav_tiles_init(void)
         s_cache_line = 64;
     }
     s_stats.capacity = NAV_TILE_SLOTS;
+    if (!s_decode_lock) s_decode_lock = xSemaphoreCreateMutex();
     s_inited = true;
     ESP_LOGI(TAG, "tile store ready (up to %d x %u KB)",
              NAV_TILE_SLOTS, (unsigned)(TILE_BYTES / 1024));

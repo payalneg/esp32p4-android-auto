@@ -208,12 +208,18 @@ static int cmp_frame(const void *a, const void *b)
     return (int)((const frame_t *)a)->idx - (int)((const frame_t *)b)->idx;
 }
 
-/* Join via a helper with a runtime size arg so -Werror=format-truncation
- * (which fires on compile-time-known sizes vs. an up-to-255-byte d_name)
- * stays quiet — snprintf truncates safely regardless (same as ble_files.c). */
+/* Join dir + name into out, truncating safely. Hand-rolled rather than
+ * snprintf("%s/%s") because GCC 14 inlines the helper and then proves the
+ * compile-time destination size against d_name's 255-byte maximum, turning
+ * -Wformat-truncation into a -Werror. Byte copies never warn. */
 static void join_path(char *out, size_t out_sz, const char *dir, const char *name)
 {
-    snprintf(out, out_sz, "%s/%s", dir, name);
+    if (!out || out_sz == 0) return;
+    size_t pos = 0;
+    for (const char *p = dir; *p && pos + 1 < out_sz; p++) out[pos++] = *p;
+    if (pos > 0 && out[pos - 1] != '/' && pos + 1 < out_sz) out[pos++] = '/';
+    for (const char *p = name; *p && pos + 1 < out_sz; p++) out[pos++] = *p;
+    out[pos] = '\0';
 }
 
 /* Scan SPLASH_DIR into the sorted s_frames[] array. Returns the frame count

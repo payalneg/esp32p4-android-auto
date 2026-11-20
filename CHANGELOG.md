@@ -11,6 +11,34 @@ the one recorded in the release commit.
 
 ## Unreleased
 
+### Performance / footprint (`perf/optimization-batch`)
+
+- Build the P4 firmware with `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`) instead
+  of IDF's `-Og` default. The S3 overlay already did this; the boards that run
+  the software H.264 decoder and the map compositor did not.
+- Draw AA video into the panel's own DPI framebuffers: the submit path skipped
+  `esp_lcd_panel_draw_bitmap()`'s DMA2D copy (768 KB/frame) and a redundant
+  cache write-back, and frees 1.5 MB of private PSRAM.
+- Fix a use-after-free in the AA display stage: staging buffers were freed
+  while the display task could still be reading them on a resolution change.
+- Reuse the 192 KB libpng scratch instead of allocating it per map tile.
+- Skip erased sectors when scanning the trip log (opening Statistics used to
+  read the whole 12 MB partition twice).
+- Stop re-invalidating the music tile every 400 ms and re-positioning map
+  labels that did not move.
+- Keep small AA control/ack messages off the heap.
+- Web file uploads stream to `<name>.part` and only replace the destination on
+  success.
+- Trim unused LVGL Montserrat sizes and demos; delete the unused
+  `aabridge_font_38`.
+- Fix two `-Werror` diagnostics that `-O2` surfaces (C6 version string,
+  splash path join).
+
+Result on Waveshare: app image 4 711 056 → 4 720 080 bytes (+9 KB — `-O2`
+costs about what the removed dead code saved), so JC4880's 5 MB OTA slot keeps
+its ~511 KB headroom and `idf.py size` still matters. The win is runtime, not
+flash. See `docs/optimization-batch-test-plan.md`.
+
 - Send navigation positions independently of tile downloads, chunk transfers
   and bulk acknowledgements. Serialize radio writes with a newest-position
   slot ahead of bulk work and acknowledged checkpoints every ~2 KiB.

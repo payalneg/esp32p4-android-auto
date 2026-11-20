@@ -22,7 +22,6 @@
 #include "freertos/task.h"
 #include "aa_overlay.h"
 #include "display_init.h"
-#include "display_init.h"
 #include "ui_mode.h"
 
 static const char *TAG = "display_video";
@@ -99,6 +98,7 @@ static SemaphoreHandle_t s_stage_free;   /* counting: free staging slots */
 static QueueHandle_t     s_disp_q;
 static TaskHandle_t      s_disp_task;
 static SemaphoreHandle_t s_draw_lock;    /* held across PPA+draw; yield takes it */
+static SemaphoreHandle_t s_drain_sem;    /* fence signalled by the display task */
 static volatile uint32_t s_gen;          /* bumped by yield: drops queued frames */
 
 /* SIMD-accelerated I420→RGB565 converter handle from esp_image_effects.
@@ -328,23 +328,40 @@ esp_err_t display_video_init(void)
     esp_err_t err = esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &s_cache_line);
     if (err != ESP_OK) s_cache_line = 64;
 
-    /* Allocate two private RGB565 framebuffers in PSRAM, panel-native
-     * 480×800 each. Bypassing the LCD's own DPI framebuffer pool while we
-     * sort out why dummy_draw_blit-into-LCD-FB tiled the output 3× across
-     * the panel — a private buffer + direct draw_bitmap takes the LVGL
-     * adapter completely out of the loop. */
+    /* Two framebuffers for the video stage. Prefer the panel's own DPI frame
+     * buffers: esp_lcd_panel_draw_bitmap() has a zero-copy fast path when the
+     * source lies inside one of them (cache write-back + cur_fb switch), while
+     * a private buffer is copied by DMA2D — a full 768 KB read+write per frame
+     * out of the PSRAM bandwidth the I420 shuffle already competes for.
+     *
+     * BSP_LCD_DPI_BUFFER_NUMS is 3, and with any rotation the LVGL adapter
+     * renders into fb[2] and uses fb[0]/fb[1] as front/back. While AA owns the
+     * panel the adapter is paused, so fb[0]/fb[1] are ours; fb[2] is left
+     * alone so a resume never lands on a buffer we are writing. If the panel
+     * exposes fewer buffers (different BSP), fall back to private memory —
+     * correct, just one copy slower. */
     size_t fb_bytes = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
                                s_cache_line);
     s_fb_count = 2;
-    for (int i = 0; i < s_fb_count; i++) {
-        s_fb[i] = heap_caps_aligned_calloc(s_cache_line, 1, fb_bytes,
-                                           MALLOC_CAP_SPIRAM);
-        if (!s_fb[i]) {
-            ESP_LOGE(TAG, "fb[%d] alloc %u failed", i, (unsigned)fb_bytes);
-            return ESP_ERR_NO_MEM;
+    void *dpi_fb[3] = { NULL, NULL, NULL };
+    if (esp_lcd_dpi_panel_get_frame_buffer(s_panel, 3, &dpi_fb[0], &dpi_fb[1],
+                                           &dpi_fb[2]) == ESP_OK &&
+        dpi_fb[0] && dpi_fb[1]) {
+        s_fb[0] = dpi_fb[0];
+        s_fb[1] = dpi_fb[1];
+        ESP_LOGI(TAG, "video draws into panel framebuffers (zero-copy submit)");
+    } else {
+        for (int i = 0; i < s_fb_count; i++) {
+            s_fb[i] = heap_caps_aligned_calloc(s_cache_line, 1, fb_bytes,
+                                               MALLOC_CAP_SPIRAM);
+            if (!s_fb[i]) {
+                ESP_LOGE(TAG, "fb[%d] alloc %u failed", i, (unsigned)fb_bytes);
+                return ESP_ERR_NO_MEM;
+            }
         }
+        ESP_LOGW(TAG, "no panel framebuffers — private video fbs (copy path)");
     }
-    ESP_LOGI(TAG, "allocated %d private framebuffers @%p,%p (%u bytes each)",
+    ESP_LOGI(TAG, "allocated %d video framebuffers @%p,%p (%u bytes each)",
              s_fb_count, s_fb[0], s_fb[1], (unsigned)fb_bytes);
 
     ppa_client_config_t ppa_cfg = { .oper_type = PPA_OPERATION_SRM };
@@ -357,7 +374,8 @@ esp_err_t display_video_init(void)
     s_stage_free = xSemaphoreCreateCounting(STAGE_SLOTS, STAGE_SLOTS);
     s_disp_q     = xQueueCreate(DISP_Q_DEPTH, sizeof(disp_item_t));
     s_draw_lock  = xSemaphoreCreateMutex();
-    if (!s_stage_free || !s_disp_q || !s_draw_lock ||
+    s_drain_sem  = xSemaphoreCreateBinary();
+    if (!s_stage_free || !s_disp_q || !s_draw_lock || !s_drain_sem ||
         xTaskCreatePinnedToCore(disp_task, "aa_disp", 8192, NULL,
                                 DISP_TASK_PRIO, &s_disp_task, DISP_TASK_CORE) != pdPASS) {
         ESP_LOGE(TAG, "display stage init failed");
@@ -1238,6 +1256,12 @@ static bool take_panel_for_video(void)
     return true;
 }
 
+static void drain_done_cb(void *arg)
+{
+    SemaphoreHandle_t sem = (SemaphoreHandle_t)arg;
+    if (sem) xSemaphoreGive(sem);
+}
+
 static bool stage_alloc(uint16_t w, uint16_t h)
 {
     size_t need = ALIGN_UP((size_t)w * h * 3 / 2, s_cache_line);
@@ -1245,7 +1269,18 @@ static bool stage_alloc(uint16_t w, uint16_t h)
         return true;
     }
     /* Resolution change mid-session is not a thing AA does, but be safe:
-     * only reallocate when no slot is in flight (all STAGE_SLOTS free). */
+     * reallocating a slot the display task may still be reading would be a
+     * use-after-free. The caller has not claimed a slot yet, so a fence is
+     * enough — the display queue is FIFO and the fence callback only runs
+     * after every earlier frame has been presented and both slots are back. */
+    if (s_disp_q && s_drain_sem) {
+        xSemaphoreTake(s_drain_sem, 0);            /* drop a stale give */
+        if (display_video_fence(drain_done_cb, s_drain_sem) == ESP_OK &&
+            xSemaphoreTake(s_drain_sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            ESP_LOGW(TAG, "stage_alloc: drain timed out — keeping old buffers");
+            return false;
+        }
+    }
     for (int i = 0; i < STAGE_SLOTS; i++) {
         free(s_stage[i]);
         s_stage[i] = heap_caps_aligned_calloc(s_cache_line, 1, need, MALLOC_CAP_SPIRAM);
@@ -1269,14 +1304,15 @@ esp_err_t display_video_submit_yuv420(const uint8_t *yuv,
     if (!yuv || src_w == 0 || src_h == 0) return ESP_ERR_INVALID_ARG;
     if (!take_panel_for_video()) return ESP_ERR_INVALID_STATE;
 
+    /* Size the staging buffers before claiming a slot: stage_alloc may drain
+     * the display queue for a resize, and it relies on no slot being claimed
+     * yet (see its comment). Only one producer ever calls this. */
+    if (!stage_alloc(src_w, src_h)) return ESP_ERR_NO_MEM;
+
     /* Back-pressure point: both staging slots busy → the display is two
      * frames behind → wait here (the h264 queue and then the recv loop fill
      * up behind us, exactly as the serial path did on a slow frame). */
     xSemaphoreTake(s_stage_free, portMAX_DELAY);
-    if (!stage_alloc(src_w, src_h)) {
-        xSemaphoreGive(s_stage_free);
-        return ESP_ERR_NO_MEM;
-    }
     /* Any slot the display task is not holding is free; find it. Slots are
      * handed back in completion order, so simple round-robin is exact. */
     static int s_next_slot;
@@ -1353,9 +1389,12 @@ static void disp_present(const disp_item_t *it)
     esp_cache_msync(s_fb[idx], out_buf_size,
                     ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
     aa_overlay_draw((uint16_t *)s_fb[idx]);
-    esp_cache_msync(s_fb[idx], out_buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     int64_t t_overlay_end = esp_timer_get_time();
 
+    /* No explicit C2M here: esp_lcd_panel_draw_bitmap() already writes back
+     * the frame before the panel DMA reads it — the whole y-range on the
+     * panel-FB path, the full source on the DMA2D path. Flushing it twice was
+     * a full 768 KB scan per frame. */
     err = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, PANEL_NATIVE_W, PANEL_NATIVE_H, s_fb[idx]);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "panel_draw_bitmap (yuv420+ppa): %s", esp_err_to_name(err));

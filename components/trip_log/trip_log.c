@@ -673,6 +673,14 @@ static void scan_records(rec_cb_t cb, void *u)
 
     uint32_t sectors = s_total_recs / RECS_PER_SECTOR;
     for (uint32_t sec = 0; sec < sectors; sec++) {
+        /* Most of the ring is erased: a ride fills ~1 sector per 10 minutes,
+         * so on a 12 MB partition over 95 % of the sectors start with 0xFFFF.
+         * Probe the magic first and skip the 4 KB read — this is what made
+         * opening the trip statistics read the whole partition (twice). */
+        uint16_t magic = 0;
+        if (esp_partition_read(s_part, (size_t)sec * SECTOR,
+                               &magic, sizeof magic) != ESP_OK) continue;
+        if (magic != REC_MAGIC) continue;
         if (esp_partition_read(s_part, (size_t)sec * SECTOR, buf, SECTOR) != ESP_OK) continue;
         for (uint32_t i = 0; i < RECS_PER_SECTOR; i++) {
             const trip_rec_t *r = (const trip_rec_t *)(buf + i * REC_SIZE);

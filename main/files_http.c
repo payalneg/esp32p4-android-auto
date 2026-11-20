@@ -335,28 +335,56 @@ static esp_err_t upload_handler(httpd_req_t *req)
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
         return send_json_err(req, 409, "path is a directory");
     }
-    FILE *f = fopen(path, "wb");
+    if (req->content_len <= 0) {
+        return send_json_err(req, 400, "empty body");
+    }
+
+    /* Stream into "<path>.part" and only put it in place once the whole body
+     * has landed. Opening the destination "wb" first truncated (and thus
+     * destroyed) the existing file before a single byte had been received, so
+     * a closed browser tab or a Wi-Fi drop left the user with neither the old
+     * file nor the new one. */
+    char tmp[MAX_PATH + 8];
+    if (snprintf(tmp, sizeof tmp, "%s.part", path) >= (int)sizeof tmp) {
+        return send_json_err(req, 400, "path too long");
+    }
+    unlink(tmp);                       /* a leftover from an earlier abort */
+    FILE *f = fopen(tmp, "wb");
     if (!f) return send_json_err(req, 500, strerror(errno));
 
     int remaining = req->content_len;
     char *buf = malloc(UPLOAD_CHUNK);
-    if (!buf) { fclose(f); unlink(path); return send_json_err(req, 500, "oom"); }
+    if (!buf) { fclose(f); unlink(tmp); return send_json_err(req, 500, "oom"); }
     while (remaining > 0) {
         int want = remaining < UPLOAD_CHUNK ? remaining : UPLOAD_CHUNK;
         int n = httpd_req_recv(req, buf, want);
         if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
         if (n <= 0) {
-            free(buf); fclose(f); unlink(path);
+            free(buf); fclose(f); unlink(tmp);
             return send_json_err(req, 500, "recv failed");
         }
         if (fwrite(buf, 1, n, f) != (size_t)n) {
-            free(buf); fclose(f); unlink(path);
+            free(buf); fclose(f); unlink(tmp);
             return send_json_err(req, 500, "write failed");
         }
         remaining -= n;
     }
     free(buf);
-    fclose(f);
+    if (fflush(f) != 0 || fclose(f) != 0) {
+        unlink(tmp);
+        return send_json_err(req, 500, "flush failed");
+    }
+    /* POSIX rename replaces atomically; FAT/SD returns EEXIST instead, so
+     * fall back to unlink+rename. The old file is only removed once the new
+     * one is complete on the card. */
+    if (rename(tmp, path) != 0) {
+        unlink(path);
+        if (rename(tmp, path) != 0) {
+            int e = errno;
+            unlink(tmp);
+            return send_json_err(req, 500, strerror(e));
+        }
+    }
     ESP_LOGI(TAG, "uploaded %d bytes -> %s", req->content_len, path);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true}");

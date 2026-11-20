@@ -127,8 +127,14 @@ static esp_err_t parse_embedded_image(size_t blob_size,
             (const esp_app_desc_t *)(slave_fw_start
                 + sizeof(esp_image_header_t)
                 + sizeof(esp_image_segment_header_t));
-        strncpy(version, desc->version, version_len - 1);
-        version[version_len - 1] = '\0';
+        /* desc->version is a fixed 32-byte field and is not guaranteed to be
+         * NUL-terminated (esp_app_desc_t packs it as char[32]). strncpy()
+         * reads the full field and trips -Wstringop-truncation at -O2; bound
+         * the copy to what the field actually holds. */
+        size_t n = strnlen(desc->version, sizeof(desc->version));
+        if (n > version_len - 1) n = version_len - 1;
+        memcpy(version, desc->version, n);
+        version[n] = '\0';
     }
     return ESP_OK;
 }

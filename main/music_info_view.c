@@ -81,6 +81,17 @@ static bool s_buttons_enabled = true;
 
 static lv_img_dsc_t s_art_dsc;
 
+/* LVGL 8's lv_obj_add_flag/clear_flag(HIDDEN) do not check the current state:
+ * clear_flag always invalidates the object (lv_obj.c), so calling them from a
+ * periodic poll repaints the whole tile even when nothing changed. */
+static void set_hidden(lv_obj_t *obj, bool hidden)
+{
+    if (!obj) return;
+    if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == hidden) return;
+    if (hidden) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    else        lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+}
+
 static bool is_video_app(const char *pkg)
 {
     if (!pkg || !pkg[0]) return false;
@@ -319,29 +330,29 @@ static void apply_layout(bool is_video, bool force)
 
 static void show_fallback(void)
 {
-    if (s_art_img) lv_obj_add_flag(s_art_img, LV_OBJ_FLAG_HIDDEN);
-    if (s_video_art_img) lv_obj_add_flag(s_video_art_img, LV_OBJ_FLAG_HIDDEN);
-    if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    set_hidden(s_art_img, true);
+    set_hidden(s_video_art_img, true);
+    set_hidden(s_overlay, true);
     if (s_current_layout == 1) {
-        if (s_art_box) lv_obj_add_flag(s_art_box, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_art_box, true);
     } else {
-        if (s_art_box) lv_obj_clear_flag(s_art_box, LV_OBJ_FLAG_HIDDEN);
-        if (s_art_glyph) lv_obj_clear_flag(s_art_glyph, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_art_box, false);
+        set_hidden(s_art_glyph, false);
     }
 }
 
 static void show_art(void)
 {
     if (s_current_layout == 1) {
-        if (s_video_art_img) lv_obj_clear_flag(s_video_art_img, LV_OBJ_FLAG_HIDDEN);
-        if (s_overlay) lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-        if (s_art_box) lv_obj_add_flag(s_art_box, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_video_art_img, false);
+        set_hidden(s_overlay, false);
+        set_hidden(s_art_box, true);
     } else {
-        if (s_video_art_img) lv_obj_add_flag(s_video_art_img, LV_OBJ_FLAG_HIDDEN);
-        if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-        if (s_art_box) lv_obj_clear_flag(s_art_box, LV_OBJ_FLAG_HIDDEN);
-        if (s_art_img) lv_obj_clear_flag(s_art_img, LV_OBJ_FLAG_HIDDEN);
-        if (s_art_glyph) lv_obj_add_flag(s_art_glyph, LV_OBJ_FLAG_HIDDEN);
+        set_hidden(s_video_art_img, true);
+        set_hidden(s_overlay, true);
+        set_hidden(s_art_box, false);
+        set_hidden(s_art_img, false);
+        set_hidden(s_art_glyph, true);
     }
 }
 
@@ -419,13 +430,16 @@ static void apply_art(uint32_t hash)
     s_last_art_hash = hash;
 }
 
+static int8_t s_container_on = -1;   /* -1 = unknown until first poll */
+
 static void set_container_visible(bool on)
 {
     if (!s_root) return;
     lv_obj_t *container = lv_obj_get_parent(s_root);
     if (!container || container == lv_scr_act() || lv_obj_get_parent(container) == NULL) return;
-    if (on) lv_obj_clear_flag(container, LV_OBJ_FLAG_HIDDEN);
-    else    lv_obj_add_flag (container, LV_OBJ_FLAG_HIDDEN);
+    if (s_container_on == (int8_t)on) return;
+    s_container_on = on ? 1 : 0;
+    set_hidden(container, !on);
 }
 
 static void poll_cb(lv_timer_t *t)
@@ -444,17 +458,17 @@ static void poll_cb(lv_timer_t *t)
             s_last_artist[0] = '\0';
             s_last_playing = -1;
         }
-        if (s_title_lbl) lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
-        if (s_artist_lbl) lv_obj_add_flag(s_artist_lbl, LV_OBJ_FLAG_HIDDEN);
-        if (s_btn_row) lv_obj_add_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
+        if (s_title_lbl) set_hidden(s_title_lbl, true);
+        if (s_artist_lbl) set_hidden(s_artist_lbl, true);
+        if (s_btn_row) set_hidden(s_btn_row, true);
         apply_art(0);
         set_container_visible(false);
         return;
     }
 
     set_container_visible(true);
-    if (s_title_lbl) lv_obj_clear_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
-    if (s_artist_lbl) lv_obj_clear_flag(s_artist_lbl, LV_OBJ_FLAG_HIDDEN);
+    if (s_title_lbl) set_hidden(s_title_lbl, false);
+    if (s_artist_lbl) set_hidden(s_artist_lbl, false);
 
     if (strcmp(s_last_title, m->title) != 0) {
         if (s_title_lbl) lv_label_set_text(s_title_lbl, m->title);
@@ -478,8 +492,7 @@ static void poll_cb(lv_timer_t *t)
     apply_layout(is_video, false);
 
     if (!is_video && s_btn_row) {
-        lv_obj_clear_flag(s_btn_row, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_btn_row);
+        set_hidden(s_btn_row, false);
     }
 
     apply_art(m->album_art_hash);
@@ -743,6 +756,7 @@ void music_info_view_detach(void)
     s_last_playing    = -1;
     s_last_art_hash   = 0;
     s_current_layout  = -1;
+    s_container_on    = -1;
 }
 
 void music_info_view_destroy(void)

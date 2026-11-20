@@ -203,12 +203,10 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 # the build picks up a different lv_conf via global include order.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_FONT_FMT_TXT_LARGE=1)
 
-# Per-widget timing markers in setup_scr_dashboard.c (Super_VESC_Display).
-# Off by default; flip to ON to log per-widget cost via ESP_LOGI("svd_prof").
-option(VESC_UI_PROFILE "Profile per-widget LVGL build time" ON)
-if(VESC_UI_PROFILE)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE VESC_UI_PROFILE)
-endif()
+# Per-widget timing markers in setup_scr_dashboard.c used to live behind
+# VESC_UI_PROFILE; they were removed from the generated screens, and the flag
+# no longer appears anywhere in Super_VESC_Display or components/vesc_ui. The
+# option is gone with them — grep before re-adding it.
 
 # The dashboard generated/_grid_480_800x480.c was excluded from the build,
 # but gui_guider.h still has LV_IMG_DECLARE(_grid_480_800x480) and the

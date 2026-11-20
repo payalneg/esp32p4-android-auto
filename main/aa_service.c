@@ -502,8 +502,14 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
      * ssl_read inside mbedtls. */
     if (xSemaphoreTakeRecursive(s_ssl_mutex, portMAX_DELAY) != pdTRUE) return ESP_FAIL;
 
-    /* plaintext = [msg_id BE16][body] */
-    uint8_t *plain = malloc(2 + body_len);
+    /* plaintext = [msg_id BE16][body]. The high-rate messages here are the AV
+     * media acks (~25/s, emitted from the display task) and mic data; those
+     * bodies are tiny, so keep them off the heap. Only setup/SD responses pay
+     * for an allocation. */
+    uint8_t  small_plain[130];
+    uint8_t *plain = (body_len <= sizeof(small_plain) - 2)
+                         ? small_plain
+                         : malloc(2 + body_len);
     if (!plain) {
         xSemaphoreGiveRecursive(s_ssl_mutex);
         return ESP_ERR_NO_MEM;
@@ -515,7 +521,7 @@ static esp_err_t send_encrypted(int sock, aa_tls_t *tls,
     size_t cipher_len = 0;
     esp_err_t err = aa_tls_encrypt(tls, plain, 2 + body_len,
                                    cipher_buf, cipher_cap, &cipher_len);
-    free(plain);
+    if (plain != small_plain) free(plain);
     if (err != ESP_OK) {
         xSemaphoreGiveRecursive(s_ssl_mutex);
         return err;

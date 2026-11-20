@@ -10,8 +10,10 @@
 #   0xA20000..0xB20000 storage (LittleFS, 1 MB — VESC config backups only)
 #   0xB20000..0x1000000 triplog (~4.875 MB raw circular trip log, via esp_partition)
 #
-# NOTE: the app image is ~3.8 MB — a 5 MB OTA slot leaves ~1.2 MB of headroom.
-# If the JC build outgrows 5 MB, OTA/flash will fail; rebalance this table
+# NOTE: the P4 app image is ~4.50 MiB (4 720 080 B) on -O2 with the BT-agent
+# blob embedded — about 9 KB more than the old -Og image. A 5 MB OTA slot
+# leaves ~511 KB of headroom; check `idf.py size` after adding screens/fonts.
+# If the JC build approaches 5 MB, OTA/flash will fail. Rebalance this table
 # (shrink storage/triplog, or bump the slots back up) at that point. trip_log
 # reads the partition size dynamically (esp_partition), so resizing triplog
 # needs no code change — but it does require a full reflash (the partition

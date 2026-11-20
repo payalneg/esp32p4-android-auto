@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,6 +47,9 @@ static lv_obj_t *s_label_layer;
 static lv_obj_t *s_label_obj[NAV_MAP_LABELS_MAX];
 static int16_t   s_label_w[NAV_MAP_LABELS_MAX];
 static int16_t   s_label_h[NAV_MAP_LABELS_MAX];
+/* Last placed position, so the 40 Hz tick only moves what actually moved. */
+static int16_t   s_label_px[NAV_MAP_LABELS_MAX];
+static int16_t   s_label_py[NAV_MAP_LABELS_MAX];
 static lv_obj_t *s_status_box;
 static lv_obj_t *s_status_lbl;
 static lv_obj_t *s_speed_lbl;
@@ -717,7 +721,15 @@ static void refresh_labels(void)
             w = (int)lv_obj_get_width(o);
             h = (int)lv_obj_get_height(o);
         }
-        lv_obj_set_pos(o, labels[i].x - w / 2, labels[i].y - h / 2);
+        /* The tick runs at 40 Hz; a label that stays put must not invalidate.
+         * lv_obj_set_pos() marks the object dirty even for the same value. */
+        const int16_t px = (int16_t)(labels[i].x - w / 2);
+        const int16_t py = (int16_t)(labels[i].y - h / 2);
+        if (s_label_px[i] != px || s_label_py[i] != py) {
+            s_label_px[i] = px;
+            s_label_py[i] = py;
+            lv_obj_set_pos(o, px, py);
+        }
         set_hidden(o, false);
     }
 }
@@ -866,6 +878,7 @@ esp_err_t nav_screen_init(void)
         set_hidden(o, true);
         s_label_obj[i] = o;
         s_label_w[i] = s_label_h[i] = 0;
+        s_label_px[i] = s_label_py[i] = INT16_MIN;
     }
 
     /* One short line between the speed and battery plates. */

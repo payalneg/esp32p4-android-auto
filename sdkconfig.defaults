@@ -5,6 +5,18 @@ CONFIG_IDF_TARGET="esp32p4"
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 
+# ===== Optimisation =====
+# The P4 spends most of a video frame in software: tinyh264 decode (~28 ms),
+# the I420→OUYY/EVYY shuffle (~17 ms), the navigator compositor (~20 ms),
+# libpng inflate. ESP-IDF defaults to -Og ("Debug"), which is typically
+# 20-40 % slower than -O2 on those loops. The S3 overlay has set PERF for a
+# while; the P4 boards — the ones that actually need the cycles — were left
+# on the default. See docs/optimization-batch-test-plan.md for the A/B
+# procedure.
+# Fresh build dirs pick this up; an existing build_<board>/sdkconfig keeps its
+# old value until it is regenerated (the test plan has the one-liner).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # SPIRAM (PSRAM) — needed for frame buffers on ESP32-P4
 # (Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 ships with 32MB Hex PSRAM @200MHz)
 CONFIG_SPIRAM=y
@@ -71,6 +83,11 @@ CONFIG_ESP_HOSTED_SDIO_RESET_DELAY_MS=100
 # Reflash the D1 Mini BT agent over UART on version mismatch. With this on,
 # P4 compares the agent's BT-VER: against CONFIG_BT_AGENT_FW_VERSION at boot
 # and pushes the embedded bt_agent_fw.bin.gz when they differ.
+#
+# Kept ON: the embedded agent blob costs ~560 KB of .rodata in every OTA slot,
+# which is the price of field-updating the D1 Mini without a USB cable. Build
+# with `n` for a one-off size-constrained image; components/bt_agent_fw then
+# stops embedding the blob.
 CONFIG_BT_AGENT_OTA_ENABLED=y
 
 # Must match what the embedded bt_agent firmware emits on boot via
