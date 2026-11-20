@@ -28,6 +28,9 @@ const int kHeadUnitH = 480;
 /// anything worth measuring (13 bytes a time).
 const Duration kViewPeriod = Duration(milliseconds: 500);
 
+/// Check the view deadline independently of tile downloads and ACK waits.
+const Duration kViewPollPeriod = Duration(milliseconds: 100);
+
 /// How long to wait before looking again when there is nothing to send and
 /// nobody to send it to. Anything that would change that — the link coming
 /// up, the head unit switching to the map, the first fix — is worth noticing
@@ -120,8 +123,15 @@ class HeadUnitFeedStatus {
       other.localVector == localVector;
 
   @override
-  int get hashCode => Object.hash(tilesSent, tilesPending, tilesFailed,
-      viewsSent, lastTileBytes, running, localVector);
+  int get hashCode => Object.hash(
+    tilesSent,
+    tilesPending,
+    tilesFailed,
+    viewsSent,
+    lastTileBytes,
+    running,
+    localVector,
+  );
 }
 
 /// What the feed needs from the link. Narrow on purpose, so the loop can be
@@ -139,14 +149,26 @@ abstract class HeadUnitLink {
   bool get localVector => displayState.localVector;
 
   Future<NavFrameResult> sendTile(
-      int z, int x, int y, int format, Uint8List bytes);
+    int z,
+    int x,
+    int y,
+    int format,
+    Uint8List bytes,
+  );
 
-  Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
-      {double speedMs});
+  Future<void> sendView(
+    double lat,
+    double lon,
+    int zoom,
+    int headingDeg, {
+    double speedMs,
+  });
 
   /// The route line, once per route.
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
-      {List<int>? segmentTypes});
+  Future<NavFrameResult> sendRoute(
+    List<({double lat, double lon})> pts, {
+    List<int>? segmentTypes,
+  });
 
   /// Where the next turn is and what is left of the ride.
   Future<void> sendGuide({
@@ -175,10 +197,10 @@ class HeadUnitFeed {
     required HeadUnitLink link,
     Future<void> Function(Duration)? sleep,
     DateTime Function()? now,
-  })  : _tiles = tiles,
-        _link = link,
-        _now = now ?? DateTime.now,
-        _sleep = sleep ?? _realSleep {
+  }) : _tiles = tiles,
+       _link = link,
+       _now = now ?? DateTime.now,
+       _sleep = sleep ?? _realSleep {
     _stateSub = _link.displayStates.listen((st) {
       // A head unit that went away and came back has an empty tile store —
       // and no route or turn either.
@@ -259,10 +281,15 @@ class HeadUnitFeed {
   Object? _routeSource;
   bool _routeSent = false;
   bool _clearRoute = false;
-  ({int turn, int distM, int remainingM, int remainingS, bool offRoute})? _guide;
+  ({int turn, int distM, int remainingM, int remainingS, bool offRoute})?
+  _guide;
   Object? _guideSent;
   DateTime? _lastViewAt;
   bool _running = false;
+  bool _disposed = false;
+  int _runEpoch = 0;
+  Timer? _viewTimer;
+  Future<void>? _viewInFlight;
   int _tilesSent = 0;
   int _tilesFailed = 0;
   int _viewsSent = 0;
@@ -284,6 +311,7 @@ class HeadUnitFeed {
     _where = at;
     if (headingDeg != null) _headingDeg = headingDeg;
     if (speedMs != null) _speedMs = speedMs;
+    if (_running) unawaited(_sendViewIfDue());
   }
 
   /// Everything we think the head unit holds is gone; send it all again.
@@ -297,8 +325,11 @@ class HeadUnitFeed {
 
   /// A new route to draw on the head unit. [source] identifies it, so the
   /// same route is never sent twice; null clears the line.
-  void setRoute(Object? source, List<({double lat, double lon})>? points,
-      {List<int>? segmentTypes}) {
+  void setRoute(
+    Object? source,
+    List<({double lat, double lon})>? points, {
+    List<int>? segmentTypes,
+  }) {
     if (identical(source, _routeSource)) return;
     _routeSource = source;
     _route = points;
@@ -332,12 +363,21 @@ class HeadUnitFeed {
 
   void start() {
     if (_running) return;
+    if (_disposed) return;
     _running = true;
-    unawaited(_loop());
+    final epoch = ++_runEpoch;
+    _viewTimer = Timer.periodic(kViewPollPeriod, (_) {
+      if (_running && epoch == _runEpoch) unawaited(_sendViewIfDue());
+    });
+    unawaited(_loop(epoch));
   }
 
   Future<void> stop() async {
     _running = false;
+    ++_runEpoch;
+    _viewTimer?.cancel();
+    _viewTimer = null;
+    await _viewInFlight;
     _lastViewAt = null;
     _speedMs = 0;
     _publish();
@@ -348,6 +388,7 @@ class HeadUnitFeed {
     await _stateSub.cancel();
     await _droppedSub.cancel();
     await _emptySub.cancel();
+    _disposed = true;
     status.dispose();
   }
 
@@ -356,10 +397,18 @@ class HeadUnitFeed {
   bool get _idle =>
       !_link.available || !_link.displayState.visible || _where == null;
 
-  Future<void> _loop() async {
-    while (_running) {
-      final sentTile = await _tick();
-      if (!_running) return;
+  Future<void> _loop(int epoch) async {
+    while (_running && epoch == _runEpoch) {
+      bool sentTile;
+      try {
+        sentTile = await _tick();
+      } catch (error) {
+        if (!_running || epoch != _runEpoch) return;
+        debugPrint('Navigation bulk transfer failed: $error');
+        await _sleep(kViewPeriod);
+        continue;
+      }
+      if (!_running || epoch != _runEpoch) return;
       // A tile in flight means the map is still filling: go straight on to the
       // next one. Pausing a view period between tiles was nearly half the time
       // a screenful took, and while it fills there is no new position to
@@ -388,6 +437,39 @@ class HeadUnitFeed {
     return due > Duration.zero ? due : Duration.zero;
   }
 
+  Future<void> _sendViewIfDue() {
+    if (_disposed || _idle || _untilNextView() > Duration.zero) {
+      return Future<void>.value();
+    }
+    if (_viewInFlight != null) return _viewInFlight!;
+    late final Future<void> task;
+    task = _sendCurrentView().whenComplete(() {
+      if (identical(_viewInFlight, task)) _viewInFlight = null;
+    });
+    _viewInFlight = task;
+    return task;
+  }
+
+  Future<void> _sendCurrentView() async {
+    final at = _where!;
+    final started = _now();
+    try {
+      await _link.sendView(
+        at.lat,
+        at.lon,
+        _zoom,
+        (_headingDeg ?? 0).round() % 360,
+        speedMs: _speedMs,
+      );
+      // Start-to-start cadence: BLE write time is part of the interval.
+      _lastViewAt = started;
+      _viewsSent++;
+      _publish();
+    } catch (error) {
+      debugPrint('Navigation position transfer failed: $error');
+    }
+  }
+
   /// One pass: say where the rider is if that is due, then hand the head unit
   /// one tile it is missing. Returns whether a tile went out. Public for
   /// tests, which drive it directly.
@@ -408,13 +490,7 @@ class HeadUnitFeed {
       _forgetEverythingSent();
     }
 
-    if (_untilNextView() == Duration.zero) {
-      await _link.sendView(at.lat, at.lon, _zoom,
-          (_headingDeg ?? 0).round() % 360,
-          speedMs: _speedMs);
-      _lastViewAt = _now();
-      _viewsSent++;
-    }
+    await _sendViewIfDue();
 
     // The line and the turn before any tile: a rider needs to know where to
     // go more than they need the ground sharp.
@@ -510,8 +586,7 @@ class HeadUnitFeed {
         ));
       }
     }
-    out.sort((a, b) =>
-        a.ring != b.ring ? a.ring - b.ring : a.d.compareTo(b.d));
+    out.sort((a, b) => a.ring != b.ring ? a.ring - b.ring : a.d.compareTo(b.d));
     return <TileId>[for (final e in out) e.tile];
   }
 
@@ -520,9 +595,9 @@ class HeadUnitFeed {
   /// unit draws under everything, so they go before anything sharp — a
   /// blurred map beats a bare one.
   List<TileId> fallbackTiles(LatLon at) => <TileId>[
-        ..._layerTiles(at, _zoom - kWideDz, 0),
-        ..._layerTiles(at, _zoom - kCoarseDz, 0),
-      ];
+    ..._layerTiles(at, _zoom - kWideDz, 0),
+    ..._layerTiles(at, _zoom - kCoarseDz, 0),
+  ];
 
   /// The ring of wide tiles around the panel. A safety net for movement —
   /// twenty kilometres a tile, so this is what keeps the map from running out
@@ -545,13 +620,17 @@ class HeadUnitFeed {
     final halfW = kHeadUnitW / 2 / kTilePx / scale;
     final halfH = kHeadUnitH / 2 / kTilePx / scale;
     final ranked = <({TileId tile, double d})>[];
-    for (var y = (centre.y - halfH).floor() - ring;
-        y <= (centre.y + halfH).floor() + ring;
-        y++) {
+    for (
+      var y = (centre.y - halfH).floor() - ring;
+      y <= (centre.y + halfH).floor() + ring;
+      y++
+    ) {
       if (y < 0 || y >= n) continue;
-      for (var x = (centre.x - halfW).floor() - ring;
-          x <= (centre.x + halfW).floor() + ring;
-          x++) {
+      for (
+        var x = (centre.x - halfW).floor() - ring;
+        x <= (centre.x + halfW).floor() + ring;
+        x++
+      ) {
         var wx = x % n;
         if (wx < 0) wx += n;
         final dx = (x + 0.5) - centre.x;
@@ -576,6 +655,7 @@ class HeadUnitFeed {
       _lastAttempt.remove(t);
       return true;
     }
+
     return <TileId>[
       for (final t in fallbackTiles(at))
         if (needed(t)) t,
@@ -594,7 +674,8 @@ class HeadUnitFeed {
     // whatever the rider is actually looking at.
     final cache = _tiles();
     if (cache == null) return false;
-    final bytes = await cache.read(t) ??
+    final bytes =
+        await cache.read(t) ??
         await cache.fetchAndStore(t, tileUrls(t), priority: TilePriority.bulk);
     if (bytes == null) {
       // No tile and no network. Count the attempt so one that never arrives
@@ -618,6 +699,7 @@ class HeadUnitFeed {
   }
 
   void _publish({int? pending}) {
+    if (_disposed) return;
     final next = HeadUnitFeedStatus(
       tilesSent: _tilesSent,
       tilesPending: pending ?? status.value.tilesPending,

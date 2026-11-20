@@ -11,6 +11,11 @@ the one recorded in the release commit.
 
 ## Unreleased
 
+- Send navigation positions independently of tile downloads, chunk transfers
+  and bulk acknowledgements. Serialize radio writes with a newest-position
+  slot ahead of bulk work and acknowledged checkpoints every ~2 KiB.
+- Start the navigation ACK timeout after the payload is sent, and cancel its
+  listener when the transfer completes or fails.
 - Count map composition time inside the frame interval instead of sleeping a
   full interval after each render. Skip identical stationary map frames while
   keeping tile/route redraws and the phone activity timeout independent.

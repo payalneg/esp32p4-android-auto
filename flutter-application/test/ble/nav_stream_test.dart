@@ -25,6 +25,7 @@ class _FakeChannel implements NavChannel {
   /// Throws this many times from writeData before giving in, to exercise the
   /// congestion retry.
   int busyWrites = 0;
+  Completer<void>? dataGate;
 
   @override
   int? mtu = 512;
@@ -39,20 +40,26 @@ class _FakeChannel implements NavChannel {
         (value[0] == NavOp.frameEnd || value[0] == NavOp.tileEnd) &&
         autoAck != null) {
       final seq = value[1] | (value[2] << 8);
-      ack(autoAck!, seq, autoAckMs,
-          status: value[0] == NavOp.tileEnd
-              ? NavStatus.tileAck
-              : NavStatus.frameAck);
+      ack(
+        autoAck!,
+        seq,
+        autoAckMs,
+        status:
+            value[0] == NavOp.tileEnd ? NavStatus.tileAck : NavStatus.frameAck,
+      );
     }
   }
 
   @override
-  Future<void> writeData(Uint8List value,
-      {required bool withoutResponse}) async {
+  Future<void> writeData(
+    Uint8List value, {
+    required bool withoutResponse,
+  }) async {
     if (busyWrites > 0) {
       busyWrites--;
       throw StateError('write failed: BUSY (201)');
     }
+    if (dataGate != null) await dataGate!.future;
     data.add(Uint8List.fromList(value));
     this.withoutResponse.add(withoutResponse);
   }
@@ -83,16 +90,19 @@ class _FakeChannel implements NavChannel {
     _notify.add(<int>[NavStatus.search, t.length, ...t]);
   }
 
-  void state({required bool nav, required bool visible, int maxChunk = 509,
-          bool vector = false}) =>
-      _notify.add(<int>[
-        NavStatus.state,
-        (nav ? 1 : 0) | (vector ? 2 : 0),
-        visible ? 1 : 0,
-        0,
-        maxChunk & 0xFF,
-        maxChunk >> 8,
-      ]);
+  void state({
+    required bool nav,
+    required bool visible,
+    int maxChunk = 509,
+    bool vector = false,
+  }) => _notify.add(<int>[
+    NavStatus.state,
+    (nav ? 1 : 0) | (vector ? 2 : 0),
+    visible ? 1 : 0,
+    0,
+    maxChunk & 0xFF,
+    maxChunk >> 8,
+  ]);
 
   Future<void> close() => _notify.close();
 }
@@ -199,11 +209,15 @@ void main() {
     expect(r.ack, NavAck.hidden);
   });
 
-  test('no answer times out instead of hanging', () async {
-    ch.autoAck = null; // the head unit says nothing
-    final r = await nav.sendFrame(400, 240, _jpeg(100));
-    expect(r.ack, NavAck.timeout);
-  }, timeout: const Timeout(Duration(seconds: 10)));
+  test(
+    'no answer times out instead of hanging',
+    () async {
+      ch.autoAck = null; // the head unit says nothing
+      final r = await nav.sendFrame(400, 240, _jpeg(100));
+      expect(r.ack, NavAck.timeout);
+    },
+    timeout: const Timeout(Duration(seconds: 10)),
+  );
 
   test('a congested write is retried without falling back at once', () async {
     ch.busyWrites = 3;
@@ -245,6 +259,16 @@ void main() {
     expect(ch.data.expand((c) => c).length, 700);
   });
 
+  test('ACK timeout excludes time spent sending a slow tile', () async {
+    ch.dataGate = Completer<void>();
+    final sending = nav.sendTile(17, 1, 1, kTileFormatPng, _jpeg(700));
+    await Future<void>.delayed(
+      kNavAckTimeout + const Duration(milliseconds: 100),
+    );
+    ch.dataGate!.complete();
+    expect((await sending).ok, isTrue);
+  });
+
   test('the view is a fourteen-byte control that needs no answer', () async {
     await nav.sendView(50.0619, 19.9368, 17, 271, speedMs: 5.5);
     expect(ch.ctrl.length, 1);
@@ -275,24 +299,28 @@ void main() {
     expect(seen.first.lon, closeTo(19.9368, 1e-6));
   });
 
-  test('a nine-byte destination is not mistaken for an acknowledgement',
-      () async {
-    // Both ride the same characteristic and are told apart by the status
-    // byte; a destination must not resolve a frame that is in flight.
-    ch.autoAck = null;
-    final pending = nav.sendFrame(400, 240, _jpeg(100));
-    await Future<void>.delayed(Duration.zero);
-    ch.destination(50.0, 20.0);
-    await Future<void>.delayed(Duration.zero);
-    ch.ack(NavAck.ok, 1, 4);
-    expect((await pending).ok, isTrue);
-  });
+  test(
+    'a nine-byte destination is not mistaken for an acknowledgement',
+    () async {
+      // Both ride the same characteristic and are told apart by the status
+      // byte; a destination must not resolve a frame that is in flight.
+      ch.autoAck = null;
+      final pending = nav.sendFrame(400, 240, _jpeg(100));
+      await Future<void>.delayed(Duration.zero);
+      ch.destination(50.0, 20.0);
+      await Future<void>.delayed(Duration.zero);
+      ch.ack(NavAck.ok, 1, 4);
+      expect((await pending).ok, isTrue);
+    },
+  );
 
   test('stop and hello are single-byte controls', () async {
     await nav.hello();
     await nav.stop();
-    expect(ch.ctrl.map((c) => c.first).toList(),
-        <int>[NavOp.hello, NavOp.stop]);
+    expect(ch.ctrl.map((c) => c.first).toList(), <int>[
+      NavOp.hello,
+      NavOp.stop,
+    ]);
   });
 
   test('an empty route clears the line, and carries no points', () async {
@@ -311,37 +339,39 @@ void main() {
     expect((await f).ok, isTrue);
   });
 
-  test('search results go as one blob, names cut on a character boundary',
-      () async {
-    // The panel holds six rows and 55 bytes a name; a name cut mid-sequence
-    // would render as a broken glyph, so the cut has to respect UTF-8.
-    final long = 'Ł' * 40;   // 80 bytes of two-byte characters
-    final f = nav.sendFound(<({double lat, double lon, String name})>[
-      (lat: 50.0619, lon: 19.9368, name: 'Rynek'),
-      (lat: 50.05, lon: 19.94, name: long),
-    ]);
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'search results go as one blob, names cut on a character boundary',
+    () async {
+      // The panel holds six rows and 55 bytes a name; a name cut mid-sequence
+      // would render as a broken glyph, so the cut has to respect UTF-8.
+      final long = 'Ł' * 40; // 80 bytes of two-byte characters
+      final f = nav.sendFound(<({double lat, double lon, String name})>[
+        (lat: 50.0619, lon: 19.9368, name: 'Rynek'),
+        (lat: 50.05, lon: 19.94, name: long),
+      ]);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(ch.ctrl.first[0], NavOp.foundBegin);
-    expect(ch.ctrl.first[1], 2, reason: 'two results');
-    final total = ch.ctrl.first[2] | (ch.ctrl.first[3] << 8);
-    final body = <int>[for (final d in ch.data) ...d];
-    expect(body.length, total, reason: 'BEGIN promised what DATA carried');
+      expect(ch.ctrl.first[0], NavOp.foundBegin);
+      expect(ch.ctrl.first[1], 2, reason: 'two results');
+      final total = ch.ctrl.first[2] | (ch.ctrl.first[3] << 8);
+      final body = <int>[for (final d in ch.data) ...d];
+      expect(body.length, total, reason: 'BEGIN promised what DATA carried');
 
-    // First entry: eight bytes of position, a length, then the name.
-    expect(body[8], 5);
-    expect(utf8.decode(body.sublist(9, 14)), 'Rynek');
-    // Second: cut short, and still valid UTF-8.
-    final len2 = body[14 + 8];
-    expect(len2, lessThanOrEqualTo(kNavFoundNameMax));
-    expect(len2.isEven, isTrue, reason: 'no half character left behind');
-    expect(() => utf8.decode(body.sublist(23, 23 + len2)), returnsNormally);
+      // First entry: eight bytes of position, a length, then the name.
+      expect(body[8], 5);
+      expect(utf8.decode(body.sublist(9, 14)), 'Rynek');
+      // Second: cut short, and still valid UTF-8.
+      final len2 = body[14 + 8];
+      expect(len2, lessThanOrEqualTo(kNavFoundNameMax));
+      expect(len2.isEven, isTrue, reason: 'no half character left behind');
+      expect(() => utf8.decode(body.sublist(23, 23 + len2)), returnsNormally);
 
-    expect(ch.ctrl.last[0], NavOp.foundEnd);
-    final seq = ch.ctrl.first[4] | (ch.ctrl.first[5] << 8);
-    ch.ack(NavAck.ok, seq, 0);
-    expect((await f).ok, isTrue);
-  });
+      expect(ch.ctrl.last[0], NavOp.foundEnd);
+      final seq = ch.ctrl.first[4] | (ch.ctrl.first[5] << 8);
+      ch.ack(NavAck.ok, seq, 0);
+      expect((await f).ok, isTrue);
+    },
+  );
 
   test('a query typed on the panel comes back as text', () async {
     final seen = <String>[];
@@ -361,21 +391,19 @@ void main() {
     ch.ack(NavAck.ok, seq, 0);
     expect((await f).ok, isTrue);
   });
-for (final typed in <bool>[false, true]) {
+  for (final typed in <bool>[false, true]) {
     test('route span types use negotiated wire layout: typed=$typed', () async {
       ch._notify.add(<int>[NavStatus.state, 1 | (typed ? 4 : 0), 1, 0, 253, 1]);
       await Future<void>.delayed(Duration.zero);
-      final f = nav.sendRoute(<({double lat, double lon}
-)>[
-        (lat: 50.0, lon: 20.0),
-        (lat: 50.001, lon: 20.001),
-        (lat: 50.002, lon: 20.002),
-        (lat: 50.003, lon: 20.003),
-      ], segmentTypes: <int>[
-        0,
-        1,
-        2
-      ]);
+      final f = nav.sendRoute(
+        <({double lat, double lon})>[
+          (lat: 50.0, lon: 20.0),
+          (lat: 50.001, lon: 20.001),
+          (lat: 50.002, lon: 20.002),
+          (lat: 50.003, lon: 20.003),
+        ],
+        segmentTypes: <int>[0, 1, 2],
+      );
       await Future<void>.delayed(Duration.zero);
       final begin = ch.ctrl.first;
       expect(begin.length, typed ? 6 : 5);
@@ -387,12 +415,18 @@ for (final typed in <bool>[false, true]) {
       expect(bd.getInt32(stride, Endian.little), 500010000);
       expect(bd.getInt32(stride + 4, Endian.little), 200010000);
       if (typed) {
-        expect(<int>[for (var i = 0; i < 4; i++) body[i * 9 + 8]],
-            <int>[0, 1, 2, 0]);
+        expect(
+          <int>[for (var i = 0; i < 4; i++) body[i * 9 + 8]],
+          <int>[0, 1, 2, 0],
+        );
       }
       expect(ch.ctrl.last[0], NavOp.routeEnd);
-      ch.ack(NavAck.ok, begin[3] | (begin[4] << 8), 0,
-          status: NavStatus.tileAck);
+      ch.ack(
+        NavAck.ok,
+        begin[3] | (begin[4] << 8),
+        0,
+        status: NavStatus.tileAck,
+      );
       expect((await f).ok, isTrue);
     });
   }

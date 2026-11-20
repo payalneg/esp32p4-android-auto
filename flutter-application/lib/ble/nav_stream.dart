@@ -18,6 +18,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'nav_write_queue.dart';
+
 /// Control opcodes we write (see main/ble_nav.h).
 class NavOp {
   static const frameBegin = 0x01;
@@ -30,6 +32,7 @@ class NavOp {
   static const routeBegin = 0x08;
   static const routeEnd = 0x09;
   static const guide = 0x0A;
+
   /// Answers a [NavStatus.search]: count, byte length, seq, then the entries.
   static const foundBegin = 0x0B;
   static const foundEnd = 0x0C;
@@ -209,13 +212,40 @@ abstract class NavChannel {
   int? get mtu;
 }
 
+/// Listen before BEGIN, but start the decode/ACK timeout only after END.
+/// Position packets may continue while downloading or transmitting a slow tile.
+class _NavReply {
+  _NavReply(Stream<NavFrameResult> replies, int seq) {
+    _done.future.ignore(); // Closure/error can arrive before the sender awaits.
+    _sub = replies.listen(
+      (reply) {
+        if (reply.seq == seq && !_done.isCompleted) _done.complete(reply);
+      },
+      onDone: () {
+        if (!_done.isCompleted) {
+          _done.completeError(StateError('Navigation link closed'));
+        }
+      },
+    );
+  }
+  final _done = Completer<NavFrameResult>();
+  late final StreamSubscription<NavFrameResult> _sub;
+  Future<NavFrameResult> get result => _done.future.timeout(kNavAckTimeout);
+  Future<void> close() => _sub.cancel();
+}
+
 /// Sends frames, one at a time, and tracks what the head unit says.
 class NavStream {
-  NavStream(this._channel) {
+  NavStream(this._channel)
+    : _writes = NavWriteQueue(
+        writeCtrl: _channel.writeCtrl,
+        writeData: _channel.writeData,
+      ) {
     _sub = _channel.notifications.listen(_onNotify);
   }
 
   final NavChannel _channel;
+  final NavWriteQueue _writes;
   late final StreamSubscription<List<int>> _sub;
 
   final _stateCtrl = StreamController<NavDisplayState>.broadcast();
@@ -287,7 +317,9 @@ class NavStream {
     if (raw[0] == NavStatus.search && raw.length >= 2) {
       final n = raw[1];
       if (raw.length >= 2 + n && !_searchCtrl.isClosed) {
-        _searchCtrl.add(utf8.decode(raw.sublist(2, 2 + n), allowMalformed: true));
+        _searchCtrl.add(
+          utf8.decode(raw.sublist(2, 2 + n), allowMalformed: true),
+        );
       }
       return;
     }
@@ -329,11 +361,11 @@ class NavStream {
 
   /// Ask the head unit to describe its screen. The answer arrives on [states].
   Future<void> hello() =>
-      _channel.writeCtrl(Uint8List.fromList(<int>[NavOp.hello]));
+      _writes.writeCtrl(Uint8List.fromList(<int>[NavOp.hello]));
 
   /// Tell it we have stopped, so it can say so on screen instead of waiting.
   Future<void> stop() =>
-      _channel.writeCtrl(Uint8List.fromList(<int>[NavOp.stop]));
+      _writes.writeCtrl(Uint8List.fromList(<int>[NavOp.stop]));
 
   /// Send one frame and wait for the head unit's verdict.
   ///
@@ -350,12 +382,10 @@ class NavStream {
     }
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
+    final reply = _NavReply(_ackCtrl.stream, seq);
     try {
       // Arm the answer before writing: on a fast link the acknowledgement can
       // land before an await further down would have started listening.
-      final acked = _ackCtrl.stream
-          .firstWhere((r) => r.seq == seq)
-          .timeout(kNavAckTimeout);
 
       final begin = Uint8List(11);
       final bd = ByteData.sublistView(begin);
@@ -364,7 +394,7 @@ class NavStream {
       bd.setUint16(3, height, Endian.little);
       bd.setUint32(5, jpeg.length, Endian.little);
       bd.setUint16(9, seq, Endian.little);
-      await _channel.writeCtrl(begin);
+      await _writes.writeCtrl(begin);
 
       final chunk = chunkSize;
       for (var off = 0; off < jpeg.length; off += chunk) {
@@ -375,12 +405,13 @@ class NavStream {
       final end = Uint8List(3);
       end[0] = NavOp.frameEnd;
       ByteData.sublistView(end).setUint16(1, seq, Endian.little);
-      await _channel.writeCtrl(end);
+      await _writes.writeCtrl(end);
 
-      return await acked;
+      return await reply.result;
     } on TimeoutException {
       return NavFrameResult(NavAck.timeout, seq, 0);
     } finally {
+      await reply.close();
       _sending = false;
     }
   }
@@ -388,15 +419,17 @@ class NavStream {
   /// Send one map tile. The head unit keeps it, so a tile goes over the link
   /// once and is then drawn from its memory for the rest of the ride.
   Future<NavFrameResult> sendTile(
-      int z, int x, int y, int format, Uint8List bytes) async {
+    int z,
+    int x,
+    int y,
+    int format,
+    Uint8List bytes,
+  ) async {
     if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
+    final reply = _NavReply(_ackCtrl.stream, seq);
     try {
-      final acked = _ackCtrl.stream
-          .firstWhere((r) => r.seq == seq)
-          .timeout(kNavAckTimeout);
-
       final begin = Uint8List(17);
       final bd = ByteData.sublistView(begin);
       begin[0] = NavOp.tileBegin;
@@ -406,7 +439,7 @@ class NavStream {
       bd.setUint32(7, y, Endian.little);
       bd.setUint32(11, bytes.length, Endian.little);
       bd.setUint16(15, seq, Endian.little);
-      await _channel.writeCtrl(begin);
+      await _writes.writeCtrl(begin);
 
       final chunk = chunkSize;
       for (var off = 0; off < bytes.length; off += chunk) {
@@ -417,12 +450,13 @@ class NavStream {
       final end = Uint8List(3);
       end[0] = NavOp.tileEnd;
       ByteData.sublistView(end).setUint16(1, seq, Endian.little);
-      await _channel.writeCtrl(end);
+      await _writes.writeCtrl(end);
 
-      return await acked;
+      return await reply.result;
     } on TimeoutException {
       return NavFrameResult(NavAck.timeout, seq, 0);
     } finally {
+      await reply.close();
       _sending = false;
     }
   }
@@ -433,8 +467,13 @@ class NavStream {
   /// The speed is what lets the head unit carry the view forward between
   /// updates and redraw at its own rate, so the map glides rather than
   /// stepping twice a second.
-  Future<void> sendView(double lat, double lon, int zoom, int headingDeg,
-      {double speedMs = 0}) {
+  Future<void> sendView(
+    double lat,
+    double lon,
+    int zoom,
+    int headingDeg, {
+    double speedMs = 0,
+  }) {
     final v = Uint8List(14);
     final bd = ByteData.sublistView(v);
     v[0] = NavOp.view;
@@ -444,7 +483,7 @@ class NavStream {
     bd.setUint16(10, headingDeg, Endian.little);
     final cms = (speedMs * 100).round().clamp(0, 0xFFFF);
     bd.setUint16(12, cms, Endian.little);
-    return _channel.writeCtrl(v);
+    return _writes.latestView(v);
   }
 
   /// Send the route line. Points are whatever the phone routed, simplified
@@ -454,30 +493,31 @@ class NavStream {
   /// An EMPTY list clears it — the head unit drops the line and the manoeuvre
   /// plate. It has no other way of learning that a ride has ended, and
   /// without it kept drawing the last one.
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
-      {List<int>? segmentTypes}) async {
+  Future<NavFrameResult> sendRoute(
+    List<({double lat, double lon})> pts, {
+    List<int>? segmentTypes,
+  }) async {
     if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
     if (pts.length == 1 || pts.length > 2000) {
       return const NavFrameResult(NavAck.badParam, 0, 0);
     }
-    final typed = _state.typedRoutes && segmentTypes != null &&
+    final typed =
+        _state.typedRoutes &&
+        segmentTypes != null &&
         segmentTypes.length == pts.length - 1;
     final stride = typed ? 9 : 8;
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
+    final reply = _NavReply(_ackCtrl.stream, seq);
     try {
-      final acked = _ackCtrl.stream
-          .firstWhere((r) => r.seq == seq)
-          .timeout(kNavAckTimeout);
-
       final begin = Uint8List(typed ? 6 : 5);
       begin[0] = NavOp.routeBegin;
       if (typed) begin[5] = 1;
       final bh = ByteData.sublistView(begin);
       bh.setUint16(1, pts.length, Endian.little);
       bh.setUint16(3, seq, Endian.little);
-      await _channel.writeCtrl(begin);
-      if (pts.isEmpty) return await acked;   // a clear carries no points
+      await _writes.writeCtrl(begin);
+      if (pts.isEmpty) return await reply.result; // a clear carries no points
 
       final body = Uint8List(pts.length * stride);
       final bd = ByteData.sublistView(body);
@@ -497,11 +537,12 @@ class NavStream {
       final end = Uint8List(3);
       end[0] = NavOp.routeEnd;
       ByteData.sublistView(end).setUint16(1, seq, Endian.little);
-      await _channel.writeCtrl(end);
-      return await acked;
+      await _writes.writeCtrl(end);
+      return await reply.result;
     } on TimeoutException {
       return NavFrameResult(NavAck.timeout, seq, 0);
     } finally {
+      await reply.close();
       _sending = false;
     }
   }
@@ -520,15 +561,16 @@ class NavStream {
         start--;
       }
       final lead = bytes[start];
-      final need = lead < 0x80
-          ? 1
-          : lead < 0xE0
+      final need =
+          lead < 0x80
+              ? 1
+              : lead < 0xE0
               ? 2
               : lead < 0xF0
-                  ? 3
-                  : 4;
-      if (start + need <= cut) break;   // last character is whole
-      cut = start;                      // drop the incomplete one
+              ? 3
+              : 4;
+      if (start + need <= cut) break; // last character is whole
+      cut = start; // drop the incomplete one
     }
     return bytes.sublist(0, cut);
   }
@@ -536,15 +578,13 @@ class NavStream {
   /// Answer a typed query. Names are UTF-8 and cut to what the panel can
   /// hold; an empty list is a valid answer and says so on the screen.
   Future<NavFrameResult> sendFound(
-      List<({double lat, double lon, String name})> hits) async {
+    List<({double lat, double lon, String name})> hits,
+  ) async {
     if (_sending) return const NavFrameResult(NavAck.busy, 0, 0);
     _sending = true;
     final seq = _seq = (_seq + 1) & 0xFFFF;
+    final reply = _NavReply(_ackCtrl.stream, seq);
     try {
-      final acked = _ackCtrl.stream
-          .firstWhere((r) => r.seq == seq)
-          .timeout(kNavAckTimeout);
-
       final body = BytesBuilder(copy: false);
       for (final h in hits.take(kNavFoundMax)) {
         final name = _cutUtf8(utf8.encode(h.name), kNavFoundNameMax);
@@ -565,8 +605,10 @@ class NavStream {
       final bh = ByteData.sublistView(begin);
       bh.setUint16(2, bytes.length, Endian.little);
       bh.setUint16(4, seq, Endian.little);
-      await _channel.writeCtrl(begin);
-      if (count == 0) return await acked;   // nothing found carries no body
+      await _writes.writeCtrl(begin);
+      if (count == 0) {
+        return await reply.result; // nothing found carries no body
+      }
 
       final chunk = chunkSize;
       for (var off = 0; off < bytes.length; off += chunk) {
@@ -576,11 +618,12 @@ class NavStream {
       final end = Uint8List(3);
       end[0] = NavOp.foundEnd;
       ByteData.sublistView(end).setUint16(1, seq, Endian.little);
-      await _channel.writeCtrl(end);
-      return await acked;
+      await _writes.writeCtrl(end);
+      return await reply.result;
     } on TimeoutException {
       return NavFrameResult(NavAck.timeout, seq, 0);
     } finally {
+      await reply.close();
       _sending = false;
     }
   }
@@ -602,7 +645,7 @@ class NavStream {
     bd.setUint32(4, remainingM.clamp(0, 0xFFFFFFFF), Endian.little);
     bd.setUint16(8, remainingS.clamp(0, 0xFFFF), Endian.little);
     g[10] = offRoute ? 1 : 0;
-    return _channel.writeCtrl(g);
+    return _writes.writeCtrl(g);
   }
 
   /// Largest DATA write to use: what the head unit accepts, capped by what the
@@ -625,10 +668,7 @@ class NavStream {
     var attempt = 0;
     while (true) {
       try {
-        await _channel.writeData(
-          chunk,
-          withoutResponse: attempt < fastAttempts,
-        );
+        await _writes.writeData(chunk, withoutResponse: attempt < fastAttempts);
         return;
       } on Object catch (e) {
         final msg = e.toString().toLowerCase();
@@ -641,6 +681,7 @@ class NavStream {
   }
 
   Future<void> dispose() async {
+    _writes.close();
     await _sub.cancel();
     await _stateCtrl.close();
     await _ackCtrl.close();

@@ -31,6 +31,26 @@ was bypassed in this replay; these short runs do not establish real-road or
 overnight endurance, per-frame p95 latency or a video-based tearing assessment.
 Other P4 profiles were compiled but not tested on hardware.
 
+## Position delivery
+
+From app 0.3.59, VIEW has its own deadline timer, so downloading a tile or
+waiting for its ACK does not suspend position updates. The existing 14-byte
+VIEW carries the latest position, course and speed; firmware 1.3.49 already
+accepts it during a tile transfer. No new wire format is required.
+
+Navigation GATT writes are serialized. A single pending VIEW slot replaces
+superseded positions and is serviced before the next bulk write. An
+acknowledged DATA checkpoint after approximately 2 KiB bounds the map backlog
+inside the Bluetooth controller. Native writes already in progress cannot be
+preempted. Bulk ACK timeouts start after END, with listeners registered before
+BEGIN so immediate replies are preserved.
+
+Automated checks cover blocked tile downloads, tile/route ACK waits, newest
+position priority, congestion recovery, controller checkpoints and stopping the
+position timer while a bulk operation is still suspended. Physical validation
+of this app change was not completed because the head unit and phone had been
+disconnected; the frame-rate results above belong to the earlier firmware test.
+
 Route colours on both the phone and head unit:
 
 | Colour | Graph classes |

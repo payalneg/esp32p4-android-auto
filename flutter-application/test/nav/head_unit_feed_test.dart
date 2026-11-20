@@ -17,8 +17,11 @@ class _FakeLink implements HeadUnitLink {
   @override
   bool available = true;
 
-  NavDisplayState _state =
-      const NavDisplayState(navMode: true, visible: true, maxChunk: 509);
+  NavDisplayState _state = const NavDisplayState(
+    navMode: true,
+    visible: true,
+    maxChunk: 509,
+  );
   final _states = StreamController<NavDisplayState>.broadcast();
   final _dropped = StreamController<({int z, int x, int y})>.broadcast();
   final _emptied = StreamController<void>.broadcast();
@@ -26,6 +29,9 @@ class _FakeLink implements HeadUnitLink {
   final tiles = <TileId>[];
   final views = <({double lat, double lon, int zoom, int heading})>[];
   int ack = NavAck.ok;
+  Completer<NavFrameResult>? heldRoute;
+  Completer<NavFrameResult>? heldTile;
+  void Function()? onView;
 
   @override
   NavDisplayState get displayState => _state;
@@ -49,43 +55,65 @@ class _FakeLink implements HeadUnitLink {
 
   void setVisible(bool v) {
     _state = NavDisplayState(
-        navMode: v,
-        visible: v,
-        maxChunk: 509,
-        localVector: _state.localVector);
+      navMode: v,
+      visible: v,
+      maxChunk: 509,
+      localVector: _state.localVector,
+    );
     _states.add(_state);
   }
 
   /// The head unit says its ground is on its own microSD card.
   void setVector(bool v) {
     _state = NavDisplayState(
-        navMode: true, visible: true, maxChunk: 509, localVector: v);
+      navMode: true,
+      visible: true,
+      maxChunk: 509,
+      localVector: v,
+    );
     _states.add(_state);
   }
 
   @override
   Future<NavFrameResult> sendTile(
-      int z, int x, int y, int format, Uint8List bytes) async {
+    int z,
+    int x,
+    int y,
+    int format,
+    Uint8List bytes,
+  ) async {
     tiles.add(TileId(z, x, y));
-    return NavFrameResult(ack, 0, 3);
+    return heldTile == null
+        ? NavFrameResult(ack, 0, 3)
+        : await heldTile!.future;
   }
 
   @override
-  Future<void> sendView(double lat, double lon, int zoom, int heading,
-      {double speedMs = 0}) async {
+  Future<void> sendView(
+    double lat,
+    double lon,
+    int zoom,
+    int heading, {
+    double speedMs = 0,
+  }) async {
     views.add((lat: lat, lon: lon, zoom: zoom, heading: heading));
+    onView?.call();
   }
 
-  final routes = <int>[];      // point counts
+  final routes = <int>[]; // point counts
   final routeTypes = <List<int>?>[];
-  final guides = <int>[];      // turn kinds
+  final guides = <int>[]; // turn kinds
 
   @override
-  Future<NavFrameResult> sendRoute(List<({double lat, double lon})> pts,
-      {List<int>? segmentTypes}) async {
+  Future<NavFrameResult> sendRoute(
+    List<({double lat, double lon})> pts, {
+    List<int>? segmentTypes,
+  }) async {
     routes.add(pts.length);
     routeTypes.add(segmentTypes);
-    return NavFrameResult(ack, 0, 1);
+    return heldRoute == null
+        ? NavFrameResult(ack, 0, 1)
+        : await heldRoute!.future;
   }
 
   @override
@@ -107,10 +135,29 @@ class _FakeLink implements HeadUnitLink {
 }
 
 /// A tile cache with no network: whatever was seeded is all there is.
-TileCache _offlineCache(Directory root) =>
-    TileCache(root, userAgent: 'test/1.0', clientFactory: () => throw 'offline');
+TileCache _offlineCache(Directory root) => TileCache(
+  root,
+  userAgent: 'test/1.0',
+  clientFactory: () => throw 'offline',
+);
 
 const _krakow = LatLon(50.0619, 19.9368);
+
+class _MemoryCache extends TileCache {
+  _MemoryCache()
+    : super(Directory('unused-navigation-test-cache'), userAgent: 'test');
+  Completer<Uint8List?>? download;
+  @override
+  Future<Uint8List?> read(TileId t) async =>
+      download == null ? Uint8List(64) : null;
+  @override
+  Future<Uint8List?> fetchAndStore(
+    TileId t,
+    List<Uri> urls, {
+    TilePriority priority = TilePriority.view,
+    int generation = 0,
+  }) => download!.future;
+}
 
 void main() {
   late Directory root;
@@ -133,11 +180,8 @@ void main() {
     return t;
   }
 
-  HeadUnitFeed build() => HeadUnitFeed(
-        tiles: () => cache,
-        link: link,
-        sleep: (_) async {},
-      );
+  HeadUnitFeed build() =>
+      HeadUnitFeed(tiles: () => cache, link: link, sleep: (_) async {});
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('hufeed');
@@ -281,43 +325,48 @@ void main() {
         t.y <= (centre.y + kHeadUnitH / 2 / kTilePx).floor();
     final lastOnScreen = tiles.lastIndexWhere(onScreen);
     final firstOffScreen = tiles.indexWhere((t) => !onScreen(t));
-    expect(firstOffScreen, greaterThan(lastOnScreen),
-        reason: 'a margin tile was queued ahead of one the rider can see');
+    expect(
+      firstOffScreen,
+      greaterThan(lastOnScreen),
+      reason: 'a margin tile was queued ahead of one the rider can see',
+    );
   });
 
-  test('while the map is filling, tiles do not wait on position updates',
-      () async {
-    // A screenful used to take a view period per tile on top of the transfer,
-    // which was nearly half the time it took to fill.
-    await seedCoarse();
-    final fine = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
-    var clock = DateTime(2026);
-    final feed = HeadUnitFeed(
-      tiles: () => cache,
-      link: link,
-      sleep: (_) async {},
-      now: () => clock,
-    )..setPosition(_krakow);
+  test(
+    'while the map is filling, tiles do not wait on position updates',
+    () async {
+      // A screenful used to take a view period per tile on top of the transfer,
+      // which was nearly half the time it took to fill.
+      await seedCoarse();
+      final fine = deg2tile(_krakow.lat, _krakow.lon, kHeadUnitZoom);
+      var clock = DateTime(2026);
+      final feed = HeadUnitFeed(
+        tiles: () => cache,
+        link: link,
+        sleep: (_) async {},
+        now: () => clock,
+      )..setPosition(_krakow);
 
-    // First pass: the position is due, and a tile goes with it.
-    expect(await feed.tick(), isTrue);
-    expect(link.views.length, 1);
-    expect(link.tiles.length, 1);
+      // First pass: the position is due, and a tile goes with it.
+      expect(await feed.tick(), isTrue);
+      expect(link.views.length, 1);
+      expect(link.tiles.length, 1);
 
-    // A moment later, still inside the view period: the next tile goes anyway
-    // and no second position is sent.
-    clock = clock.add(const Duration(milliseconds: 50));
-    await seed(fine);
-    expect(await feed.tick(), isTrue);
-    expect(link.views.length, 1);
-    expect(link.tiles.length, 2);
+      // A moment later, still inside the view period: the next tile goes anyway
+      // and no second position is sent.
+      clock = clock.add(const Duration(milliseconds: 50));
+      await seed(fine);
+      expect(await feed.tick(), isTrue);
+      expect(link.views.length, 1);
+      expect(link.tiles.length, 2);
 
-    // Once the period has passed, the position goes out again.
-    clock = clock.add(kViewPeriod);
-    await seed(TileId(fine.z, fine.x + 1, fine.y));
-    await feed.tick();
-    expect(link.views.length, 2);
-  });
+      // Once the period has passed, the position goes out again.
+      clock = clock.add(kViewPeriod);
+      await seed(TileId(fine.z, fine.x + 1, fine.y));
+      await feed.tick();
+      expect(link.views.length, 2);
+    },
+  );
 
   test('a tile the head unit dropped is sent again', () async {
     // Its store is in RAM and finite. The feed never repeats itself, so an
@@ -359,12 +408,21 @@ void main() {
     // A rider needs to know where to go more than they need sharp ground.
     await seedCoarse();
     final feed = build()..setPosition(_krakow);
-    feed.setRoute('route-1', <({double lat, double lon})>[
-      (lat: 50.06, lon: 19.93),
-      (lat: 50.07, lon: 19.94),
-    ], segmentTypes: <int>[1]);
+    feed.setRoute(
+      'route-1',
+      <({double lat, double lon})>[
+        (lat: 50.06, lon: 19.93),
+        (lat: 50.07, lon: 19.94),
+      ],
+      segmentTypes: <int>[1],
+    );
     feed.setGuide(
-        turn: 3, distM: 80, remainingM: 700, remainingS: 120, offRoute: false);
+      turn: 3,
+      distM: 80,
+      remainingM: 700,
+      remainingS: 120,
+      offRoute: false,
+    );
 
     await feed.tick();
     expect(link.routes, <int>[2]);
@@ -389,12 +447,18 @@ void main() {
     // core for as long as the screen was open.
     final feed = build()..setPosition(_krakow);
     link.available = false;
-    expect(feed.waitAfterPass(sentTile: false), greaterThanOrEqualTo(kIdlePeriod));
+    expect(
+      feed.waitAfterPass(sentTile: false),
+      greaterThanOrEqualTo(kIdlePeriod),
+    );
 
     link.available = true;
     link.setVisible(false);
-    expect(feed.waitAfterPass(sentTile: false), greaterThanOrEqualTo(kIdlePeriod),
-        reason: 'a head unit showing something else is idle too');
+    expect(
+      feed.waitAfterPass(sentTile: false),
+      greaterThanOrEqualTo(kIdlePeriod),
+      reason: 'a head unit showing something else is idle too',
+    );
 
     // A tile still goes straight on to the next one.
     expect(feed.waitAfterPass(sentTile: true), Duration.zero);
@@ -407,4 +471,54 @@ void main() {
     await feed.stop();
     expect(feed.running, isFalse);
   });
+  for (final blocked in ['download', 'tile ACK', 'route ACK']) {
+    test('fresh positions continue during a blocked $blocked', () async {
+      final peer = _FakeLink();
+      final memory = _MemoryCache();
+      if (blocked == 'download') memory.download = Completer<Uint8List?>();
+      if (blocked == 'tile ACK') peer.heldTile = Completer<NavFrameResult>();
+      if (blocked == 'route ACK') peer.heldRoute = Completer<NavFrameResult>();
+      final freshView = Completer<void>();
+      peer.onView = () {
+        if (peer.views.last.lat == 50.062 && !freshView.isCompleted) {
+          freshView.complete();
+        }
+      };
+      final feed = HeadUnitFeed(tiles: () => memory, link: peer)
+        ..setPosition(_krakow, headingDeg: 0, speedMs: 5);
+      if (blocked == 'route ACK') {
+        feed.setRoute(Object(), [
+          (lat: 50.0619, lon: 19.9368),
+          (lat: 50.0629, lon: 19.9368),
+        ]);
+      }
+      feed.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(peer.views, hasLength(1));
+      feed.setPosition(
+        const LatLon(50.062, 19.937),
+        headingDeg: 10,
+        speedMs: 5,
+      );
+      await freshView.future.timeout(const Duration(seconds: 3));
+      expect(peer.views.last.heading, 10);
+      expect(
+        feed.status.value.tilesSent,
+        0,
+        reason: 'bulk transfer is still suspended',
+      );
+      await feed.dispose();
+      final count = peer.views.length;
+      memory.download?.complete(null);
+      peer.heldTile?.complete(const NavFrameResult(NavAck.ok, 1, 1));
+      peer.heldRoute?.complete(const NavFrameResult(NavAck.ok, 1, 1));
+      await Future<void>.delayed(kViewPeriod + kViewPollPeriod);
+      expect(
+        peer.views.length,
+        count,
+        reason: 'no position writes after disposal',
+      );
+      await peer.close();
+    });
+  }
 }
