@@ -53,6 +53,16 @@ abstract class NusTransport {
   /// Best-effort — a no-op wherever the platform/adapter won't do it.
   Future<void> setFast(bool fast);
 
+  /// Drop any cached subscription so the next [ensureReady] re-arms it.
+  ///
+  /// A GATT link can bounce (connection-parameter update, head-unit reboot,
+  /// Android dropping the CCCD) while the characteristic object and the app's
+  /// `onValueReceived` listener stay alive. Nothing notices: writes still go
+  /// out, but no reply ever arrives, and every operation times out until the
+  /// user re-picks the adapter. [VescLink] calls this after a failed transfer
+  /// so the retry recovers on its own.
+  Future<void> rearm();
+
   /// Short label for logs.
   String get label;
 }
@@ -142,6 +152,13 @@ class HeadUnitNusTransport implements NusTransport {
 
   @override
   Future<void> setFast(bool fast) => BleService.instance.setLinkSpeed(fast: fast);
+
+  @override
+  Future<void> rearm() async {
+    // Force ensureReady() to write the CCCD again even though the
+    // characteristic object is the same one we subscribed to earlier.
+    _notifyOn = null;
+  }
 }
 
 /// A stand-alone NUS adapter the app connects to itself.
@@ -317,8 +334,19 @@ class DirectNusTransport implements NusTransport {
           connectionPriorityRequest:
               fast ? ConnectionPriority.high : ConnectionPriority.balanced);
     } catch (_) {
-      // android-only API, or the adapter refused — speed is a hint anyway
+      // android-only API, or the adapter refused - speed is a hint anyway
     }
+  }
+
+  @override
+  Future<void> rearm() async {
+    final tx = _tx;
+    if (tx == null) return;
+    // Re-write the CCCD on the live link. If the characteristic is gone the
+    // next ensureReady()/connect() rediscovers it.
+    try {
+      await tx.setNotifyValue(true);
+    } catch (_) {}
   }
 
   /// Drop the link and stop retrying (editor closed / another target picked).

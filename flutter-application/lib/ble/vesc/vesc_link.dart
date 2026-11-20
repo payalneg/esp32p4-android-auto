@@ -102,10 +102,38 @@ class VescLink {
     try {
       await prev;
     } catch (_) {}
+    // Start every operation on a clean byte stream: a frame cut short by a
+    // dropped notification would otherwise leave the decoder waiting forever
+    // for bytes that never come, and every later reply would sit behind it.
+    _decoder.reset();
     try {
       return await op();
+    } catch (_) {
+      // Recover like the user's "pick the adapter again" does: drop the
+      // binding (and its possibly-stale CCCD) so the next operation re-binds
+      // and re-subscribes instead of timing out until the screen is reopened.
+      await _dropBinding();
+      rethrow;
     } finally {
       done.complete();
+    }
+  }
+
+  /// Forget the current transport binding and re-arm its subscription.
+  Future<void> _dropBinding() async {
+    final t = _transport;
+    await _sub?.cancel();
+    _sub = null;
+    _transport = null;
+    _boundKey = null;
+    _decoder.reset();
+    _pending.clear();
+    _readWaiters.clear();
+    _readPipelined = false;
+    if (t != null) {
+      try {
+        await t.rearm();
+      } catch (_) {}
     }
   }
 
@@ -196,6 +224,9 @@ class VescLink {
         return await c.future.timeout(timeout);
       } on TimeoutException {
         _pending.remove(replyCmd);
+        // The reply may be stuck behind a partially received frame; start the
+        // retry on a clean stream.
+        _decoder.reset();
         _retries++;
       } catch (_) {
         _pending.remove(replyCmd);
@@ -407,7 +438,15 @@ class VescLink {
           final packed = packLispCode(code);
           final blob = buildUploadBlob(packed);
 
-          if (stopFirst) await _setRunningBestEffort(false);
+          if (stopFirst) {
+            await _setRunningBestEffort(false);
+            // VESC Tool sleeps briefly between stop and erase for the same
+            // reason: the erase must not land while the LISP runtime is still
+            // tearing the script down, or the write that follows is rejected
+            // (the script is then gone and the upload looks like "it only
+            // erased" on the second attempt after Upload & Run).
+            await Future.delayed(const Duration(milliseconds: 120));
+          }
 
           // Erase (packed size + slack), like VESC Tool's on_uploadButton.
           final eraseReply = await _sendAndWait(
