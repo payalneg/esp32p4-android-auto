@@ -1,5 +1,80 @@
 # VESC LISP script
 
+## `main.adc-pas.lisp` v8: continuous ADC1 override (firmware 7.00)
+
+This alternative script now commands only **virtual throttle ADC1**. It never
+disables the ADC application, commands motor current directly, or commands
+speed through `set-rpm`. Physical ADC2, its calibration and native braking
+remain unchanged. The separate Lisp brake transition/ramp has been removed.
+
+Priority is brake, traction inhibit, physical throttle, cruise, then PAS:
+
+- Any decoded brake above `brake-threshold` immediately requests the calibrated
+  neutral ADC1 voltage and cancels cruise. Full gas can no longer subtract from
+  the brake request. Stock ADC filtering, deadband and ramping still apply.
+- Physical throttle has priority over both cruise and PAS. Its physical voltage
+  is forwarded unchanged above the release threshold, preserving the native
+  ADC curve and ramp. Cruise stays enabled while the throttle is held and
+  resumes its original speed target when the throttle is released.
+- PAS supplies virtual throttle only with the physical throttle released and
+  cruise inactive. The input protocol is still motor amperes. Requests expire
+  after 0.4 seconds; the existing sender lock is retained.
+- Cruise uses a local speed **PID**, with derivative on measured speed, a
+  derivative filter and integral anti-windup. RX enables it or increases the
+  target by 1 km/h; TX decreases the target by 1 km/h, down to 0.5 m/s without
+  cancelling cruise. It supplies positive throttle only: overspeed reduces
+  throttle to zero, never injects braking.
+- Brake cancels cruise during normal riding. The master switch, an input or
+  motor fault, VESC Tool output inhibition, or a control-loop stall also clear
+  cruise. Startup and these inhibits require the physical throttle released
+  before traction is armed. Braking remains available with the master off.
+
+At startup `base-current-max` sets Motor Current Max to **100 A** in RAM;
+the three existing profile scales give 50 / 67 / 100 A. Brake-current settings
+are not changed. Later VESC Tool motor-current edits are read live. PAS current
+is divided by the active profile limit, clamped to 0..1, and mapped back through
+the inverse throttle curve and deadband to calibrated voltage. Actual current
+remains subject to firmware motor, battery, thermal and speed limits.
+
+Before loading, select **ADC** or **ADC and UART**, ADC control type **Current
+No Reverse Brake ADC** (8), and disable native ADC button functions. Calibrate
+both controls normally in VESC Tool. The script checks app type, ADC1 calibration
+and a nonzero motor timeout; incompatible configurations do not start override.
+It does not automatically change the app selection or calibration.
+
+These three constants at the top must match VESC Tool (7.00 does not expose
+them through Lisp `conf-get`):
+
+| Script constant | Matching ADC setting | Default |
+| --- | --- | --- |
+| `adc1-inverted` | ADC1 voltage inversion, 0 off / 1 on | 0 |
+| `adc-curve-accel` | Acceleration throttle curve gain | 0.0 (linear) |
+| `adc-curve-mode` | Curve mode: exponential / natural / polynomial | 0 |
+
+Only PAS and cruise use inverse curve conversion. Manual throttle still goes
+through the native curve unchanged. Calibration endpoints, deadband and current
+limits are read live; ADC1 inversion is also needed to recognize a released
+physical throttle and choose neutral voltage correctly.
+
+`cruise-kp`, `cruise-ki`, `cruise-kd` and `cruise-d-tau` are starting values
+requiring tuning on the real vehicle. Error is in m/s, time in seconds, output
+is a 0..1 current fraction. Measured traction seeds the integral on engagement
+and tracks it while the physical throttle overrides cruise.
+
+Detached ADC uses the **global motor timeout**. Stopping override does not
+reattach the physical throttle. Another command source that resets this timeout
+can keep the last virtual input alive: do not use concurrent motor-command or
+timeout-reset senders. Verify actual timeout behavior on the controller.
+
+Host checks: `python scripts/test_adc_pas.py`. These execute the actual control
+functions with a small subset evaluator and mocked hardware, including source
+priority, brake neutralization, PAS expiry/profile scaling, inverse curves and
+PID behavior. They do not validate VESC LispBM scheduling, heap/stack usage,
+hardware filtering or vehicle stability. No controller flashing is performed.
+
+The sections below describe the original `main.lisp` and the shared panel
+protocol; they do not describe the v8 alternative's control algorithm.
+
 `main.lisp` runs on the **VESC controller's** built-in LISP runtime (not on
 the ESP32-P4). It does three things that the dashboard relies on:
 

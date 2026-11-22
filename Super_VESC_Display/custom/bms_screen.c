@@ -105,6 +105,7 @@ static lv_obj_t *s_status, *s_soc, *s_rem, *s_full, *s_volt, *s_curr, *s_power,
 /* tabs: Pack (the existing readout) and Cells (per-cell voltage) */
 static lv_obj_t *s_tab_pack, *s_tab_cells;
 static lv_obj_t *s_pack_list, *s_cells_list;
+static lv_obj_t *s_cell_tile[BMS_BATTERY_MAX_CELLS];
 static lv_obj_t *s_cell_lbl[BMS_BATTERY_MAX_CELLS];
 static lv_obj_t *s_cells_head;
 static bool      s_cells_active;
@@ -392,16 +393,17 @@ static void update_cb(lv_timer_t *t)
         set_text(s_cells_head, hb);
 
         for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) {
+            lv_obj_t *tile = s_cell_tile[i];
             lv_obj_t *l = s_cell_lbl[i];
-            if (!l) continue;
+            if (!tile || !l) continue;
             if (i >= tm.cell_count || !tm.connected) {
-                lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(tile, LV_OBJ_FLAG_HIDDEN);
                 continue;
             }
-            lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(tile, LV_OBJ_FLAG_HIDDEN);
             char cb[24];
             const float v = tm.cells[i];
-            if (isfinite(v)) snprintf(cb, sizeof cb, "%02d  %.3f", i + 1, (double)v);
+            if (isfinite(v)) snprintf(cb, sizeof cb, "%02d  %.3f V", i + 1, (double)v);
             else             snprintf(cb, sizeof cb, "%02d  --", i + 1);
             set_text(l, cb);
             uint32_t col = COL_TEXT;
@@ -437,7 +439,10 @@ static void screen_unloaded_cb(lv_event_t *e)
     s_cells_head = NULL;
     s_tab_pack = NULL;
     s_tab_cells = NULL;
-    for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) s_cell_lbl[i] = NULL;
+    for (int i = 0; i < BMS_BATTERY_MAX_CELLS; i++) {
+        s_cell_tile[i] = NULL;
+        s_cell_lbl[i] = NULL;
+    }
     s_cells_active = false;
 }
 
@@ -616,6 +621,7 @@ void show_bms_settings(void)
         lv_obj_center(l);
         lv_obj_set_style_text_font(l, &lv_font_montserratMedium_16, 0);
         lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
+        s_cell_tile[i] = c;
         s_cell_lbl[i] = l;
     }
 

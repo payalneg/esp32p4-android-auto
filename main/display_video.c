@@ -2,6 +2,7 @@
 #include "display_video.h"
 
 #include <string.h>
+#include <stdint.h>
 
 #include "bsp/esp-bsp.h"
 #include "driver/ppa.h"
@@ -118,6 +119,62 @@ static struct {
     uint64_t total_us;
     int64_t  window_start_us;
 } s_aa_stats;
+
+/* PPA wrote this frame with DMA, bypassing the CPU cache; the HUD blend reads
+ * the pixels underneath it, so those cache lines must be dropped first. Only
+ * the strip aa_overlay_draw() touches needs invalidating: in the portrait
+ * panel layout the landscape bottom bar is a narrow column strip, so walk its
+ * rows and invalidate the few lines each one covers. The old code invalidated
+ * the whole 768 KB frame here (12k cache lines) for every video frame. */
+static void invalidate_overlay_strip(void *fb)
+{
+    if (!fb) return;
+    int c0, c1, r0, r1;
+    aa_overlay_visible_panel_rect(&c0, &c1, &r0, &r1);
+    if (c0 < 0) c0 = 0;
+    if (c1 >= PANEL_NATIVE_W) c1 = PANEL_NATIVE_W - 1;
+    if (r0 < 0) r0 = 0;
+    if (r1 >= PANEL_NATIVE_H) r1 = PANEL_NATIVE_H - 1;
+    if (c1 < c0 || r1 < r0) return;
+
+    uintptr_t line = (uintptr_t)(s_cache_line ? s_cache_line : 64);
+    size_t bytes = (size_t)(c1 - c0 + 1) * sizeof(uint16_t);
+    uint8_t *base = (uint8_t *)fb;
+    uintptr_t fb_end = (uintptr_t)base +
+                       ALIGN_UP((size_t)PANEL_NATIVE_W * PANEL_NATIVE_H * 2,
+                                line);
+    for (int row = r0; row <= r1; row++) {
+        uintptr_t p = (uintptr_t)(base +
+                        ((size_t)row * PANEL_NATIVE_W + (size_t)c0) *
+                            sizeof(uint16_t));
+        uintptr_t start = p & ~(line - 1);
+        uintptr_t end   = (p + bytes + line - 1) & ~(line - 1);
+        if (end > fb_end) end = fb_end;
+        if (start >= end) continue;
+        esp_cache_msync((void *)start, end - start,
+                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    }
+}
+
+/* Drop any cache lines the panel framebuffers still hold from the last LVGL
+ * render. Per-frame invalidation now only covers the HUD strip, so a stale
+ * dirty line elsewhere could otherwise be written back over a fresh video
+ * frame by esp_lcd_panel_draw_bitmap()'s full-frame flush. One full
+ * invalidate per AA session is enough; after it every frame is written by the
+ * PPA (DMA) before the CPU touches anything. */
+static void discard_fb_cache(void)
+{
+    size_t line = s_cache_line ? s_cache_line : 64;
+    size_t bytes = ALIGN_UP(PANEL_NATIVE_W * PANEL_NATIVE_H * 2, line);
+    for (int i = 0; i < s_fb_count; i++) {
+        if (s_fb[i]) {
+            esp_cache_msync(s_fb[i], bytes,
+                            ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                            ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        }
+    }
+}
 
 static void aa_stats_log_once_per_second(void)
 {
@@ -564,6 +621,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
             ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
         }
         s_pause_attempted = true;
+        discard_fb_cache();
         boot_guard_ui_required(false);
     }
 
@@ -784,9 +842,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         /* Invalidate so our overlay reads the PPA-written pixels (DMA bypassed
          * the cache), then paint the speed/battery HUD with CPU writes,
          * then flush back to PSRAM before the LCD DMA scans it out. */
-        esp_cache_msync(s_fb[idx], out_buf_size,
-                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
-                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        invalidate_overlay_strip(s_fb[idx]);
         aa_overlay_draw((uint16_t *)s_fb[idx]);
         esp_cache_msync(s_fb[idx], out_buf_size,
                         ESP_CACHE_MSYNC_FLAG_DIR_C2M);
@@ -874,9 +930,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
         }
         int64_t t_ppa_end = esp_timer_get_time();
 
-        esp_cache_msync(s_fb[idx], out_buf_size,
-                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
-                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        invalidate_overlay_strip(s_fb[idx]);
         aa_overlay_draw((uint16_t *)s_fb[idx]);
         esp_cache_msync(s_fb[idx], out_buf_size,
                         ESP_CACHE_MSYNC_FLAG_DIR_C2M);
@@ -1099,9 +1153,7 @@ esp_err_t display_video_show_yuv420(const uint8_t *yuv,
 
         /* M2C invalidate so overlay reads PPA-written pixels, paint HUD,
          * C2M flush before DPI DMA scans out. */
-        esp_cache_msync(s_fb[idx], out_buf_size,
-                        ESP_CACHE_MSYNC_FLAG_DIR_M2C |
-                        ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        invalidate_overlay_strip(s_fb[idx]);
         aa_overlay_draw((uint16_t *)s_fb[idx]);
         esp_cache_msync(s_fb[idx], out_buf_size,
                         ESP_CACHE_MSYNC_FLAG_DIR_C2M);
@@ -1257,6 +1309,7 @@ static bool take_panel_for_video(void)
             ESP_LOGW(TAG, "esp_lv_adapter_pause timed out — running unpaused");
         }
         s_pause_attempted = true;
+        discard_fb_cache();
         boot_guard_ui_required(false);
     }
     return true;
@@ -1392,8 +1445,7 @@ static void disp_present(const disp_item_t *it)
     }
     int64_t t_ppa_end = esp_timer_get_time();
 
-    esp_cache_msync(s_fb[idx], out_buf_size,
-                    ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+    invalidate_overlay_strip(s_fb[idx]);
     aa_overlay_draw((uint16_t *)s_fb[idx]);
     int64_t t_overlay_end = esp_timer_get_time();
 

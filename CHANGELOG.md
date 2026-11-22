@@ -9,7 +9,29 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
-## Unreleased
+## 1.3.53 — 2026-11-22 (Android app 0.3.64+128)
+
+### Performance (second batch)
+
+- AA video: the display stage invalidates only the HUD strip of the panel
+  framebuffer before blending the overlay, instead of walking all 768 KB
+  (12k cache lines) on every frame. One full invalidate per AA session still
+  drops lines left behind by LVGL.
+- AA HUD: the 1-px halo is composited per destination pixel and drawn in one
+  pass instead of four glyph stamps, cutting the overlay from five passes to
+  two and the PSRAM read-modify-writes per halo pixel from four to one. The
+  composited alpha is mathematically identical to the old overlapping stamps.
+- Settings: NVS commits moved off the LVGL thread to a low-priority writer
+  task. Each toggle used to stall the UI for ~100 ms; bursts coalesce into a
+  single commit, while callbacks still fire synchronously.
+- LISP web editor: `GET /lisp/api/code` copies the source under the lock and
+  sends it after releasing the lock, so a large response no longer blocks the
+  transfer worker (the old path is kept as an out-of-memory fallback).
+- BMS cell tab: hide/show the whole cell tile rather than only its label, and
+  print each cell voltage with a `V` suffix.
+- `lisp/main.adc-pas.lisp` v8: continuous virtual ADC1 throttle for PAS plus a
+  local-speed PID cruise, with brake/throttle priority and startup interlocks;
+  `lisp/README.md` documents the matching VESC ADC configuration.
 
 ## 1.3.52 — 2026-11-20 (Android app 0.3.63+127)
 

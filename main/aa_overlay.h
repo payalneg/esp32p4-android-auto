@@ -19,3 +19,12 @@
  * for cache flushing the buffer afterwards before handing it to the LCD
  * DMA. */
 void aa_overlay_draw(uint16_t *fb);
+
+/* Conservative bounding box (inclusive, panel-native pixels) of every pixel
+ * aa_overlay_draw() may read or write, for the current display_flip setting.
+ * The box is a narrow strip along one edge of the portrait framebuffer: PPA
+ * painted the frame with DMA (bypassing the CPU cache), and this is the only
+ * region the CPU reads back while blending the HUD. Callers use it to
+ * invalidate just that strip instead of the whole 768 KB frame. */
+void aa_overlay_visible_panel_rect(int *col0, int *col1,
+                                   int *row0, int *row1);

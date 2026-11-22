@@ -7,6 +7,9 @@
 #include <time.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -155,18 +158,74 @@ static void load_from_nvs(void) {
     nvs_close(h);
 }
 
-static esp_err_t open_rw(nvs_handle_t *h) {
-    esp_err_t err = nvs_open(NS, NVS_READWRITE, h);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_open RW failed: %s", esp_err_to_name(err));
+/* ---------- deferred NVS writer ----------
+ * nvs_commit() stalls for ~100 ms on this board (the flash write suspends the
+ * cache on both cores). Every settings toggle used to run it inline on the
+ * LVGL thread, freezing the UI and any animation for a tenth of a second.
+ *
+ * Setters now write through one long-lived handle and kick a low-priority
+ * task that does the commit. A slider's burst of changes coalesces into one
+ * commit; callbacks still fire synchronously on the caller's thread. The only
+ * window in which a power cut can lose the last change is the few ms it takes
+ * the writer to run. */
+static nvs_handle_t      s_nvs_h;
+static bool              s_nvs_open;
+static SemaphoreHandle_t s_nvs_lock;
+static SemaphoreHandle_t s_nvs_kick;
+
+/* Returns a locked read-write handle; pair every success with nvs_end().
+ * Falls back to the pre-deferral open/commit/close behaviour if the mutex or
+ * writer task could not be created at boot. */
+static bool nvs_begin(nvs_handle_t *h) {
+    if (!s_nvs_lock) {
+        esp_err_t err = nvs_open(NS, NVS_READWRITE, h);
+        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_open RW failed: %s",
+                                    esp_err_to_name(err));
+        return err == ESP_OK;
     }
-    return err;
+    xSemaphoreTake(s_nvs_lock, portMAX_DELAY);
+    if (!s_nvs_open) {
+        esp_err_t err = nvs_open(NS, NVS_READWRITE, &s_nvs_h);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_open RW failed: %s", esp_err_to_name(err));
+            xSemaphoreGive(s_nvs_lock);
+            return false;
+        }
+        s_nvs_open = true;
+    }
+    *h = s_nvs_h;
+    return true;
 }
 
-static void commit(nvs_handle_t h) {
-    esp_err_t err = nvs_commit(h);
-    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
-    nvs_close(h);
+static void nvs_end(nvs_handle_t h) {
+    if (!s_nvs_lock) {
+        /* No deferred writer — behave like the old code. */
+        esp_err_t err = nvs_commit(h);
+        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit failed: %s",
+                                    esp_err_to_name(err));
+        nvs_close(h);
+        return;
+    }
+    if (!s_nvs_kick) {
+        /* Writer task missing: commit here, still under the lock. */
+        esp_err_t err = nvs_commit(h);
+        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit failed: %s",
+                                    esp_err_to_name(err));
+    }
+    xSemaphoreGive(s_nvs_lock);
+    if (s_nvs_kick) xSemaphoreGive(s_nvs_kick);
+}
+
+static void nvs_writer_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        xSemaphoreTake(s_nvs_kick, portMAX_DELAY);
+        xSemaphoreTake(s_nvs_lock, portMAX_DELAY);
+        esp_err_t err = nvs_commit(s_nvs_h);
+        xSemaphoreGive(s_nvs_lock);
+        if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit failed: %s",
+                                    esp_err_to_name(err));
+    }
 }
 
 void settings_init(void) {
@@ -207,6 +266,19 @@ void settings_init(void) {
     s_cache.display_flip      = false;
     s_cache.phone_screen      = 0;   /* the 3-finger gesture shows Android Auto */
     s_cache.voltage_offset    = 0.0f; /* display the real pack voltage */
+
+    /* Off-thread NVS commits — see the writer block above. */
+    s_nvs_lock = xSemaphoreCreateMutex();
+    s_nvs_kick = s_nvs_lock ? xSemaphoreCreateBinary() : NULL;
+    if (!(s_nvs_lock && s_nvs_kick &&
+          xTaskCreate(nvs_writer_task, "settings_nv", 4096, NULL, 2,
+                      NULL) == pdPASS)) {
+        ESP_LOGW(TAG, "deferred NVS writer unavailable — committing inline");
+        if (s_nvs_kick) {
+            vSemaphoreDelete(s_nvs_kick);
+            s_nvs_kick = NULL;
+        }
+    }
 
     load_from_nvs();
     s_cache.loaded = true;
@@ -250,9 +322,9 @@ void settings_set_target_vesc_id(uint8_t id) {
     if (s_cache.target_vesc_id == id) return;
     s_cache.target_vesc_id = id;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "tgt_vesc_id", id);
-        commit(h);
+        nvs_end(h);
     }
     if (s_target_id_cb) s_target_id_cb(id);
 }
@@ -262,9 +334,9 @@ void settings_set_can_speed(can_speed_t speed) {
     if (s_cache.can_speed == s) return;
     s_cache.can_speed = s;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u16(h, "can_kbps", (uint16_t)s);
-        commit(h);
+        nvs_end(h);
     }
     if (s_can_speed_cb) s_can_speed_cb((int)s);
 }
@@ -274,9 +346,9 @@ void settings_set_screen_brightness(uint8_t brightness) {
     if (s_cache.brightness == brightness) return;
     s_cache.brightness = brightness;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "brightness", brightness);
-        commit(h);
+        nvs_end(h);
     }
     if (s_brightness_cb) s_brightness_cb(brightness);
 }
@@ -285,9 +357,9 @@ void settings_set_controller_id(uint8_t id) {
     if (s_cache.controller_id == id) return;
     s_cache.controller_id = id;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "ctrl_id", id);
-        commit(h);
+        nvs_end(h);
     }
     if (s_controller_id_cb) s_controller_id_cb(id);
 }
@@ -296,9 +368,9 @@ void settings_set_battery_capacity(float capacity) {
     if (s_cache.battery_capacity == capacity) return;
     s_cache.battery_capacity = capacity;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_blob(h, "batt_cap", &capacity, sizeof(capacity));
-    commit(h);
+    nvs_end(h);
     /* Smart calc keeps a separate remaining-Ah counter; capacity change must
      * trigger a reset so the new full = new capacity. */
     battery_calc_capacity_changed();
@@ -308,72 +380,72 @@ void settings_set_battery_calc_mode(battery_calc_mode_t mode) {
     if (s_cache.battery_calc_mode == mode) return;
     s_cache.battery_calc_mode = mode;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "batt_calc", (uint8_t)mode);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_show_fps(bool show) {
     if (s_cache.show_fps == show) return;
     s_cache.show_fps = show;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "show_fps", show ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_use_imperial(bool on) {
     if (s_cache.use_imperial == on) return;
     s_cache.use_imperial = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "use_imp", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_use_fahrenheit(bool on) {
     if (s_cache.use_fahrenheit == on) return;
     s_cache.use_fahrenheit = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "use_fahr", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_second_head_enabled(bool on) {
     if (s_cache.second_head_enabled == on) return;
     s_cache.second_head_enabled = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "sh_en", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_brightness_gesture_enabled(bool on) {
     if (s_cache.brightness_gesture_enabled == on) return;
     s_cache.brightness_gesture_enabled = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "br_gest_en", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_music_widget_enabled(bool on) {
     if (s_cache.music_widget_enabled == on) return;
     s_cache.music_widget_enabled = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "music_wdg", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_music_buttons_enabled(bool on) {
     if (s_cache.music_buttons_enabled == on) return;
     s_cache.music_buttons_enabled = on;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "music_btn", on ? 1 : 0);
-        commit(h);
+        nvs_end(h);
     }
     if (s_music_buttons_cb) s_music_buttons_cb(on);
 }
@@ -382,27 +454,27 @@ void settings_set_second_head_id(uint8_t id) {
     if (s_cache.second_head_id == id) return;
     s_cache.second_head_id = id;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "sh_id", id);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_dashboard_theme(uint8_t theme) {
     if (s_cache.dashboard_theme == theme) return;
     s_cache.dashboard_theme = theme;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "dash_theme", theme);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_splash_loops(uint8_t loops) {
     if (s_cache.splash_loops == loops) return;
     s_cache.splash_loops = loops;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "splash_loops", loops);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_phone_screen(uint8_t which) {
@@ -410,18 +482,18 @@ void settings_set_phone_screen(uint8_t which) {
     if (s_cache.phone_screen == which) return;
     s_cache.phone_screen = which;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "phone_scr", which);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_display_flip(bool on) {
     if (s_cache.display_flip == on) return;
     s_cache.display_flip = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "disp_flip", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_voltage_offset(float volts) {
@@ -429,18 +501,18 @@ void settings_set_voltage_offset(float volts) {
     if (s_cache.voltage_offset == volts) return;
     s_cache.voltage_offset = volts;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_blob(h, "volt_off", &volts, sizeof(volts));
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_wheel_diameter_mm(uint16_t diameter_mm) {
     if (s_cache.wheel_diameter_mm == diameter_mm) return;
     s_cache.wheel_diameter_mm = diameter_mm;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u16(h, "wheel_mm", diameter_mm);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_wheel_diameter_mm_volatile(uint16_t diameter_mm) {
@@ -450,18 +522,18 @@ void settings_set_wheel_diameter_mm_volatile(uint16_t diameter_mm) {
 
 void settings_persist_wheel_diameter_mm(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u16(h, "wheel_mm", s_cache.wheel_diameter_mm);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_motor_poles(uint8_t poles) {
     if (s_cache.motor_poles == poles) return;
     s_cache.motor_poles = poles;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "motor_poles", poles);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_power_max_kw(float power_max_kw) {
@@ -470,25 +542,25 @@ void settings_set_power_max_kw(float power_max_kw) {
     if (s_cache.power_max_kw == power_max_kw) return;
     s_cache.power_max_kw = power_max_kw;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_blob(h, "pwr_max", &power_max_kw, sizeof(power_max_kw));
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_vesc_emulator(bool on) {
     if (s_cache.vesc_emulator == on) return;
     s_cache.vesc_emulator = on;
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "vesc_sim", on ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_vesc_link_ble(bool on) {
     if (s_cache.vesc_link_ble == on) return;
     s_cache.vesc_link_ble = on;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) { nvs_set_u8(h, "link_ble", on ? 1 : 0); commit(h); }
+    if (nvs_begin(&h)) { nvs_set_u8(h, "link_ble", on ? 1 : 0); nvs_end(h); }
     /* Hot-apply: main.c tears one transport down and brings the other up. */
     if (s_vesc_link_cb) s_vesc_link_cb(on);
 }
@@ -498,13 +570,13 @@ void settings_set_vesc_ble_route(vesc_ble_route_t route) {
     if (s_cache.vesc_ble_route == route) return;
     s_cache.vesc_ble_route = route;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "ble_route", (uint8_t)route);
         /* Drop the pre-AUTO key so it can't override the new one on the next
          * boot (load_from_nvs reads it first, by design, for devices that
          * never touched this screen). */
         nvs_erase_key(h, "ble_fwd");
-        commit(h);
+        nvs_end(h);
     }
     vesc_ble_link_route_changed();
 }
@@ -513,9 +585,9 @@ void settings_set_aa_autoconnect(bool on) {
     if (s_cache.aa_autoconnect == on) return;
     s_cache.aa_autoconnect = on;
     nvs_handle_t h;
-    if (open_rw(&h) == ESP_OK) {
+    if (nvs_begin(&h)) {
         nvs_set_u8(h, "aa_autocon", on ? 1 : 0);
-        commit(h);
+        nvs_end(h);
     }
     if (s_aa_autoconnect_cb) s_aa_autoconnect_cb(on);
 }
@@ -535,9 +607,9 @@ void settings_set_target_vesc_id_volatile(uint8_t id) {
 
 void settings_persist_target_vesc_id(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "tgt_vesc_id", s_cache.target_vesc_id);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_screen_brightness_volatile(uint8_t brightness) {
@@ -549,9 +621,9 @@ void settings_set_screen_brightness_volatile(uint8_t brightness) {
 
 void settings_persist_screen_brightness(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "brightness", s_cache.brightness);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_controller_id_volatile(uint8_t id) {
@@ -562,9 +634,9 @@ void settings_set_controller_id_volatile(uint8_t id) {
 
 void settings_persist_controller_id(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "ctrl_id", s_cache.controller_id);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_battery_capacity_volatile(float capacity) {
@@ -578,10 +650,10 @@ void settings_set_battery_capacity_volatile(float capacity) {
 
 void settings_persist_battery_capacity(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     float v = s_cache.battery_capacity;
     nvs_set_blob(h, "batt_cap", &v, sizeof(v));
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_power_max_kw_volatile(float power_max_kw) {
@@ -592,10 +664,10 @@ void settings_set_power_max_kw_volatile(float power_max_kw) {
 
 void settings_persist_power_max_kw(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     float v = s_cache.power_max_kw;
     nvs_set_blob(h, "pwr_max", &v, sizeof(v));
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_second_head_id_volatile(uint8_t id) {
@@ -605,9 +677,9 @@ void settings_set_second_head_id_volatile(uint8_t id) {
 
 void settings_persist_second_head_id(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "sh_id", s_cache.second_head_id);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_brightness_gesture_enabled_volatile(bool on) {
@@ -628,23 +700,23 @@ void settings_set_music_buttons_enabled_volatile(bool on) {
 
 void settings_persist_brightness_gesture_enabled(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "br_gest_en", s_cache.brightness_gesture_enabled ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_persist_music_widget_enabled(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "music_wdg", s_cache.music_widget_enabled ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_persist_music_buttons_enabled(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "music_btn", s_cache.music_buttons_enabled ? 1 : 0);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_dashboard_theme_volatile(uint8_t theme) {
@@ -654,9 +726,9 @@ void settings_set_dashboard_theme_volatile(uint8_t theme) {
 
 void settings_persist_dashboard_theme(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     nvs_set_u8(h, "dash_theme", s_cache.dashboard_theme);
-    commit(h);
+    nvs_end(h);
 }
 
 void settings_set_voltage_offset_volatile(float volts) {
@@ -667,10 +739,10 @@ void settings_set_voltage_offset_volatile(float volts) {
 
 void settings_persist_voltage_offset(void) {
     nvs_handle_t h;
-    if (open_rw(&h) != ESP_OK) return;
+    if (!nvs_begin(&h)) return;
     float v = s_cache.voltage_offset;
     nvs_set_blob(h, "volt_off", &v, sizeof(v));
-    commit(h);
+    nvs_end(h);
 }
 
 /* ---------------- wall clock ----------------

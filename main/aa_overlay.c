@@ -105,6 +105,29 @@ static void fill_user_rect(uint16_t *fb, int x, int y, int w, int h,
     }
 }
 
+/* Alpha of one pixel in a glyph's bitmap (0..255); 0 outside the box. */
+static inline uint8_t glyph_alpha(const uint8_t *bm,
+                                  const lv_font_glyph_dsc_t *g,
+                                  int col, int row)
+{
+    if ((unsigned)col >= g->box_w || (unsigned)row >= g->box_h) return 0;
+    int bit_ofs = (row * g->box_w + col) * g->bpp;
+    int byte_idx = bit_ofs >> 3;
+    int bit_in_byte = bit_ofs & 7;
+    switch (g->bpp) {
+    case 4:
+        return bpp4_opa[(bm[byte_idx] >> (4 - bit_in_byte)) & 0x0F];
+    case 8:
+        return bm[byte_idx];
+    case 2:
+        return (uint8_t)(((bm[byte_idx] >> (6 - bit_in_byte)) & 0x03) * 85);
+    case 1:
+        return ((bm[byte_idx] >> (7 - bit_in_byte)) & 0x01) ? 255 : 0;
+    default:
+        return 0;
+    }
+}
+
 /* Render one glyph at (pen_x, line_top_y); return the advance width. */
 static uint16_t draw_glyph(uint16_t *fb, const lv_font_t *font, uint32_t letter,
                            int pen_x, int line_top_y,
@@ -119,36 +142,72 @@ static uint16_t draw_glyph(uint16_t *fb, const lv_font_t *font, uint32_t letter,
     int ascent = font->line_height - font->base_line;
     int gy0 = line_top_y + ascent - g.box_h - g.ofs_y;
     int gx0 = pen_x + g.ofs_x;
-    int bpp = g.bpp;
 
     for (int row = 0; row < g.box_h; row++) {
         for (int col = 0; col < g.box_w; col++) {
-            int bit_ofs = (row * g.box_w + col) * bpp;
-            int byte_idx = bit_ofs >> 3;
-            int bit_in_byte = bit_ofs & 7;
-            uint8_t a = 0;
-            switch (bpp) {
-            case 4:
-                a = bpp4_opa[(bm[byte_idx] >> (4 - bit_in_byte)) & 0x0F];
-                break;
-            case 8:
-                a = bm[byte_idx];
-                break;
-            case 2:
-                a = (uint8_t)(((bm[byte_idx] >> (6 - bit_in_byte)) & 0x03) * 85);
-                break;
-            case 1:
-                a = ((bm[byte_idx] >> (7 - bit_in_byte)) & 0x01) ? 255 : 0;
-                break;
-            default:
-                continue;
-            }
+            uint8_t a = glyph_alpha(bm, &g, col, row);
             if (a == 0) continue;
             uint8_t eff = (uint16_t)a * global_alpha / 255;
             blend_user_pixel(fb, gx0 + col, gy0 + row, color, eff);
         }
     }
     return g.adv_w;
+}
+
+/* One-pixel N/S/E/W halo for one glyph, composited in a single pass.
+ *
+ * The old implementation stamped the glyph four times (x±1, y±1), so every
+ * destination pixel in the halo was read from PSRAM and blended up to four
+ * times. The four stamps are all the same colour, and alpha compositing is
+ * commutative: 1 - Π(1 - aᵢ). Computing that product first gives exactly the
+ * same pixel (to the last rounding step) with one PSRAM write instead of four.
+ */
+static void draw_glyph_halo(uint16_t *fb, const lv_font_t *font,
+                            uint32_t letter, int pen_x, int line_top_y)
+{
+    lv_font_glyph_dsc_t g;
+    if (!lv_font_get_glyph_dsc(font, &g, letter, 0)) return;
+    if (g.box_w == 0 || g.box_h == 0) return;
+    const uint8_t *bm = lv_font_get_glyph_bitmap(font, letter);
+    if (!bm) return;
+
+    int ascent = font->line_height - font->base_line;
+    int gy0 = line_top_y + ascent - g.box_h - g.ofs_y;
+    int gx0 = pen_x + g.ofs_x;
+
+    /* Destination pixels the four stamps could touch: source box ± 1 px. */
+    for (int row = -1; row <= (int)g.box_h; row++) {
+        for (int col = -1; col <= (int)g.box_w; col++) {
+            uint32_t remaining = 255;
+            /* Stamps: draw_text(pen_x-1), (pen_x+1), (top-1), (top+1). */
+            uint8_t src[4] = {
+                glyph_alpha(bm, &g, col + 1, row),
+                glyph_alpha(bm, &g, col - 1, row),
+                glyph_alpha(bm, &g, col, row + 1),
+                glyph_alpha(bm, &g, col, row - 1),
+            };
+            for (int i = 0; i < 4; i++) {
+                if (!src[i]) continue;
+                uint8_t eff = (uint16_t)src[i] * GLOBAL_ALPHA / 255;
+                remaining = (remaining * (255u - eff) + 127) / 255;
+            }
+            uint8_t halo = (uint8_t)(255u - remaining);
+            if (halo == 0) continue;
+            blend_user_pixel(fb, gx0 + col, gy0 + row, COLOR_OUTLINE, halo);
+        }
+    }
+}
+
+static void draw_text_halo(uint16_t *fb, const lv_font_t *font,
+                           int pen_x, int line_top_y, const char *s)
+{
+    int x = pen_x;
+    while (*s) {
+        uint32_t ch = (unsigned char)*s++;
+        draw_glyph_halo(fb, font, ch, x, line_top_y);
+        lv_font_glyph_dsc_t g;
+        if (lv_font_get_glyph_dsc(font, &g, ch, 0)) x += g.adv_w;
+    }
 }
 
 static int measure_text(const lv_font_t *font, const char *s)
@@ -183,17 +242,12 @@ static int draw_text(uint16_t *fb, const lv_font_t *font,
     return pen_x - x0;
 }
 
-/* White text + a 1-px black halo (N/S/E/W). 4 outline passes is enough to
- * keep light digits readable against any video background; a full 8-way
- * outline would be twice the cost for diagonal pixels barely visible at
- * this font size. */
+/* White text + a 1-px black halo (N/S/E/W). The halo is composited once per
+ * destination pixel (see draw_glyph_halo), then the fill is blended on top. */
 static int draw_text_with_halo(uint16_t *fb, const lv_font_t *font,
                                int pen_x, int line_top_y, const char *s)
 {
-    draw_text(fb, font, pen_x - 1, line_top_y,     s, COLOR_OUTLINE, GLOBAL_ALPHA);
-    draw_text(fb, font, pen_x + 1, line_top_y,     s, COLOR_OUTLINE, GLOBAL_ALPHA);
-    draw_text(fb, font, pen_x,     line_top_y - 1, s, COLOR_OUTLINE, GLOBAL_ALPHA);
-    draw_text(fb, font, pen_x,     line_top_y + 1, s, COLOR_OUTLINE, GLOBAL_ALPHA);
+    draw_text_halo(fb, font, pen_x, line_top_y, s);
     return draw_text(fb, font, pen_x, line_top_y, s, COLOR_TEXT, GLOBAL_ALPHA);
 }
 
@@ -381,4 +435,69 @@ void aa_overlay_draw(uint16_t *fb)
         xt += 1;
         draw_text_with_halo(fb, sml, xt, sml_top, "%");
     }
+}
+
+/* Same layout as aa_overlay_draw(), but only the *bounds*. Worst case for
+ * every variable part: three speed digits, "N/A" (the widest battery text),
+ * the longer unit label and the cruise icon. The padding and the 2 px margins
+ * are deliberately generous — over-invalidating a few pixels costs nothing,
+ * under-invalidating leaves one stale frame row under the glyphs. */
+void aa_overlay_visible_panel_rect(int *col0, int *col1,
+                                   int *row0, int *row1)
+{
+    const lv_font_t *big = &lv_font_Antonio_Regular_64;
+    const lv_font_t *sml = &lv_font_Antonio_Regular_22;
+
+    int baseline_y = USER_H - BAR_BOTTOM_PAD;
+
+    int unit_w = measure_text(sml, "KM/H");
+    int mph_w  = measure_text(sml, "MPH");
+    if (mph_w > unit_w) unit_w = mph_w;
+
+    /* Left widget: optional 38 px cruise icon + gap, then "999", gap, unit. */
+    int lx0 = SPEED_LEFT_X - (38 + 6) - 2;
+    int lx1 = SPEED_LEFT_X + measure_text(big, "999") + 4 + unit_w + 2;
+
+    /* Right widget: battery icon, gap, "999" or "N/A", "%" when it has a
+     * number. Right edge is the anchor itself. */
+    int digits_w = measure_text(big, "999");
+    int na_w     = measure_text(&lv_font_montserrat_48, "N/A");
+    if (na_w > digits_w) digits_w = na_w;
+    int batt_total = (BATT_W + BATT_TIP_W) + 6 + digits_w + 1 +
+                     measure_text(sml, "%") + 2;
+    int rx0 = BATT_RIGHT_X - batt_total;
+    int rx1 = BATT_RIGHT_X + 2;
+
+    int ux0 = lx0 < rx0 ? lx0 : rx0;
+    int ux1 = lx1 > rx1 ? lx1 : rx1;
+
+    /* Top: the 64 px face has the tallest ascent. Bottom: the 9 px descender
+     * of Montserrat 48 is the largest; blend_user_pixel() clips at the frame
+     * edge, so the box never needs to exceed USER_H. */
+    int uy0 = line_top_for_baseline(big, baseline_y) - 2;
+    int uy1 = baseline_y + 9 + 1;
+    if (uy0 < 0) uy0 = 0;
+    if (uy1 > USER_H - 1) uy1 = USER_H - 1;
+    if (ux0 < 0) ux0 = 0;
+    if (ux1 > USER_W - 1) ux1 = USER_W - 1;
+
+    /* Same user→panel mapping as blend_user_pixel(): user x becomes the panel
+     * row, user y the panel column. A landscape row is therefore a portrait
+     * column strip in framebuffer memory. */
+    if (!display_flip_active()) {
+        *col0 = (USER_H - 1) - uy1;
+        *col1 = (USER_H - 1) - uy0;
+        *row0 = ux0;
+        *row1 = ux1;
+    } else {
+        *col0 = uy0;
+        *col1 = uy1;
+        *row0 = (PANEL_H - 1) - ux1;
+        *row1 = (PANEL_H - 1) - ux0;
+    }
+
+    if (*col0 < 0) *col0 = 0;
+    if (*col1 >= PANEL_W) *col1 = PANEL_W - 1;
+    if (*row0 < 0) *row0 = 0;
+    if (*row1 >= PANEL_H) *row1 = PANEL_H - 1;
 }

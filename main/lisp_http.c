@@ -250,10 +250,37 @@ static esp_err_t read_handler(httpd_req_t *req)
 static esp_err_t code_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    /* Sent with the lock held: the buffer belongs to whoever read it last and
-     * a concurrent read would free it under us. The only task that can block
-     * on this is the transfer worker finishing its NEXT read, which is
-     * harmless (it just stays "busy" a moment longer). */
+
+    /* Copy the code out under the lock, then send outside it. The transfer
+     * worker takes the same lock to publish a fresh read, and a 120 KB
+     * response over Wi-Fi can hold it for a long time; the copy costs ~1 ms. */
+    char *copy = NULL;
+    uint32_t len = 0;
+    bool have_copy = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_code && s_code_len) {
+        len = s_code_len;
+        copy = heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!copy) copy = malloc(len);
+        if (copy) {
+            memcpy(copy, s_code, len);
+            have_copy = true;
+        }
+    }
+    xSemaphoreGive(s_lock);
+
+    if (have_copy) {
+        esp_err_t e = httpd_resp_send(req, copy, len);
+        free(copy);
+        return e;
+    }
+    if (len == 0) {
+        /* Nothing stored on the VESC yet. */
+        return httpd_resp_send(req, "", 0);
+    }
+
+    /* Out of memory for the copy — fall back to the old behaviour and send
+     * the shared buffer while holding the lock. */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     esp_err_t e = s_code ? httpd_resp_send(req, s_code, s_code_len)
                          : httpd_resp_send(req, "", 0);

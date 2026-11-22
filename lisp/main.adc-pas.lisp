@@ -1,109 +1,64 @@
 ; =============================================================================
-;  main.adc-pas.lisp — ALTERNATIVE to main.lisp: the stock ADC app keeps the
-;  throttle/brake, LISP only injects pedal-assist current when the rider is
-;  NOT using them. Experimental — nothing flashes this file automatically.
+; main.adc-pas.lisp v8 - continuous ADC1 override, VESC firmware 7.00.
+; Only virtual throttle is commanded. ADC2/braking, curves, ramps and motor
+; limits remain in the stock ADC app. No set-current, set-rpm or app suppression.
+;
+; Priority: brake > master/arming/fault inhibit > physical throttle > cruise > PAS.
+; A physical throttle overrides cruise without cancelling it. Brake cancels it.
+; PAS is accepted only with the physical throttle released, and expires in 0.4 s.
+; Cruise is a local speed PID whose output is a positive current fraction,
+; converted through the inverse ADC curve/deadband into virtual throttle volts.
+;
+; REQUIRED: APP_ADC or APP_ADC_UART, Current No Reverse Brake ADC (type 8).
+; Disable native ADC button functions; RX/TX are handled by this script.
+; adc1-inverted / adc-curve-accel / adc-curve-mode below MUST match VESC Tool.
+; FW 7.00 does not expose those three ADC settings through conf-get.
+; Calibration endpoints, fault range, deadband and current limits are read live.
+;
+; Detached ADC relies on the GLOBAL motor timeout: no override -> timeout stop,
+; NOT automatic restoration of the physical throttle. Another command source
+; resetting that timeout can keep stale override alive; do not run another motor
+; command/timeout-reset source. Test timeout on the actual controller.
+; The PID defaults are starting values, not validated gains for this bicycle.
 ; =============================================================================
-;
-;  WHY THIS SHAPE
-;  The current main.lisp makes LISP the single motor arbiter: it reads the ADC
-;  pots, applies its own curve and slew, and suppresses the stock app with a
-;  rolling (app-disable-output 1500). That works, but LISP then owns the whole
-;  throttle feel and every future feature has to be wedged into the arbiter.
-;
-;  Here the motor is owned by ONE of four parties at a time (motor-owner):
-;
-;    0  the stock ADC app        - default; throttle/brake are firmware-native
-;    1  cruise (firmware speed PID) - only while cruise-active
-;    2  pedal assist (LISP)      - only while the rider is not on throttle/brake
-;    3  panel master switch off  - holds zero until the master is back on
-;
-;  PAS (2) is a strict subset of "rider is idle": throttle released, brake
-;  released,
-;  master on, cruise off, setpoint fresh. The moment any of those breaks, the
-;  injected current is cut and the motor is handed straight back to the ADC app
-;  within one tick (20 ms), so the rider never fights us for control.
-;
-;  FAIL-SAFE
-;  Suppression is a ROLLING 200 ms window armed every tick, never -1. If this
-;  script dies while owning the motor, the stock app is back in <= 200 ms:
-;    - died during PAS  -> throttle/brake respond again, assist just stops;
-;    - died with master off -> the bike becomes rideable again (deliberate);
-;    - died during cruise -> stock app returns; speed PID is no longer asked
-;      for a target, so the motor coasts on the command timeout.
-;
-;  WHAT IS DELIBERATELY GONE (vs main.lisp)
-;    armed / out-rel / brk-rel / throttle-out / brake-out / monitor-traction —
-;    no throttle curve, no brake slew, no second set-current caller.
-;    Profiles still scale l-current-max (l-current-max-scale) instead of
-;    overwriting the VESC Tool value, and that scale is what PAS is clamped to.
-;    Cruise is the FIRMWARE speed PID again (set-rpm), not the LISP PI: this is
-;    the pre-PAS behaviour, so engaging has the old "sag then pull" character
-;    instead of the LISP bumpless transfer.
-;
-;  FIRMWARE FACTS THIS SCRIPT IS BUILT ON (vedderb/bldc)
-;    apps/adc: `decoded_level = pwr` is stored BEFORE deadband/curve/ramping
-;      and BEFORE the `app_is_output_disabled()` check, so get-adc-decoded is
-;      always live and always the raw pot, never the ramped output.
-;    apps/adc: while the output is disabled the thread `continue`s BEFORE the
-;      ramp block, so pwr_ramp and last_time freeze. On hand-back the stale
-;      last_time makes ramp_step enormous and utils_step_towards jumps to the
-;      target in ONE cycle — i.e. the stock app has NO ramp on its first cycle
-;      after a suppression. Hence: we only take the motor while the stock
-;      output is already ~0 (pas-settle), and we never hand it back with a
-;      throttle held (lazy master re-enable).
-;    app.c: app_disable_output(0) re-enables now, (-1) disables forever, (ms)
-;      disables for ms. We only ever use the (ms) form, refreshed every tick.
-;    mc_interface/mcpwm_foc: set-rpm enters CONTROL_MODE_SPEED; with
-;      s_pid_ramp_erpms_s > 0 (default 25000) the setpoint is seeded from the
-;      CURRENT rpm and the command ramps to the target, so the rpm setpoint
-;      itself engages bumplessly. The speed PI output starts from its stored
-;      integrator, which is why the current sags briefly on the first engage.
-;
-;  NOT CHANGED
-;    The 'VP' panel protocol (UI_DESC/STATE/DASH/ACTION/PAS/helper buttons),
-;    beep volume in EEPROM — byte-identical to main.lisp.
 
 (def cruise-active 0)
-(def cruise-rpm 0)
-; Raw decoded pot levels from the previous tick, for the cruise-cancel edge
-; detector. The old script cancelled cruise on a RISING edge of the throttle
-; (so you can engage it while holding the throttle at speed) and on level for
-; the brake (safety: the stock brake is suppressed while we own the motor).
-(def old-thr 0.0)
-(def old-brk 0.0)
+(def cruise-rpm 0.0)
+(def cruise-i 0.0)
+(def cruise-d 0.0)
+(def cruise-last-speed 0.0)
+; PID output is a 0..1 current fraction, error in m/s, time in seconds.
+(def cruise-kp 0.06)
+(def cruise-ki 0.03)
+(def cruise-kd 0.01)
+(def cruise-d-tau 0.2)
+(def adc1-inverted 0)
+(def adc-curve-accel 0.0)
+(def adc-curve-mode 0)
+(def input-threshold 0.02)
+(def brake-threshold 0.001)
+(def throttle-armed 0)
+(def adc1-command 0.0)
+(def ctl-dt 0.01)
+(def ctl-time 0)
 (def rx-button-state 1)
 (def tx-button-state 1)
+(def base-current-max 100.0) ; motor amperes, before profile scaling
 (def current-profile 0)
 (def num-profiles 3)
 (def first-profile-init 1)
 (def rpm-per-ms 0.0)
 (def throttle-on 1)
-; Panel throttle master. 0 = hold the motor at zero (owner 3) until switched
-; back on AND the throttle has been seen released once.
 (def pbuf (bufcreate 128))
 (def pi 0)
 (def beep-vol-addr 0)
 (def beep-vol (let ((v (eeprom-read-i beep-vol-addr)))
                 (if (and v (>= v 0) (<= v 50)) v 30)))
 (def beep-vol-dirty 0)
-; Pedal-assist setpoint from the head unit / BLE helper (COMM_CUSTOM_APP_DATA,
-; msg 0x05): pas-amps is the requested motor current (A), pas-seen the (systime)
-; of the last accepted frame, pas-src the CAN id of the sender we are locked
-; onto (-1 = none) — see the 0x05 handler for why the lock exists.
+; External PAS protocol remains motor amperes; source lock is unchanged.
 (def pas-amps 0.0)
 (def pas-seen 0)
 (def pas-src -1)
-; Injection state. pas-out is the SLEWED absolute current actually commanded,
-; so a fading setpoint ramps out instead of stepping to 0.
-(def pas-out 0.0)
-; Who commands the motor right now: 0 ADC app, 1 cruise, 2 PAS, 3 master-off.
-(def motor-owner 0)
-; Supervisor tick — 100 Hz for the same reason the arbiter in main.lisp runs at
-; 100 Hz: at 20 Hz a ramp advances in 12.5%-of-full-scale steps, and the FOC
-; loop executes each step instantly, so it feels like a staircase rather than a
-; ramp. Cheap here: one ADC read plus a couple of conf-get per tick.
-(def ctl-dt 0.01)
-(def own-window 200)      ; ms of rolling output suppression per tick
 
 ; @const-start flashes every definition below, freeing the cons heap. Without it
 ; all the defun bodies live in RAM and exhaust the heap — panel-event-loop then
@@ -175,165 +130,138 @@
 })
 
 ; -----------------------------------------------------------------------------
-;  Motor ownership helpers
+; ADC calibration and inverse mapping. Manual input bypasses this mapping and
+; passes physical voltage unchanged. Only PAS/PID need inverse curve conversion.
 ; -----------------------------------------------------------------------------
-
-; Take the motor: arm a fresh suppression window. Refreshed every tick while we
-; own it, so a dead script gives the stock app back within own-window ms.
-(defun own-motor (who) {
-    (setq motor-owner who)
-    (app-disable-output own-window)
-})
-
-; Hand the motor back: command zero while still suppressed, then release the
-; suppression so the stock ADC app resumes from a known-zero state.
-(defun release-motor () {
-    (set-current 0)
-    (app-disable-output 0)
-    (setq motor-owner 0)
-})
-
 (defun clampf (v lo hi) (if (< v lo) lo (if (> v hi) hi v)))
 
-; Live full-scale current for the active profile: VESC Tool Motor Current Max
-; (master value, never written by us) x the profile scale. Read fresh each use
-; so a VESC Tool write or a profile switch applies without restarting anything.
-(defun cur-max () {
-    (let ((v (conf-get 'l-current-max))) (if v v 60.0))
-})
-(defun cur-scale () {
-    (let ((v (conf-get 'l-current-max-scale))) (if v v 1.0))
-})
-(defun motor-limit () {
-    (let ((m (cur-max)) (s (cur-scale)))
-        (if (and (> m 0.0) (> s 0.0)) (* m s) 0.0))
+(defun motor-limit ()
+    (* (conf-get 'l-current-max) (conf-get 'l-current-max-scale)))
+
+(defun adc-config-ok () {
+    (let ((app (conf-get 'app-to-use))
+          (v0 (conf-get 'adc-v1-start)) (v1 (conf-get 'adc-v1-end))) {
+        (and (or (= app 2) (= app 5)) (= (conf-get 'adc-ctrl-type) 8)
+             (>= v0 0.0) (<= v0 3.3) (>= v1 0.0) (<= v1 3.3)
+             (> (abs (- v1 v0)) 0.05)
+             (> (conf-get 'adc-v1-max) (conf-get 'adc-v1-min))
+             (>= v0 (conf-get 'adc-v1-min))
+             (<= v0 (conf-get 'adc-v1-max))
+             (>= v1 (conf-get 'adc-v1-min))
+             (<= v1 (conf-get 'adc-v1-max))
+             (>= (conf-get 'adc-thr-hyst) 0.0)
+             (< (conf-get 'adc-thr-hyst) 0.95)
+             (> (conf-get 'timeout-msec) 0))
+    })
 })
 
-; Ramping times come live from the VESC Tool ADC app page — the same knobs that
-; shape the stock throttle — so PAS ramps feel like the throttle and tuning
-; stays in VESC Tool. Clamped away from 0 so a zero in the config can't divide
-; by zero and kill the supervisor thread.
-(defun ramp-pos () {
-    (let ((v (conf-get 'adc-ramp-time-pos))) (clampf (if v v 0.3) 0.05 5.0))
-})
-(defun ramp-neg () {
-    (let ((v (conf-get 'adc-ramp-time-neg))) (clampf (if v v 0.3) 0.05 5.0))
+(defun adc1-volts (level) {
+    (let ((v0 (conf-get 'adc-v1-start)) (v1 (conf-get 'adc-v1-end))) {
+        (+ v0 (* (- v1 v0) (if (= adc1-inverted 1) (- 1.0 level) level)))
+    })
 })
 
-; Slew an ABSOLUTE current (A) toward target: a full-scale (limit) step takes
-; pos-s when rising and neg-s when falling. limit <= 0 (no limit known) freezes
-; the output instead of dividing by zero.
-(defun slew-amps (v target pos-s neg-s limit) {
-    (if (<= limit 0.0)
-        0.0
-        (if (> target v)
-            (clampf (+ v (* limit (/ ctl-dt pos-s))) 0.0 target)
-            (clampf (- v (* limit (/ ctl-dt neg-s))) target limit)))
+(defun physical-throttle (volts) {
+    (let ((v0 (conf-get 'adc-v1-start)) (v1 (conf-get 'adc-v1-end))) {
+        (let ((level (clampf (/ (- volts v0) (- v1 v0)) 0.0 1.0)))
+            (if (= adc1-inverted 1) (- 1.0 level) level))
+    })
 })
 
-; -----------------------------------------------------------------------------
-;  Cruise — the FIRMWARE speed PID (set-rpm), as in the pre-PAS script: the
-;  rider sets the speed with the throttle, presses RX to lock it, and the VESC
-;  speed PI holds the ERPM. We only own the motor (suppress the ADC app) while
-;  the PI drives it.
-; -----------------------------------------------------------------------------
-(defun activate-cruise-control () {
-    (if (and (= cruise-active 0) (= throttle-on 1)) {
-        (setq cruise-rpm (get-rpm))
-        (if (> (abs cruise-rpm) 0) {
-            (setq pas-out 0.0)             ; assist stops the moment cruise takes over
-            (setq cruise-active 1)
-            ; Take the motor and issue the setpoint in the SAME breath as the
-            ; state flip: between the flip and the supervisor's next tick the
-            ; ADC app would otherwise keep applying a held throttle.
-            (own-motor 1)
-            (set-rpm cruise-rpm)
-            (print (str-merge "Cruise control activated at RPM: " (to-str cruise-rpm)))
-        } {
-            (print "Cannot activate cruise control: speed is zero")
+(defun throttle-released (level)
+    (<= level (if (> (conf-get 'adc-thr-hyst) input-threshold)
+                   (conf-get 'adc-thr-hyst) input-threshold)))
+
+; Binary inversion uses the firmware's own curve primitive, including all three
+; modes and negative curve constants. At zero use genuine neutral, not deadband.
+(defun current-to-volts (fraction) {
+    (if (<= fraction 0.0) (adc1-volts 0.0) {
+        (let ((lo 0.0) (hi 1.0) (n 0)
+              (target (clampf fraction 0.0 1.0))) {
+            (loopwhile (< n 16) {
+                (let ((mid (* 0.5 (+ lo hi)))) {
+                    (if (< (throttle-curve mid adc-curve-accel 0.0 adc-curve-mode) target)
+                        (setq lo mid) (setq hi mid))
+                })
+                (setq n (+ n 1))
+            })
+            (let ((h (conf-get 'adc-thr-hyst)))
+                (adc1-volts (+ h (* (- 1.0 h) (* 0.5 (+ lo hi))))))
         })
     })
 })
 
-; Drop the cruise STATE without touching motor ownership. Used where the caller
-; is about to take ownership itself (master-off): going through
-; deactivate-cruise-control would release the ADC app for a millisecond and let
-; a held throttle through before the new owner re-arms the suppression.
-(defun cruise-clear () {
-    (setq cruise-active 0)
-    (setq cruise-rpm 0)
-    (setq rpm-per-ms 0.0)
-})
-
-(defun deactivate-cruise-control () {
-    (if (= cruise-active 1) {
-        (cruise-clear)
-        (release-motor)
-        (print "Cruise control deactivated")
-    })
-})
-
-; Keep the firmware speed PID fed. Re-issuing set-rpm every tick also keeps the
-; motor-command timeout alive (if this script dies, the timeout coasts the motor
-; instead of holding the last setpoint).
-(defun cruise-hold () {
-    (own-motor 1)
-    (set-rpm cruise-rpm)
-})
-
-(defun increase-cruise-speed () {
-    (if (= cruise-active 1) {
-        (if (> rpm-per-ms 0.0) {
-            (let ((current-speed-ms (/ (abs cruise-rpm) rpm-per-ms))) {
-                (let ((new-speed-ms (+ current-speed-ms (/ 1.0 3.6)))) {
-                    (let ((new-rpm (* new-speed-ms rpm-per-ms))) {
-                        (if (< cruise-rpm 0) {
-                            (setq cruise-rpm (- new-rpm))
-                        } {
-                            (setq cruise-rpm new-rpm)
-                        })
-                        (print (str-merge "Cruise speed increased to RPM: " (to-str cruise-rpm)))
+; PID derivative is on measured speed (no setpoint kick), low-pass filtered.
+; Conditional integration prevents windup at 0 and 1. While the physical
+; throttle wins, track measured traction so release does not restore an old
+; saturated integrator. Firmware ADC ramping is always active downstream.
+(defun cruise-output (dt manual) {
+    (let ((speed (get-speed))
+          (target (/ cruise-rpm rpm-per-ms))) {
+        (let ((error (- target speed))) {
+            (setq cruise-d (+ cruise-d
+                (* (/ dt (+ cruise-d-tau dt))
+                   (- (/ (- speed cruise-last-speed) dt) cruise-d))))
+            (setq cruise-last-speed speed)
+            (let ((pd (- (* cruise-kp error) (* cruise-kd cruise-d)))) {
+                (if manual {
+                    (let ((limit (motor-limit))) {
+                        (setq cruise-i (clampf (- (if (> limit 0.0)
+                            (clampf (/ (get-current) limit) 0.0 1.0) 0.0) pd) 0.0 1.0))
+                    })
+                } {
+                    (let ((candidate (clampf (+ cruise-i (* cruise-ki error dt)) 0.0 1.0))) {
+                        (if (or (and (>= (+ pd candidate) 0.0) (<= (+ pd candidate) 1.0))
+                                (and (> (+ pd candidate) 1.0) (< error 0.0))
+                                (and (< (+ pd candidate) 0.0) (> error 0.0)))
+                            (setq cruise-i candidate))
                     })
                 })
-            })
-        } {
-            (let ((rpm-increment 50)) {
-                (if (< cruise-rpm 0) {
-                    (setq cruise-rpm (- cruise-rpm rpm-increment))
-                } {
-                    (setq cruise-rpm (+ cruise-rpm rpm-increment))
-                })
-                (print (str-merge "Cruise speed increased to RPM: " (to-str cruise-rpm)))
+                (clampf (+ pd cruise-i) 0.0 1.0)
             })
         })
     })
+})
+
+(defun activate-cruise-control () {
+    (if (and (= cruise-active 0) (= throttle-on 1) (= throttle-armed 1)
+             (= (get-fault) 0)
+             (adc-config-ok) (> rpm-per-ms 0.0) (> (get-speed) 0.5)
+             (<= (get-adc-decoded 1) brake-threshold)
+             (not (app-is-output-disabled))) {
+        (setq cruise-rpm (* (get-speed) rpm-per-ms))
+        (setq cruise-last-speed (get-speed))
+        (setq cruise-d 0.0)
+        ; Seed from actual traction after the ADC ramp, rather than a raw held
+        ; throttle that may still be far above actual current during acceleration.
+        (let ((limit (motor-limit)))
+            (setq cruise-i (if (> limit 0.0)
+                (clampf (/ (get-current) limit) 0.0 1.0) 0.0)))
+        (setq cruise-active 1)
+        (print (str-merge "Cruise PID activated at RPM: " (to-str cruise-rpm)))
+    })
+})
+
+(defun cruise-clear () {
+    (setq cruise-active 0)
+    (setq cruise-rpm 0.0)
+    (setq cruise-i 0.0)
+    (setq cruise-d 0.0)
+})
+
+(defun deactivate-cruise-control () (cruise-clear))
+
+(defun increase-cruise-speed () {
+    (if (and (= cruise-active 1) (> rpm-per-ms 0.0))
+        (setq cruise-rpm (* rpm-per-ms
+            (clampf (+ (/ cruise-rpm rpm-per-ms) (/ 1.0 3.6)) 0.5
+                    (conf-get 'max-speed)))))
 })
 
 (defun decrease-cruise-speed () {
-    (if (= cruise-active 1) {
-        (if (> rpm-per-ms 0.0) {
-            (let ((current-speed-ms (/ (abs cruise-rpm) rpm-per-ms))) {
-                (let ((new-speed-ms (- current-speed-ms (/ 1.0 3.6)))) {
-                    (if (> new-speed-ms 0.1) {
-                        (let ((new-rpm (* new-speed-ms rpm-per-ms))) {
-                            (if (< cruise-rpm 0) {
-                                (setq cruise-rpm (- new-rpm))
-                            } {
-                                (setq cruise-rpm new-rpm)
-                            })
-                            (print (str-merge "Cruise speed decreased to RPM: " (to-str cruise-rpm)))
-                        })
-                    } {
-                        (deactivate-cruise-control)
-                        (print "Cruise control deactivated: speed too low")
-                    })
-                })
-            })
-        } {
-            (deactivate-cruise-control)
-            (print "Cruise control deactivated: no speed ratio available")
-        })
-    })
+    (if (and (= cruise-active 1) (> rpm-per-ms 0.0))
+        (setq cruise-rpm (* rpm-per-ms
+            (clampf (- (/ cruise-rpm rpm-per-ms) (/ 1.0 3.6)) 0.5 100.0))))
 })
 
 (defun monitor-rx-button () {
@@ -388,105 +316,75 @@
 })
 
 ; -----------------------------------------------------------------------------
-;  THE supervisor — the only thing that decides who commands the motor. It does
-;  NOT shape the throttle: whenever the rider touches throttle or brake, the
-;  stock ADC app gets the motor back and drives it exactly as it does without
-;  any script installed.
-;
-;  Priority: master-off > (hold until throttle released) > brake/throttle >
-;  cruise > pedal assist > stock ADC app.
-;
-;  BRAKE — NO SMOOTHING IN THIS BUILD
-;    Pressing the brake while we own the motor hands the motor straight back to
-;    the stock app. Because a suppressed app has a frozen ramp, the stock brake
-;    is then applied in one cycle: +drive -> full regen. That is the jerk we
-;    tried to smooth and rolled back; the smoother variants broke cruise/PAS on
-;    this controller, and a working bike beats a soft one. Known limitation #2:
-;    with the panel master switch off the stock output is suppressed, so the
-;    brake does not work until the switch is back on.
+; Only writer of virtual ADC1 during normal operation. No ADC2 override or
+; direct motor command anywhere. Brake neutralizes ADC1 BEFORE choosing a
+; source, so full throttle cannot cancel full brake in firmware's pwr -= brake.
 ; -----------------------------------------------------------------------------
 (defun pas-fresh () (and (> pas-amps 0.0) (< (secs-since pas-seen) 0.4)))
 
-; Is the stock app done? Its output must be ~0 A before we take the motor,
-; because a suppressed app freezes its ramp and jumps on hand-back (see the
-; firmware notes at the top). Once we own the motor, skip the test — otherwise
-; our own injected current would read as "still ramping" and cut itself.
-(defun pas-settle () (or (= motor-owner 2) (< (abs (get-current)) 2.0)))
-
-(defun motor-supervisor () {
-    (loopwhile t {
-        (let ((thr   (get-adc-decoded 0))
-              (brake (get-adc-decoded 1))) {
-            (let ((rider    (or (> thr 0.05) (> brake 0.05)))
-                  (thr-edge (and (> thr 0.05) (<= old-thr 0.05)))
-                  (brake-on (> brake 0.05))) {
+(defun motor-tick (dt) {
+    (if (adc-config-ok) {
+        (let ((raw (get-adc 0)) (brake (get-adc-decoded 1))) {
+            (let ((thr (physical-throttle raw))
+                  (valid (and (>= raw (conf-get 'adc-v1-min))
+                              (<= raw (conf-get 'adc-v1-max))))) {
+                (setq adc1-command (adc1-volts 0.0))
                 (cond
-                    ; 1. Panel master off: hold the motor at zero.
-                    ((= throttle-on 0) {
-                        (setq pas-out 0.0)
-                        (if (= cruise-active 1) (cruise-clear))
-                        (own-motor 3)
-                        (set-current 0)
+                    ((> brake brake-threshold) {
+                        (cruise-clear)
+                        (setq pas-amps 0.0)
+                        ; Re-arm after release of BOTH controls; PAS also needs
+                        ; a newly received setpoint after braking ends.
+                        (setq throttle-armed 0)
                     })
-
-                    ; 2. Master back on but the throttle is still held: keep
-                    ;    holding. The ADC app's ramp state is frozen while
-                    ;    suppressed, so its first cycle would apply the held
-                    ;    throttle at full value in one step.
-                    ((and (= motor-owner 3) (> thr 0.05)) {
-                        (own-motor 3)
-                        (set-current 0) })
-
-                    ; 3. Cruise (firmware speed PID) owns the motor.
-                    ((= cruise-active 1) {
-                        (if (or brake-on thr-edge) {
-                            (deactivate-cruise-control)
-                            (setq pas-out 0.0)
-                        } {
-                            (cruise-hold)
-                        }) })
-
-                    ; 4. Nobody owns it: stock ADC app drives, PAS may add.
+                    ((or (not valid) (= throttle-on 0)
+                         (app-is-output-disabled) (not (= (get-fault) 0)) (> dt 0.2)) {
+                        (cruise-clear)
+                        (setq throttle-armed 0)
+                        (setq pas-amps 0.0)
+                    })
+                    ((= throttle-armed 0) {
+                        (if (throttle-released thr) (setq throttle-armed 1))
+                    })
                     (t {
-                        (let ((limit (motor-limit))) {
-                            (if rider {
-                                ; Rider takes over the throttle: cut instantly (no
-                                ; ramp — the ADC app must see the pot at full
-                                ; authority NOW) and give the motor back.
-                                (setq pas-out 0.0)
-                                (if (> motor-owner 0) (release-motor))
-                            } {
-                                ; Start injecting only once the stock output has
-                                ; decayed: otherwise the takeover lands mid-ramp
-                                ; and the hand-off dips (see pas-settle).
-                                (let ((target (if (and (pas-fresh) (pas-settle))
-                                                  (if (> pas-amps limit) limit pas-amps)
-                                                  0.0))) {
-                                    (setq pas-out (slew-amps pas-out target (ramp-pos) (ramp-neg) limit))
-                                    (if (> pas-out 0.01) {
-                                        (own-motor 2)
-                                        ; Relative so the firmware's thermal
-                                        ; derating and the live limit keep
-                                        ; applying; the absolute form is the
-                                        ; fallback when the limit is unknown.
-                                        (if (> limit 1.0)
-                                            (set-current-rel (clampf (/ pas-out limit) 0.0 1.0) 0.2)
-                                            (set-current pas-out 0.2))
-                                    } {
-                                        ; Idle or fading out: once the ramp
-                                        ; reaches zero, hand the bike back to the
-                                        ; stock app.
-                                        (if (> motor-owner 0) (release-motor))
-                                        (setq pas-out 0.0)
+                        (let ((manual (not (throttle-released thr))) (request 0.0)) {
+                            (if (= cruise-active 1) {
+                                (if (> rpm-per-ms 0.0)
+                                    (setq request (cruise-output (clampf dt 0.001 0.05) manual))
+                                    (cruise-clear))
+                            })
+                            (cond
+                                (manual (setq adc1-command raw))
+                                ((= cruise-active 1)
+                                    (setq adc1-command (current-to-volts request)))
+                                ((pas-fresh) {
+                                    (let ((limit (motor-limit))) {
+                                        (if (> limit 0.0)
+                                            (setq adc1-command (current-to-volts
+                                                (clampf (/ pas-amps limit) 0.0 1.0))))
                                     })
                                 })
-                            })
+                            )
                         })
                     })
                 )
-                (setq old-thr thr)
-                (setq old-brk brake)
+                (app-adc-override 0 adc1-command)
             })
+        })
+    } {
+        ; No keepalive when the live app/calibration changes incompatibly.
+        ; Detached ADC will stop on the configured global timeout.
+        (cruise-clear)
+        (setq throttle-armed 0)
+    })
+})
+
+(defun motor-supervisor () {
+    (setq ctl-time (systime))
+    (loopwhile t {
+        (let ((dt (secs-since ctl-time))) {
+            (setq ctl-time (systime))
+            (motor-tick dt)
         })
         (sleep ctl-dt)
     })
@@ -539,23 +437,13 @@
     (if (= reply-id 255) (send-data pbuf) (send-data pbuf 2 reply-id))
 })
 
-; Master enable. With the ADC app owning the motor, "off" cannot be just a flag:
-; the supervisor has to keep the stock output suppressed. Arm that here so the
-; switch takes effect immediately instead of on the next tick.
+; Master disables traction only. Native braking remains available. The loop
+; owns ADC1 writes; turning back on requires a released physical throttle.
 (defun panel-set-throttle (on) {
-    (if (= on 0) {
-        (setq throttle-on 0)
-        (setq pas-out 0.0)
-        ; cruise-clear, not deactivate-cruise-control: never hand the motor to
-        ; the ADC app on the way to suppressing it (see cruise-clear).
-        (if (= cruise-active 1) (cruise-clear))
-        (own-motor 3)
-        (set-current 0)
-    } {
-        ; Re-enabling is lazy on purpose: the supervisor hands the motor back
-        ; only after the throttle has been seen released (see motor-supervisor).
-        (setq throttle-on 1)
-    })
+    (setq throttle-on on)
+    (setq throttle-armed 0)
+    (setq pas-amps 0.0)
+    (cruise-clear)
 })
 
 (defun two-beeps () {
@@ -703,8 +591,22 @@
 ; bound. The supervisor is spawned last of all so its first tick sees finished
 ; state. These are plain expressions (not definitions), so @const-start does not
 ; flash them.
+(conf-set 'l-current-max base-current-max)
 (apply-profile 0)
-(print "adc-pas v5: ADC owns throttle, PAS injects, brake fade 0.35 s")
+; Seed neutral BEFORE detaching. State 2 detaches ADC1 only; ADC2 stays live.
+; Mode 3 also detaches native buttons, preventing their cruise/reverse actions
+; from competing with the custom RX/TX button handlers. Neither ADC2 nor its
+; calibration, filtering, curve or ramp is changed.
+(if (adc-config-ok) {
+    (setq adc1-command (adc1-volts 0.0))
+    (app-adc-override 0 adc1-command)
+    (app-adc-detach 3 2)
+    (app-adc-override 2 0) ; reverse button released
+    (app-adc-override 3 0) ; native cruise button released
+    (print "adc-pas v8: ADC1 override, manual > cruise PID > PAS; native brake")
+} {
+    (print "ADC1 override NOT started: select ADC/ADC+UART, Current No Reverse Brake ADC; check calibration")
+})
 (event-register-handler (spawn 300 panel-event-loop))
 (event-enable 'event-data-rx)
 (event-enable 'event-shutdown)
@@ -712,8 +614,7 @@
 (spawn 150 monitor-rx-button)
 (spawn 150 monitor-tx-button)
 (spawn 150 persist-volumes-loop)
-; 50 Hz supervisor: deeper nesting than the old monitors (cond -> let -> let ->
-; slew-amps -> clampf), so give it more stack than the 150 used elsewhere.
-(spawn 300 motor-supervisor)
+; Do not start the override loop unless initialization actually detached ADC1.
+(if (adc-config-ok) (spawn 500 motor-supervisor))
 
 @const-end
