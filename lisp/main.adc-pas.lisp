@@ -25,18 +25,17 @@
 (def cruise-active 0)
 (def cruise-rpm 0.0)
 (def cruise-i 0.0)
-(def cruise-d 0.0)
-(def cruise-last-speed 0.0)
-; PID output is a 0..1 current fraction, error in m/s, time in seconds.
-(def cruise-kp 0.06)
-(def cruise-ki 0.03)
-(def cruise-kd 0.01)
-(def cruise-d-tau 0.2)
+; Gains from main.lisp. Error is in ERPM and output is in motor amps.
+(def cruise-kp 0.02)
+(def cruise-ki 0.05)
 (def adc1-inverted 0)
 (def adc-curve-accel 0.0)
 (def adc-curve-mode 0)
 (def input-threshold 0.02)
-(def brake-threshold 0.001)
+; Decoded ADC2 rests at 0.009..0.016 on this controller.
+(def brake-press-threshold 0.05)
+(def brake-release-threshold 0.02)
+(def brake-active nil)
 (def throttle-armed 0)
 (def adc1-command 0.0)
 (def ctl-dt 0.01)
@@ -135,8 +134,8 @@
 ; -----------------------------------------------------------------------------
 (defun clampf (v lo hi) (if (< v lo) lo (if (> v hi) hi v)))
 
-(defun motor-limit ()
-    (* (conf-get 'l-current-max) (conf-get 'l-current-max-scale)))
+(defun amps-to-fraction (amps)
+    (clampf (/ amps base-current-max) 0.0 1.0))
 
 (defun adc-config-ok () {
     (let ((app (conf-get 'app-to-use))
@@ -191,34 +190,18 @@
     })
 })
 
-; PID derivative is on measured speed (no setpoint kick), low-pass filtered.
-; Conditional integration prevents windup at 0 and 1. While the physical
-; throttle wins, track measured traction so release does not restore an old
-; saturated integrator. Firmware ADC ramping is always active downstream.
+; The old PI produces amps. ADC1 uses a fixed 100 A reference on all profiles.
+; Track measured traction while manual throttle is active for a smoother return.
 (defun cruise-output (dt manual) {
-    (let ((speed (get-speed))
-          (target (/ cruise-rpm rpm-per-ms))) {
-        (let ((error (- target speed))) {
-            (setq cruise-d (+ cruise-d
-                (* (/ dt (+ cruise-d-tau dt))
-                   (- (/ (- speed cruise-last-speed) dt) cruise-d))))
-            (setq cruise-last-speed speed)
-            (let ((pd (- (* cruise-kp error) (* cruise-kd cruise-d)))) {
-                (if manual {
-                    (let ((limit (motor-limit))) {
-                        (setq cruise-i (clampf (- (if (> limit 0.0)
-                            (clampf (/ (get-current) limit) 0.0 1.0) 0.0) pd) 0.0 1.0))
-                    })
-                } {
-                    (let ((candidate (clampf (+ cruise-i (* cruise-ki error dt)) 0.0 1.0))) {
-                        (if (or (and (>= (+ pd candidate) 0.0) (<= (+ pd candidate) 1.0))
-                                (and (> (+ pd candidate) 1.0) (< error 0.0))
-                                (and (< (+ pd candidate) 0.0) (> error 0.0)))
-                            (setq cruise-i candidate))
-                    })
-                })
-                (clampf (+ pd cruise-i) 0.0 1.0)
-            })
+    (let ((error (- cruise-rpm (get-rpm)))) {
+        (let ((p (* cruise-kp error))) {
+            (if manual
+                (setq cruise-i (clampf (- (get-current) p) 0.0 base-current-max))
+                (if (or (and (> error 0.0) (< (+ p cruise-i) base-current-max))
+                        (and (< error 0.0) (> cruise-i 0.0)))
+                    (setq cruise-i (clampf (+ cruise-i (* cruise-ki error dt))
+                                          0.0 base-current-max))))
+            (amps-to-fraction (+ p cruise-i))
         })
     })
 })
@@ -227,16 +210,13 @@
     (if (and (= cruise-active 0) (= throttle-on 1) (= throttle-armed 1)
              (= (get-fault) 0)
              (adc-config-ok) (> rpm-per-ms 0.0) (> (get-speed) 0.5)
-             (<= (get-adc-decoded 1) brake-threshold)
+             (not brake-active)
+             (< (get-adc-decoded 1) brake-press-threshold)
              (not (app-is-output-disabled))) {
-        (setq cruise-rpm (* (get-speed) rpm-per-ms))
-        (setq cruise-last-speed (get-speed))
-        (setq cruise-d 0.0)
+        (setq cruise-rpm (get-rpm))
         ; Seed from actual traction after the ADC ramp, rather than a raw held
         ; throttle that may still be far above actual current during acceleration.
-        (let ((limit (motor-limit)))
-            (setq cruise-i (if (> limit 0.0)
-                (clampf (/ (get-current) limit) 0.0 1.0) 0.0)))
+        (setq cruise-i (clampf (get-current) 0.0 base-current-max))
         (setq cruise-active 1)
         (print (str-merge "Cruise PID activated at RPM: " (to-str cruise-rpm)))
     })
@@ -246,7 +226,6 @@
     (setq cruise-active 0)
     (setq cruise-rpm 0.0)
     (setq cruise-i 0.0)
-    (setq cruise-d 0.0)
 })
 
 (defun deactivate-cruise-control () (cruise-clear))
@@ -325,23 +304,24 @@
 (defun motor-tick (dt) {
     (if (adc-config-ok) {
         (let ((raw (get-adc 0)) (brake (get-adc-decoded 1))) {
+            (setq brake-active (if brake-active
+                (> brake brake-release-threshold)
+                (>= brake brake-press-threshold)))
             (let ((thr (physical-throttle raw))
                   (valid (and (>= raw (conf-get 'adc-v1-min))
                               (<= raw (conf-get 'adc-v1-max))))) {
                 (setq adc1-command (adc1-volts 0.0))
                 (cond
-                    ((> brake brake-threshold) {
-                        (cruise-clear)
-                        (setq pas-amps 0.0)
-                        ; Re-arm after release of BOTH controls; PAS also needs
-                        ; a newly received setpoint after braking ends.
-                        (setq throttle-armed 0)
-                    })
                     ((or (not valid) (= throttle-on 0)
                          (app-is-output-disabled) (not (= (get-fault) 0)) (> dt 0.2)) {
                         (cruise-clear)
                         (setq throttle-armed 0)
                         (setq pas-amps 0.0)
+                    })
+                    (brake-active {
+                        (cruise-clear)
+                        (setq pas-amps 0.0)
+                        ; Keep an already armed throttle ready for brake release.
                     })
                     ((= throttle-armed 0) {
                         (if (throttle-released thr) (setq throttle-armed 1))
@@ -354,15 +334,15 @@
                                     (cruise-clear))
                             })
                             (cond
-                                (manual (setq adc1-command raw))
-                                ((= cruise-active 1)
-                                    (setq adc1-command (current-to-volts request)))
+                                (manual {
+                                    (setq adc1-command raw)
+                                })
+                                ((= cruise-active 1) {
+                                    (setq adc1-command (current-to-volts request))
+                                })
                                 ((pas-fresh) {
-                                    (let ((limit (motor-limit))) {
-                                        (if (> limit 0.0)
-                                            (setq adc1-command (current-to-volts
-                                                (clampf (/ pas-amps limit) 0.0 1.0))))
-                                    })
+                                    (setq adc1-command
+                                        (current-to-volts (amps-to-fraction pas-amps)))
                                 })
                             )
                         })
@@ -603,7 +583,6 @@
     (app-adc-detach 3 2)
     (app-adc-override 2 0) ; reverse button released
     (app-adc-override 3 0) ; native cruise button released
-    (print "adc-pas v8: ADC1 override, manual > cruise PID > PAS; native brake")
 } {
     (print "ADC1 override NOT started: select ADC/ADC+UART, Current No Reverse Brake ADC; check calibration")
 })
