@@ -93,6 +93,7 @@ class Controller:
             'get-adc': lambda ch: self.raw,
             'get-adc-decoded': lambda ch: self.brake,
             'get-speed': lambda: self.speed,
+            'get-rpm': lambda: self.speed * self.env['rpm-per-ms'],
             'get-current': lambda: self.current,
             'get-fault': lambda: self.fault,
             'app-is-output-disabled': lambda: self.disabled,
@@ -207,16 +208,23 @@ class AdcPasTests(unittest.TestCase):
         self.assertEqual(c.env['pas-amps'], 0)
         self.assertTrue(all(ch == 0 for ch, v in c.writes))
 
-    def test_small_brake_also_removes_full_gas(self):
-        self.c.raw, self.c.brake = 3., .01
-        self.assertEqual(self.c.tick(), .9)
+    def test_brake_hysteresis_and_armed_throttle_resume(self):
+        c = self.c
+        c.raw, c.brake = 3., .016
+        self.assertEqual(c.tick(), 3.)
+        c.brake = .05
+        self.assertEqual(c.tick(), .9)
+        c.brake = .03
+        self.assertEqual(c.tick(), .9)
+        c.brake = .02
+        self.assertEqual(c.tick(), 3.)
 
-    def test_pas_fraction_tracks_profile_limit(self):
+    def test_pas_fraction_uses_fixed_reference_across_profiles(self):
         c = self.c
         c.pas(20)
         for scale in (.5, .67, 1.):
             c.conf['l-current-max-scale'] = scale
-            self.assertAlmostEqual(c.fraction(c.tick()), 20/(100*scale), places=4)
+            self.assertAlmostEqual(c.fraction(c.tick()), .2, places=4)
 
     def test_pas_expiry_and_clamping(self):
         c = self.c
@@ -281,31 +289,30 @@ class AdcPasTests(unittest.TestCase):
         c.fault = 0
         self.assertEqual(c.tick(.5), .9)
 
-    def test_pid_engagement_is_seeded_and_derivative_has_no_target_kick(self):
+    def test_pi_engagement_is_seeded_and_target_can_be_adjusted(self):
         c = self.c
         c.call('activate-cruise-control')
         self.assertAlmostEqual(c.fraction(c.tick()), .3, places=4)
         c.call('increase-cruise-speed')
-        c.tick()
-        self.assertAlmostEqual(c.env['cruise-d'], 0.)
+        self.assertGreater(c.fraction(c.tick()), .3)
         self.assertEqual(c.env['cruise-active'], 1)
         for _ in range(100):
             c.call('decrease-cruise-speed')
         self.assertEqual(c.env['cruise-active'], 1)
         self.assertAlmostEqual(c.env['cruise-rpm']/c.env['rpm-per-ms'], .5)
 
-    def test_pid_bounds_windup_and_simple_load_recovery(self):
+    def test_pi_bounds_windup_and_simple_load_recovery(self):
         c = self.c
         c.call('activate-cruise-control')
         c.speed = 0
         for _ in range(500):
             self.assertTrue(0 <= c.fraction(c.tick()) <= 1)
-        self.assertTrue(0 <= c.env['cruise-i'] <= 1)
+        self.assertTrue(0 <= c.env['cruise-i'] <= 100)
         # Restore speed and simulate a simple motor/load with downstream ADC ramp.
-        c.speed, c.env['cruise-last-speed'], c.env['cruise-d'] = 10., 10., 0.
-        c.env['cruise-i'] = .3
+        c.speed = 10.
+        c.env['cruise-i'] = 30.
         output = .3
-        for n in range(3000):
+        for n in range(6000):
             requested = c.fraction(c.tick())
             output += max(-.01/.3, min(.01/.3, requested-output))
             load = .3 if n < 500 else .4

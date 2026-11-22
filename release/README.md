@@ -21,9 +21,10 @@ included in this release or the app bundle.
   transfer worker.
 - BMS cell tab: the whole cell tile is hidden/shown (not just its label) and
   each cell now prints its voltage with a `V` suffix.
-- `lisp/main.adc-pas.lisp` v8: continuous virtual ADC1 throttle for PAS and a
-  local-speed PID cruise, with brake/throttle priority and startup interlocks.
-  See `lisp/README.md` for the required ADC configuration.
+- The optional VESC Lisp script adds virtual ADC1 throttle for PAS and
+  ERPM-based PI cruise, both scaled against a fixed 100 A reference. ADC2
+  brake hysteresis avoids false braking from idle readings. Load the script
+  separately and follow the [VESC ADC setup guide](https://github.com/payalneg/esp32p4-android-auto/blob/v1.3.53/lisp/README.md).
 - All P4 images in this release are built with `-O2`
   (`CONFIG_COMPILER_OPTIMIZATION_PERF`), including JC4880.
 
@@ -37,10 +38,9 @@ board's `flasher_args.json`. `release/SHA256SUMS.txt` was regenerated from the
 seven published artifacts. JC4880 uses 4 733 088 of its 5 MiB OTA slot
 (0x7c760 free, 10 %).
 
-No hardware was flashed for this build. The on-device checklist for the AA HUD,
-settings writer and LISP editor is in
-`docs/optimization-batch-test-plan.md`; AA output and the settings commit path
-still need a real-device run.
+All 13 ADC/PAS host tests passed. The tests use mocked hardware. The AA HUD,
+settings commit path and updated VESC Lisp behavior still need hardware
+validation. See the [on-device test plan](https://github.com/payalneg/esp32p4-android-auto/blob/v1.3.53/docs/optimization-batch-test-plan.md).
 
 ## Files and hardware
 
@@ -59,7 +59,7 @@ still need a real-device run.
 For USB recovery use `flash.bat` (Windows) or `flash.command` (macOS), with
 `flash.py` alongside the images. Stable esptool 4.12+ or 5.3+ is required.
 Choose **waveshare-rev3** for P4 v3.2 and do not force a v1.x image onto it.
-See [v3.2 recovery instructions](../docs/esp32p4-rev3.md). Use the application
+See [v3.2 recovery instructions](https://github.com/payalneg/esp32p4-android-auto/blob/v1.3.53/docs/esp32p4-rev3.md). Use the application
 image for ordinary OTA updates; the merged image is the full USB recovery set.
 
 APK signing certificate SHA-256:

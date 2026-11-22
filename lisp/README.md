@@ -7,11 +7,12 @@ disables the ADC application, commands motor current directly, or commands
 speed through `set-rpm`. Physical ADC2, its calibration and native braking
 remain unchanged. The separate Lisp brake transition/ramp has been removed.
 
-Priority is brake, traction inhibit, physical throttle, cruise, then PAS:
+Priority is traction inhibit, brake, physical throttle, cruise, then PAS:
 
-- Any decoded brake above `brake-threshold` immediately requests the calibrated
-  neutral ADC1 voltage and cancels cruise. Full gas can no longer subtract from
-  the brake request. Stock ADC filtering, deadband and ramping still apply.
+- Decoded ADC2 at or above 0.05 requests neutral ADC1 voltage and cancels
+  cruise. Brake stays active until ADC2 falls to 0.02 or below, at which
+  point an already armed throttle can resume. Stock ADC filtering,
+  deadband and ramping still apply.
 - Physical throttle has priority over both cruise and PAS. Its physical voltage
   is forwarded unchanged above the release threshold, preserving the native
   ADC curve and ramp. Cruise stays enabled while the throttle is held and
@@ -19,8 +20,8 @@ Priority is brake, traction inhibit, physical throttle, cruise, then PAS:
 - PAS supplies virtual throttle only with the physical throttle released and
   cruise inactive. The input protocol is still motor amperes. Requests expire
   after 0.4 seconds; the existing sender lock is retained.
-- Cruise uses a local speed **PID**, with derivative on measured speed, a
-  derivative filter and integral anti-windup. RX enables it or increases the
+- Cruise uses a local ERPM **PI** controller with integral anti-windup.
+  RX enables it or increases the
   target by 1 km/h; TX decreases the target by 1 km/h, down to 0.5 m/s without
   cancelling cruise. It supplies positive throttle only: overspeed reduces
   throttle to zero, never injects braking.
@@ -31,8 +32,8 @@ Priority is brake, traction inhibit, physical throttle, cruise, then PAS:
 
 At startup `base-current-max` sets Motor Current Max to **100 A** in RAM;
 the three existing profile scales give 50 / 67 / 100 A. Brake-current settings
-are not changed. Later VESC Tool motor-current edits are read live. PAS current
-is divided by the active profile limit, clamped to 0..1, and mapped back through
+are not changed. PAS and cruise requests are divided by the fixed 100 A
+reference, clamped to 0..1, and mapped back through
 the inverse throttle curve and deadband to calibrated voltage. Actual current
 remains subject to firmware motor, battery, thermal and speed limits.
 
@@ -52,13 +53,13 @@ them through Lisp `conf-get`):
 | `adc-curve-mode` | Curve mode: exponential / natural / polynomial | 0 |
 
 Only PAS and cruise use inverse curve conversion. Manual throttle still goes
-through the native curve unchanged. Calibration endpoints, deadband and current
-limits are read live; ADC1 inversion is also needed to recognize a released
+through the native curve unchanged. Calibration endpoints and deadband are
+read live. ADC1 inversion is also needed to recognize a released
 physical throttle and choose neutral voltage correctly.
 
-`cruise-kp`, `cruise-ki`, `cruise-kd` and `cruise-d-tau` are starting values
-requiring tuning on the real vehicle. Error is in m/s, time in seconds, output
-is a 0..1 current fraction. Measured traction seeds the integral on engagement
+`cruise-kp` and `cruise-ki` come from `main.lisp`. Error is in ERPM, time
+in seconds and PI output in motor amps before conversion to ADC1 voltage.
+Measured traction seeds the integral on engagement
 and tracks it while the physical throttle overrides cruise.
 
 Detached ADC uses the **global motor timeout**. Stopping override does not
@@ -68,8 +69,8 @@ timeout-reset senders. Verify actual timeout behavior on the controller.
 
 Host checks: `python scripts/test_adc_pas.py`. These execute the actual control
 functions with a small subset evaluator and mocked hardware, including source
-priority, brake neutralization, PAS expiry/profile scaling, inverse curves and
-PID behavior. They do not validate VESC LispBM scheduling, heap/stack usage,
+priority, brake hysteresis, PAS expiry/current scaling, inverse curves and
+PI behavior. They do not validate VESC LispBM scheduling, heap/stack usage,
 hardware filtering or vehicle stability. No controller flashing is performed.
 
 The sections below describe the original `main.lisp` and the shared panel

@@ -29,9 +29,10 @@ the one recorded in the release commit.
   transfer worker (the old path is kept as an out-of-memory fallback).
 - BMS cell tab: hide/show the whole cell tile rather than only its label, and
   print each cell voltage with a `V` suffix.
-- `lisp/main.adc-pas.lisp` v8: continuous virtual ADC1 throttle for PAS plus a
-  local-speed PID cruise, with brake/throttle priority and startup interlocks;
-  `lisp/README.md` documents the matching VESC ADC configuration.
+- `lisp/main.adc-pas.lisp` v8: virtual ADC1 throttle for PAS and ERPM-based PI
+  cruise, both scaled against a fixed 100 A reference. ADC2 brake hysteresis
+  avoids false braking from idle readings. See `lisp/README.md` for the VESC
+  ADC configuration.
 
 ## 1.3.52 — 2026-11-20 (Android app 0.3.63+127)
 
