@@ -78,7 +78,7 @@ const _en = <String, String>{
   'about.title': 'About',
   'about.app': 'App version',
   'about.fw': 'Bundled firmware',
-  'about.desc': 'Bridges phone notifications, media and time to an ESP32-P4 head unit over BLE, and flashes its firmware over WiFi.',
+  'about.desc': 'Bridges phone notifications, media and time to an ESP32-P4 head unit over BLE, and flashes its firmware over WiFi, Bluetooth or USB.',
   'about.source': 'Source code',
   'fw.title': 'Firmware update',
   'fw.device': 'Head unit version',
@@ -107,9 +107,83 @@ const _en = <String, String>{
       'Flashes over the existing Bluetooth link — no WiFi needed. Slower (a few minutes); keep the app open.',
   'fw.method.ble.unsupported':
       'This head unit\'s firmware can\'t flash over Bluetooth — update over WiFi.',
+  'fw.method.usb': 'USB',
+  'fw.method.usb.note':
+      'Writes the chip\'s flash directly over USB-OTG. Works even if the head '
+      'unit no longer boots. Use the port labelled USB (or UART), a data cable, '
+      'and keep the board powered — a powered hub helps.',
+  'fw.usb.source': 'Firmware source',
+  'fw.usb.source.bundled': 'Bundled in app',
+  'fw.usb.source.file': 'Custom file',
+  'fw.usb.pick': 'Choose firmware file…',
+  'fw.usb.file.none': 'No file selected',
+  'fw.usb.file.merged': 'Full image (bootloader + partitions + app)',
+  'fw.usb.file.app': 'Application image only',
+  'fw.usb.custom.merged.warn':
+      'A full image replaces the bootloader and partition table — use one built for your exact board and chip revision.',
+  'fw.usb.file.invalid': 'This is not an ESP32 firmware image',
+  'fw.usb.file.size': '{size} KB · {chip}',
+  'fw.usb.offset': 'Flash offset (hex)',
+  'fw.usb.merged.note':
+      'The APK contains a full recovery image: bootloader, partition table and app are written. Device settings (NVS) are reset.',
+  'fw.usb.apponly.note':
+      'This APK has no full recovery image: only the application is written, so the device must still have a matching partition table.',
+  'fw.usb.apponly': 'Application only',
+  'fw.usb.apponly.keep':
+      'Keeps settings — writes the app slot and resets the OTA boot selector.',
+  'fw.usb.apponly.chosen.note':
+      'Only the application partition is written; settings are kept. The OTA boot selector is cleared so the board boots this slot.',
+  'fw.usb.port': 'USB device',
+  'fw.usb.scan': 'Find USB devices',
+  'fw.usb.none':
+      'No USB device found. Plug the head unit in with a USB-C OTG adapter.',
+  'fw.usb.board.hint':
+      'The chip cannot report its board model: pick the board you are flashing.',
+  'fw.usb.phase.open': 'Opening the USB port…',
+  'fw.usb.phase.reset': 'Putting the chip into download mode…',
+  'fw.usb.phase.check': 'Connected to {chip}',
+  'fw.usb.phase.erase': 'Erasing flash ({size} KB)…',
+  'fw.usb.phase.write': 'Writing {name}…',
+  'fw.usb.phase.verify': 'Verifying flash…',
+  'fw.usb.phase.reboot': 'Rebooting the head unit…',
+  'fw.usb.done':
+      'Firmware written and verified — the head unit is rebooting.',
+  'fw.usb.warn.body':
+      'The head unit\'s flash will be rewritten over USB. Don\'t unplug the cable or cut power until it finishes.',
+  'fw.usb.flash': 'Flash over USB',
+  'fw.usb.stop': 'Stop',
+  'fw.usb.err.permission':
+      'USB access was denied. Allow the app to use the USB device and retry.',
+  'fw.usb.err.open': 'Couldn\'t open the USB device: {err}',
+  'fw.usb.err.sync':
+      'The chip didn\'t answer. Hold BOOT, press and release RESET, release BOOT and retry.',
+  'fw.usb.err.timeout':
+      'The chip stopped responding during the transfer — retry.',
+  'fw.usb.err.chip':
+      'This image is for {image}, but the connected chip is {chip}',
+  'fw.usb.err.rev':
+      'This image needs chip revision {range}, but the connected chip is v{major}.{minor}',
+  'fw.usb.err.offset': 'The flash offset must be a 4 KB-aligned hex value',
+  'fw.usb.err.verify':
+      'Flash verification failed — the write was corrupted, retry',
+  'fw.usb.err.toobig': 'This file is too large to be a firmware image',
+  'fw.usb.err.proto': 'The chip rejected a flash command: {err}',
+  'fw.usb.err.generic': 'USB flash failed: {err}',
+  'fw.usb.cancelled': 'USB flashing stopped.',
   'fw.warn.go': 'Flash',
   'fw.cancel': 'Cancel',
-  'fw.done': 'Firmware uploaded — the head unit is rebooting.',
+  'fw.done': 'Firmware uploaded - the head unit is rebooting.',
+  // Dialog raised ON the head unit when the APK bundles a newer firmware than
+  // the board is running. Labels travel over BLE, so they follow this table.
+  'fw.prompt.title': 'Firmware update available',
+  'fw.prompt.body':
+      'A newer firmware is bundled in the app. Update the head unit now? '
+          'Keep it powered during the update.',
+  'fw.prompt.now': 'Update',
+  'fw.prompt.later': 'Later',
+  'fw.prompt.skip': 'Skip this version',
+  'fw.prompt.updating': 'Updating',
+  'fw.prompt.failed': 'Update failed - reconnect and try again.',
   // Firmware-update status/error messages (emitted as keys by the updater so
   // they localise; {size}/{host}/{err} are substituted at display time).
   'fw.ota.uploading.wifi': 'Uploading firmware ({size} KB)…',
@@ -210,6 +284,10 @@ const _en = <String, String>{
   'helper.tab.params': 'Parameters',
   'helper.tab.bind': 'Pairing',
   'helper.tab.fw': 'Firmware',
+  'helper.hub.status.sub': 'Cadence, assist level and links',
+  'helper.hub.params.sub': 'CAN bus, pedal assist and button commands',
+  'helper.hub.bind.sub': 'Scan and pair the remote and cadence sensor',
+  'helper.hub.fw.sub': 'Installed and bundled firmware',
   'helper.connect': 'Connect',
   'helper.disconnect': 'Disconnect',
   'helper.searching': 'Searching for the helper…',
@@ -229,6 +307,12 @@ const _en = <String, String>{
   'helper.status.assist': 'Assist',
   'helper.status.level': 'Level',
   'helper.status.battery': 'Battery',
+  'helper.last.title': 'Last read battery charge',
+  'helper.last.value': '{v}% · {when}',
+  'helper.last.justNow': 'just now',
+  'helper.last.minutes': '{n} min ago',
+  'helper.last.hours': '{n} h ago',
+  'helper.last.days': '{n} d ago',
   'helper.status.links': 'Links',
   'helper.status.sensor': 'Sensor',
   'helper.status.remote': 'Remote',
@@ -533,7 +617,47 @@ const _en = <String, String>{
   'lisp.err.unknown': 'LISP operation failed',
 
   // --- offline navigator ---
+  // Bike pack charge, read from the head unit and cached on the phone.
+  'bikebatt.title': 'Bike battery',
+  'bikebatt.live': 'Live from the head unit',
+  'bikebatt.lastRead': 'Last read {when}',
+  'bikebatt.voltage': 'Pack voltage',
+  'bikebatt.remaining': 'Remaining',
+  'bikebatt.staleHint':
+      'Switch the bike on and bring the phone within range to refresh.',
+  'bikebatt.justNow': 'just now',
+  'bikebatt.minutes': '{n} min ago',
+  'bikebatt.hours': '{n} h ago',
+  'bikebatt.days': '{n} d ago',
+
   'nav.title': 'Navigator',
+  'nav.settings.title': 'Map settings',
+  'nav.settings.subtitle': 'Style, navigation, offline maps and the head unit',
+  'nav.settings.section.navigation': 'Navigation',
+  'nav.settings.section.map': 'Map',
+  'nav.settings.section.offline': 'Offline maps',
+  'nav.settings.section.headUnit': 'Head unit',
+  'nav.settings.section.data': 'Map data',
+  'nav.settings.region': 'Choose a region',
+  'nav.settings.openData.subtitle':
+      'Regions, saved maps, imports and the tile cache',
+  'nav.settings.stream.sub':
+      'Show the map on the head unit while its navigator is open',
+  'nav.settings.saveArea.sub': 'Download the tiles around your position',
+  'nav.region.offer.title': 'Offline map for {region}',
+  'nav.region.offer.dest.title': 'Map for {region}?',
+  'nav.region.offer.saved.title': '{region} is saved',
+  'nav.region.offer.body': 'You are in {path}. Download its offline map?',
+  'nav.region.offer.dest.body':
+      'The destination is in {path}. Download its offline map?',
+  'nav.region.offer.saved.body':
+      'The offline map for {path} is already on the phone.',
+  'nav.region.offer.keeps': 'Keeps the current map — {current} — available.',
+  'nav.region.offer.later': 'Not now',
+  'nav.region.offer.use': 'Switch',
+  'nav.region.offer.download': 'Download',
+  'nav.region.offer.looking': 'Looking up the region…',
+  'nav.route.mapChanged': 'The map changed; the route was reset',
   'nav.search.hint': 'Street, address or place',
   'nav.search.empty': 'Nothing found',
   'nav.search.noindex': 'No search index — download the map data',
@@ -587,6 +711,18 @@ const _en = <String, String>{
   'nav.haptics': 'Vibrate before turns',
   'nav.simulator': 'Route playback button',
   'nav.stream': 'Show on the display',
+  // Map style. Both renderings come from the same offline data; the graph is
+  // drawn on the phone, the raster one is OpenStreetMap's own tiles.
+  'nav.tiles.enable': 'Draw the offline map',
+  'nav.tiles.switch.osm': 'Switch to OpenStreetMap',
+  'nav.tiles.switch.graph': 'Switch to the offline map',
+  'nav.tiles.switched.osm': 'Map: OpenStreetMap',
+  'nav.tiles.switched.graph': 'Map: drawn from the offline graph',
+  'nav.tiles.noGraph': 'Download a region first — there is nothing to draw yet',
+  'nav.tiles.style.graph.sub':
+      'Rendered from the downloaded region. Works without a connection.',
+  'nav.tiles.style.osm.sub':
+      'OpenStreetMap tiles. Need a connection unless the area is saved.',
   // The picture the head unit gets. The preview is a thumbnail of the real
   // frame, so the badge says why it is standing still.
   'nav.hu.remaining': '{km} km · {min} min',
@@ -637,6 +773,16 @@ const _en = <String, String>{
   'mapdata.region.confirm':
       'Downloads the extract and builds the routing graph. Expect a few '
       'hundred megabytes and a couple of minutes — use Wi-Fi.',
+  'mapdata.region.current': 'Current: {name}',
+  'mapdata.auto.title': 'Offer maps for where I am',
+  'mapdata.auto.subtitle':
+      'Suggest the matching region when the downloaded map ends',
+  'mapdata.saved.title': 'Saved maps',
+  'mapdata.saved.active': 'in use',
+  'mapdata.saved.imported': 'Imported map',
+  'mapdata.saved.delete': 'Delete map',
+  'mapdata.saved.delete.confirm': 'Delete the saved map “{name}”?',
+  'mapdata.saved.switchFailed': 'Could not switch to that map',
   'log.title': 'Log',
   'log.subtitle': '{n} lines from this session',
   'log.empty': 'Nothing yet.',
@@ -763,7 +909,7 @@ const _ru = <String, String>{
   'about.title': 'О приложении',
   'about.app': 'Версия приложения',
   'about.fw': 'Прошивка в комплекте',
-  'about.desc': 'Мост уведомлений, медиа и времени с телефона на головное устройство ESP32-P4 по BLE; прошивка устройства по WiFi.',
+  'about.desc': 'Мост уведомлений, медиа и времени с телефона на головное устройство ESP32-P4 по BLE; прошивка устройства по WiFi, Bluetooth или USB.',
   'about.source': 'Исходный код',
   'fw.title': 'Обновление прошивки',
   'fw.device': 'Версия на устройстве',
@@ -792,9 +938,76 @@ const _ru = <String, String>{
       'Прошивка по уже установленному Bluetooth — WiFi не нужен. Медленнее (несколько минут); не закрывай приложение.',
   'fw.method.ble.unsupported':
       'Прошивка устройства не умеет обновляться по Bluetooth — обнови по WiFi.',
+  'fw.method.usb': 'USB',
+  'fw.method.usb.note':
+      'Запись напрямую во flash чипа по USB-OTG. Работает, даже если устройство '
+      'больше не загружается. Используй порт с надписью USB (или UART), кабель '
+      'с передачей данных и следи за питанием — поможет USB-хаб с питанием.',
+  'fw.usb.source': 'Источник прошивки',
+  'fw.usb.source.bundled': 'В приложении',
+  'fw.usb.source.file': 'Свой файл',
+  'fw.usb.pick': 'Выбрать файл прошивки…',
+  'fw.usb.file.none': 'Файл не выбран',
+  'fw.usb.file.merged': 'Полный образ (загрузчик + разделы + приложение)',
+  'fw.usb.file.app': 'Только приложение',
+  'fw.usb.custom.merged.warn':
+      'Полный образ перезаписывает загрузчик и таблицу разделов — бери образ именно для своей платы и ревизии чипа.',
+  'fw.usb.file.invalid': 'Это не образ прошивки ESP32',
+  'fw.usb.file.size': '{size} КБ · {chip}',
+  'fw.usb.offset': 'Адрес (hex)',
+  'fw.usb.merged.note':
+      'В APK есть полный образ восстановления: записываются загрузчик, таблица разделов и приложение. Настройки устройства (NVS) сбрасываются.',
+  'fw.usb.apponly.note':
+      'В этом APK нет полного образа: записывается только приложение, поэтому на устройстве должна быть совместимая таблица разделов.',
+  'fw.usb.apponly': 'Только приложение',
+  'fw.usb.apponly.keep':
+      'Сохраняет настройки — пишет слот приложения и сбрасывает выбор OTA-слота.',
+  'fw.usb.apponly.chosen.note':
+      'Пишется только раздел приложения, настройки сохраняются. Выбор OTA-слота сбрасывается, чтобы плата загрузила этот слот.',
+  'fw.usb.port': 'USB-устройство',
+  'fw.usb.scan': 'Найти USB-устройства',
+  'fw.usb.none':
+      'USB-устройство не найдено. Подключи устройство через USB-C OTG-переходник.',
+  'fw.usb.board.hint':
+      'Чип не сообщает модель платы — выбери плату вручную.',
+  'fw.usb.phase.open': 'Открытие USB-порта…',
+  'fw.usb.phase.reset': 'Перевод чипа в режим загрузки…',
+  'fw.usb.phase.check': 'Подключено к {chip}',
+  'fw.usb.phase.erase': 'Стирание flash ({size} КБ)…',
+  'fw.usb.phase.write': 'Запись {name}…',
+  'fw.usb.phase.verify': 'Проверка flash…',
+  'fw.usb.phase.reboot': 'Перезагрузка устройства…',
+  'fw.usb.done': 'Прошивка записана и проверена — устройство перезагружается.',
+  'fw.usb.warn.body':
+      'Flash устройства будет перезаписан по USB. Не отключай кабель и не снимай питание до завершения.',
+  'fw.usb.flash': 'Прошить по USB',
+  'fw.usb.stop': 'Стоп',
+  'fw.usb.err.permission':
+      'Доступ к USB отклонён. Разреши приложению использовать USB-устройство и повтори.',
+  'fw.usb.err.open': 'Не удалось открыть USB-устройство: {err}',
+  'fw.usb.err.sync':
+      'Чип не отвечает. Зажми BOOT, нажми и отпусти RESET, отпусти BOOT и повтори.',
+  'fw.usb.err.timeout': 'Чип перестал отвечать во время передачи — повтори.',
+  'fw.usb.err.chip': 'Этот образ для {image}, а подключён чип {chip}',
+  'fw.usb.err.rev': 'Образ требует ревизию {range}, а у чипа v{major}.{minor}',
+  'fw.usb.err.offset': 'Адрес должен быть hex-числом, кратным 4 КБ',
+  'fw.usb.err.verify': 'Проверка не прошла — запись повредилась, повтори',
+  'fw.usb.err.toobig': 'Файл слишком большой для образа прошивки',
+  'fw.usb.err.proto': 'Чип отклонил команду записи: {err}',
+  'fw.usb.err.generic': 'Ошибка прошивки по USB: {err}',
+  'fw.usb.cancelled': 'Прошивка по USB остановлена.',
   'fw.warn.go': 'Прошить',
   'fw.cancel': 'Отмена',
   'fw.done': 'Прошивка залита — устройство перезагружается.',
+  'fw.prompt.title': 'Доступно обновление прошивки',
+  'fw.prompt.body':
+      'В приложении есть более новая прошивка. Обновить магнитолу сейчас? '
+          'Не выключайте питание во время обновления.',
+  'fw.prompt.now': 'Обновить',
+  'fw.prompt.later': 'Позже',
+  'fw.prompt.skip': 'Пропустить версию',
+  'fw.prompt.updating': 'Обновление',
+  'fw.prompt.failed': 'Не удалось обновить — переподключитесь и попробуйте снова.',
   'fw.ota.uploading.wifi': 'Загрузка прошивки ({size} КБ)…',
   'fw.ota.uploading.ble': 'Передача прошивки по Bluetooth ({size} КБ)…',
   'fw.ota.verifying': 'Проверка образа…',
@@ -893,6 +1106,10 @@ const _ru = <String, String>{
   'helper.tab.params': 'Параметры',
   'helper.tab.bind': 'Привязка',
   'helper.tab.fw': 'Прошивка',
+  'helper.hub.status.sub': 'Каденс, уровень ассиста и связи',
+  'helper.hub.params.sub': 'Шина CAN, педальный ассист и команды кнопок',
+  'helper.hub.bind.sub': 'Поиск и привязка пульта и датчика каденса',
+  'helper.hub.fw.sub': 'Установленная и встроенная прошивка',
   'helper.connect': 'Подключить',
   'helper.disconnect': 'Отключить',
   'helper.searching': 'Ищу хелпер…',
@@ -912,6 +1129,12 @@ const _ru = <String, String>{
   'helper.status.assist': 'Ассист',
   'helper.status.level': 'Уровень',
   'helper.status.battery': 'Батарея',
+  'helper.last.title': 'Последний считанный заряд',
+  'helper.last.value': '{v}% · {when}',
+  'helper.last.justNow': 'только что',
+  'helper.last.minutes': '{n} мин назад',
+  'helper.last.hours': '{n} ч назад',
+  'helper.last.days': '{n} дн назад',
   'helper.status.links': 'Связи',
   'helper.status.sensor': 'Датчик',
   'helper.status.remote': 'Пульт',
@@ -1222,7 +1445,46 @@ const _ru = <String, String>{
   'lisp.err.unknown': 'Ошибка операции LISP',
 
   // --- offline navigator ---
+  // Заряд тяговой батареи: читается head unit'ом и кэшируется в телефоне.
+  'bikebatt.title': 'Батарея велосипеда',
+  'bikebatt.live': 'Данные с head unit',
+  'bikebatt.lastRead': 'Последнее чтение {when}',
+  'bikebatt.voltage': 'Напряжение',
+  'bikebatt.remaining': 'Остаток',
+  'bikebatt.staleHint':
+      'Включите велосипед и поднесите телефон, чтобы обновить.',
+  'bikebatt.justNow': 'только что',
+  'bikebatt.minutes': '{n} мин назад',
+  'bikebatt.hours': '{n} ч назад',
+  'bikebatt.days': '{n} дн назад',
+
   'nav.title': 'Навигатор',
+  'nav.settings.title': 'Настройки карты',
+  'nav.settings.subtitle': 'Стиль, навигация, офлайн-карты и дисплей',
+  'nav.settings.section.navigation': 'Навигация',
+  'nav.settings.section.map': 'Карта',
+  'nav.settings.section.offline': 'Офлайн-карты',
+  'nav.settings.section.headUnit': 'Дисплей',
+  'nav.settings.section.data': 'Данные карты',
+  'nav.settings.region': 'Выбрать регион',
+  'nav.settings.openData.subtitle':
+      'Регионы, сохранённые карты, импорт и кэш тайлов',
+  'nav.settings.stream.sub':
+      'Показывать карту на дисплее, пока открыт навигатор',
+  'nav.settings.saveArea.sub': 'Скачать тайлы вокруг текущего положения',
+  'nav.region.offer.title': 'Офлайн-карта для {region}',
+  'nav.region.offer.dest.title': 'Карта для {region}?',
+  'nav.region.offer.saved.title': '{region} уже сохранена',
+  'nav.region.offer.body': 'Вы в {path}. Скачать офлайн-карту?',
+  'nav.region.offer.dest.body':
+      'Точка назначения в {path}. Скачать офлайн-карту?',
+  'nav.region.offer.saved.body': 'Офлайн-карта для {path} уже на телефоне.',
+  'nav.region.offer.keeps': 'Текущая карта — {current} — останется доступной.',
+  'nav.region.offer.later': 'Не сейчас',
+  'nav.region.offer.use': 'Переключить',
+  'nav.region.offer.download': 'Скачать',
+  'nav.region.offer.looking': 'Ищу регион…',
+  'nav.route.mapChanged': 'Карта сменилась, маршрут сброшен',
   'nav.search.hint': 'Улица, адрес или место',
   'nav.search.empty': 'Ничего не найдено',
   'nav.search.noindex': 'Нет поискового индекса — скачайте данные карты',
@@ -1276,6 +1538,16 @@ const _ru = <String, String>{
   'nav.haptics': 'Вибрация перед поворотом',
   'nav.simulator': 'Кнопка проигрывания маршрута',
   'nav.stream': 'Показывать на дисплее',
+  'nav.tiles.enable': 'Рисовать офлайн-карту',
+  'nav.tiles.switch.osm': 'Переключить на OpenStreetMap',
+  'nav.tiles.switch.graph': 'Переключить на офлайн-карту',
+  'nav.tiles.switched.osm': 'Карта: OpenStreetMap',
+  'nav.tiles.switched.graph': 'Карта: из офлайн-графа',
+  'nav.tiles.noGraph': 'Сначала скачайте регион — рисовать пока нечего',
+  'nav.tiles.style.graph.sub':
+      'Рисуется из скачанного региона. Работает без соединения.',
+  'nav.tiles.style.osm.sub':
+      'Тайлы OpenStreetMap. Нужно соединение, если район не сохранён.',
   'nav.hu.remaining': '{km} км · {min} мин',
   'nav.hu.title': 'Дисплей',
   'nav.hu.badge.offline': 'Дисплей не подключён',
@@ -1324,6 +1596,16 @@ const _ru = <String, String>{
   'mapdata.region.confirm':
       'Скачает выгрузку и соберёт граф маршрутов. Это сотни мегабайт и '
       'пара минут — лучше по Wi-Fi.',
+  'mapdata.region.current': 'Текущий: {name}',
+  'mapdata.auto.title': 'Предлагать карты по местоположению',
+  'mapdata.auto.subtitle':
+      'Предлагать подходящий регион, когда скачанная карта заканчивается',
+  'mapdata.saved.title': 'Сохранённые карты',
+  'mapdata.saved.active': 'используется',
+  'mapdata.saved.imported': 'Импортированная карта',
+  'mapdata.saved.delete': 'Удалить карту',
+  'mapdata.saved.delete.confirm': 'Удалить сохранённую карту «{name}»?',
+  'mapdata.saved.switchFailed': 'Не удалось переключиться на эту карту',
   'log.title': 'Журнал',
   'log.subtitle': 'строк за этот запуск: {n}',
   'log.empty': 'Пока пусто.',
@@ -1434,6 +1716,12 @@ String t(BuildContext context, String key) {
   final l = LocaleScope.of(context).locale.languageCode;
   return _tables[l]?[key] ?? _en[key] ?? key;
 }
+
+/// [t] for layers without a [BuildContext] — the background isolate that
+/// talks to the head unit, for instance. [languageCode] is the persisted app
+/// locale ('en'/'ru'); null falls back to English.
+String tl(String? languageCode, String key) =>
+    _tables[languageCode]?[key] ?? _en[key] ?? key;
 
 /// [t] with `{placeholder}` substitution.
 ///

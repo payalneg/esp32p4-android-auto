@@ -6,10 +6,13 @@
 /// graph that covers more than a neighbourhood.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../i18n/strings.dart';
 import '../nav/geofabrik.dart';
+import '../nav/location_service.dart';
 import '../nav/map_data.dart';
 
 class RegionPickerScreen extends StatefulWidget {
@@ -27,6 +30,11 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
   Map<String, String>? _errorArgs;
   List<GeofabrikRegion> _hits = const <GeofabrikRegion>[];
 
+  /// Catalogue ids whose map is already kept on disk.
+  Set<String> _savedIds = const <String>{};
+  GeofabrikRegion? _near;
+  String? _nearPath;
+
   @override
   void initState() {
     super.initState();
@@ -39,15 +47,16 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool refresh = false}) async {
     setState(() {
       _loading = true;
       _errorKey = null;
     });
     try {
-      final index =
-          await GeofabrikIndex.fetch(userAgent: MapData.instance.userAgent);
+      final index = await MapData.instance.regionCatalogue(refresh: refresh);
       if (mounted) setState(() => _index = index);
+      unawaited(_loadSavedIds());
+      unawaited(_findNear());
     } on GeofabrikException catch (e) {
       if (mounted) {
         setState(() {
@@ -57,6 +66,35 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Which rows already have a map on the phone.
+  Future<void> _loadSavedIds() async {
+    final archived = await MapData.instance.archivedRegions();
+    if (!mounted) return;
+    setState(() => _savedIds = <String>{
+          for (final item in archived)
+            if (item.id != null && item.id!.isNotEmpty) item.id!,
+        });
+  }
+
+  /// The region containing where the rider is, without asking for anything
+  /// and without downloading the geometry catalogue if it is not here yet.
+  Future<void> _findNear() async {
+    try {
+      final GeoFix? fix = await LocationService().lastKnown();
+      if (fix == null) return;
+      final catalogue = await MapData.instance.cachedGeometryCatalogue();
+      if (catalogue == null) return;
+      final region = catalogue.regionAt(fix.position);
+      if (region == null || !mounted) return;
+      setState(() {
+        _near = region;
+        _nearPath = region.pathLabel(catalogue.byId);
+      });
+    } on Object {
+      // A hint is optional; a platform without geolocation simply has none.
     }
   }
 
@@ -100,7 +138,7 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
                             color: Theme.of(context).colorScheme.error)),
                   ),
                   TextButton(
-                      onPressed: _load,
+                      onPressed: () => _load(refresh: true),
                       child: Text(t(context, 'mapdata.catalog.refresh'))),
                 ],
               ),
@@ -115,16 +153,32 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
     final index = _index;
     if (index == null) return const SizedBox.shrink();
     if (_query.text.trim().isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Text(
-            tf(context, 'mapdata.region.count',
-                <String, Object?>{'n': index.regions.length}),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
+      return ListView(
+        children: <Widget>[
+          if (_near != null)
+            Card(
+              margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+              child: ListTile(
+                leading: const Icon(Icons.my_location),
+                title: Text(tf(context, 'mapdata.region.near',
+                    <String, Object?>{'region': _near!.name})),
+                subtitle: Text(_nearPath ?? ''),
+                trailing: _savedIds.contains(_near!.id)
+                    ? const Icon(Icons.offline_pin)
+                    : const Icon(Icons.chevron_right),
+                onTap: () => _confirm(_near!),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(32),
+            child: Text(
+              tf(context, 'mapdata.region.count',
+                  <String, Object?>{'n': index.regions.length}),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
           ),
-        ),
+        ],
       );
     }
     if (_hits.isEmpty) {
@@ -138,6 +192,9 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
           leading: const Icon(Icons.public),
           title: Text(region.name),
           subtitle: Text(region.pathLabel(index.byId)),
+          trailing: _savedIds.contains(region.id)
+              ? const Icon(Icons.offline_pin)
+              : null,
           onTap: () => _confirm(region),
         );
       },
@@ -145,13 +202,45 @@ class _RegionPickerScreenState extends State<RegionPickerScreen> {
   }
 
   /// A province is a long download and a heavy parse, so it is worth one
-  /// deliberate tap rather than an accidental one.
+  /// deliberate tap rather than an accidental one. A region that is already
+  /// saved needs no download at all: the tap becomes a switch.
   Future<void> _confirm(GeofabrikRegion region) async {
+    final saved = _savedIds.contains(region.id) ||
+        await MapData.instance.hasArchivedRegion(region.id);
+    if (!mounted) return;
+
+    if (saved) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(region.name),
+          content: Text(t(ctx, 'mapdata.region.saved.confirm')),
+          actions: <Widget>[
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(t(ctx, 'home.forget.cancel'))),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(t(ctx, 'mapdata.region.switch'))),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+      Navigator.pop(context);
+      await MapData.instance.activateRegion(MapData.regionKey(region.id));
+      return;
+    }
+
+    final current = MapData.instance.regionName;
+    final warn = current == null
+        ? ''
+        : '\n\n'
+            '${tf(context, 'mapdata.region.confirm.replaces', <String, Object?>{'current': current})}';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(region.name),
-        content: Text(t(ctx, 'mapdata.region.confirm')),
+        content: Text('${t(ctx, 'mapdata.region.confirm')}$warn'),
         actions: <Widget>[
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),

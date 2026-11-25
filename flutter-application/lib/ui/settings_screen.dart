@@ -26,6 +26,7 @@ import 'display_settings_screen.dart';
 import 'helper_screen.dart';
 import 'lisp_editor_screen.dart';
 import 'map_data_screen.dart';
+import 'map_settings_screen.dart';
 import '../log/app_log.dart';
 import 'log_screen.dart';
 
@@ -97,6 +98,18 @@ class SettingsScreen extends StatelessWidget {
             },
           ),
           const SizedBox(height: 8),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.tune),
+              title: Text(t(context, 'nav.settings.title')),
+              subtitle: Text(t(context, 'nav.settings.subtitle')),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MapSettingsScreen()),
+              ),
+            ),
+          ),
           ListenableBuilder(
             listenable: MapData.instance,
             builder: (ctx, _) => Card(

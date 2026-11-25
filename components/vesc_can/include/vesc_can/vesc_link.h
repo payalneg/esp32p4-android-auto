@@ -114,6 +114,45 @@ uint32_t vesc_link_sync_timeout_ms(void);
 /* Scale a CAN-tuned poll interval for the live transport. Identity on CAN. */
 uint32_t vesc_link_scale_ms(uint32_t base_ms);
 
+/* Same, for the dashboard's own *polling* cadence — plus one rule that only
+ * matters when the NUS bridge has a peer: while the phone (VESC Tool) is
+ * talking to the same node, this device's polls are stretched to at most
+ * 1 Hz. They share one request/reply rail with the phone's requests, so at
+ * 10 Hz the dashboard alone could keep that rail busy enough that VESC Tool's
+ * requests queue up behind it and time out (the "connected, one dataset, then
+ * nothing" symptom). The dashboard does not need them: every payload the
+ * bridge forwards passes through the same fan-out, so VESC Tool's own answers
+ * keep the fast fields fresh; the slow ones (odometer, pack level) cost at
+ * most a second of staleness. Not for timeouts — use vesc_link_scale_ms(). */
+uint32_t vesc_link_poll_ms(uint32_t base_ms);
+
+/* The phone-side bridge sent a request. Called on the bridge task, right
+ * before the request is handed to the transport, so it must stay a timestamp
+ * write and nothing else. */
+void vesc_link_bridge_note_traffic(void);
+
+/* True for a short hold window after the last phone request. Read by the
+ * dashboard's poll loops through vesc_link_poll_ms(). */
+bool vesc_link_bridge_active(void);
+
+/* Longest prefix vesc_link_reply_prefix() writes (command + 4 mask bytes). */
+#define VESC_LINK_REPLY_PREFIX_MAX 5
+
+/* The prefix the answer to `data` must start with, so a transport can tell
+ * the phone's own answer from the dashboard's: the echoed command byte, plus
+ * the echoed mask for the two SELECTIVE polls (whose replies carry a mask that
+ * this device and VESC Tool both use — the command byte alone is not enough).
+ * A pre-addressed COMM_FORWARD_CAN payload is unwrapped first, because the
+ * answer comes back without the wrapper. Returns the length, 0 for bad input. */
+uint8_t vesc_link_reply_prefix(const uint8_t *data, unsigned int len,
+                               uint8_t out[VESC_LINK_REPLY_PREFIX_MAX]);
+
+/* Whether `reply` (len bytes) starts with `prefix` (plen bytes). A reply
+ * shorter than the prefix — the SET_* family answers with the bare command —
+ * is compared as far as it goes. */
+bool vesc_link_reply_matches(const uint8_t *reply, unsigned int len,
+                             const uint8_t *prefix, uint8_t plen);
+
 /* One hook for reassembled VESC packets, whichever transport produced them.
  * Registering it also wires the CAN backend's own handler. */
 void vesc_link_set_packet_handler(vesc_link_packet_handler_t handler);

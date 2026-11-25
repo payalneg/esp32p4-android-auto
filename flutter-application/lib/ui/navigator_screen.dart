@@ -18,6 +18,7 @@ import '../ble/nav_stream.dart';
 import '../bridge/nav_intent_bridge.dart';
 import '../bridge/screen_bridge.dart';
 import '../i18n/strings.dart';
+import '../log/app_log.dart';
 import '../nav/announcer.dart';
 import '../nav/head_unit_feed.dart';
 import '../nav/geo.dart';
@@ -27,16 +28,18 @@ import '../nav/map_data.dart';
 import '../nav/nav_camera.dart';
 import '../nav/nav_controller.dart';
 import '../nav/nav_link.dart';
+import '../nav/region_suggester.dart';
 import '../nav/router.dart';
 import '../nav/voice.dart';
 import '../nav/search_index.dart';
 import '../nav/tile_cache.dart';
 import '../nav/tile_math.dart';
-import '../nav/way_classes.dart';
 import '../settings/nav_settings.dart';
 import 'nav/cached_tile_provider.dart';
 import 'nav/maneuver_banner.dart';
 import 'nav/route_info_bar.dart';
+import 'bike_battery_chip.dart';
+import 'map_settings_screen.dart';
 import 'region_picker_screen.dart';
 import 'settings_screen.dart';
 
@@ -104,6 +107,10 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   /// A map link that arrived before the routing graph was loaded.
   NavLink? _pendingLink;
 
+  /// The ride-stream switch as last applied, so a settings change is noticed
+  /// without restarting the feed on every unrelated preference change.
+  bool _streamSetting = true;
+
   /// Whether we hold FLAG_KEEP_SCREEN_ON; follows [NavController.navigating].
   bool _screenPinned = false;
 
@@ -168,6 +175,21 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   bool _prefetching = false;
   LatLon? _lastPrefetchAt;
 
+  /// The regional map offered for where the rider is, if any, and where it was
+  /// offered. The offer is not a dialog: it sits above the map until it is
+  /// acted on or the rider has ridden far enough for it to be the wrong
+  /// region.
+  RegionSuggestion? _suggestedRegion;
+  LatLon? _suggestedFrom;
+
+  /// The destination whose missing map has already been looked up, so a failed
+  /// route does not ask on every notification.
+  LatLon? _destinationChecked;
+  late final RegionSuggester _suggester;
+  bool _regionCheckRunning = false;
+  bool _lookingUpRegion = false;
+  Timer? _lookupTimer;
+
   /// Nudges the tile layer to ask for its tiles again.
   ///
   /// A tile that failed once — a tunnel, a dead second of signal — is marked
@@ -179,6 +201,8 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   void initState() {
     super.initState();
     _controller = widget.controller ?? NavController();
+    _suggester = RegionSuggester(
+        map: MapData.instance, settings: NavSettings.instance);
     WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _announceSub = _controller.announcements.listen(_onAnnouncement);
@@ -217,9 +241,12 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     // The service isolate keeps the head unit fed while this UI sleeps; tell
     // it we are awake and feeding now, and mirror the stream switch.
     BleProxy.instance.setNavUiActive(true);
-    BleProxy.instance
-        .setNavStreamEnabled(NavSettings.instance.streamToDisplay);
+    _streamSetting = NavSettings.instance.streamToDisplay;
+    BleProxy.instance.setNavStreamEnabled(_streamSetting);
     _syncStreamer();
+    // The preferences live on their own screen now; keep the live controller
+    // (and the head unit feed) in step when they change there.
+    NavSettings.instance.addListener(_onNavSettingsChanged);
     unawaited(_locateOnOpen());
   }
 
@@ -245,6 +272,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _lookupTimer?.cancel();
     // Hand the head unit back to the service isolate before this feed dies.
     BleProxy.instance.setNavUiActive(false);
     unawaited(_feed?.dispose());
@@ -259,10 +287,28 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     _announceSub?.cancel();
     unawaited(_voice.stop());
     if (_screenPinned) unawaited(ScreenBridge.keepOn(false));
+    NavSettings.instance.removeListener(_onNavSettingsChanged);
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     _map.dispose();
     super.dispose();
+  }
+
+  /// Preferences are edited on [MapSettingsScreen]; mirror the ones that own
+  /// live state (profile, track-up, the head-unit stream) into this controller.
+  void _onNavSettingsChanged() {
+    final s = NavSettings.instance;
+    if (_controller.profile != s.profile) {
+      unawaited(_controller.setProfile(s.profile));
+    }
+    if (_controller.trackUp != s.trackUp) {
+      _controller.setTrackUp(s.trackUp);
+    }
+    if (_streamSetting != s.streamToDisplay) {
+      _streamSetting = s.streamToDisplay;
+      BleProxy.instance.setNavStreamEnabled(_streamSetting);
+      _syncStreamer();
+    }
   }
 
   void _onControllerChanged() {
@@ -295,6 +341,17 @@ class _NavigatorScreenState extends State<NavigatorScreen>
                   for (final p in route.points) (lat: p.lat, lon: p.lon),
                 ], segmentTypes: route?.segmentTypes);
     }
+    // A route that could not be finished may be missing the region the
+    // destination sits in. Ask once per destination, not once per redraw.
+    final finish = _controller.finish;
+    if (finish == null || _controller.hasRoute) {
+      _destinationChecked = null;
+    } else if (!_controller.routing &&
+        _controller.messageKey == 'nav.route.notFound' &&
+        _destinationChecked != finish) {
+      _destinationChecked = finish;
+      unawaited(_considerDestinationRegion(finish));
+    }
     final fix = _controller.lastFix;
     if (fix != null) {
       if (_controller.follow) _followCamera(fix);
@@ -311,6 +368,7 @@ class _NavigatorScreenState extends State<NavigatorScreen>
         );
       }
       unawaited(_topUpAroundPosition(fix.position));
+      _considerRegionSuggestion(fix.position);
     }
     if (_controller.navigating != _screenPinned) {
       _screenPinned = _controller.navigating;
@@ -384,15 +442,54 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     // and the map underneath is not cheap to redraw, so the progress is
     // throttled; a change of state is never throttled, since that is the one
     // the rider is waiting for.
+    final previous = _paintedDataState;
+    final state = MapData.instance.state;
     if (mounted) {
-      final state = MapData.instance.state;
       final now = DateTime.now();
-      if (state != _paintedDataState ||
+      if (state != previous ||
           now.difference(_paintedDataAt).inMilliseconds > 250) {
         _paintedDataState = state;
         _paintedDataAt = now;
         setState(() {});
       }
+    }
+    // A new region answers the old question; a running build makes the offer
+    // pointless and the two cards would fight for the same strip of screen.
+    if (state == MapDataState.downloading || state == MapDataState.loading) {
+      if (mounted && (_suggestedRegion != null || _lookingUpRegion)) {
+        setState(() {
+          _suggestedRegion = null;
+          _suggestedFrom = null;
+          _lookingUpRegion = false;
+        });
+      }
+    } else if (state == MapDataState.ready && previous != MapDataState.ready) {
+      _suggester.reset();
+    }
+    // A fix that arrived before the graph was read got "not settled" as its
+    // answer, and a rider standing still may not send another one for a while.
+    // Ask again now that the disk has been read.
+    if ((state == MapDataState.ready || state == MapDataState.absent) &&
+        state != previous) {
+      final fix = _controller.lastFix;
+      if (fix != null) _considerRegionSuggestion(fix.position);
+    }
+    // A different graph object means the saved map was switched (or deleted).
+    // A route computed on the old one is not something the router can carry
+    // over, so ask for it again rather than guide along a line it cannot
+    // follow.
+    final graph = MapData.instance.graph;
+    if (_graphSeen != null && !identical(_graphSeen, graph)) {
+      _graphSeen = graph;
+      if (_controller.hasRoute) {
+        _controller.reset(keepFixes: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(t(context, 'nav.route.mapChanged'))));
+        }
+      }
+    } else {
+      _graphSeen = graph;
     }
     final link = _pendingLink;
     if (link == null || !MapData.instance.isReady) return;
@@ -402,6 +499,176 @@ class _NavigatorScreenState extends State<NavigatorScreen>
 
   MapDataState? _paintedDataState;
   DateTime _paintedDataAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// The graph the current route was computed on. A different object means the
+  /// saved map was switched or deleted, and the line on screen is no longer
+  /// something the router can reroute along.
+  Object? _graphSeen;
+
+  /// Watches for a fix outside every downloaded map and offers the region that
+  /// contains it. Called for each fix; the suggester owns the throttling.
+  void _considerRegionSuggestion(LatLon at) {
+    if (!mounted) return;
+    final shown = _suggestedRegion;
+    if (shown != null) {
+      final from = _suggestedFrom;
+      // Twenty kilometres is past the border of almost any Geofabrik extract
+      // in daily use, and the offer is about where the rider is *now*.
+      if (from == null || haversineM(from, at) < 20000) return;
+      setState(() {
+        _suggestedRegion = null;
+        _suggestedFrom = null;
+      });
+    }
+    if (_regionCheckRunning) return;
+    _regionCheckRunning = true;
+    unawaited(_checkRegionSuggestion(at));
+  }
+
+  Future<void> _checkRegionSuggestion(LatLon at) async {
+    // Reading the three-megabyte catalogue takes a moment even from disk, and
+    // fetching it takes longer; a spinner only after half a second keeps the
+    // common cached case from flashing a card.
+    _lookupTimer?.cancel();
+    _lookupTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted && _regionCheckRunning) {
+        setState(() => _lookingUpRegion = true);
+      }
+    });
+    try {
+      final suggestion = await _suggester.check(at);
+      if (!mounted) return;
+      final state = MapData.instance.state;
+      // A build may have started while the lookup was in flight; its progress
+      // card owns the top of the map now, and its answer supersedes this one.
+      final stillWanted = state == MapDataState.ready ||
+          state == MapDataState.absent;
+      setState(() {
+        _lookingUpRegion = false;
+        if (suggestion != null && stillWanted) {
+          _suggestedRegion = suggestion;
+          _suggestedFrom = at;
+        }
+      });
+    } finally {
+      _regionCheckRunning = false;
+      _lookupTimer?.cancel();
+      _lookupTimer = null;
+    }
+  }
+
+  /// Where a full-width card may start: below the turn plate when one is up,
+  /// so a suggestion never covers the next manoeuvre.
+  double get _topBannerInset =>
+      _controller.guidance != null && _controller.hasRoute ? 92 : 12;
+
+  /// A route that failed because the destination's region is not downloaded.
+  ///
+  /// Unlike a position fix, a destination does not move, so it is checked
+  /// without the "once per five kilometres" throttle — but it is still checked
+  /// only once per destination, and still respects "Not now".
+  Future<void> _considerDestinationRegion(LatLon finish) async {
+    if (!mounted) return;
+    if (_suggestedRegion != null || _regionCheckRunning) {
+      // Another card is already up; ask again on the next update instead of
+      // losing this destination for good.
+      _destinationChecked = null;
+      return;
+    }
+    _regionCheckRunning = true;
+    try {
+      final suggestion = await _suggester.check(finish,
+          oncePerPlace: false, reason: RegionSuggestionReason.destination);
+      if (!mounted) return;
+      final state = MapData.instance.state;
+      if (suggestion != null &&
+          state != MapDataState.downloading &&
+          state != MapDataState.loading &&
+          state != MapDataState.error) {
+        setState(() {
+          _suggestedRegion = suggestion;
+          _suggestedFrom = null;
+        });
+      }
+    } finally {
+      _regionCheckRunning = false;
+    }
+  }
+
+  /// Recomputes the route the rider was trying to build, now that its region
+  /// is on the phone.
+  Future<void> _retryDestinationRoute() async {
+    final finish = _controller.finish;
+    if (!mounted || finish == null) return;
+    _destinationChecked = finish;
+    await _controller.routeTo(finish);
+  }
+
+  /// Where a download should be centred when there is no fix: whatever the map
+  /// is showing, or the last place it was left.
+  LatLon get _viewCentre {
+    try {
+      final c = _map.camera.center;
+      return LatLon(c.latitude, c.longitude);
+    } on Object {
+      final saved = NavSettings.instance.lastView;
+      return saved == null ? kFallbackCentre : LatLon(saved.$1, saved.$2);
+    }
+  }
+
+  /// Download the offered region, or switch to it when it is already on the
+  /// phone. A download then saves the tiles around the rider: the graph is
+  /// what answers routing, the tiles are what show the ground, and "download
+  /// the map for here" means both.
+  Future<void> _applyRegionOffer() async {
+    final offer = _suggestedRegion;
+    if (offer == null) return;
+    final destination = offer.reason == RegionSuggestionReason.destination;
+    final centre = _controller.lastFix?.position ?? _viewCentre;
+    setState(() {
+      _suggestedRegion = null;
+      _suggestedFrom = null;
+    });
+    await NavSettings.instance.clearRegionSnooze();
+
+    if (offer.saved) {
+      final ok = await MapData.instance
+          .activateRegion(MapData.regionKey(offer.region.id));
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(t(context, 'mapdata.saved.switchFailed'))));
+        return;
+      }
+      if (destination) await _retryDestinationRoute();
+      return;
+    }
+
+    await MapData.instance.buildFromRegion(offer.region);
+    if (!mounted || !MapData.instance.isReady) return;
+    // Finish the errand first: the route the rider asked for, now that the
+    // map exists. The tile download follows.
+    if (destination) await _retryDestinationRoute();
+    // The build may have taken minutes with the phone in a pocket; save the
+    // tiles where the rider is now, not where the offer was made.
+    try {
+      await _saveAreaTiles(_controller.lastFix?.position ?? centre,
+          NavSettings.instance.areaRadiusKm * 1000.0);
+    } on Object catch (e) {
+      // The graph is already useful without the tiles; a dead connection here
+      // must not turn the download into a failure.
+      AppLog.w('map', 'area tiles after a region build failed: $e');
+    }
+  }
+
+  Future<void> _snoozeRegionOffer() async {
+    final offer = _suggestedRegion;
+    setState(() {
+      _suggestedRegion = null;
+      _suggestedFrom = null;
+    });
+    if (offer != null) await NavSettings.instance.snoozeRegion(offer.region.id);
+  }
 
   /// Another app handed us a place — show it, route to it, or go, whichever
   /// the sender asked for.
@@ -593,109 +860,24 @@ class _NavigatorScreenState extends State<NavigatorScreen>
         appBar: AppBar(
           title: Text(t(context, 'nav.title')),
           actions: <Widget>[
+            const BikeBatteryChip(),
             IconButton(
               icon: const Icon(Icons.search),
               tooltip: t(context, 'nav.search.hint'),
               onPressed: _openSearch,
             ),
-            PopupMenuButton<RideProfile>(
-              icon: const Icon(Icons.route_outlined),
-              tooltip: t(context, 'nav.profile'),
-              initialValue: _controller.profile,
-              onSelected: _controller.setProfile,
-              itemBuilder: (ctx) => RideProfile.values
-                  .map((p) => PopupMenuItem<RideProfile>(
-                      value: p, child: Text(t(ctx, p.i18nKey))))
-                  .toList(),
+            IconButton(
+              icon: const Icon(Icons.tune),
+              tooltip: t(context, 'nav.settings.title'),
+              onPressed: _openMapSettings,
             ),
-            // Reachable whether or not data is already loaded: riding into the
-            // next town is exactly when you need another area.
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert),
-              onSelected: (choice) {
-                switch (choice) {
-                  case 'region':
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const RegionPickerScreen()));
-                  case 'tiles':
-                    _saveMapAroundMe();
-                  case 'settings':
-                    Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const SettingsScreen()));
-                  case 'voice':
-                    NavSettings.instance.setVoice(!NavSettings.instance.voice);
-                  case 'haptics':
-                    NavSettings.instance
-                        .setHaptics(!NavSettings.instance.haptics);
-                  case 'trackUp':
-                    _controller.setTrackUp(!_controller.trackUp);
-                  case 'simulator':
-                    NavSettings.instance
-                        .setSimulator(!NavSettings.instance.simulator);
-                  case 'stream':
-                    NavSettings.instance.setStreamToDisplay(
-                        !NavSettings.instance.streamToDisplay);
-                    BleProxy.instance.setNavStreamEnabled(
-                        NavSettings.instance.streamToDisplay);
-                    _syncStreamer();
-                }
-              },
-              itemBuilder: (ctx) => <PopupMenuEntry<String>>[
-                CheckedPopupMenuItem<String>(
-                  value: 'voice',
-                  checked: NavSettings.instance.voice,
-                  child: Text(t(ctx, 'nav.voice')),
-                ),
-                CheckedPopupMenuItem<String>(
-                  value: 'haptics',
-                  checked: NavSettings.instance.haptics,
-                  child: Text(t(ctx, 'nav.haptics')),
-                ),
-                CheckedPopupMenuItem<String>(
-                  value: 'trackUp',
-                  checked: _controller.trackUp,
-                  child: Text(t(ctx, 'nav.trackUp')),
-                ),
-                CheckedPopupMenuItem<String>(
-                  value: 'stream',
-                  checked: NavSettings.instance.streamToDisplay,
-                  child: Text(t(ctx, 'nav.stream')),
-                ),
-                CheckedPopupMenuItem<String>(
-                  value: 'simulator',
-                  checked: NavSettings.instance.simulator,
-                  child: Text(t(ctx, 'nav.simulator')),
-                ),
-                const PopupMenuDivider(),
-                PopupMenuItem<String>(
-                  value: 'region',
-                  child: ListTile(
-                    leading: const Icon(Icons.public),
-                    title: Text(t(ctx, 'mapdata.region.title')),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'tiles',
-                  child: ListTile(
-                    leading: const Icon(Icons.download_for_offline_outlined),
-                    title: Text(t(ctx, 'mapdata.area.save')),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'settings',
-                  child: ListTile(
-                    leading: const Icon(Icons.settings),
-                    title: Text(t(ctx, 'settings.title')),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-              ],
+            IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: t(context, 'settings.title'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
             ),
           ],
         ),
@@ -706,7 +888,15 @@ class _NavigatorScreenState extends State<NavigatorScreen>
         body: Stack(
           children: <Widget>[
             _buildMap(context),
-            if (MapData.instance.state == MapDataState.absent ||
+            // One card owns the top of the map. An offer for the region the
+            // rider is standing in says more than "no map data yet", so it
+            // takes the place of the generic banner; a lookup in progress says
+            // what the wait is for.
+            if (_suggestedRegion != null && NavSettings.instance.autoRegion)
+              _regionOfferBanner(context, top: _topBannerInset)
+            else if (_lookingUpRegion)
+              _regionLookupBanner(context, top: _topBannerInset)
+            else if (MapData.instance.state == MapDataState.absent ||
                 MapData.instance.state == MapDataState.error)
               _dataBanner(context),
             // A region takes minutes and is started from this screen's menu,
@@ -1022,6 +1212,132 @@ class _NavigatorScreenState extends State<NavigatorScreen>
     );
   }
 
+  /// The unsolicited offer: "you are here, this map covers it".
+  ///
+  /// Deliberately a card and not a dialog — the rider may be mid-ride, and a
+  /// modal that asks a question about a download they did not start is how a
+  /// navigator gets in the way. It can be ignored until the next one.
+  Widget _regionOfferBanner(BuildContext context, {required double top}) {
+    final offer = _suggestedRegion!;
+    final theme = Theme.of(context);
+    final saved = offer.saved;
+    final destination = offer.reason == RegionSuggestionReason.destination;
+    final titleKey = saved
+        ? 'nav.region.offer.saved.title'
+        : (destination
+            ? 'nav.region.offer.dest.title'
+            : 'nav.region.offer.title');
+    final bodyKey = saved
+        ? 'nav.region.offer.saved.body'
+        : (destination
+            ? 'nav.region.offer.dest.body'
+            : 'nav.region.offer.body');
+    final current = MapData.instance.regionName;
+    return Positioned(
+      top: top,
+      left: 12,
+      right: 12,
+      child: Card(
+        color: theme.colorScheme.secondaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(
+                      saved
+                          ? Icons.offline_pin
+                          : Icons.download_for_offline_outlined,
+                      size: 22, color: theme.colorScheme.onSecondaryContainer),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          tf(context, titleKey,
+                              <String, Object?>{'region': offer.region.name}),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          tf(context, bodyKey,
+                              <String, Object?>{'path': offer.label}),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        if (!saved && current != null) ...<Widget>[
+                          const SizedBox(height: 4),
+                          Text(
+                            tf(context, 'nav.region.offer.keeps',
+                                <String, Object?>{'current': current}),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: <Widget>[
+                  TextButton(
+                    onPressed: _snoozeRegionOffer,
+                    child: Text(t(context, 'nav.region.offer.later')),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _applyRegionOffer,
+                    child: Text(t(
+                        context,
+                        saved
+                            ? 'nav.region.offer.use'
+                            : 'nav.region.offer.download')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The few seconds it takes to answer "which region is this".
+  Widget _regionLookupBanner(BuildContext context, {required double top}) =>
+      Positioned(
+        top: top,
+        left: 12,
+        right: 12,
+        child: Card(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: <Widget>[
+                const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 14),
+                Expanded(
+                    child: Text(t(context, 'nav.region.offer.looking'))),
+              ],
+            ),
+          ),
+        ),
+      );
+
   /// Without a graph there is nothing to route on, so this leads straight to
   /// the one place that provides one.
   Widget _dataBanner(BuildContext context) => Positioned(
@@ -1098,6 +1414,19 @@ class _NavigatorScreenState extends State<NavigatorScreen>
               LinearProgressIndicator(value: value),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// All map and navigator preferences live on their own screen now; this
+  /// keeps the map itself down to search and the gear.
+  Future<void> _openMapSettings() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MapSettingsScreen(
+          onSaveArea: () => unawaited(_saveMapAroundMe()),
         ),
       ),
     );

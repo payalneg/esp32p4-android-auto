@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../nav/geo.dart';
 
 import '../firmware/ota_info.dart';
+import 'bike_battery.dart';
 import 'ble_service.dart' show BleConnState;
 import 'file_ops.dart';
 import 'ipc.dart';
@@ -85,6 +86,8 @@ class BleProxy {
   final _helperCtrl = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get helperEvents => _helperCtrl.stream;
   final _vescTargetCtrl = StreamController<VescTargetInfo>.broadcast();
+  final _bikeBatteryCtrl = StreamController<BikeBattery>.broadcast();
+  BikeBattery? _bikeBattery;
   final _navStateCtrl = StreamController<NavDisplayState>.broadcast();
   final _navDestCtrl = StreamController<LatLon>.broadcast();
   final _navDroppedCtrl = StreamController<({int z, int x, int y})>.broadcast();
@@ -122,6 +125,11 @@ class BleProxy {
   /// Which NUS link the LISP editor is pointed at, and its state.
   Stream<VescTargetInfo> get vescTarget => _vescTargetCtrl.stream;
   VescTargetInfo get currentVescTarget => _vescTarget;
+
+  /// The bike's pack charge. Loaded from the cache at startup, so the app can
+  /// answer "how much is left?" even when the bike is switched off.
+  BikeBattery? get bikeBattery => _bikeBattery;
+  Stream<BikeBattery> get bikeBatteryUpdates => _bikeBatteryCtrl.stream;
   BleConnState get currentState => _state;
   String? get savedRemoteId => _savedRemoteId;
   bool get supportsFileManager => _supportsFm;
@@ -165,6 +173,10 @@ class BleProxy {
     }
     final p = await SharedPreferences.getInstance();
     _savedRemoteId = p.getString(_prefSavedId);
+    // The service that owns the link may not be running (bike off, service
+    // reaped); the cached reading is the whole point of this feature then.
+    final cachedBattery = BikeBattery.loadFrom(p);
+    if (cachedBattery != null) _applyBikeBattery(cachedBattery);
     // Pull the live status — the task only pushes on *change*, so without this
     // a fresh UI isolate would paint "not connected" over a working link.
     unawaited(syncStatus());
@@ -298,6 +310,13 @@ class BleProxy {
         _navDestCtrl.add(LatLon(
             (m['lat'] as num).toDouble(), (m['lon'] as num).toDouble()));
         break;
+      case IpcEvt.bikeBattery:
+        final b = m['battery'];
+        if (b is Map) {
+          _applyBikeBattery(
+              BikeBattery.fromMap(Map<String, dynamic>.from(b)));
+        }
+        break;
       case IpcEvt.helperState:
       case IpcEvt.helperStatusFrame:
       case IpcEvt.helperParams:
@@ -324,6 +343,11 @@ class BleProxy {
     if (raw is! Map) return;
     _vescTarget = VescTargetInfo.fromMap(Map<String, dynamic>.from(raw));
     _vescTargetCtrl.add(_vescTarget);
+  }
+
+  void _applyBikeBattery(BikeBattery b) {
+    _bikeBattery = b;
+    if (!_bikeBatteryCtrl.isClosed) _bikeBatteryCtrl.add(b);
   }
 
   void _forget(int? id) {
@@ -371,6 +395,11 @@ class BleProxy {
       _navStateCtrl.add(_navState);
     }
     _applyVescTarget(m['vescTarget']);
+    final battery = m['bikeBattery'];
+    if (battery is Map) {
+      _applyBikeBattery(
+          BikeBattery.fromMap(Map<String, dynamic>.from(battery)));
+    }
     final name = m['state'] as String?;
     _state = BleConnState.values.firstWhere((e) => e.name == name,
         orElse: () => BleConnState.idle);

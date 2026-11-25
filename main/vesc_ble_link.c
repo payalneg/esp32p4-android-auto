@@ -175,7 +175,10 @@ static volatile uint8_t s_inflight_kind;
  * its answer will carry. Read by on_packet() to decide what may be forwarded
  * back: only this request's answer, never the dashboard's own poll replies. */
 static volatile bool    s_inflight_from_bridge;
-static volatile uint8_t s_inflight_cmd;
+/* The prefix (command byte, plus the mask for the SELECTIVE polls) the answer
+ * to that request must start with — see vesc_link_reply_prefix(). */
+static volatile uint8_t s_inflight_prefix[VESC_LINK_REPLY_PREFIX_MAX];
+static volatile uint8_t s_inflight_prefix_len;
 /* The id probe timed out but its answer may still turn up; swallow that one
  * frame when it does instead of letting the RT parser stamp it as fresh. */
 static volatile bool    s_probe_late_id;
@@ -326,9 +329,13 @@ static void on_packet(const uint8_t *data, uint16_t len)
     /* Is this the answer to the request the TX task has out right now, and did
      * that request come from the phone? Both halves are needed: a reply to a
      * request that already timed out can arrive inside the next request's
-     * window, and it must not be handed to the phone as its own answer. */
+     * window, and it must not be handed to the phone as its own answer. The
+     * prefix includes the SELECTIVE mask, so this device's own polls of the
+     * same command cannot claim the tag. */
     bool for_phone = s_awaiting && s_inflight_from_bridge && !is_async &&
-                     data[0] == s_inflight_cmd;
+                     vesc_link_reply_matches(
+                         data, len, (const uint8_t *)s_inflight_prefix,
+                         s_inflight_prefix_len);
 
     bool mine = probe_capture(data, len);
     if (!mine) vesc_link_deliver_tagged(data, len, for_phone);
@@ -391,10 +398,11 @@ static void tx_task(void *arg)
          * are polling — and the answer would be attributed to the wrong
          * request. Pass a pre-addressed payload through untouched. */
         bool           pre_routed = (plen > 0 && payload[0] == COMM_FORWARD_CAN);
-        /* The command byte the answer will carry (the inner one when the
-         * request is wrapped), for matching it to this request. */
-        uint8_t        reply_cmd = plen ? payload[0] : 0;
-        if (reply_cmd == COMM_FORWARD_CAN && plen >= 3) reply_cmd = payload[2];
+        /* The prefix the answer must carry (the inner request's, when this one
+         * is wrapped), for matching it to this request. */
+        uint8_t        reply_prefix[VESC_LINK_REPLY_PREFIX_MAX];
+        uint8_t        reply_prefix_len =
+            vesc_link_reply_prefix(payload, plen, reply_prefix);
         /* Decided here, at send time, with whatever the probe knows by now —
          * not at queue time, when it may not have resolved yet. */
         bool           wrap    = !pre_routed && (it->route == TX_ROUTE_AUTO) &&
@@ -441,7 +449,8 @@ static void tx_task(void *arg)
          * so the poll task never reads a probe result recorded for a later
          * request. */
         if (kind == TX_KIND_PROBE_ID) s_probe_late_id = false;
-        s_inflight_cmd         = reply_cmd;
+        memcpy((void *)s_inflight_prefix, reply_prefix, reply_prefix_len);
+        s_inflight_prefix_len  = reply_prefix_len;
         s_inflight_from_bridge = bridge;
         s_inflight_kind        = kind;
         s_awaiting = (mode != 3);
@@ -469,7 +478,7 @@ static void tx_task(void *arg)
         s_awaiting             = false;
         s_inflight_kind        = TX_KIND_NORMAL;
         s_inflight_from_bridge = false;
-        s_inflight_cmd         = 0;
+        s_inflight_prefix_len  = 0;
 
         if (wait) xSemaphoreGive(s_caller_sem);
     }

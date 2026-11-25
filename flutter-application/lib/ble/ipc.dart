@@ -133,6 +133,10 @@ class IpcEvt {
   /// The head unit's tile store is empty — everything must be sent again.
   static const navEmptied = 'navEmptied';
 
+  /// {battery: {pct, v, ah, at, live}} — the bike's pack charge, read from
+  /// the head unit's NotifBridge battery characteristic.
+  static const bikeBattery = 'bikeBattery';
+
   // Helper (ESP32-C3), all unsolicited.
   static const helperState = 'helperState'; // {state, fw, busy}
   static const helperStatusFrame = 'helperStatusFrame'; // {status}

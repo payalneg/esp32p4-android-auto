@@ -9,6 +9,163 @@ changes.
 Entries below name the firmware version; the app version of the same release is
 the one recorded in the release commit.
 
+## Unreleased (Android app)
+
+### USB flashing now actually writes (five defects, found on hardware)
+
+The USB path had never been exercised against a real board. It answered
+`reason 0x5` then `reason 0x6` on FLASH_BEGIN and never wrote a byte; each of
+these was needed:
+
+- **The ROM takes 1 KB blocks, not 16 KB.** `0x4000` is the *stub* loader's
+  maximum (`ESPLoader.FLASH_WRITE_SIZE` in esptool is `0x400`); sending it to
+  the ROM is rejected with INVALID_COMMAND — `Command 0x2 failed (status 0x1,
+  reason 0x5)`.
+- **`SPI_SET_PARAMS` was missing.** Without it the ROM believes the flash has
+  size 0, and the erase FLASH_BEGIN asks for fails within 2 ms with
+  COMMAND_FAILED (`reason 0x6`). Sent with the same six words esptool uses.
+- **The flash chip was never reset.** 0x66/0x99 through the SPI peripheral's
+  USR_COMMAND path (register pokes ported from `run_spiflash_command()`), plus a
+  0x9F flash-id read that also lands in logcat (`[usbflash] flash id=0x…`).
+- **921600 Bd does not survive USB-OTG + CH343.** The ROM switched, the
+  verification read timed out every time and the link died. 460800 is used, and
+  a failed change is no longer fatal.
+- **A failed attempt leaked its baud rate.** The ROM keeps CHANGE_BAUD until
+  reset, so the next attempt at 115200 got no SYNC at all. `connect()` now
+  tries 115200 / 460800 / 921600, which also recovers a unit left mid-write.
+- **The board did not reboot after the write.** `FLASH_END` only *asks* the ROM
+  to restart and over USB-Serial/JTAG that request is often ignored — the unit
+  sat in the loader ("flashes but never restarts"). An EN pulse (RTS) with IO0
+  high now follows it.
+- Every phase goes to logcat (`adb logcat -s flutter | grep usbflash`), chip
+  revision included, because the screen only ever shows one line.
+
+### Debug the head unit over Wi-Fi, with no cable attached
+
+- A second transport for the debug commands, next to the UART/USB console:
+  **TCP on port 3333** (`CONFIG_DEBUG_WIFI_BRIDGE`, off by default). It streams
+  the log live and runs the same `screenshot` / `tap` / `swipe` / `uimode` /
+  `tasks` / `lvtimers` / `navstat` set, which now lives in one file
+  (`main/debug_cmds.c`) shared by both bridges instead of being tied to the
+  serial REPL.
+- This is the case that had no answer before: while the phone owns the USB port
+  (firmware flashing over USB, the app's third update path) there is no serial
+  console to watch, and a unit behind the dash never has one at all. The port is
+  reachable from the head unit's own SoftAP, `192.168.4.1:3333`, and the
+  firmware logs that line on boot.
+- Logs come from the PSRAM ring that already backs the Logs screen
+  (`components/log_capture`, 1 MB). `log_capture_read()` is new: a cursor-based
+  streaming read that reports how many bytes a slow client lost, so a client can
+  tail the ring without re-scanning it. On connect the client is first sent the
+  last `CONFIG_DEBUG_WIFI_BRIDGE_BACKLOG_KB` (32) of history — the boot log is
+  already in there, because the ring is installed at the very start of
+  `app_main`.
+- Screenshots over TCP are the raw payload after a `SCR-BEGIN … len=N` line
+  (no base64, which remains the UART wire format); logging is muted for the
+  frame so nothing splices into the bytes, and the CRC32 is advisory like on
+  UART. Anything a client types is a command; each finishes with `# done` or
+  `# err <code>`.
+- Host tool: `scripts/wifi_debug.py` — `logs [--grep RE] [--save FILE]`,
+  `screenshot FILE`, `tap`/`swipe`/`touchdown|move|up`, `cmd "tasks"`.
+- It grants touch injection and mode switching, and the log contains the AP
+  PSK, so it stays a bench-build option: release builds leave it off.
+
+### Flash the head unit from the phone over USB
+
+- The firmware screen has a third method next to WiFi and Bluetooth: **USB
+  cable**. The phone acts as a USB host and speaks the ESP ROM loader protocol
+  to the head unit — the native USB-Serial/JTAG port or the CH343 UART bridge —
+  so a unit whose firmware no longer boots can be revived without a PC.
+- The image bundled in the APK is written as a **full recovery image**
+  (bootloader at 0x2000 + partition table at 0x8000 + app at 0x20000), with an
+  **Application only** switch that writes just the app partition (and clears
+  the OTA boot selector) while keeping NVS/settings. To keep the APK small only
+  the first 0x20000 bytes (the "head") are bundled; the app part is appended at
+  flash time.
+- Any third-party `.bin` can be picked instead. Merged images are written at
+  0x0; application-only images at an editable offset (0x20000 by default for
+  this project's P4 boards). The image header's chip id and P4 silicon revision
+  range (v1.x vs v3.x — see `docs/esp32p4-rev3.md`) are checked before the first
+  erase, and the ROM's MD5 of the written region is verified afterwards.
+- `usb_serial` is vendored at `flutter-application/packages/usb_serial` and
+  patched for the CH343/CH343P bridge (upstream 0.6.0 only knows CH340/CH341).
+- `scripts/stage_firmware_asset.sh` now also stages
+  `assets/firmware/esp32p4_android_auto-<board>-head.bin` from each board's
+  `flasher_args.json`; `tool/check_usb_image.dart` prints what the flasher will
+  do with the staged assets or an arbitrary image.
+
+## 1.3.55 — 2026-11-25 (Android app 0.3.68+132)
+
+### VESC Tool through the display: reads and writes work again
+
+Firmware-only fix; the phone app is unchanged apart from the version bump.
+
+- **The dashboard yielded the link to VESC Tool.** Both live on the same
+  request/reply rail, and the display's 10 Hz `COMM_GET_VALUES_SETUP_SELECTIVE`
+  poll (plus the 5 Hz dashboard-stats poll and the ADC/PPM viewer) could keep it
+  busy enough that VESC Tool's requests queued behind it and timed out — the
+  link connected, the first dataset arrived, and then reads and writes stopped
+  working while the dashboard still looked fine. Every phone request now marks
+  the bridge active, and for two seconds after the last one the dashboard's own
+  polls are capped at 1 Hz (`vesc_link_poll_ms`). Its fast fields now come from
+  the phone's answers — the same packets pass through the shared fan-out — and
+  `COMM_GET_VALUES_SELECTIVE` / `COMM_GET_VALUES` are parsed for that
+  (`vesc_rt_data`), not just the setup-values variants.
+- **The bridge no longer runs on the NimBLE host task.** On CAN a phone request
+  takes the shared rail and waits for its answer (up to 60 ms, longer when a
+  poll holds the rail). Doing that inside the GATT write callback stalled the
+  whole BLE stack once per request, which is the other way the link ends up
+  "connected but deaf". Requests now go through a small `nus_bridge` task; the
+  host task only copies the payload. The queue is drained on disconnect and on
+  an NUS ownership switch, so a stale `SET_*` can never be applied later.
+- **Reply matching is exact.** The "is this the phone's answer" tag used to
+  compare only the command byte, so the display's own `SELECTIVE` polls — the
+  setup-values poll, and on a BLE link the second head's temperature-only poll,
+  which carries the same command byte as VESC Tool's realtime request — could
+  claim the tag: the phone received a partial dataset and its own answer was
+  dropped. The tag now carries the echoed mask as well
+  (`vesc_link_reply_prefix()`), on both transports.
+- Windows release tooling: `build_board.bat` passes the dependency-lock path to
+  CMake with forward slashes; a backslashed `C:\Users\...` aborted the
+  configure with `Invalid character escape '\U'`.
+
+## 1.3.54 — 2026-11-24 (Android app 0.3.67+131)
+
+### Map settings window
+
+- Every map and navigator preference now lives on a dedicated **Map settings**
+  screen: voice, haptics, track-up, simulator, ride profile, map style, region,
+  region offers, area radius, tile budget/cache/route limits and the head-unit
+  stream. The map screen has two settings buttons instead: the gear opens this
+  map screen, the classic settings button opens the old hub (display, helper,
+  LISP, map data, language, log, about). The map-data screen keeps downloads,
+  saved maps, imports and the tile cache.
+- Fixed the missing English/Russian strings for the region-offer banner and
+  saved-map list.
+- The live navigator mirrors profile, track-up and stream changes made on the
+  settings screen.
+
+### Bike battery in the companion app
+
+- The head unit exposes the pack state the dashboard uses (SOC, pack voltage,
+  remaining Ah) on a new NotifBridge battery characteristic (`…000d`).
+- The app reads it on connect and every 30 s, caches the last reading on the
+  phone, and shows it in the navigator's app bar. Tapping opens percent,
+  voltage, remaining capacity and the age of the reading. With the bike off,
+  the app still shows the last known charge instead of nothing.
+- The BLE helper screen keeps the last battery percentage its cadence sensor
+  reported, with an age, instead of falling back to “—”.
+
+### Offline navigator
+
+- Region suggestions: a fix outside every downloaded map offers the Geofabrik
+  region containing it, can download graph + tiles, and can snooze the offer.
+  A missing destination region is offered the same way and the route is retried
+  after the build.
+- Saved maps: the previous active graph is archived per region, so returning to
+  a region is a switch, not another download; the import path is preserved.
+- Offline vector map rendering and the app/head-unit style switch.
+
 ## 1.3.53 — 2026-11-22 (Android app 0.3.64+128)
 
 ### Performance (second batch)

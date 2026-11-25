@@ -120,18 +120,74 @@ void vesc_rt_data_request(void)
                         vesc_link_sync_timeout_ms());
 }
 
+/* COMM_GET_VALUES (the classic MC dataset, cmd 4). Fixed layout, no mask and
+ * no speed field — that one only exists in the setup values. Still worth
+ * parsing: it is what VESC Tool's realtime screen may ask for, and while the
+ * phone is polling, this device's own SETUP_SELECTIVE poll is throttled to
+ * 1 Hz (vesc_link_poll_ms), so the phone's answers are what keeps the
+ * dashboard current. */
+static bool rt_parse_mc_values(const uint8_t *data, unsigned int len)
+{
+    int32_t ind = 1;
+#define RT_HAVE(n) (((unsigned int)ind + (unsigned int)(n)) <= len)
+    if (!RT_HAVE(2)) return false;
+    s_rt_data.temp_mos = buffer_get_float16(data, 1e1f, &ind);
+    if (!RT_HAVE(2)) return false;
+    s_rt_data.temp_motor = buffer_get_float16(data, 1e1f, &ind);
+    if (!RT_HAVE(4)) return false;
+    s_rt_data.current_motor = buffer_get_float32(data, 1e2f, &ind);
+    if (!RT_HAVE(4)) return false;
+    s_rt_data.current_in = buffer_get_float32(data, 1e2f, &ind);
+    if (!RT_HAVE(8)) return false;                 /* id + iq — not shown here */
+    ind += 8;
+    if (!RT_HAVE(2)) return false;
+    s_rt_data.duty_now = buffer_get_float16(data, 1e3f, &ind);
+    if (!RT_HAVE(4)) return false;
+    s_rt_data.rpm = buffer_get_float32(data, 1e0f, &ind);
+    if (!RT_HAVE(2)) return false;
+    s_rt_data.v_in = buffer_get_float16(data, 1e1f, &ind);
+    if (!RT_HAVE(16)) return false;                /* Ah, Ah charged, Wh, Wh charged */
+    s_rt_data.amp_hours = buffer_get_float32(data, 1e4f, &ind);
+    s_rt_data.amp_hours_charged = buffer_get_float32(data, 1e4f, &ind);
+    s_rt_data.watt_hours = buffer_get_float32(data, 1e4f, &ind);
+    s_rt_data.watt_hours_charged = buffer_get_float32(data, 1e4f, &ind);
+    if (!RT_HAVE(8)) return false;
+    s_rt_data.tachometer = buffer_get_float32(data, 1e3f, &ind);
+    s_rt_data.tachometer_abs = buffer_get_float32(data, 1e3f, &ind);
+    if (!RT_HAVE(1)) return false;
+    s_rt_data.fault_code = data[ind++];
+    if (!RT_HAVE(4)) return false;
+    s_rt_data.position = buffer_get_float32(data, 1e6f, &ind);
+    if (!RT_HAVE(1)) return false;
+    s_rt_data.vesc_id = data[ind++];
+    return true;
+#undef RT_HAVE
+}
+
 void vesc_rt_data_process_response(const uint8_t *data, unsigned int len)
 {
     if (len < 1) return;
 
     uint8_t cmd = data[0];
-    if (cmd != COMM_GET_VALUES_SETUP && cmd != COMM_GET_VALUES_SETUP_SELECTIVE) {
+    if (cmd == COMM_GET_VALUES) {
+        /* A truncated packet must not stamp the dashboard as fresh. */
+        if (!rt_parse_mc_values(data, len)) return;
+        s_rt_data.rx_time = millis_now();
+        s_data_received   = true;
+        return;
+    }
+    /* Both SELECTIVE polls use the same mask and the same field order, so a
+     * reply to VESC Tool's realtime request feeds the dashboard exactly like
+     * this device's own. */
+    if (cmd != COMM_GET_VALUES_SETUP &&
+        cmd != COMM_GET_VALUES_SETUP_SELECTIVE &&
+        cmd != COMM_GET_VALUES_SELECTIVE) {
         return;
     }
 
     int32_t  ind  = 1;
     uint32_t mask = 0xFFFFFFFFu;
-    if (cmd == COMM_GET_VALUES_SETUP_SELECTIVE) {
+    if (cmd != COMM_GET_VALUES_SETUP) {
         if (len < 5) {
             ESP_LOGW(TAG, "selective response too short (%u)", len);
             return;
@@ -248,7 +304,7 @@ void vesc_rt_data_loop(void)
 {
     if (!s_active) return;
     uint32_t now = millis_now();
-    if (now - s_last_request_ms >= vesc_link_scale_ms(s_request_interval_ms)) {
+    if (now - s_last_request_ms >= vesc_link_poll_ms(s_request_interval_ms)) {
         vesc_rt_data_request();
         s_last_request_ms = now;
     }

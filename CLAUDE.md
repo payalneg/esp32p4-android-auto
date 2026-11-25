@@ -419,6 +419,22 @@ scripts/build_board.sh s3touch4 -p <PORT> flash monitor # Waveshare ESP32-S3-Tou
 - **Релиз** (`scripts/release.sh`) собирает все борды, кладёт per-device бинари
   `release/esp32p4_android_auto-<board>-<ver>.bin` и один APK с обеими прошивками.
   Блобы C6 / BT-агента общие для всех плат.
+- **USB-прошивка из APK** (третий путь рядом с WiFi/BLE OTA): телефон как
+  USB-host говорит с ROM-загрузчиком P4 — через родной USB-Serial/JTAG или
+  UART-мост CH343. APK везёт «head» merged-образа
+  (`assets/firmware/esp32p4_android_auto-<board>-head.bin`, первые `0x20000`
+  байт: 0xFF-паддинг, загрузчик на `0x2000`, таблица разделов на `0x8000`) и
+  application `.bin`; при прошивке они склеиваются в полный образ с `0x0`
+  (`FirmwareUpdater.usbImageFor`), поэтому второй 4.8 МБ копии в APK нет.
+  `stage_firmware_asset.sh` собирает head из `build_<board>/flasher_args.json`.
+  Сторонний `.bin` тоже принимается: merged пишется с `0x0`, app-only — по
+  указанному адресу (`0x20000` для P4-раскладки этого проекта). До первого
+  стирания проверяются chip id и диапазон ревизий кремния (v1.x/v3.x из
+  заголовка загрузчика), после записи сверяется MD5 от ROM. Вендорный
+  `usb_serial` пропатчен под CH343/CH343P
+  (`flutter-application/packages/usb_serial`); утилита
+  `flutter-application/tool/check_usb_image.dart` показывает, что именно будет
+  записано.
 
 ### ESP32-S3-Touch-LCD-4 (`s3touch4`) — дашборд без Android Auto
 
@@ -520,6 +536,37 @@ Wi-Fi и BLE — на самом чипе, без ESP32-C6. Плата соби�
   и снимался дашборд под ней — теперь читается кадровый буфер дисплея с
   `full_refresh`; а `show_lisp_panel()` молча отказывается открываться, если
   активный экран не дашборд.
+
+## Отладка по Wi-Fi (без провода)
+
+Кроме UART-моста (`CONFIG_DEBUG_UART_BRIDGE`, `main/debug_uart_bridge.c`,
+`scripts/uart_debug.py`) есть второй транспорт — TCP:
+
+```
+CONFIG_DEBUG_WIFI_BRIDGE=y          # menuconfig: "Wi-Fi debug bridge"
+CONFIG_DEBUG_WIFI_BRIDGE_PORT=3333
+CONFIG_DEBUG_WIFI_BRIDGE_BACKLOG_KB=32
+```
+
+- **Зачем.** Пока телефон держит USB-порт (прошивка по USB из APK) или когда
+  голова уже за панелью, последовательного консоли нет. По Wi-Fi видно лог и
+  можно дёргать те же команды.
+- **Что отдаёт:** живой `ESP_LOG` (из PSRAM-кольца `components/log_capture`,
+  оно ведётся с самого старта, так что при подключении клиент получает ещё и
+  хвост boot-лога — `log_capture_read()`), плюс `screenshot`/`tap`/`swipe`/
+  `uimode`/`tasks`/`lvtimers`/`navstat` — те же самые команды, один код на оба
+  транспорта (`main/debug_cmds.c`, синк `debug_out_t`).
+- **Адрес:** SoftAP → `192.168.4.1:3333`; прошивка пишет строку
+  `dbg_wifi: debug bridge on <ip>:3333`.
+- **Хост:** `python scripts/wifi_debug.py logs` (ещё `--grep`, `--save`,
+  `screenshot FILE`, `tap X Y`, `cmd navstat`).
+- **Протокол:** баннер + хвост лога, дальше сырые байты лога; строка от клиента =
+  команда, после неё `# done` / `# err N`. Скриншот — `SCR-BEGIN … len=<N>` и
+  ровно N сырых байт (без base64, на UART он и остался), логи на время кадра
+  глушатся.
+- **Опасность:** кто попал в AP, получает инъекцию тача, переключение режимов и
+  лог, в котором бывает psk точки доступа. Только для отладочных сборок —
+  в релиз не включать.
 
 ## Воспроизведение игнорируемых артефактов
 

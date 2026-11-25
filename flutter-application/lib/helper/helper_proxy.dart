@@ -34,6 +34,12 @@ class HelperProxy extends ChangeNotifier {
   HelperStatus? status;
   PasParams? params;
 
+  /// The last battery level the helper reported. Kept when the link drops or
+  /// the sensor goes to sleep (the live frame then says "unknown"), because a
+  /// stale-but-labelled figure is more useful than nothing at all.
+  int? lastBatteryPercent;
+  DateTime? lastBatteryAt;
+
   /// idx → binding, filled in as the helper answers GET_BINDING.
   final bindings = <int, ButtonBinding>{};
 
@@ -59,9 +65,11 @@ class HelperProxy extends ChangeNotifier {
             orElse: () => HelperConnState.idle);
         fwVersion = m['fw'] as String?;
         busy = m['busy'] as bool? ?? false;
+        _applyLastBattery(m);
         if (!connected) {
           // Stale state after a drop is worse than none: the screen should
-          // say "not connected", not show yesterday's cadence.
+          // say "not connected", not show yesterday's cadence. The battery
+          // reading is the exception — it is explicitly a last-known value.
           status = null;
           params = null;
           bindings.clear();
@@ -71,6 +79,10 @@ class HelperProxy extends ChangeNotifier {
         final s = m['status'];
         if (s is Map) {
           status = HelperStatus.fromMap(Map<String, dynamic>.from(s));
+          if (status!.battKnown) {
+            lastBatteryPercent = status!.batt;
+            lastBatteryAt = DateTime.now();
+          }
         }
       case IpcEvt.helperParams:
         params = PasParams.fromB64(m['b64'] as String? ?? '');
@@ -135,7 +147,20 @@ class HelperProxy extends ChangeNotifier {
         .firstWhere((e) => e.name == r['state'], orElse: () => state);
     fwVersion = r['fw'] as String? ?? fwVersion;
     busy = r['busy'] as bool? ?? busy;
+    _applyLastBattery(r);
     notifyListeners();
+  }
+
+  /// The service owns the reading (it sees status frames even while this UI is
+  /// asleep); this just mirrors what it last saw.
+  void _applyLastBattery(Map<String, dynamic> m) {
+    final percent = (m['lastBatt'] as num?)?.toInt();
+    if (percent == null || percent < 0 || percent > 100) return;
+    lastBatteryPercent = percent;
+    final ms = (m['lastBattAt'] as num?)?.toInt();
+    if (ms != null) {
+      lastBatteryAt = DateTime.fromMillisecondsSinceEpoch(ms);
+    }
   }
 
   /// Ask the HELPER to scan (it takes ~6 s and finds sleepy gadgets the phone

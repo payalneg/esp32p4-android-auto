@@ -19,6 +19,8 @@ import '../bridge/foreground_bridge.dart';
 import '../firmware/ble_ota.dart';
 import '../firmware/ota_info.dart';
 import '../firmware/recovery.dart';
+import 'bike_battery.dart';
+import 'fw_prompt.dart';
 import 'messages.dart';
 import 'nav_stream.dart';
 import 'protocol.dart';
@@ -64,6 +66,21 @@ class BleService {
   BluetoothCharacteristic? _navCtrl;
   BluetoothCharacteristic? _navData;
   NavStream? _nav;
+  // Optional — null when the firmware predates the battery characteristic
+  // (...000d). Read every 30 s so the app can show the pack charge at home.
+  BluetoothCharacteristic? _batteryChar;
+  // Optional — null when the firmware predates the firmware-prompt
+  // characteristic (...000e). Offers a newer bundled image and carries the
+  // rider's answer back (see fw_prompt.dart).
+  BluetoothCharacteristic? _fwPrompt;
+  final _fwPromptCtrl = StreamController<FwPromptChoice>.broadcast();
+  StreamSubscription<List<int>>? _fwPromptSub;
+  final _batteryCtrl = StreamController<BikeBattery>.broadcast();
+  BikeBattery? _battery;
+  Timer? _batteryTimer;
+  bool _batteryReading = false;
+  int? _batterySavedPercent;
+  DateTime? _batterySavedAt;
   // Optional — the head unit's separate Nordic UART Service (VESC-Tool bridge).
   // Present together; drive the LISP editor (see lib/ble/vesc/). Absent on
   // firmware without the bridge.
@@ -108,10 +125,22 @@ class BleService {
   BluetoothDevice? get device => _device;
   String? get savedRemoteId => _savedRemoteId;
 
+  /// Latest pack reading; set from the link when present, otherwise restored
+  /// from the cache written by the previous run.
+  BikeBattery? get battery => _battery;
+  Stream<BikeBattery> get batteryUpdates => _batteryCtrl.stream;
+
   /// Pull the persisted remote id and, if present, kick off a background
   /// auto-connect attempt. Safe to call once at app boot.
   Future<void> resumeIfPaired() async {
     final p = await SharedPreferences.getInstance();
+    // The bike is normally off by the time its charge is checked; the cached
+    // reading is what makes "last known" possible at all.
+    final cached = BikeBattery.loadFrom(p);
+    if (cached != null && _battery == null) {
+      _battery = cached;
+      if (!_batteryCtrl.isClosed) _batteryCtrl.add(cached);
+    }
     _savedRemoteId = p.getString(_prefSavedId);
     if (_savedRemoteId == null) return;
     // Use `unawaited` semantics — boot path mustn't block on a BLE scan.
@@ -297,6 +326,8 @@ class BleService {
     _fileData = null;
     _navCtrl = null;
     _navData = null;
+    _batteryChar = null;
+    _fwPrompt = null;
     for (final c in svc.characteristics) {
       final u = c.uuid.toString().toLowerCase();
       if (u == NotifBridgeUuids.charTime) _time = c;
@@ -308,6 +339,8 @@ class BleService {
       if (u == NotifBridgeUuids.charFileData) _fileData = c;
       if (u == NotifBridgeUuids.charNavCtrl) _navCtrl = c;
       if (u == NotifBridgeUuids.charNavData) _navData = c;
+      if (u == NotifBridgeUuids.charBattery) _batteryChar = c;
+      if (u == NotifBridgeUuids.charFwPrompt) _fwPrompt = c;
     }
     // Recovery keeps the OTA link but has no renderer/filesystem workers.
     final recovery = _recovery;
@@ -338,9 +371,11 @@ class BleService {
     await _outbound!.setNotifyValue(true);
     await _outSub?.cancel();
     _outSub = _outbound!.onValueReceived.listen(_onOutbound);
+    await _startFwPrompt();
     await _startNavStream();
     _setState(BleConnState.connected);
     _startClock();
+    _startBatteryPolling();
   }
 
   /// Push local wall-clock time to the head unit every 15 s (and once
@@ -366,8 +401,139 @@ class BleService {
     }
   }
 
+  /// Read the pack state once on connect, then every 30 s. The charge changes
+  /// slowly, but a rider who just opened the app should not have to wait for
+  /// the next tick — hence the immediate first read.
+  void _startBatteryPolling() {
+    _batteryTimer?.cancel();
+    _batteryTimer = null;
+    if (_batteryChar == null) return;
+    unawaited(_readBattery());
+    _batteryTimer = Timer.periodic(
+        const Duration(seconds: 30), (_) => unawaited(_readBattery()));
+  }
+
+  void _stopBatteryPolling() {
+    _batteryTimer?.cancel();
+    _batteryTimer = null;
+  }
+
+  Future<void> _readBattery() async {
+    final ch = _batteryChar;
+    if (ch == null || _state != BleConnState.connected || _batteryReading) {
+      return;
+    }
+    _batteryReading = true;
+    try {
+      final reading = BikeBattery.parse(await ch.read());
+      if (reading == null || reading.percent == null) {
+        // The link is up but the selected pack source is not answering (BMS
+        // offline, controller silent). Keep the last charge on screen, but do
+        // not keep calling it live.
+        _markBatteryStale();
+        return;
+      }
+      final previous = _battery;
+      final current = BikeBattery(
+        percent: reading.percent,
+        voltageV: reading.voltageV ?? previous?.voltageV,
+        remainingAh: reading.remainingAh ?? previous?.remainingAh,
+        at: reading.at,
+        live: true,
+      );
+      _battery = current;
+      if (!_batteryCtrl.isClosed) _batteryCtrl.add(current);
+      // The charge changes slowly and the same reading repeats every 30 s.
+      // Persist a change at once, otherwise only every five minutes — a flash
+      // write per poll would be pure wear.
+      final now = DateTime.now();
+      if (current.percent != _batterySavedPercent ||
+          _batterySavedAt == null ||
+          now.difference(_batterySavedAt!) >= const Duration(minutes: 5)) {
+        _batterySavedPercent = current.percent;
+        _batterySavedAt = now;
+        final p = await SharedPreferences.getInstance();
+        await current.saveTo(p);
+      }
+    } catch (_) {
+      // The next tick retries. The previous reading stays on screen, marked
+      // by its age; a transient GATT error is not worth clearing it.
+    } finally {
+      _batteryReading = false;
+    }
+  }
+
+  /// The link dropped: keep the number, but stop calling it live.
+  void _markBatteryStale() {
+    final b = _battery;
+    if (b == null || !b.live) return;
+    _battery = b.copyWith(live: false);
+    if (!_batteryCtrl.isClosed) _batteryCtrl.add(_battery!);
+  }
+
   /// Whether the connected head unit exposes the OTA-from-app feature.
   bool get supportsOta => _otaInfo != null;
+
+  /// Whether the connected head unit can show the "new firmware" dialog
+  /// (...000e). Older firmware does not, so the app stays quiet there.
+  bool get supportsFwPrompt => _fwPrompt != null;
+
+  /// The rider's answers on the head unit's firmware dialog.
+  Stream<FwPromptChoice> get fwPromptChoices => _fwPromptCtrl.stream;
+
+  Future<void> _startFwPrompt() async {
+    await _stopFwPrompt();
+    final ch = _fwPrompt;
+    if (ch == null) return;
+    try {
+      await ch.setNotifyValue(true);
+      _fwPromptSub = ch.onValueReceived.listen((raw) {
+        final choice = parseFwPromptChoice(raw);
+        if (choice != null && !_fwPromptCtrl.isClosed) {
+          _fwPromptCtrl.add(choice);
+        }
+      });
+    } catch (_) {
+      // No notifications means no answer; leave the feature off rather than
+      // offer an update nobody can accept.
+      _fwPrompt = null;
+      await _stopFwPrompt();
+    }
+  }
+
+  Future<void> _stopFwPrompt() async {
+    await _fwPromptSub?.cancel();
+    _fwPromptSub = null;
+  }
+
+  /// Offer [offer] to the head unit. Returns false when the link or the
+  /// characteristic is gone.
+  Future<bool> sendFwPrompt(String text) async {
+    final ch = _fwPrompt;
+    if (ch == null || _state != BleConnState.connected) return false;
+    try {
+      await ch.write(utf8.encode(text));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> sendFwPromptProgress(int percent) async {
+    final ch = _fwPrompt;
+    if (ch == null || _state != BleConnState.connected) return;
+    try {
+      await ch.write(utf8.encode(FwPromptOffer.progress(percent)));
+    } catch (_) {}
+  }
+
+  Future<void> sendFwPromptFailed(String text) async {
+    final ch = _fwPrompt;
+    if (ch == null || _state != BleConnState.connected) return;
+    try {
+      await ch.write(utf8.encode(FwPromptOffer.failed(text)));
+    } catch (_) {}
+  }
 
   /// Read the head unit's SoftAP credentials + OTA endpoint + firmware
   /// version. Returns null if the firmware lacks the characteristic or the
@@ -553,6 +719,8 @@ class BleService {
       // reconnect). Run the GATT handshake on top of it.
       _handleLinkUp(_device!);
     } else if (s == BluetoothConnectionState.disconnected) {
+      _stopBatteryPolling();
+      _markBatteryStale();
       _setState(BleConnState.disconnected);
       _armLinkWatchdog();
       // Deliberately NOT re-arming here. With autoConnect:true this event
@@ -723,8 +891,11 @@ class BleService {
     _handshaking = false;
     _clockTimer?.cancel();
     _clockTimer = null;
+    _stopBatteryPolling();
+    _markBatteryStale();
     await _connSub?.cancel();
     await _outSub?.cancel();
+    await _stopFwPrompt();
     _connSub = null;
     _outSub = null;
     try {
@@ -740,6 +911,8 @@ class BleService {
     _otaData = null;
     _fileCtrl = null;
     _fileData = null;
+    _batteryChar = null;
+    _fwPrompt = null;
     _nusRx = null;
     _nusTx = null;
     await _stopNavStream();

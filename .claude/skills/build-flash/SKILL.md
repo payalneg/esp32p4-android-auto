@@ -65,12 +65,20 @@ blob itself: see `CLAUDE.md` → "Воспроизведение игнорир�
 ## Enabling build-time options
 
 Project options are under `menuconfig` → **"Android Auto Head Unit"** (see
-`main/Kconfig.projbuild`): board model, Wi-Fi role (SoftAP vs STA), and the
-**UART debug bridge** (`CONFIG_DEBUG_UART_BRIDGE`, default off — turn on for the
-device-screen skill; keep off for jc4880's tight OTA slot). For a throwaway
-build, add a one-line overlay file (`CONFIG_FOO=y`) as the last entry of
+`main/Kconfig.projbuild`): board model, Wi-Fi role (SoftAP vs STA), and the two
+debug bridges — **UART** (`CONFIG_DEBUG_UART_BRIDGE`) and **Wi-Fi**
+(`CONFIG_DEBUG_WIFI_BRIDGE`), both default off. The UART one is for the
+device-screen skill; the Wi-Fi one streams the log and takes the same commands
+over TCP (`scripts/wifi_debug.py`, port 3333) when no cable is attached. Keep
+both off for jc4880's tight OTA slot / release builds. For a throwaway build, add
+a one-line overlay file (`CONFIG_FOO=y`) as the last entry of
 `-D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.<board>;<overlay>"`
 into a scratch `-B build_dir` so you don't mutate the real board sdkconfig.
+
+When driving `idf.py` by hand, export `IDF_COMPONENT_CHECK_NEW_VERSION=0` like
+`build_board.sh` does: with it unset, the component manager asks the registry
+for new versions and the current registry data for `esp_hosted` fails to parse
+(`Invalid boolean "1" in "if" clause`), aborting the configure.
 
 ## Flash budget watch (jc4880 = 16 MB)
 

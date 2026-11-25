@@ -13,6 +13,10 @@ service), independently of the Android Auto link.
 - **Wall clock** — pushes local `HH:MM` over BLE every 15 s so the dashboard
   shows the time without an on-device RTC / coin cell. The head unit hides the
   clock again if updates stop for 30 s.
+- **Bike battery** — reads the pack charge (SOC, pack voltage and remaining Ah)
+  from the head unit over the NotifBridge battery characteristic, and caches
+  the last reading on the phone. The app bar shows it even after the bike is
+  switched off, with how long ago it was read.
 - **Firmware update over WiFi** — bundles the P4 firmware image in the APK and
   flashes it to the head unit over its SoftAP:
   - reads the SoftAP SSID / password + running version over BLE
@@ -20,6 +24,22 @@ service), independently of the Android Auto link.
   - joins that WiFi (Android `WifiNetworkSpecifier` + `bindProcessToNetwork`),
   - POSTs the image to `http://192.168.4.1/ota`; the head unit verifies and
     reboots onto the new version.
+- **Firmware update over USB** — with a USB-C OTG adapter the phone is the USB
+  host and writes the chip's flash directly (ESP ROM loader protocol over the
+  native USB-Serial/JTAG port or the CH343 UART bridge). Works when the firmware
+  no longer boots. Choose the image bundled in the APK (written as a full
+  recovery image: bootloader + partition table + app) or any `.bin`: merged
+  images go to 0x0, application-only images to an editable offset (0x20000 by
+  default on this project's P4 boards). The chip and the P4 silicon revision
+  are checked before erasing and the flash is MD5-verified. `usb_serial` is
+  vendored in `packages/usb_serial` with CH343 support. See
+  [`../docs/usb-flashing.md`](../docs/usb-flashing.md) for the step-by-step
+  guide and troubleshooting.
+- **Update prompt on the head unit** — when the firmware bundled in the APK is
+  newer than the version the board reports, the head unit puts an
+  Update / Later / Skip dialog over its dashboard (`…000E`). Update flashes the
+  image over the same BLE link and the dialog shows progress; Skip remembers
+  that version per board and stops offering it.
 - **About** screen — app + bundled-firmware versions.
 
 In **Map data → Download a region**, select **Małopolskie** to build the
@@ -47,13 +67,21 @@ adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
 The OTA assets (`assets/firmware/`) are git-ignored — they're generated from
-the freshly built `build/esp32p4_android_auto.bin` by `stage_firmware_asset.sh`.
+the freshly built `build/esp32p4_android_auto.bin` by `stage_firmware_asset.sh`
+(together with `…-head.bin`, the first 0x20000 bytes of each board's merged
+image, which the USB flasher combines with the application at flash time).
+`dart run tool/check_usb_image.dart` prints the resulting USB image kind,
+offset, chip and silicon-revision range.
 
 ## Platform notes
 
 - **Android only** for the WiFi-flash + scan features (uses native
   `WifiManager` / `ConnectivityManager`). The BLE bridge works cross-platform,
   but the app is wired up and tested on Android.
+- **USB flashing** needs an Android phone with USB host (USB-C OTG adapter).
+  Android asks for permission to access the serial device the first time; no
+  storage permission is involved. The head unit draws more than the phone's
+  port usually supplies, so power the board properly while flashing.
 - WiFi scan + "current network" read need **location enabled** + the location
   permission (Android requirement). Joining the SoftAP shows the system's own
   approval dialog.
@@ -63,7 +91,7 @@ the freshly built `build/esp32p4_android_auto.bin` by `stage_firmware_asset.sh`.
 | Path | What |
 |---|---|
 | `lib/ble/` | BLE service, NotifBridge UUIDs, chunked PDU codec |
-| `lib/firmware/` | `OtaInfo`, `FirmwareUpdater` (join → upload → reboot) |
+| `lib/firmware/` | `OtaInfo`, `FirmwareUpdater` (join → upload → reboot), `esptool/` + `usb_flasher.dart` (ROM loader over USB) |
 | `lib/bridge/` | platform-channel wrappers (foreground service, WiFi) |
 | `lib/ui/` | pairing, home, app filter, firmware update, about screens |
 | `android/.../WifiBridge.kt` | native WiFi join / scan / current-SSID |

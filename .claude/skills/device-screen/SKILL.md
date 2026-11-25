@@ -48,6 +48,32 @@ python3 scripts/uart_debug.py -p <PORT> touchup
 
 Set `AA_PORT` in the env to skip `-p` every time.
 
+## No cable? The same thing over Wi-Fi
+
+There is a second transport for the same command set: TCP on port 3333, gated
+behind `CONFIG_DEBUG_WIFI_BRIDGE` (also off by default, alone or together with
+the UART bridge). Use it when the USB port is busy (e.g. the phone flashing the
+head unit over USB) or when there is no adapter at hand:
+
+```bash
+pip install Pillow
+python scripts/wifi_debug.py -H 192.168.4.1 logs            # live log
+python scripts/wifi_debug.py logs --grep "E \(" --save boot.log
+python scripts/wifi_debug.py screenshot /tmp/scr.png
+python scripts/wifi_debug.py tap 400 240
+python scripts/wifi_debug.py cmd navstat
+```
+
+`-H` is the head unit's SoftAP address (`192.168.4.1`); in a bench STA build use
+the IP it logs as `dbg_wifi: debug bridge on <ip>:3333`. Unlike the UART path
+there is nothing to reset — connecting does not disturb the device, and the
+first thing you get is the last 32 KB of log (boot included), so a crash that
+already happened is still visible.
+
+Over Wi-Fi the screenshot arrives as raw bytes after the `SCR-BEGIN` header
+rather than base64 chunks; `wifi_debug.py` handles both differences for you.
+
+
 ## Prerequisite: build with the bridge enabled
 
 The bridge is gated behind `CONFIG_DEBUG_UART_BRIDGE` (default **off**). Enable

@@ -18,6 +18,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helper_protocol.dart';
 import '../log/app_log.dart';
@@ -60,7 +61,9 @@ class _EventQueue<T> {
 }
 
 class HelperService {
-  HelperService._();
+  HelperService._() {
+    unawaited(_loadLastBattery());
+  }
   static final HelperService instance = HelperService._();
 
   // ---- outbound (to the UI, via ble_host) ----
@@ -90,6 +93,17 @@ class HelperService {
   /// An OTA transfer is running; config writes are refused meanwhile.
   bool busy = false;
 
+  /// The last battery percentage the helper reported, kept after the sensor
+  /// goes to sleep or the helper link drops — the status frame carries 0xFF
+  /// for "not said", which is exactly when the last value is worth showing.
+  /// Persisted so it also survives an app restart.
+  int? lastBatteryPercent;
+  DateTime? lastBatteryAt;
+  static const _kLastBattery = 'helper_last_batt_v1';
+  static const _kLastBatteryAt = 'helper_last_batt_at_v1';
+  bool _batteryLoaded = false;
+  DateTime? _batterySavedAt;
+
   BluetoothDevice? _device;
   StreamSubscription<BluetoothConnectionState>? _connSub;
   BluetoothCharacteristic? _cfgCtrl, _otaCtrl, _otaData;
@@ -114,6 +128,7 @@ class HelperService {
   /// confirm the name.
   Future<void> connect({String? remoteId}) async {
     if (_conn == HelperConnState.connecting || connected) return;
+    unawaited(_loadLastBattery());
     _setState(HelperConnState.connecting);
     try {
       final device = remoteId != null
@@ -261,7 +276,57 @@ class HelperService {
 
   void _onStatus(Uint8List data) {
     final s = HelperStatus.decode(data);
-    if (s != null && !_status.isClosed) _status.add(s);
+    if (s == null) return;
+    if (s.battKnown) _rememberBattery(s.batt);
+    if (!_status.isClosed) _status.add(s);
+  }
+
+  /// The sensor repeats its percentage in every status frame. Remember the
+  /// reading, but only touch flash when it changes — or every ten minutes, so
+  /// the persisted timestamp does not drift arbitrarily after a restart.
+  void _rememberBattery(int percent) {
+    final now = DateTime.now();
+    final changed = percent != lastBatteryPercent;
+    lastBatteryPercent = percent;
+    lastBatteryAt = now;
+    if (changed ||
+        _batterySavedAt == null ||
+        now.difference(_batterySavedAt!) >= const Duration(minutes: 10)) {
+      _batterySavedAt = now;
+      unawaited(_saveLastBattery());
+    }
+  }
+
+  Future<void> _loadLastBattery() async {
+    if (_batteryLoaded) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final percent = p.getInt(_kLastBattery);
+      final at = p.getInt(_kLastBatteryAt);
+      _batteryLoaded = true;
+      if (percent == null || percent < 0 || percent > 100) return;
+      // A live frame may have landed while the read was in flight; it is newer
+      // than what is on disk, so do not step on it.
+      if (lastBatteryPercent != null) return;
+      lastBatteryPercent = percent;
+      if (at != null) lastBatteryAt = DateTime.fromMillisecondsSinceEpoch(at);
+    } catch (_) {
+      // Prefs are a convenience here; retry on the next connect rather than
+      // failing the helper link.
+    }
+  }
+
+  Future<void> _saveLastBattery() async {
+    final percent = lastBatteryPercent;
+    final at = lastBatteryAt;
+    if (percent == null || at == null) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt(_kLastBattery, percent);
+      await p.setInt(_kLastBatteryAt, at.millisecondsSinceEpoch);
+    } catch (_) {
+      // Same: losing the cached value is not a reason to fail a BLE command.
+    }
   }
 
   void _onScan(Uint8List data) {

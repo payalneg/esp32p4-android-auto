@@ -1,7 +1,7 @@
 name: aa_bridge
 description: "Notification + media BLE bridge to ESP32-P4 head unit."
 publish_to: 'none'
-version: 0.3.64+128
+version: 0.3.69+133
 
 environment:
   sdk: ^3.7.2
@@ -36,6 +36,13 @@ dependencies:
   # 14.0.3 pulls package_info_plus ^10; the app is on ^8, so pin one patch back.
   geolocator: ^14.0.2
   flutter_tts: ^4.2.5
+  # USB-host serial for flashing the head unit from the phone (lib/firmware/usb).
+  # Vendored from pub 0.6.0 and patched to drive the CH343P bridge on the
+  # Waveshare board (the published driver only knows CH340/CH341): see
+  # packages/usb_serial/CHANGELOG.md. Do not switch back to the hosted package
+  # or the UART port stops being flashable from Android.
+  usb_serial:
+    path: packages/usb_serial
 
 dev_dependencies:
   flutter_test:
@@ -54,6 +61,12 @@ flutter:
     - assets/firmware/esp32p4_android_auto-waveshare-rev3.bin
     - assets/firmware/esp32p4_android_auto-jc4880.bin
     - assets/firmware/version.txt
+    # Full-recovery head (first 0x20000 bytes of the merged image: 0xFF pad,
+    # bootloader at 0x2000, partition table at 0x8000). The USB flasher appends
+    # the application .bin above to build a complete merged image on the fly.
+    - assets/firmware/esp32p4_android_auto-waveshare-head.bin
+    - assets/firmware/esp32p4_android_auto-waveshare-rev3-head.bin
+    - assets/firmware/esp32p4_android_auto-jc4880-head.bin
     # VESC BLE Helper (ESP32-C3) firmware, so it can be flashed with no network.
     # Fetched from that project's GitHub releases by
     # scripts/stage_firmware_asset.sh — never committed here.

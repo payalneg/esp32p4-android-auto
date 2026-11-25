@@ -7,6 +7,7 @@
 
 #include "vesc_can/buffer.h"
 #include "vesc_can/crc.h"
+#include "vesc_can/vesc_link.h"
 
 #include "driver/twai.h"
 #include "esp_err.h"
@@ -69,11 +70,28 @@ static SemaphoreHandle_t s_req_mutex;
 /* Answer to the request comm_can_send_buffer_from_phone() put on the wire.
  * Armed at send time, claimed by decode_msg when a payload with the expected
  * command byte is delivered, and dropped by age so a request that was never
- * answered cannot claim some later reply. */
+ * answered cannot claim some later reply.
+ *
+ * The match is a prefix, not just the command byte. For the two SELECTIVE
+ * polls the firmware echoes the request's mask at the front of the reply, and
+ * the mask is what tells the phone's dataset from this device's own: the
+ * dashboard's SETUP_SELECTIVE poll and (on a BLE link) the second head's
+ * temperature-only SELECTIVE poll carry the same command byte as VESC Tool's
+ * realtime poll. Matching only the byte let one of those replies claim the
+ * tag — the phone received a partial dataset and its own answer was dropped
+ * (the once-a-second collapse to zero this bridge exists to prevent). */
+/* What the answer to a bridge request must start with — see
+ * vesc_link_reply_prefix(). Kept next to the tag so the send path and the
+ * match path cannot drift apart. */
 #define BRIDGE_REPLY_WINDOW_MS 2000u
+#define BRIDGE_PREFIX_MAX VESC_LINK_REPLY_PREFIX_MAX
 static volatile bool     s_bridge_pending;
-static volatile uint8_t  s_bridge_cmd;
+static volatile uint8_t  s_bridge_prefix[BRIDGE_PREFIX_MAX];
+static volatile uint8_t  s_bridge_prefix_len;
 static volatile uint32_t s_bridge_sent_ms;
+/* Armed by the bridge task (often the NimBLE host task's helper), claimed by
+ * the CAN decode task — the prefix and the flag must change together. */
+static portMUX_TYPE      s_bridge_mux = portMUX_INITIALIZER_UNLOCKED;
 /* Set by decode_msg around the handler call, read by
  * comm_can_take_reply_from_bridge() from inside it. */
 static volatile bool     s_delivering_bridge_reply;
@@ -379,29 +397,35 @@ void comm_can_send_buffer(uint8_t controller_id, const uint8_t *data,
                           send_buffer, ind);
 }
 
-/* Which command byte the answer to a bridge request will carry. Normally the
- * reply echoes the request's command; a request VESC Tool already addressed
- * with COMM_FORWARD_CAN comes back as the inner command. */
-static uint8_t bridge_reply_cmd(const uint8_t *data, unsigned int len)
-{
-    if (len == 0) return 0;
-    if (data[0] == COMM_FORWARD_CAN && len >= 3) return data[2];
-    return data[0];
-}
-
 static bool bridge_take_if_match(const uint8_t *data, unsigned int len)
 {
-    if (!s_bridge_pending || len == 0) return false;
+    if (len == 0) return false;
 
+    uint8_t  prefix[VESC_LINK_REPLY_PREFIX_MAX];
+    uint8_t  plen;
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (now - s_bridge_sent_ms > BRIDGE_REPLY_WINDOW_MS) {
-        s_bridge_pending = false;
+
+    portENTER_CRITICAL(&s_bridge_mux);
+    if (!s_bridge_pending) {
+        portEXIT_CRITICAL(&s_bridge_mux);
         return false;
     }
-    if (data[0] != s_bridge_cmd) return false;
+    if (now - s_bridge_sent_ms > BRIDGE_REPLY_WINDOW_MS) {
+        s_bridge_pending = false;        /* never answered — drop the tag */
+        portEXIT_CRITICAL(&s_bridge_mux);
+        return false;
+    }
+    plen = s_bridge_prefix_len;
+    memcpy(prefix, (const void *)s_bridge_prefix, plen);
+    portEXIT_CRITICAL(&s_bridge_mux);
 
+    if (!vesc_link_reply_matches(data, len, prefix, plen)) return false;
+
+    portENTER_CRITICAL(&s_bridge_mux);
+    bool claimed = s_bridge_pending;     /* the send may have re-armed it */
     s_bridge_pending = false;
-    return true;
+    portEXIT_CRITICAL(&s_bridge_mux);
+    return claimed;
 }
 
 bool comm_can_take_reply_from_bridge(void)
@@ -445,18 +469,29 @@ void comm_can_send_buffer_from_phone(uint8_t controller_id, const uint8_t *data,
     xSemaphoreTake(s_req_mutex, portMAX_DELAY);
     xSemaphoreTake(s_rx_done_sem, 0);
 
-    s_bridge_cmd     = bridge_reply_cmd(data, len);
-    s_bridge_sent_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    s_bridge_pending = true;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint8_t  prefix[BRIDGE_PREFIX_MAX];
+    uint8_t  prefix_len = 0;
+    prefix_len = vesc_link_reply_prefix(data, len, prefix);
+    /* Arm only after the prefix is fully written: bridge_take_if_match runs on
+     * the CAN decode task the moment the answer lands. */
+    portENTER_CRITICAL(&s_bridge_mux);
+    memcpy((void *)s_bridge_prefix, prefix, prefix_len);
+    s_bridge_prefix_len = prefix_len;
+    s_bridge_sent_ms    = now_ms;
+    s_bridge_pending    = true;
+    portEXIT_CRITICAL(&s_bridge_mux);
 
     comm_can_send_buffer(controller_id, data, len, send);
     BaseType_t got = xSemaphoreTake(s_rx_done_sem, pdMS_TO_TICKS(reply_timeout_ms));
-    if (got != pdTRUE && s_bridge_pending) {
+    if (got != pdTRUE) {
         /* No answer (the SET_* family has none, or the reply was lost). Drop
          * the tag: leaving it armed would let the display's next poll reply of
          * the same command — a selective dataset with a different mask — be
          * handed to the phone as if it had asked for it. */
+        portENTER_CRITICAL(&s_bridge_mux);
         s_bridge_pending = false;
+        portEXIT_CRITICAL(&s_bridge_mux);
     }
     xSemaphoreGive(s_req_mutex);
 }

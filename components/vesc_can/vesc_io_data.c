@@ -61,7 +61,7 @@ void vesc_io_data_loop(void)
 {
     if (!s_active) return;
     uint32_t now = millis_now();
-    if (now - s_last_poll_ms < vesc_link_scale_ms(s_poll_interval_ms)) return;
+    if (now - s_last_poll_ms < vesc_link_poll_ms(s_poll_interval_ms)) return;
     s_last_poll_ms = now;
 
     send_cmd(COMM_GET_DECODED_ADC);

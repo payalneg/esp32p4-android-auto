@@ -15,6 +15,11 @@ class NavSettings extends ChangeNotifier {
   NavSettings._();
   static final NavSettings instance = NavSettings._();
 
+  /// A settings object with defaults and no singleton behind it, for tests
+  /// that need to flip a preference without touching the rider's real one.
+  @visibleForTesting
+  NavSettings.forTest();
+
   static const _kProfile = 'nav_profile_v1';
   static const _kTileCapMb = 'nav_tile_cap_mb_v1';
   static const _kCorridorMaxTiles = 'nav_corridor_max_tiles_v1';
@@ -26,6 +31,24 @@ class NavSettings extends ChangeNotifier {
   static const _kTrackUp = 'nav_track_up_v1';
   static const _kSimulator = 'nav_simulator_v1';
   static const _kStreamToDisplay = 'nav_stream_v1';
+  static const _kAutoRegion = 'nav_auto_region_v1';
+  static const _kRegionSnooze = 'nav_region_snooze_v1';
+
+  /// Whether the phone draws its own map from the offline OSM geometry
+  /// instead of downloading OpenStreetMap raster tiles.
+  ///
+  /// Public because the foreground-service isolate builds its own tile cache
+  /// and has to read the same switch without a second settings object.
+  static const kUseGraphTiles = 'nav_graph_tiles_v1';
+
+  /// The raster map is the familiar one and needs no downloaded geometry to
+  /// look right, so it is what a fresh install (and an upgraded one that never
+  /// expressed a preference) gets.
+  static const defaultUseGraphTiles = false;
+
+  /// How long "Not now" keeps a region quiet. Long enough not to nag a rider
+  /// who just rode through, short enough to offer again on a later trip.
+  static const Duration regionSnoozeFor = Duration(days: 3);
 
   RideProfile _profile = kDefaultProfile;
   int _tileCapMb = 300;
@@ -62,6 +85,20 @@ class NavSettings extends ChangeNotifier {
   /// the point of the feature, and nothing is sent unless the head unit says
   /// it is showing that screen.
   bool _streamToDisplay = true;
+
+  /// Offer the regional map for where the rider is, when no downloaded map
+  /// covers it. On by default: this is the one download a navigator cannot do
+  /// without, and a rider who has just arrived should not have to know that
+  /// Geofabrik exists to get a map.
+  bool _autoRegion = true;
+
+  /// Draw the map from the offline graph geometry rather than OSM raster
+  /// tiles. Off by default: raster tiles are what the map looked like before
+  /// the graph renderer existed, and a toggle makes the choice reversible.
+  bool _useGraphTiles = defaultUseGraphTiles;
+
+  /// The region a "Not now" was given to, as `id|millisecondsSinceEpoch`.
+  String _regionSnooze = '';
   bool _loaded = false;
 
   RideProfile get profile => _profile;
@@ -74,7 +111,20 @@ class NavSettings extends ChangeNotifier {
   bool get trackUp => _trackUp;
   bool get simulator => _simulator;
   bool get streamToDisplay => _streamToDisplay;
+  bool get autoRegion => _autoRegion;
+  bool get useGraphTiles => _useGraphTiles;
   bool get loaded => _loaded;
+
+  /// Whether [regionId] was waved away recently enough to stay quiet.
+  bool isRegionSnoozed(String regionId) {
+    final at = _regionSnooze.lastIndexOf('|');
+    if (at <= 0) return false;
+    final id = _regionSnooze.substring(0, at);
+    final ms = int.tryParse(_regionSnooze.substring(at + 1));
+    if (id != regionId || ms == null) return false;
+    final age = DateTime.now().millisecondsSinceEpoch - ms;
+    return age >= 0 && age < regionSnoozeFor.inMilliseconds;
+  }
 
   /// Last map position as `lat,lon,zoom`, or null if never saved.
   (double lat, double lon, double zoom)? get lastView {
@@ -100,6 +150,9 @@ class NavSettings extends ChangeNotifier {
     _trackUp = p.getBool(_kTrackUp) ?? true;
     _simulator = p.getBool(_kSimulator) ?? false;
     _streamToDisplay = p.getBool(_kStreamToDisplay) ?? true;
+    _autoRegion = p.getBool(_kAutoRegion) ?? true;
+    _useGraphTiles = p.getBool(kUseGraphTiles) ?? defaultUseGraphTiles;
+    _regionSnooze = p.getString(_kRegionSnooze) ?? '';
     _loaded = true;
     notifyListeners();
   }
@@ -190,5 +243,37 @@ class NavSettings extends ChangeNotifier {
     _lastView = '$lat,$lon,$zoom';
     final p = await SharedPreferences.getInstance();
     await p.setString(_kLastView, _lastView);
+  }
+
+  Future<void> setAutoRegion(bool value) async {
+    if (value == _autoRegion) return;
+    _autoRegion = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kAutoRegion, value);
+  }
+
+  Future<void> setUseGraphTiles(bool value) async {
+    if (value == _useGraphTiles) return;
+    _useGraphTiles = value;
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(kUseGraphTiles, value);
+  }
+
+  /// "Not now" on a region offer. Persisted, because the point is to stop the
+  /// offer coming back on the next launch from the same place.
+  Future<void> snoozeRegion(String regionId) async {
+    _regionSnooze =
+        '$regionId|${DateTime.now().millisecondsSinceEpoch}';
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kRegionSnooze, _regionSnooze);
+  }
+
+  Future<void> clearRegionSnooze() async {
+    if (_regionSnooze.isEmpty) return;
+    _regionSnooze = '';
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kRegionSnooze);
   }
 }

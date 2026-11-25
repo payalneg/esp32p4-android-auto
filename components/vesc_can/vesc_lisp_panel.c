@@ -261,7 +261,7 @@ void vesc_lisp_panel_dash_loop(void)
      * transfer, which is driven from BLE/CAN callbacks; hence the pause gate. */
     if (s_polls_paused) return;
     uint32_t now = millis_now();
-    if (now - s_dash_last_ms < vesc_link_scale_ms(VLP_DASH_INTERVAL_MS)) return;
+    if (now - s_dash_last_ms < vesc_link_poll_ms(VLP_DASH_INTERVAL_MS)) return;
     s_dash_last_ms = now;
     vesc_lisp_panel_request_dash();
 }

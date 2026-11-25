@@ -25,6 +25,10 @@ enum OtaTransport {
 
   /// Streamed straight over the existing BLE link — slower, but needs no WiFi.
   ble,
+
+  /// Written straight into the chip's flash through a USB cable. Needs no
+  /// network at all and works even when the firmware doesn't boot.
+  usb,
 }
 
 class UpdateState {
@@ -41,6 +45,20 @@ class UpdateState {
   /// Substitutions for {placeholder}s in the localised string (e.g. {size},
   /// {host}, {err}).
   final Map<String, String>? args;
+}
+
+/// A bundled image resolved for direct flashing over USB.
+class UsbFirmwareImage {
+  const UsbFirmwareImage(this.bytes, this.offset, this.merged);
+
+  final Uint8List bytes;
+
+  /// Flash offset: 0 for a merged recovery image, the application partition
+  /// offset (0x20000) for an application-only image.
+  final int offset;
+
+  /// True when [bytes] contains a bootloader + partition table + app.
+  final bool merged;
 }
 
 class FirmwareUpdater {
@@ -94,8 +112,54 @@ class FirmwareUpdater {
   /// Load the bundled firmware image bytes for [model]. Usable from the
   /// background isolate (rootBundle works there too) — the BLE OTA flash now
   /// runs in the task isolate that owns the link, so it loads the image itself.
-  static Future<Uint8List> imageFor(String? model) async =>
-      (await rootBundle.load(assetFor(model))).buffer.asUint8List();
+  static Future<Uint8List> imageFor(String? model) async {
+    final data = await rootBundle.load(assetFor(model));
+    return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  }
+
+  /// The first 0x20000 bytes of a merged image: 0xFF padding up to the
+  /// bootloader at 0x2000 and the partition table at 0x8000, with 0xFF up to
+  /// the application partition. Staged next to the application .bin by
+  /// scripts/stage_firmware_asset.sh; combining it with that .bin at flash
+  /// time gives a full recovery image without shipping a second 4.8 MB copy
+  /// per board in the APK.
+  static const mergedHeadLength = 0x20000;
+
+  static String headAssetFor(String? model) =>
+      'assets/firmware/esp32p4_android_auto-${model ?? defaultModel}-head.bin';
+
+  /// Whether this APK was built with the recovery-image head for [model].
+  static Future<bool> hasMergedImage(String? model) async {
+    try {
+      final head = await rootBundle.load(headAssetFor(model));
+      return head.lengthInBytes == mergedHeadLength &&
+          head.getUint8(0x2000) == 0xE9;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Bundled image ready for direct (USB) flashing. Prefers a full recovery
+  /// image; falls back to the application-only OTA image when the APK was
+  /// staged without the merged head.
+  static Future<UsbFirmwareImage> usbImageFor(String? model) async {
+    final app = await imageFor(model);
+    try {
+      final head = await rootBundle.load(headAssetFor(model));
+      if (head.lengthInBytes == mergedHeadLength && head.getUint8(0x2000) == 0xE9) {
+        final out = Uint8List(mergedHeadLength + app.length);
+        out.setAll(
+            0,
+            head.buffer.asUint8List(
+                head.offsetInBytes, head.lengthInBytes));
+        out.setAll(mergedHeadLength, app);
+        return UsbFirmwareImage(out, 0, true);
+      }
+    } catch (_) {
+      // Not staged: still allow the application-only write.
+    }
+    return UsbFirmwareImage(app, 0x20000, false);
+  }
 
   /// Whether this board runs the Android Auto side of the firmware. The
   /// ESP32-S3 board is the VESC dashboard alone (no AA), which changes what
@@ -115,6 +179,39 @@ class FirmwareUpdater {
   /// shared across boards, so it's board-agnostic.
   static Future<String> bundledVersion() async =>
       (await rootBundle.loadString(_versionAsset)).trim();
+
+  /// Compare dotted numeric versions: `1.3.10` is newer than `1.3.9`, and a
+  /// missing component counts as zero (`1.3` == `1.3.0`). Anything after the
+  /// numeric parts (a `-rc1` suffix, build metadata) is ignored — the release
+  /// pipeline only uses plain `x.y.z`.
+  static int compareVersions(String a, String b) {
+    List<int> parts(String v) {
+      // Take only the leading dotted numeric portion: a "-rc1" suffix or
+      // build metadata must not count as an extra version component.
+      final m = RegExp(r'^\s*v?(\d+(?:\.\d+)*)').firstMatch(v);
+      if (m == null) return const <int>[];
+      return m
+          .group(1)!
+          .split('.')
+          .map((s) => int.tryParse(s) ?? 0)
+          .toList(growable: false);
+    }
+
+    final pa = parts(a);
+    final pb = parts(b);
+    final n = pa.length > pb.length ? pa.length : pb.length;
+    for (var i = 0; i < n; i++) {
+      final va = i < pa.length ? pa[i] : 0;
+      final vb = i < pb.length ? pb[i] : 0;
+      if (va != vb) return va < vb ? -1 : 1;
+    }
+    return 0;
+  }
+
+  /// SharedPreferences key remembering a version the rider skipped on
+  /// [model]. Per board, so skipping a release on one head unit does not hide
+  /// it on another.
+  static String skippedVersionKey(String model) => 'fw_skip_v1_$model';
 
   final _ctrl = StreamController<UpdateState>.broadcast();
   Stream<UpdateState> get state => _ctrl.stream;

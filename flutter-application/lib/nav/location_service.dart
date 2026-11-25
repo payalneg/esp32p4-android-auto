@@ -71,6 +71,23 @@ class LocationService {
         permission == LocationPermission.whileInUse;
   }
 
+  /// The platform's cached position, if it is recent enough and permission is
+  /// already granted. Never puts a permission dialog on the screen, so it is
+  /// safe to call from a screen that only wants a hint.
+  Future<GeoFix?> lastKnown() async {
+    if (!await hasPermission()) return null;
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last == null ||
+          DateTime.now().difference(last.timestamp) >= kLastKnownMaxAge) {
+        return null;
+      }
+      return _toFix(last);
+    } on Object {
+      return null;
+    }
+  }
+
   /// Positions, starting with whatever the platform already knows.
   ///
   /// The first live fix can take a while — indoors, for ever — and until it
@@ -78,15 +95,8 @@ class LocationService {
   /// position is good enough to draw, to route from and to start guiding;
   /// the live feed corrects it as soon as it has something better.
   Stream<GeoFix> fixes() async* {
-    try {
-      final last = await Geolocator.getLastKnownPosition();
-      if (last != null &&
-          DateTime.now().difference(last.timestamp) < kLastKnownMaxAge) {
-        yield _toFix(last);
-      }
-    } on Object {
-      // Nothing cached yet — the normal first run; the live feed follows.
-    }
+    final cached = await lastKnown();
+    if (cached != null) yield cached;
     yield* Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.best,

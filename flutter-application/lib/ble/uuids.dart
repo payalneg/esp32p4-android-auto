@@ -50,6 +50,18 @@ class NotifBridgeUuids {
   /// WRITE_NO_RSP. Navigator frame data: the JPEG bytes of one frame,
   /// streamed between BEGIN and END on [charNavCtrl].
   static const charNavData = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000c';
+
+  /// READ. The bike's pack state as the head unit's dashboard sees it:
+  /// version, flags, SOC %, voltage (0.01 V) and remaining capacity (0.01 Ah).
+  /// Optional — absent on firmware without the battery broadcast, in which
+  /// case the app keeps showing the last cached reading.
+  static const charBattery = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000d';
+
+  /// WRITE | NOTIFY. New-firmware prompt: the app writes an OFFER with the new
+  /// version and localized labels (see lib/ble/fw_prompt.dart), the head unit
+  /// notifies the rider's choice (update / later / skip). Progress and failures
+  /// use the same characteristic. Optional — older firmware doesn't expose it.
+  static const charFwPrompt = '7b4e4f00-3f8e-4d2a-9d5c-2c9f1a6e000e';
 }
 
 /// Nordic UART Service — the head unit's VESC-Tool-compatible transparent

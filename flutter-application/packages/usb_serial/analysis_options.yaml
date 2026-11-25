@@ -1,0 +1,8 @@
+# Vendored third-party plugin (pub `usb_serial` 0.6.0 + the CH343 patch).
+# It keeps upstream's Java/Dart style, so it is deliberately outside this
+# app's lint surface: the nearest analysis options file stops the app's
+# `flutter_lints` include from flagging upstream identifier names.
+analyzer:
+  errors:
+    constant_identifier_names: ignore
+    library_private_types_in_public_api: ignore

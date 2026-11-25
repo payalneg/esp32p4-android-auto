@@ -32,6 +32,45 @@ class LatLon {
   String toString() => '(${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)})';
 }
 
+/// An axis-aligned WGS84 envelope: what a routing graph or a region covers.
+///
+/// A rectangle is a crude answer to "is this point on my map", but it is the
+/// cheapest one that can be computed while parsing and asked a thousand times
+/// per ride. Callers combine it with a snap-radius test where the difference
+/// matters (see `MapData.covers`).
+class LatLonBounds {
+  const LatLonBounds({
+    required this.south,
+    required this.west,
+    required this.north,
+    required this.east,
+  })  : assert(south <= north),
+        assert(west <= east);
+
+  final double south;
+  final double west;
+  final double north;
+  final double east;
+
+  LatLon get center => LatLon((south + north) / 2, (west + east) / 2);
+
+  /// Rough area in square degrees. Only ever compared with another box, so
+  /// the latitude/longitude distortion cancels out.
+  double get areaDeg2 => (north - south) * (east - west);
+
+  /// Whether [p] is inside, grown by [marginM] metres on every side.
+  bool contains(LatLon p, {double marginM = 0}) {
+    final dLat = marginM / 111320.0;
+    final midLat = (south + north) / 2 * math.pi / 180.0;
+    final squeeze = math.cos(midLat).abs();
+    final dLon = dLat / (squeeze < 0.01 ? 0.01 : squeeze);
+    return p.lat >= south - dLat &&
+        p.lat <= north + dLat &&
+        p.lon >= west - dLon &&
+        p.lon <= east + dLon;
+  }
+}
+
 /// Great-circle distance in metres.
 double haversineM(LatLon a, LatLon b) {
   final p1 = a.lat * math.pi / 180.0;

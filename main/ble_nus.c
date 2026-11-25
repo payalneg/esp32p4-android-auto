@@ -48,6 +48,26 @@ static const char *TAG = "ble_nus";
 static RingbufHandle_t s_tx_rb;
 static TaskHandle_t    s_tx_task;
 
+/* Phone -> VESC requests leave from their own task, not from the NimBLE host
+ * task.
+ *
+ * nus_access_cb runs on the host task — the task that also carries ATT, the
+ * link's own control procedures and every notification this device sends. On
+ * CAN a bridge request takes the shared request rail and waits for its answer
+ * (CAN_SYNC_TIMEOUT_MS, longer when a dashboard poll holds the rail); doing
+ * that inline stalls the whole BLE stack for that long, once per request.
+ * VESC Tool polls several times a second, and the link then spends more time
+ * unable to process anything than processing: it connects, the first dataset
+ * arrives, and every later read or write times out. The host task now only
+ * copies the payload into this queue.
+ *
+ * 4 KiB holds a config write (SET_MCCONF is ~800 B) plus the requests behind
+ * it. Dropping under overload is correct — the peer times out and retries,
+ * exactly as it would with a dropped CAN frame. */
+#define NUS_BRIDGE_RB_SIZE 4096
+static RingbufHandle_t s_bridge_rb;
+static TaskHandle_t    s_bridge_task;
+
 /* NimBLE stores UUID-128 in little-endian byte order (least-significant
  * byte first). The on-the-wire UUID 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
  * thus reverses to the byte sequence below; only byte[12] changes between
@@ -111,6 +131,7 @@ static void peer_drop(uint16_t conn)
 }
 
 static void tx_rb_drain(void);
+static void bridge_rb_drain(void);
 
 /* Make `conn` the NUS owner. Resets the RX parser and drops frames queued
  * for the previous owner (they'd desync the new session — see tx_rb_drain).
@@ -122,6 +143,7 @@ static void nus_claim(uint16_t conn)
     s_conn_handle = conn;
     packet_parser_init(&s_rx_parser);
     tx_rb_drain();
+    bridge_rb_drain();
     nus_peer_t *p = peer_find(conn);
     s_tx_subscribed = p && p->subscribed;
 }
@@ -175,6 +197,26 @@ static void lisp_transfer_touch(void)
     esp_timer_start_once(s_poll_resume_timer, 3 * 1000 * 1000);
 }
 
+/* Drains the phone -> VESC queue. Own task on purpose: on CAN the send takes
+ * the shared request rail and waits for the answer, which must never happen
+ * on the NimBLE host task (see s_bridge_rb). */
+static void nus_bridge_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        size_t   sz   = 0;
+        uint8_t *item = xRingbufferReceive(s_bridge_rb, &sz, portMAX_DELAY);
+        if (!item) continue;
+        if (sz > 0) {
+            /* Target is read here, at send time, so a Settings change applies
+             * to requests that were already queued. */
+            vesc_link_send_from_phone(settings_get_target_vesc_id(),
+                                      item, (unsigned)sz, 0);
+        }
+        vRingbufferReturnItem(s_bridge_rb, item);
+    }
+}
+
 static void rx_packet_complete(const uint8_t *payload, uint16_t len)
 {
     if (len == 0 || boot_guard_recovery()) return;
@@ -191,28 +233,30 @@ static void rx_packet_complete(const uint8_t *payload, uint16_t len)
      * issues bursts of these on every screen open. Demoted to DEBUG so the
      * default INFO log stays readable. */
     ESP_LOGD(TAG, "BLE→CAN cmd 0x%02X len=%u", payload[0], (unsigned)len);
-    /* send=0 — the VESC replies back to us and the handler in main.c fans the
-     * reassembled packet to ble_nus_forward_response. On CAN that is comm_can's
-     * RX task unwrapping PROCESS_RX_BUFFER; on BLE it is the adapter link's RX
-     * task, which makes this a NUS-to-NUS relay.
+
+    /* Hand the request to the bridge task. send=0 — the VESC replies back to
+     * us and the handler in main.c fans the reassembled packet to
+     * ble_nus_forward_response. On CAN that is comm_can's RX task unwrapping
+     * PROCESS_RX_BUFFER; on BLE it is the adapter link's RX task, which makes
+     * this a NUS-to-NUS relay.
      *
      * Target = the runtime-configured primary VESC (Settings → Target VESC
      * ID, NVS-backed), NOT the compile-time Kconfig default — otherwise the
      * bridge keeps talking to a node that may not exist on the user's bus
      * while the dashboard (which reads the same setting) works fine.
      *
-     * Never blocks: this runs on the NimBLE host task, and in BLE mode the
-     * reply arrives on that same task — waiting for it here would deadlock.
-     * vesc_link_send_from_phone() is enqueue-and-return on BLE; on CAN it
-     * queues the request behind the dashboard's own polls so the two replies
-     * cannot share (and corrupt) the one reassembly slot that node has.
-     *
      * The "from phone" tag is what keeps this side of the bridge transparent:
      * only the answer to THIS request goes back to the phone. The display's
      * own polls answer into the same NUS characteristic otherwise, and VESC
      * Tool decodes their partial datasets as its own — see
      * ble_nus_forward_response(). */
-    vesc_link_send_from_phone(settings_get_target_vesc_id(), payload, len, 0);
+    if (!s_bridge_rb ||
+        xRingbufferSend(s_bridge_rb, payload, len, 0) != pdTRUE) {
+        /* Overload (the link is slower than the peer's polling). Dropping is
+         * what a lost CAN frame would have been; the peer retries. */
+        ESP_LOGW(TAG, "bridge queue full — dropped request 0x%02X (%u B)",
+                 payload[0], (unsigned)len);
+    }
 }
 
 static int nus_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -318,6 +362,20 @@ static void tx_rb_drain(void)
     }
 }
 
+/* Same for requests that have not gone out yet: they belong to the peer that
+ * left (or to the session before an ownership switch). A stale SET_* applied a
+ * second later would be worse than a dropped one. */
+static void bridge_rb_drain(void)
+{
+    if (!s_bridge_rb) return;
+    while (1) {
+        size_t sz = 0;
+        void *p = xRingbufferReceive(s_bridge_rb, &sz, 0);
+        if (!p) break;
+        vRingbufferReturnItem(s_bridge_rb, p);
+    }
+}
+
 void ble_nus_on_disconnect(uint16_t conn_handle)
 {
     peer_drop(conn_handle);
@@ -329,6 +387,7 @@ void ble_nus_on_disconnect(uint16_t conn_handle)
     s_conn_handle  = BLE_HS_CONN_HANDLE_NONE;
     s_tx_subscribed = false;
     tx_rb_drain();
+    bridge_rb_drain();
     /* Peer vanished mid-transfer — don't leave the dashboard pollers off
      * for the rest of the timer window. */
     if (s_poll_resume_timer) esp_timer_stop(s_poll_resume_timer);
@@ -460,6 +519,21 @@ void ble_nus_init(void)
     xTaskCreatePinnedToCore(nus_tx_task, "ble_nus_tx", 4096, NULL, 5,
                             &s_tx_task, 0);
     ESP_LOGI(TAG, "tx task up (rb=%d B)", NUS_TX_RB_SIZE);
+
+    s_bridge_rb = xRingbufferCreate(NUS_BRIDGE_RB_SIZE, RINGBUF_TYPE_NOSPLIT);
+    if (!s_bridge_rb) {
+        ESP_LOGE(TAG, "bridge ringbuf alloc failed (%d B) — VESC Tool cannot talk through us",
+                 NUS_BRIDGE_RB_SIZE);
+        return;
+    }
+    if (xTaskCreatePinnedToCore(nus_bridge_task, "nus_bridge", 4096, NULL, 5,
+                                &s_bridge_task, 0) != pdPASS) {
+        ESP_LOGE(TAG, "bridge task not created — VESC Tool cannot talk through us");
+        vRingbufferDelete(s_bridge_rb);
+        s_bridge_rb = NULL;
+        return;
+    }
+    ESP_LOGI(TAG, "bridge task up (rb=%d B)", NUS_BRIDGE_RB_SIZE);
 }
 
 void ble_nus_forward_response(const uint8_t *data, uint16_t len)

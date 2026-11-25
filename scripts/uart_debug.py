@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Host side of the ESP32-P4 UART debug bridge (main/debug_uart_bridge.c).
+"""Host side of the ESP32-P4 UART debug bridge.
 
-Talks to the esp_console REPL on the device's UART0 console to:
+The commands themselves live in main/debug_cmds.c (shared with the Wi-Fi
+transport, scripts/wifi_debug.py); this script talks to the esp_console REPL on
+the device's UART0 console to:
   * grab a screenshot of the live LVGL screen and save it as a PNG, and
   * inject synthetic touch events (tap / swipe / low-level down/move/up).
 

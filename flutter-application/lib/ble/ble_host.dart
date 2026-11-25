@@ -21,15 +21,19 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../coordinator.dart';
 import '../firmware/firmware_updater.dart';
 import '../helper/helper_protocol.dart';
 import '../helper/helper_service.dart';
+import '../i18n/strings.dart' show tl;
 import '../nav/geo.dart';
+import 'bike_battery.dart';
 import 'ble_service.dart';
 import 'file_manager.dart';
 import 'file_ops.dart';
+import 'fw_prompt.dart';
 import 'ipc.dart';
 import 'lisp_models.dart';
 import 'nav_background.dart';
@@ -66,10 +70,20 @@ class BleTaskHandler extends TaskHandler {
       _navLookSub;
   StreamSubscription<String>? _navSearchSub;
   StreamSubscription<void>? _navEmptySub;
+  StreamSubscription<BikeBattery>? _batterySub;
+  StreamSubscription<FwPromptChoice>? _fwChoiceSub;
   Timer? _navIdleTimer;
   bool _navFast = false;
   final _navOwner = NavBackgroundOwner<NavBackground>(NavBackground.new);
   NavBackground? get _navBg => _navOwner.current;
+
+  /// Pending "new firmware" offer the head unit is currently showing, and the
+  /// generation that scheduled it. A disconnect invalidates both, so a delayed
+  /// offer cannot land on a dead link.
+  int _fwOfferGen = 0;
+  ({String current, String available, String model, String? lang})? _fwOffer;
+  bool _fwAutoOtaBusy = false;
+  bool _otaInProgress = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -89,6 +103,9 @@ class BleTaskHandler extends TaskHandler {
     // the editor is open.
     await VescTarget.instance.restore();
     _targetSub = VescTarget.instance.changes.listen(_pushTarget);
+    _batterySub = _ble.batteryUpdates.listen((b) => FlutterForegroundTask
+        .sendDataToMain({'t': IpcEvt.bikeBattery, 'battery': b.toMap()}));
+    _fwChoiceSub = _ble.fwPromptChoices.listen(_onFwPromptChoice);
     _wireHelper();
     // Script output accumulates in VescLink's ring whether anyone is watching
     // or not; we only forward it while a UI panel has asked for the live feed.
@@ -127,6 +144,8 @@ class BleTaskHandler extends TaskHandler {
     await _navEmptySub?.cancel();
     await _stateSub?.cancel();
     await _targetSub?.cancel();
+    await _batterySub?.cancel();
+    await _fwChoiceSub?.cancel();
     await _consoleSub?.cancel();
     for (final s in _helperSubs) {
       await s.cancel();
@@ -148,6 +167,8 @@ class BleTaskHandler extends TaskHandler {
         'navMode': _ble.navStream?.state.navMode ?? false,
         'navVisible': _ble.navStream?.state.visible ?? false,
         'localVector': _ble.navStream?.state.localVector ?? false,
+        // Cached at startup and refreshed every 30 s while the head unit is up.
+        'bikeBattery': _ble.battery?.toMap(),
         // Whether the head unit exposes the NUS bridge is part of the VESC
         // target info now (`headUnitAvailable`) — one source of truth for the
         // LISP editor, which may instead be riding a direct adapter.
@@ -301,6 +322,134 @@ class BleTaskHandler extends TaskHandler {
     FlutterForegroundTask.sendDataToMain({'t': IpcEvt.state, ..._statusMap()});
     // The head unit going up/down also changes whether it's a usable target.
     _pushTarget(VescTarget.instance.info);
+    if (s == BleConnState.connected) {
+      _scheduleFirmwareOffer();
+    } else {
+      _cancelFirmwareOffer();
+    }
+  }
+
+  // ---- head-unit firmware offer ----
+
+  /// Wait a moment after the link settles before asking the head unit to put a
+  /// dialog over its dashboard: a connection that just came up may still be
+  /// starting projection, and the prompt would land on top of it.
+  void _scheduleFirmwareOffer() {
+    final gen = ++_fwOfferGen;
+    unawaited(Future<void>.delayed(const Duration(seconds: 6), () async {
+      if (gen != _fwOfferGen) return;
+      await _maybeOfferFirmwareUpdate(gen);
+    }));
+  }
+
+  void _cancelFirmwareOffer() {
+    _fwOfferGen++;
+    _fwOffer = null;
+  }
+
+  /// Compare the firmware bundled in this APK with the version the head unit
+  /// reports. Offer it only when the APK's image is newer, the link can flash
+  /// over BLE, and the rider has not skipped this version on this board.
+  Future<void> _maybeOfferFirmwareUpdate(int gen) async {
+    if (_fwAutoOtaBusy || _otaInProgress) return;
+    if (_ble.currentState != BleConnState.connected) return;
+    if (!_ble.supportsOta || !_ble.supportsFwPrompt || !_ble.supportsBleOta) {
+      return;
+    }
+    final info = await _ble.readOtaInfo();
+    if (info == null || gen != _fwOfferGen) return;
+    if (_ble.currentState != BleConnState.connected) return;
+
+    final model = info.model ?? FirmwareUpdater.defaultModel;
+    final bundled = await FirmwareUpdater.bundledVersion();
+    if (FirmwareUpdater.compareVersions(bundled, info.version) <= 0) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString(FirmwareUpdater.skippedVersionKey(model)) == bundled) {
+      return;
+    }
+    final lang = prefs.getString('app_locale_v1');
+    final offer = FwPromptOffer(
+      current: info.version,
+      available: bundled,
+      title: tl(lang, 'fw.prompt.title'),
+      body: tl(lang, 'fw.prompt.body'),
+      now: tl(lang, 'fw.prompt.now'),
+      later: tl(lang, 'fw.prompt.later'),
+      skip: tl(lang, 'fw.prompt.skip'),
+      updating: tl(lang, 'fw.prompt.updating'),
+    );
+    if (gen != _fwOfferGen) return;
+    if (!await _ble.sendFwPrompt(offer.encode())) return;
+    _fwOffer =
+        (current: info.version, available: bundled, model: model, lang: lang);
+    AppLog.i('fw', 'offered $bundled to the head unit (running ${info.version})');
+  }
+
+  void _onFwPromptChoice(FwPromptChoice choice) {
+    final offer = _fwOffer;
+    if (offer == null) return;
+    switch (choice) {
+      case FwPromptChoice.update:
+        unawaited(_runHeadUnitUpdate(offer));
+      case FwPromptChoice.later:
+        AppLog.i('fw',
+            'head unit postponed the update to ${offer.available}');
+      case FwPromptChoice.skip:
+        unawaited(_rememberSkippedFirmware(offer));
+    }
+  }
+
+  Future<void> _rememberSkippedFirmware(
+      ({String current, String available, String model, String? lang}) offer) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        FirmwareUpdater.skippedVersionKey(offer.model), offer.available);
+    AppLog.i('fw', 'head unit skipped ${offer.available}');
+  }
+
+  /// The rider tapped Update on the head unit: flash the bundled image over
+  /// the existing BLE link and keep the dialog's progress bar moving. The head
+  /// unit reboots on success, which ends the dialog with it.
+  Future<void> _runHeadUnitUpdate(
+      ({String current, String available, String model, String? lang}) offer) async {
+    if (_fwAutoOtaBusy || _otaInProgress) return;
+    _fwAutoOtaBusy = true;
+    AppLog.i('fw',
+        'head unit accepted ${offer.available}; flashing over BLE');
+    var lastPct = -1;
+    var lastAt = DateTime.fromMillisecondsSinceEpoch(0);
+    try {
+      final image = await FirmwareUpdater.imageFor(offer.model);
+      final digest = Uint8List.fromList(sha256.convert(image).bytes);
+      final res = await _ble.bleOta(
+        image,
+        digest,
+        onUpload: (f) {
+          final pct = (f * 100).round();
+          final now = DateTime.now();
+          if (pct == lastPct ||
+              (now.difference(lastAt).inMilliseconds < 300 && pct - lastPct < 2)) {
+            return;
+          }
+          lastPct = pct;
+          lastAt = now;
+          unawaited(_ble.sendFwPromptProgress(pct));
+        },
+        onVerify: () => unawaited(_ble.sendFwPromptProgress(100)),
+      );
+      if (!res.ok) {
+        AppLog.w('fw', 'head-unit-requested update failed: ${res.errorKey}');
+        await _ble.sendFwPromptFailed(tl(offer.lang, 'fw.prompt.failed'));
+      } else {
+        AppLog.i('fw', 'firmware sent; head unit rebooting into ${offer.available}');
+      }
+    } catch (e) {
+      AppLog.w('fw', 'head-unit-requested update failed: $e');
+      await _ble.sendFwPromptFailed(tl(offer.lang, 'fw.prompt.failed'));
+    } finally {
+      _fwAutoOtaBusy = false;
+    }
   }
 
   void _pushTarget(VescTargetInfo info) {
@@ -322,6 +471,11 @@ class BleTaskHandler extends TaskHandler {
         'state': HelperService.instance.connState.name,
         'fw': HelperService.instance.fwVersion,
         'busy': HelperService.instance.busy,
+        // The live frame says 0xFF once the sensor sleeps; this is the last
+        // value that was actually read, so the UI can still show something.
+        'lastBatt': HelperService.instance.lastBatteryPercent,
+        'lastBattAt':
+            HelperService.instance.lastBatteryAt?.millisecondsSinceEpoch,
       };
 
   /// Fan the helper's streams out to the UI. Subscribed for the lifetime of
@@ -822,6 +976,7 @@ class BleTaskHandler extends TaskHandler {
   }
 
   Future<void> _doBleOta(int? id, String? model) async {
+    _otaInProgress = true;
     try {
       final image = await FirmwareUpdater.imageFor(model);
       final digest = Uint8List.fromList(sha256.convert(image).bytes);
@@ -852,6 +1007,8 @@ class BleTaskHandler extends TaskHandler {
       _reply(id, {'ok': res.ok, 'errorKey': res.errorKey});
     } catch (e) {
       _reply(id, {'ok': false, 'errorKey': 'fw.ota.bleerror'});
+    } finally {
+      _otaInProgress = false;
     }
   }
 

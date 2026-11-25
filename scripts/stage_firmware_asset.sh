@@ -37,6 +37,47 @@ done
 head -n1 "$VER" | tr -d '[:space:]' > "$DEST/version.txt"
 echo "stage_firmware_asset: version $(cat "$DEST/version.txt")"
 
+# --- recovery-image head for USB flashing ------------------------------------
+#
+# USB flashing writes a merged image at 0x0. Instead of bundling a second
+# ~4.8 MB copy of every board, bundle only the first 0x20000 bytes: the 0xFF
+# padding and the bootloader (at 0x2000) plus partition table (at 0x8000).
+# The app appends the application .bin at 0x20000 at flash time
+# (FirmwareUpdater.usbImageFor). Same files/offsets as release.sh's merge_bin,
+# written here directly so the APK staging does not depend on esptool.
+PY=python
+command -v python >/dev/null 2>&1 || PY=python3
+command -v "$PY" >/dev/null 2>&1 || {
+    echo "stage_firmware_asset: Python not found (needed for the USB head)" >&2
+    exit 1
+}
+"$PY" - "$ROOT" "$DEST" "${BOARDS[@]}" <<'PY'
+import json, os, sys
+
+root, dest, boards = sys.argv[1], sys.argv[2], sys.argv[3:]
+HEAD = 0x20000
+for board in boards:
+    bdir = os.path.join(root, "build_%s" % board)
+    with open(os.path.join(bdir, "flasher_args.json"), encoding="utf-8") as f:
+        args = json.load(f)
+    head = bytearray(b"\xff" * HEAD)
+    for addr, name in args["flash_files"].items():
+        offset = int(addr, 0)
+        if offset >= HEAD:
+            continue
+        with open(os.path.join(bdir, name), "rb") as f:
+            data = f.read()
+        if offset + len(data) > HEAD:
+            raise SystemExit("stage_firmware_asset: %s/%s overruns the head" % (board, name))
+        head[offset:offset + len(data)] = data
+    if head[0x2000] != 0xE9:
+        raise SystemExit("stage_firmware_asset: %s has no bootloader at 0x2000" % board)
+    out = os.path.join(dest, "esp32p4_android_auto-%s-head.bin" % board)
+    with open(out, "wb") as f:
+        f.write(head)
+    print("stage_firmware_asset: recovery head %s: %d bytes" % (board, len(head)))
+PY
+
 # --- VESC BLE Helper (ESP32-C3) ----------------------------------------------
 #
 # The helper's firmware is bundled too, so the app can flash it with no network

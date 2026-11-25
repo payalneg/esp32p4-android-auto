@@ -35,6 +35,7 @@ set(MAIN_SRCS
     "ble_ota.c"
     "ble_files.c"
     "notif_toast.c"
+    "fw_prompt.c"
     "charge_prompt.c"
     "music_info_view.c"
     "fonts/aabridge_font_24.c"
@@ -47,6 +48,8 @@ set(MAIN_SRCS
     "files_screen.c"
     "splash_screen.c"
     "debug_uart_bridge.c"
+    "debug_cmds.c"
+    "debug_wifi.c"
 )
 
 set(MAIN_REQUIRES

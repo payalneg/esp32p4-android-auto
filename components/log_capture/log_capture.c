@@ -244,3 +244,46 @@ size_t log_capture_total_bytes(void)
     portEXIT_CRITICAL(&s_lock);
     return total;
 }
+
+size_t log_capture_read(size_t *cursor, char *out, size_t out_size,
+                        size_t *dropped)
+{
+    if (dropped) *dropped = 0;
+    if (!s_buf || !cursor || !out || out_size < 2) return 0;
+
+    portENTER_CRITICAL(&s_lock);
+    const size_t total     = s_total_written;
+    const size_t available = total < s_buf_size ? total : s_buf_size;
+    const size_t oldest    = total - available;
+
+    size_t from = *cursor;
+    size_t lost = 0;
+    if (from < oldest) {
+        /* The reader lapped the ring: everything between its cursor and the
+         * oldest buffered byte has been overwritten. Say so and resume at the
+         * oldest byte rather than splicing a hole into the stream. */
+        lost = oldest - from;
+        from = oldest;
+    } else if (from > total) {
+        from = total;       /* cleared/rewound ring — treat as caught up */
+    }
+
+    size_t want = total - from;
+    if (want > out_size - 1) want = out_size - 1;
+
+    /* s_head is the buffer index of absolute offset `total`, and offsets are
+     * counted in bytes since init with s_head wrapping in lockstep — so the
+     * index of any still-buffered offset is just offset % s_buf_size. */
+    size_t idx = from % s_buf_size;
+    for (size_t i = 0; i < want; i++) {
+        out[i] = s_buf[idx];
+        idx = (idx + 1) % s_buf_size;
+    }
+
+    *cursor = from + want;
+    portEXIT_CRITICAL(&s_lock);
+
+    out[want] = '\0';
+    if (dropped) *dropped = lost;
+    return want;
+}

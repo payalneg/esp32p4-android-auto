@@ -99,12 +99,19 @@ class TileCache {
     this.maxConcurrent = 2,
     this.requestTimeout = const Duration(seconds: 20),
     this.krakow,
+    this.useGraphTiles = true,
     HttpClient Function()? clientFactory,
   }) : _clientFactory = clientFactory ?? (() => HttpClient());
 
   /// Directory holding `{z}/{x}/{y}.png`.
   final Directory root;
   final KrakowTileSource? krakow;
+
+  /// Whether tiles inside [krakow]'s coverage are drawn from its offline
+  /// geometry. False keeps the whole cache on the raster path — including
+  /// tiles rendered from the graph at an earlier switch — so the two styles
+  /// never get mixed up on screen.
+  final bool useGraphTiles;
   final String userAgent;
   final Duration minGap;
   final int maxConcurrent;
@@ -147,7 +154,7 @@ class TileCache {
 
   File fileFor(TileId t) {
     final local = krakow;
-    final base = local != null && local.covers(t)
+    final base = useGraphTiles && local != null && local.covers(t)
         ? '${root.path}/krakow-v2/${local.version}'
         : root.path;
     return File('$base/${t.z}/${t.x}/${t.y}.png');
@@ -204,7 +211,7 @@ class TileCache {
   Future<Uint8List?> _fetchAny(
       TileId t, List<Uri> urls, TilePriority priority, int generation) async {
     final local = krakow;
-    if (local != null && local.covers(t)) {
+    if (useGraphTiles && local != null && local.covers(t)) {
       await _acquireSlot(t, priority, generation);
       try {
         final bytes = await renderKrakowTile(local, t);

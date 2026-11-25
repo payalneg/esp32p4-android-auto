@@ -29,16 +29,13 @@ class HelperScreen extends StatefulWidget {
   State<HelperScreen> createState() => _HelperScreenState();
 }
 
-class _HelperScreenState extends State<HelperScreen>
-    with SingleTickerProviderStateMixin {
+class _HelperScreenState extends State<HelperScreen> {
   final _h = HelperProxy.instance;
-  late final TabController _tab;
   bool _logOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 4, vsync: this);
     _h.addListener(_onChange);
     // The isolate only pushes on change, so a screen opened after the helper
     // was already up would otherwise paint "not connected".
@@ -48,7 +45,6 @@ class _HelperScreenState extends State<HelperScreen>
   @override
   void dispose() {
     _h.removeListener(_onChange);
-    _tab.dispose();
     super.dispose();
   }
 
@@ -56,111 +52,129 @@ class _HelperScreenState extends State<HelperScreen>
     if (mounted) setState(() {});
   }
 
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  Future<void> _toggleConnection() async {
-    try {
-      if (_h.connected) {
-        await _h.disconnect();
-      } else {
-        await _h.connect();
-        if (!_h.connected && mounted) _snack(t(context, 'helper.notFound'));
-      }
-    } catch (e) {
-      _snack('$e');
-    }
+  /// One section, opened like the entries on the display settings screen.
+  void _open(String title, Widget Function(HelperProxy h) body) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _HelperSubScreen(title: title, body: body),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final busy = _h.scanning || _h.state == HelperConnState.connecting;
+    final installed = _h.fwVersion;
     return Scaffold(
       appBar: AppBar(
         title: Text(t(context, 'helper.title')),
-        actions: [
-          IconButton(
-            icon: Icon(_h.connected ? Icons.link_off : Icons.link),
-            tooltip: t(context,
-                _h.connected ? 'helper.disconnect' : 'helper.connect'),
-            onPressed: busy ? null : _toggleConnection,
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tab,
-          isScrollable: true,
-          tabs: [
-            Tab(text: t(context, 'helper.tab.status')),
-            Tab(text: t(context, 'helper.tab.params')),
-            Tab(text: t(context, 'helper.tab.bind')),
-            Tab(text: t(context, 'helper.tab.fw')),
-          ],
-        ),
+        actions: [_LinkAction(h: _h)],
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          _linkBar(context, busy),
-          if (busy) const LinearProgressIndicator(),
-          if (_h.otaProgress != null)
-            LinearProgressIndicator(value: _h.otaProgress),
-          Expanded(
-            child: TabBarView(
-              controller: _tab,
-              children: [
-                _StatusTab(h: _h),
-                _ParamsTab(h: _h),
-                _BindTab(h: _h),
-                _FirmwareTab(h: _h),
-              ],
-            ),
+          _statusCard(context),
+          const SizedBox(height: 16),
+          _HelperHubCard(
+            icon: Icons.speed,
+            title: t(context, 'helper.tab.status'),
+            subtitle: t(context, 'helper.hub.status.sub'),
+            onTap: () => _open(
+                t(context, 'helper.tab.status'), (h) => _StatusTab(h: h)),
           ),
-          _logPanel(context),
+          _HelperHubCard(
+            icon: Icons.tune,
+            title: t(context, 'helper.tab.params'),
+            subtitle: t(context, 'helper.hub.params.sub'),
+            onTap: () => _open(
+                t(context, 'helper.tab.params'), (h) => _ParamsTab(h: h)),
+          ),
+          _HelperHubCard(
+            icon: Icons.bluetooth_searching,
+            title: t(context, 'helper.tab.bind'),
+            subtitle: t(context, 'helper.hub.bind.sub'),
+            onTap: () =>
+                _open(t(context, 'helper.tab.bind'), (h) => _BindTab(h: h)),
+          ),
+          _HelperHubCard(
+            icon: Icons.system_update,
+            title: t(context, 'helper.tab.fw'),
+            subtitle: installed == null
+                ? t(context, 'helper.hub.fw.sub')
+                : tf(context, 'helper.fw', <String, Object?>{'v': installed}),
+            onTap: () => _open(
+                t(context, 'helper.tab.fw'), (h) => _FirmwareTab(h: h)),
+          ),
+          if (_h.log.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _logPanel(context),
+          ],
         ],
       ),
     );
   }
 
-  Widget _linkBar(BuildContext context, bool busy) {
+  /// Link state, the same green-tinted card the display settings screen uses
+  /// for its own link.
+  Widget _statusCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final text = switch (_h.state) {
+    final connected = _h.connected;
+    final busy = _helperBusy(_h);
+    final subtitle = switch (_h.state) {
       HelperConnState.connected => _h.fwVersion == null
-          ? t(context, 'helper.connected')
-          : '${t(context, 'helper.connected')} · '
-              '${t(context, 'helper.fw').replaceAll('{v}', _h.fwVersion!)}',
+          ? t(context, 'helper.status.waiting')
+          : tf(context, 'helper.fw', <String, Object?>{'v': _h.fwVersion!}),
       HelperConnState.connecting => t(context, 'helper.connecting'),
       HelperConnState.scanning => t(context, 'helper.searching'),
-      HelperConnState.idle => t(context, 'helper.disconnected'),
+      HelperConnState.idle => t(context, 'helper.intro'),
     };
-    return Container(
-      width: double.infinity,
-      color: scheme.surfaceContainerHighest,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
+    return Card(
+      color: connected
+          ? Colors.green.withValues(alpha: 0.15)
+          : scheme.surfaceContainerHigh,
+      child: Column(
         children: [
-          Icon(
-            _h.connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-            size: 18,
-            color: _h.connected ? scheme.primary : scheme.outline,
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text(text, style: Theme.of(context).textTheme.bodySmall)),
-          if (!_h.connected && !busy)
-            TextButton(
-              onPressed: _toggleConnection,
-              child: Text(t(context, 'helper.connect')),
+          ListTile(
+            leading: Icon(
+              connected
+                  ? Icons.bluetooth_connected
+                  : Icons.bluetooth_disabled,
+              color: connected ? Colors.green : Colors.grey,
+              size: 32,
             ),
+            title: Text(connected
+                ? t(context, 'helper.connected')
+                : t(context, 'helper.disconnected')),
+            subtitle: Text(subtitle),
+          ),
+          if (busy || _h.otaProgress != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: LinearProgressIndicator(value: _h.otaProgress),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8, bottom: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed:
+                      busy ? null : () => _toggleHelperConnection(context, _h),
+                  icon: Icon(connected ? Icons.link_off : Icons.link, size: 18),
+                  label: Text(t(context,
+                      connected ? 'helper.disconnect' : 'helper.connect')),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _logPanel(BuildContext context) {
-    if (_h.log.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
+    return Card(
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
@@ -191,6 +205,115 @@ class _HelperScreenState extends State<HelperScreen>
   }
 }
 
+bool _helperBusy(HelperProxy h) =>
+    h.scanning || h.state == HelperConnState.connecting;
+
+Future<void> _toggleHelperConnection(
+    BuildContext context, HelperProxy h) async {
+  try {
+    if (h.connected) {
+      await h.disconnect();
+    } else {
+      await h.connect();
+      if (!h.connected && context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(t(context, 'helper.notFound'))));
+      }
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+}
+
+/// Connect / disconnect in the app bar, shared by the hub and its sections.
+class _LinkAction extends StatelessWidget {
+  const _LinkAction({required this.h});
+  final HelperProxy h;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = _helperBusy(h);
+    return IconButton(
+      icon: Icon(h.connected ? Icons.link_off : Icons.link),
+      tooltip: t(context, h.connected ? 'helper.disconnect' : 'helper.connect'),
+      onPressed: busy ? null : () => _toggleHelperConnection(context, h),
+    );
+  }
+}
+
+/// One entry in the helper hub, styled like the display settings entries.
+class _HelperHubCard extends StatelessWidget {
+  const _HelperHubCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+/// A helper section (status, parameters, pairing, firmware) behind its own
+/// page, so the hub itself stays a plain list of cards.
+class _HelperSubScreen extends StatefulWidget {
+  const _HelperSubScreen({required this.title, required this.body});
+  final String title;
+  final Widget Function(HelperProxy h) body;
+
+  @override
+  State<_HelperSubScreen> createState() => _HelperSubScreenState();
+}
+
+class _HelperSubScreenState extends State<_HelperSubScreen> {
+  final _h = HelperProxy.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _h.addListener(_onChange);
+    unawaited(_h.refresh().catchError((_) {}));
+  }
+
+  @override
+  void dispose() {
+    _h.removeListener(_onChange);
+    super.dispose();
+  }
+
+  void _onChange() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [_LinkAction(h: _h)],
+      ),
+      body: widget.body(_h),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -205,14 +328,29 @@ class _StatusTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = h.status;
     if (s == null) {
-      return _Empty(
-        icon: h.connected ? Icons.hourglass_top : Icons.bluetooth_disabled,
-        title: t(context,
-            h.connected ? 'helper.status.waiting' : 'helper.disconnected'),
-        hint: t(context, 'helper.intro'),
+      return ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          const SizedBox(height: 24),
+          _Empty(
+            icon: h.connected ? Icons.hourglass_top : Icons.bluetooth_disabled,
+            title: t(context,
+                h.connected ? 'helper.status.waiting' : 'helper.disconnected'),
+            hint: t(context, 'helper.intro'),
+          ),
+          if (h.lastBatteryPercent != null) ...[
+            const SizedBox(height: 16),
+            _lastBatteryCard(context),
+          ],
+        ],
       );
     }
     final scheme = Theme.of(context).colorScheme;
+    // The sensor reports 0xFF while it sleeps or after the link drops. Fall
+    // back to the last value it did report, labelled as such so an old figure
+    // is never mistaken for a live one.
+    final battLive = s.battKnown;
+    final battPct = battLive ? s.batt : h.lastBatteryPercent;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -287,8 +425,11 @@ class _StatusTab extends StatelessWidget {
             Expanded(
                 child: _Stat(
                     label: t(context, 'helper.status.battery'),
-                    value: s.battKnown ? '${s.batt}' : '—',
-                    unit: s.battKnown ? '%' : null)),
+                    value: battPct == null ? '—' : '$battPct',
+                    unit: battPct == null ? null : '%',
+                    note: battLive || battPct == null
+                        ? null
+                        : _batteryWhen(context, h.lastBatteryAt))),
           ],
         ),
         const SizedBox(height: 8),
@@ -453,6 +594,35 @@ class _StatusTab extends StatelessWidget {
     );
   }
 
+  /// Stands in for the whole status card when there is no live frame at all.
+  /// The one thing worth keeping is the battery the sensor last reported.
+  Widget _lastBatteryCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.battery_std, color: scheme.primary),
+        title: Text(t(context, 'helper.last.title')),
+        subtitle: Text(tf(context, 'helper.last.value', <String, Object?>{
+          'v': h.lastBatteryPercent!,
+          'when': _batteryWhen(context, h.lastBatteryAt),
+        })),
+      ),
+    );
+  }
+
+  String _batteryWhen(BuildContext context, DateTime? at) {
+    if (at == null) return t(context, 'helper.last.justNow');
+    final age = DateTime.now().difference(at);
+    if (age.inMinutes < 1) return t(context, 'helper.last.justNow');
+    if (age.inMinutes < 60) {
+      return tf(context, 'helper.last.minutes', {'n': age.inMinutes});
+    }
+    if (age.inHours < 24) {
+      return tf(context, 'helper.last.hours', {'n': age.inHours});
+    }
+    return tf(context, 'helper.last.days', {'n': age.inDays});
+  }
+
   /// [state]: true ok, false problem, null "not configured".
   Widget _chip(BuildContext context, IconData icon, String label,
       String detail, bool? state) {
@@ -481,10 +651,13 @@ class _StatusTab extends StatelessWidget {
 }
 
 class _Stat extends StatelessWidget {
-  const _Stat({required this.label, required this.value, this.unit});
+  const _Stat({required this.label, required this.value, this.unit, this.note});
   final String label;
   final String value;
   final String? unit;
+
+  /// A quiet line under the value, e.g. how old a last-known reading is.
+  final String? note;
 
   @override
   Widget build(BuildContext context) {
@@ -510,6 +683,13 @@ class _Stat extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: scheme.outline)),
               ],
             )),
+            if (note != null) ...[
+              const SizedBox(height: 2),
+              Text(note!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 10, color: scheme.outline)),
+            ],
           ],
         ),
       ),

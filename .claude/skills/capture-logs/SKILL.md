@@ -47,6 +47,42 @@ scripts/capture_phone.sh --all-live  # save + print everything
 Needs `adb` and an authorised device. Filters on AA tags
 (`aap|gearhead|projection|androidauto|wireless.?helper|…`) → `logs/phone-<ts>.log`.
 
+### Phone over Wi-Fi (no cable)
+
+`scripts/phone_wifi.py` (Windows wrapper: `scripts\phone_wifi.bat`) drives ADB
+over TCP, which is the only way to watch the phone while its USB port is doing
+something else — notably **USB-flashing the head unit**, where the phone is the
+USB host and there is no ADB over USB at all.
+
+```bash
+# Android 11+: phone -> Developer options -> Wireless debugging -> On
+scripts\phone_wifi.bat discover --connect      # mDNS: pairs nothing, connects
+scripts\phone_wifi.bat pair 192.168.1.55:37219 # 6-digit code, asked for
+scripts\phone_wifi.bat connect 192.168.1.55:37223   # port shown on that screen
+# older / one-time with the cable: adb tcpip 5555, then connect <ip> (port 5555)
+
+scripts\phone_wifi.bat discover      # list wireless-debugging endpoints
+scripts\phone_wifi.bat status        # model, Android, battery temp, thermal state
+scripts\phone_wifi.bat logs          # AA filter live + full log to logs/phone-<ts>.log
+scripts\phone_wifi.bat logs --all --grep usbflash,gearhead
+```
+
+`--grep` takes a regex; a comma is accepted as alternation (`usbflash,gearhead`)
+because an unquoted `|` does not survive PowerShell 5.1 → cmd.exe argument
+passing. A single-word filter (`--grep usbflash`) is always safe.
+
+Note the port: Android 11+ picks a random one each time wireless debugging is
+toggled (the screen shows `IP address & port`), so `:5555` is only right for the
+legacy `adb tcpip 5555` path.
+
+Requirements: phone and PC on the same L3 network — the head unit's SoftAP
+(`192.168.4.0/24`) counts, and so does Tailscale (use the phone's `100.x`
+address), so this works even when the phone is on mobile data behind a hotspot.
+`logs` survives the phone leaving and coming back only in the sense that it exits
+— re-run it after a reconnect. Battery/temperature in `status` is the quickest
+answer to "the phone cooks while projecting AA".
+
+
 ## Combined (shared timestamp so streams line up)
 
 ```bash

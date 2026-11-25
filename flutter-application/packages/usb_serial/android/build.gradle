@@ -1,0 +1,42 @@
+group = 'dev.bessems.usbserial'
+version = '1.0'
+
+apply plugin: 'com.android.library'
+
+android {
+    compileSdk = 36
+
+    namespace = 'dev.bessems.usbserial'
+
+    defaultConfig {
+        minSdk = 21
+        // Keep rule for the vendored usb-serial-for-android drivers
+        // (UsbSerialProber looks them up via reflection).
+        consumerProguardFiles 'proguard-rules.pro'
+    }
+    lint {
+        disable 'InvalidPackage'
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    // The USB serial drivers are vendored from mik3y/usb-serial-for-android
+    // (src/main/java/dev/bessems/usbserial/vendored, see
+    // tool/update_vendored_usb_serial.sh), so apps need no JitPack repository.
+    // This is that library's only runtime dependency.
+    implementation 'androidx.annotation:annotation:1.10.0'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+}

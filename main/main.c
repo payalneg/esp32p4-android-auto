@@ -64,6 +64,7 @@ void port_start_app_hook(void)
 #include "ble_nus.h"
 #include "notif_bridge.h"
 #include "notif_toast.h"
+#include "fw_prompt.h"
 #include "pas.h"
 #include "speed_sensor.h"
 #include "bms_battery.h"
@@ -85,6 +86,7 @@ void port_start_app_hook(void)
 #include "touch_input.h"
 #include "ui_mode.h"
 #include "debug_uart_bridge.h"
+#include "debug_wifi.h"
 #include "vesc_can/comm_can.h"
 #include "vesc_can/vesc_link.h"
 #include "vesc_ble_link.h"
@@ -702,6 +704,9 @@ void app_main(void)
      * notif_bridge_init for the GATT plumbing; this one wires the LVGL
      * toast widget on top so incoming notifications actually appear. */
     notif_toast_init();
+    /* Dialog the phone raises when the firmware bundled in the APK is newer
+     * than the one this board is running. */
+    fw_prompt_init();
 
     /* Pedal-assist: load settings + bound cadence sensor from NVS and start the
      * control task. Safe to call regardless of CAN state — it only forwards a
@@ -753,6 +758,17 @@ void app_main(void)
         ESP_LOGI(TAG, "AP \"%s\" psk \"%s\" bssid %s ch %u",
                  ap->ssid, ap->password, ap->bssid_str, (unsigned)ap->channel);
     }
+
+    /* Wi-Fi debug bridge: live log + the same screenshot/touch commands the
+     * serial bridge offers, over TCP. The point is the cable: while the phone
+     * holds the USB port (firmware flashing over USB, the app's third update
+     * path) there is no serial console to watch, and once the unit is behind
+     * the dash there never will be. Needs only the netif, which is up here;
+     * the log history it replays is already in log_capture from boot. No-op
+     * stub unless CONFIG_DEBUG_WIFI_BRIDGE. */
+#if CONFIG_DEBUG_WIFI_BRIDGE
+    debug_wifi_start();
+#endif
 
     /* mDNS hostname (CONFIG_WEB_MDNS_HOSTNAME) — makes the web UI reachable
      * as http://<hostname>.local/ and, on the AA boards, is what the Wireless

@@ -12,9 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../i18n/strings.dart';
 import '../nav/map_data.dart';
-import '../nav/way_classes.dart';
 import 'region_picker_screen.dart';
-import '../settings/nav_settings.dart';
 
 class MapDataScreen extends StatefulWidget {
   const MapDataScreen({super.key});
@@ -25,12 +23,20 @@ class MapDataScreen extends StatefulWidget {
 
 class _MapDataScreenState extends State<MapDataScreen> {
   ({int bytes, int files})? _tileStats;
-
+  List<ArchivedRegion>? _archived;
+  bool _switching = false;
+  MapDataState? _lastState;
 
   @override
   void initState() {
     super.initState();
     _refreshTiles();
+    _refreshArchived();
+  }
+
+  Future<void> _refreshArchived() async {
+    final list = await MapData.instance.archivedRegions();
+    if (mounted) setState(() => _archived = list);
   }
 
 
@@ -45,19 +51,27 @@ class _MapDataScreenState extends State<MapDataScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(t(context, 'mapdata.title'))),
       body: ListenableBuilder(
-        listenable: Listenable.merge(
-            <Listenable>[MapData.instance, NavSettings.instance]),
-        builder: (context, _) => ListView(
-          padding: const EdgeInsets.all(16),
-          children: <Widget>[
-            _statusCard(context),
-            _regionCard(context),
-            _importCard(context),
-            _tilesCard(context),
-            _profileCard(context),
-            if (MapData.instance.state != MapDataState.absent) _deleteCard(context),
-          ],
-        ),
+        listenable: MapData.instance,
+        builder: (context, _) {
+          // A finished build adds a saved map; the list here was read once.
+          final state = MapData.instance.state;
+          if (state == MapDataState.ready && _lastState != MapDataState.ready) {
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _refreshArchived());
+          }
+          _lastState = state;
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: <Widget>[
+              _statusCard(context),
+              _regionCard(context),
+              _savedMapsCard(context),
+              _importCard(context),
+              _tilesCard(context),
+              if (state != MapDataState.absent) _deleteCard(context),
+            ],
+          );
+        },
       ),
     );
   }
@@ -89,6 +103,14 @@ class _MapDataScreenState extends State<MapDataScreen> {
                   <String, Object?>{'places': data.index!.length}),
           style: theme.textTheme.bodySmall,
         ));
+        if (data.regionName != null) {
+          children.add(const SizedBox(height: 4));
+          children.add(Text(
+            tf(context, 'mapdata.region.current',
+                <String, Object?>{'name': data.regionName!}),
+            style: theme.textTheme.bodySmall,
+          ));
+        }
       case MapDataState.downloading:
         children.add(Text(tf(context, 'mapdata.downloading',
             <String, Object?>{'file': data.progressFile ?? ''})));
@@ -138,6 +160,90 @@ class _MapDataScreenState extends State<MapDataScreen> {
     );
   }
 
+  /// Maps kept on the phone. One is in use; the rest are one tap away, which
+  /// is what makes crossing a border cheap instead of a re-download.
+  Widget _savedMapsCard(BuildContext context) {
+    final list = _archived;
+    if (list == null || list.isEmpty) return const SizedBox.shrink();
+    final active = MapData.instance.activeKey;
+    final dataState = MapData.instance.state;
+    final busy = _switching ||
+        dataState == MapDataState.downloading ||
+        dataState == MapDataState.loading;
+    final theme = Theme.of(context);
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          ListTile(
+            leading: const Icon(Icons.inventory_2_outlined),
+            title: Text(t(context, 'mapdata.saved.title')),
+            subtitle: Text(tf(
+                context, 'mapdata.saved.subtitle',
+                <String, Object?>{'n': list.length})),
+          ),
+          for (final item in list)
+            ListTile(
+              enabled: !busy,
+              leading: Icon(
+                item.key == active
+                    ? Icons.check_circle
+                    : Icons.offline_pin_outlined,
+                color: item.key == active ? theme.colorScheme.primary : null,
+              ),
+              title: Text(_savedName(context, item)),
+              subtitle: Text(
+                '${(item.bytes / (1 << 20)).toStringAsFixed(1)} MB'
+                '${item.key == active ? ' · ${t(context, 'mapdata.saved.active')}' : ''}',
+              ),
+              onTap: item.key == active || busy ? null : () => _switchTo(item),
+              trailing: item.key == active || busy
+                  ? null
+                  : IconButton(
+                      tooltip: t(context, 'mapdata.saved.delete'),
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      onPressed: () => _deleteArchived(item),
+                    ),
+            ),
+          if (_switching)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: LinearProgressIndicator(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _savedName(BuildContext context, ArchivedRegion item) {
+    if (item.isImported) return t(context, 'mapdata.saved.imported');
+    return item.name.isEmpty ? item.id ?? '' : item.name;
+  }
+
+  Future<void> _switchTo(ArchivedRegion item) async {
+    if (_switching) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final failure = t(context, 'mapdata.saved.switchFailed');
+    setState(() => _switching = true);
+    final ok = await MapData.instance.activateRegion(item.key);
+    if (!mounted) return;
+    setState(() => _switching = false);
+    await _refreshArchived();
+    if (!ok) {
+      messenger.showSnackBar(SnackBar(content: Text(failure)));
+    }
+  }
+
+  Future<void> _deleteArchived(ArchivedRegion item) async {
+    final ok = await _confirmBody(
+        context,
+        tf(context, 'mapdata.saved.delete.confirm',
+            <String, Object?>{'name': _savedName(context, item)}));
+    if (!ok) return;
+    await MapData.instance.deleteArchived(item.key);
+    await _refreshArchived();
+  }
+
   Widget _importCard(BuildContext context) {
     return Card(
       child: Column(
@@ -172,7 +278,6 @@ class _MapDataScreenState extends State<MapDataScreen> {
 
   Widget _tilesCard(BuildContext context) {
     final stats = _tileStats;
-    final settings = NavSettings.instance;
     return Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -186,51 +291,6 @@ class _MapDataScreenState extends State<MapDataScreen> {
                     'mb': (stats.bytes / (1 << 20)).toStringAsFixed(1),
                     'n': stats.files,
                   })),
-          ),
-          ListTile(
-            title: Text(t(context, 'mapdata.area.radius')),
-            trailing: DropdownButton<double>(
-              value: settings.areaRadiusKm,
-              items: const <double>[1, 2, 5, 20, 50, 100]
-                  .map((km) => DropdownMenuItem<double>(
-                      value: km, child: Text('${km.round()} km')))
-                  .toList(),
-              onChanged: (v) => v == null ? null : settings.setAreaRadiusKm(v),
-            ),
-          ),
-          ListTile(
-            title: Text(t(context, 'mapdata.area.budget')),
-            trailing: DropdownButton<int>(
-              value: settings.tileBudget,
-              items: const <int>[1000, 3000, 10000]
-                  .map((n) =>
-                      DropdownMenuItem<int>(value: n, child: Text('$n')))
-                  .toList(),
-              onChanged: (v) => v == null ? null : settings.setTileBudget(v),
-            ),
-          ),
-          ListTile(
-            title: Text(t(context, 'mapdata.tiles.cap')),
-            trailing: DropdownButton<int>(
-              value: settings.tileCapMb,
-              items: const <int>[100, 300, 1000]
-                  .map((mb) =>
-                      DropdownMenuItem<int>(value: mb, child: Text('$mb MB')))
-                  .toList(),
-              onChanged: (v) => v == null ? null : settings.setTileCapMb(v),
-            ),
-          ),
-          ListTile(
-            title: Text(t(context, 'mapdata.corridor.max')),
-            trailing: DropdownButton<int>(
-              value: settings.corridorMaxTiles,
-              items: const <int>[100, 250, 600]
-                  .map((n) =>
-                      DropdownMenuItem<int>(value: n, child: Text('$n')))
-                  .toList(),
-              onChanged: (v) =>
-                  v == null ? null : settings.setCorridorMaxTiles(v),
-            ),
           ),
           Align(
             alignment: Alignment.centerRight,
@@ -255,24 +315,6 @@ class _MapDataScreenState extends State<MapDataScreen> {
     );
   }
 
-  Widget _profileCard(BuildContext context) {
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.route_outlined),
-        title: Text(t(context, 'mapdata.profile.default')),
-        trailing: DropdownButton<RideProfile>(
-          value: NavSettings.instance.profile,
-          items: RideProfile.values
-              .map((p) => DropdownMenuItem<RideProfile>(
-                  value: p, child: Text(t(context, p.i18nKey))))
-              .toList(),
-          onChanged: (p) =>
-              p == null ? null : NavSettings.instance.setProfile(p),
-        ),
-      ),
-    );
-  }
-
   Widget _deleteCard(BuildContext context) {
     return Card(
       child: ListTile(
@@ -282,17 +324,21 @@ class _MapDataScreenState extends State<MapDataScreen> {
         onTap: () async {
           if (await _confirm(context, 'mapdata.delete.confirm')) {
             await MapData.instance.deleteAll();
+            await _refreshArchived();
           }
         },
       ),
     );
   }
 
-  Future<bool> _confirm(BuildContext context, String bodyKey) async {
+  Future<bool> _confirm(BuildContext context, String bodyKey) =>
+      _confirmBody(context, t(context, bodyKey));
+
+  Future<bool> _confirmBody(BuildContext context, String body) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        content: Text(t(ctx, bodyKey)),
+        content: Text(body),
         actions: <Widget>[
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),

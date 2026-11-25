@@ -1,0 +1,113 @@
+## 0.6.0+aa.1 (vendored in this repo)
+
+* Android: CH343 / CH343P (1a86:55d3) support — the ESP32-P4 Waveshare board's
+  UART bridge. Adds the PID to the probe table, uses the CH343 baud-rate
+  encoding (generic factor, no CH340 921600/307200 quirks) and a short init
+  sequence whose vendor-request failures do not abort `open()`, so the port
+  still works at the chip's 115200 8N1 default. Everything else is unchanged
+  from upstream 0.6.0; see the note in `flutter-application/pubspec.yaml`.
+
+## 0.6.0
+* Android: confirmed and documented 16 KB memory page size support (#130).
+* Android: switched the USB serial drivers from felHR85/UsbSerial 6.1.0 to
+  mik3y/usb-serial-for-android 3.12.0 (#134, thanks @ravisvf). Adds the Prolific PL2303
+  G/HXN family (e.g. PL2303GC 067b:23a3) and fixes DTR/RTS handling. The Dart API and the
+  `create` `type` strings are unchanged.
+* Android: the drivers are vendored into the plugin (package `dev.bessems.usbserial.vendored`),
+  so apps no longer need the JitPack repository. `tool/update_vendored_usb_serial.sh` updates
+  them and CI checks they match upstream.
+* Android: port parameters, DTR, RTS and flow control set before `open()` are applied when
+  the port opens; the input stream ends (onDone) when the device is unplugged; serial errors
+  are returned as `PlatformException` instead of crashing the app.
+* Android: `write` no longer blocks the UI thread; its timeout scales with the baud rate.
+* Android: XON/XOFF flow control on FTDI chips uses inline XON/XOFF with the characters
+  filtered from the input stream.
+* Android: `create`'s `interface` argument now selects the port index on multi-port devices.
+* Android: modern Gradle DSL in the plugin (`compileSdk =`, `lint {}`, assignment syntax)
+  and removed the deprecated `package` attribute from the plugin manifest.
+* Example app migrated to the current Flutter Android template (Gradle Kotlin DSL,
+  declarative plugins, AGP 9) and fixed `setState()` being called after `dispose()`.
+* CI: new Dart workflow (format, `flutter analyze --fatal-infos`, tests on stable and beta)
+  and Android workflow, both scoped to relevant paths; latest action versions; Dependabot
+  for GitHub Actions and pub (#135).
+* Adopted `flutter_lints` and fixed all findings. No public API renames; the
+  `stripTerminator` fields of the terminated transformers are now typed `bool` (was `dynamic`).
+* Added platform-channel contract tests for `UsbSerial`, `UsbDevice` and `UsbPort`.
+
+## 0.5.2
+* Android 14 compatibility improvements
+* Gradle build fixes
+* Updated readme
+
+## 0.5.1
+* Improve Java handling of null pointers.
+* Update gradle version on sample.
+
+## 0.5.0
+* Support newer Android version.
+* Linter fixes.
+* Add device name mapping.
+* Add access to maxLen parameter for long serial messages.
+
+## 0.4.0
+* Use deviceName (unique and not null) for equal operator and hashCode.
+
+## 0.3.0
+
+* Implemented v2 Android embedding
+* Updated UsbSerial to 6.1.0
+* Transaction constructor signature changed to fix issue #39 (see test testTwoTransformersInSequence)
+
+## 0.2.991
+
+* Addressed issue #46
+* Fixed @immutable error
+
+## 0.2.99
+
+* Merged null safety pull request
+
+## 0.2.4
+
+* Added interfaceCount
+* Added CH340 VID/PID to example xml.
+* Added exception catch for Device Create
+
+## 0.2.3
+
+* Fixed threading issue ( PR10 )
+
+## 0.2.2
+
+* Fixed 3 dart lint warnings.
+
+## 0.2.1
+
+* Updated the underlying UsbSerial library to 6.0.6
+* Updated the examples
+
+## 0.2.0
+
+* Added Transformers and Transactions
+* Added unit tests
+* Changed Java naming, if your compile fails delete the 'build' directory and try again.
+
+## 0.1.1
+
+* Merged pull request 1: Fix for NoSuchMethodException thrown on api level less than 21
+  during device enumeration.
+
+## 0.1.0
+
+* Modified the USB Attached/Detach stream from Stream<String> to Stream<UsbEvent> to
+  carry additional information about the device being added or removed.
+* Added ACTION_USB_ATTACHED and ACTION_USB_DETACHED constants to dart interface.
+
+## 0.0.2
+
+* Fixed crasher when connected or disconnecting a USB device without having
+  a sink attached.
+
+## 0.0.1
+
+* Initial release, providing easy UART access to Android Flutter apps

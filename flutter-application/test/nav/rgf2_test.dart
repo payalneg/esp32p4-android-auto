@@ -133,6 +133,23 @@ void main() {
     });
   });
 
+  group('bounds', () {
+    test('is the envelope of every vertex', () {
+      final g = RouteGraph.parse(_sample());
+      final b = g.bounds!;
+      expect(b.south, closeTo(50.000, 1e-9));
+      expect(b.north, closeTo(50.003, 1e-9));
+      expect(b.west, closeTo(20.0, 1e-9));
+      expect(b.east, closeTo(20.0, 1e-9));
+      expect(b.contains(const LatLon(50.001, 20.0)), isTrue);
+      expect(b.contains(const LatLon(50.001, 20.01)), isFalse);
+    });
+
+    test('an empty graph has no envelope', () {
+      expect(RouteGraph.parse(packGraph(const [], const [])).bounds, isNull);
+    });
+  });
+
   group('nearestNode', () {
     test('snaps to the closest vertex', () {
       final g = RouteGraph.parse(_sample());
@@ -142,6 +159,13 @@ void main() {
     test('gives up past the snap radius', () {
       final g = RouteGraph.parse(_sample());
       expect(g.nearestNode(const LatLon(51.0, 21.0)), isNull);
+    });
+
+    test('a widened radius finds a road far outside the snap radius', () {
+      final g = RouteGraph.parse(_sample());
+      const aKilometreNorth = LatLon(50.01, 20.0);
+      expect(g.nearestNode(aKilometreNorth), isNull);
+      expect(g.nearestNode(aKilometreNorth, maxRadiusM: 3000), 3);
     });
 
     test('a profile snaps past what it cannot ride', () {

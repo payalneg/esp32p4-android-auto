@@ -40,8 +40,26 @@ size_t   log_capture_snapshot(char *out, size_t out_size);
 size_t   log_capture_snapshot_colorized(char *out, size_t out_size);
 
 /* Total bytes of log captured since init, before any wrap. Useful as
- * a "did anything happen since last open" indicator. */
+ * a "did anything happen since last open" indicator, and as the starting
+ * cursor for log_capture_read() (see below). */
 size_t   log_capture_total_bytes(void);
+
+/* Streaming read, for a live log client (the Wi-Fi debug bridge,
+ * main/debug_wifi.c, and anything else that tails the log).
+ *
+ * Copies the bytes written after *cursor into `out` (NUL-terminated), then
+ * advances *cursor past them, so repeated calls return consecutive slices of
+ * the log with no overlap and no gap. A brand-new client starts at
+ * log_capture_total_bytes() and gets only what happens next; to replay the
+ * recent past, start at total - N instead (the ring keeps the newest
+ * LOG_CAPTURE_SIZE bytes).
+ *
+ * If the client fell behind by more than the ring holds, the missing bytes are
+ * gone: the call resumes at the oldest byte still buffered and reports how
+ * many bytes were skipped through *dropped (may be NULL). Returns the number
+ * of bytes copied. Thread-safe; never blocks for longer than the copy. */
+size_t   log_capture_read(size_t *cursor, char *out, size_t out_size,
+                          size_t *dropped);
 
 #ifdef __cplusplus
 }

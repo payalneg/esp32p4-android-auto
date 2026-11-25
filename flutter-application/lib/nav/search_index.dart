@@ -146,6 +146,34 @@ class SearchIndex {
   static Future<SearchIndex> load(String path) =>
       Isolate.run(() => parse(File(path).readAsStringSync()));
 
+  /// Loads several region indexes as one, sorted by the folded key.
+  ///
+  /// Sorting matters: [search] stops walking the prefix bucket at the first
+  /// limit hits, which is only correct while entries are in key order. The
+  /// merge runs in an isolate — a country index is tens of thousands of lines
+  /// and a saved map beside it doubles that.
+  static Future<SearchIndex> loadMerged(List<String> paths) =>
+      Isolate.run(() {
+        final lines = <String>[];
+        for (final path in paths) {
+          try {
+            for (final line
+                in const LineSplitter().convert(File(path).readAsStringSync())) {
+              if (line.isNotEmpty) lines.add(line);
+            }
+          } on FileSystemException {
+            // A missing side index only costs results from that region.
+          }
+        }
+        String normOf(String line) {
+          final tab = line.indexOf('\t');
+          return tab <= 0 ? line : line.substring(0, tab);
+        }
+
+        lines.sort((a, b) => normOf(a).compareTo(normOf(b)));
+        return parse(lines.join('\n'));
+      });
+
   /// Exactly what was typed, then what starts with it, then what contains
   /// every word of it, then what contains it as written.
   ///

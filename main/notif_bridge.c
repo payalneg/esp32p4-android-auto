@@ -20,6 +20,7 @@
 #include "notif_bridge.h"
 #include "ble_ota.h"
 #include "ble_files.h"
+#include "fw_prompt.h"
 #if CONFIG_NAV_ENABLE
 #include "ble_nav.h"   /* navigator: both chips, see NAV_ENABLE */
 #endif
@@ -33,7 +34,11 @@
 #include "esp_timer.h"
 
 #include "wifi_manager.h"
+#include "dev_settings.h"
+#include "vesc_battery_calc.h"
+#include "vesc_can/vesc_rt_data.h"
 #include "freertos/FreeRTOS.h"
+#include <math.h>
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -70,6 +75,29 @@ static const ble_uuid128_t NB_OUT_UUID = BLE_UUID128_INIT(
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 static const ble_uuid128_t NB_ST_UUID  = BLE_UUID128_INIT(
     0x04, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+/* BATTERY char — READ. The pack state the dashboard uses, so the companion
+ * app can show the bike's charge at home even when the rider is not looking
+ * at the panel. Layout (version 1, 8 bytes):
+ *   u8  version (1)
+ *   u8  flags   (bit0 SOC valid, bit1 voltage valid, bit2 remaining Ah valid)
+ *   u8  SOC, percent 0..100 (0xFF when invalid)
+ *   u8  reserved
+ *   u16 voltage, 0.01 V (little-endian)
+ *   u16 remaining capacity, 0.01 Ah (little-endian)
+ * Optional: firmware without it doesn't expose ...000D, and the app treats a
+ * cached last reading as "last known" rather than live. */
+static const ble_uuid128_t NB_BATTERY_UUID = BLE_UUID128_INIT(
+    0x0D, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
+    0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
+/* FW-PROMPT char — WRITE | NOTIFY. The companion app offers a newer bundled
+ * firmware on it ("OFFER\n<current>\n<available>\n..."), the head unit shows an
+ * Update / Later / Skip dialog (see fw_prompt.c) and notifies the choice back
+ * as one byte (0 later, 1 update now, 2 skip this version). Progress and
+ * failure messages use the same characteristic. Optional/probed by the app —
+ * older firmware simply doesn't expose ...000E. */
+static const ble_uuid128_t NB_FW_PROMPT_UUID = BLE_UUID128_INIT(
+    0x0E, 0x00, 0x6E, 0x1A, 0x9F, 0x2C, 0x5C, 0x9D,
     0x2A, 0x4D, 0x8E, 0x3F, 0x00, 0x4F, 0x4E, 0x7B);
 /* TIME char — phone pushes wall-clock time so the dashboard can show it
  * without an on-device RTC (see ENABLE_WALL_CLOCK in main/config.h, which
@@ -157,6 +185,8 @@ static const ble_uuid128_t NB_NAV_DATA_UUID = BLE_UUID128_INIT(
 /* ---------- module state ---------- */
 
 static uint16_t s_in_handle, s_out_handle, s_st_handle, s_time_handle, s_ota_handle;
+static uint16_t s_battery_handle;
+static uint16_t s_fw_prompt_handle;
 static uint16_t s_ota_ctrl_handle, s_ota_data_handle;
 static uint16_t s_file_ctrl_handle, s_file_data_handle;
 #if CONFIG_NAV_ENABLE
@@ -205,8 +235,12 @@ typedef struct {
 static icon_slot_t s_icons[NOTIF_ICON_CACHE];
 static uint32_t    s_lru_tick;
 
-/* Outbound CMD queue — fixed-size 8-byte frames. */
-typedef struct { uint8_t op; uint32_t arg; } outbound_cmd_t;
+/* Outbound queue — fixed-size frames. Most entries are CMD frames for the
+ * OUT characteristic; the firmware prompt also needs a one-byte reply on its
+ * own characteristic, so the queue carries a small kind tag. */
+#define OUT_KIND_CMD 0
+#define OUT_KIND_FW  1
+typedef struct { uint8_t kind; uint8_t op; uint32_t arg; } outbound_cmd_t;
 static QueueHandle_t s_out_q;
 static TaskHandle_t  s_out_task;
 
@@ -610,6 +644,19 @@ static int access_cb(uint16_t conn, uint16_t attr,
         reasm_feed(s_wbuf, out_len);
         return 0;
     }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_fw_prompt_handle) {
+        /* Firmware-update prompt: short UTF-8 lines from the phone. Copied and
+         * handed to the LVGL module, which never touches the UI from this
+         * task. */
+        uint16_t pkt_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (pkt_len >= sizeof(s_wbuf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        uint16_t out_len = 0;
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, s_wbuf, sizeof(s_wbuf) - 1, &out_len);
+        if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
+        s_wbuf[out_len] = '\0';
+        fw_prompt_handle_text((char *)s_wbuf);
+        return 0;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && attr == s_time_handle) {
         /* Tiny fixed payload: [hour, minute]. No chunking/reassembly —
          * a clock tick never exceeds the smallest MTU. */
@@ -696,6 +743,46 @@ static int access_cb(uint16_t conn, uint16_t attr,
         return os_mbuf_append(ctxt->om, info, n) == 0
             ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_battery_handle) {
+        /* The bike's state of charge, exactly as the dashboard shows it. The
+         * BMS answers even when the controller is silent, so keep asking the
+         * selected source rather than requiring fresh VESC data for a
+         * percentage. Voltage/Ah still need the controller's own report. */
+        uint8_t out[8] = { 1, 0, 0xFF, 0, 0, 0, 0, 0 };
+        const bool bms = settings_get_battery_calc_mode() == BATTERY_CALC_MODE_BMS;
+        const bool fresh = vesc_rt_data_is_fresh();
+        const vesc_setup_values_t *rt = fresh ? vesc_rt_data_get_latest() : NULL;
+        const float level = rt ? rt->battery_level : 0.0f;
+        const float ah = rt ? rt->amp_hours : 0.0f;
+        const float ah_charged = rt ? rt->amp_hours_charged : 0.0f;
+
+        if (fresh || bms) {
+            const float pct = battery_calc_display_percentage(level, ah, ah_charged);
+            if (isfinite(pct)) {
+                int p = (int)(pct + 0.5f);
+                if (p < 0) p = 0;
+                if (p > 100) p = 100;
+                out[1] |= 0x01;
+                out[2] = (uint8_t)p;
+            }
+            const float remain = battery_calc_display_amp_hours(level, ah, ah_charged);
+            if (isfinite(remain) && remain >= 0.0f && remain < 655.35f) {
+                const uint16_t centi_ah = (uint16_t)(remain * 100.0f + 0.5f);
+                out[1] |= 0x04;
+                out[6] = (uint8_t)(centi_ah & 0xFF);
+                out[7] = (uint8_t)(centi_ah >> 8);
+            }
+        }
+        if (fresh && rt && isfinite(rt->v_in) && rt->v_in > 0.0f &&
+            rt->v_in < 655.35f) {
+            const uint16_t centi_v = (uint16_t)(rt->v_in * 100.0f + 0.5f);
+            out[1] |= 0x02;
+            out[4] = (uint8_t)(centi_v & 0xFF);
+            out[5] = (uint8_t)(centi_v >> 8);
+        }
+        return os_mbuf_append(ctxt->om, out, sizeof(out)) == 0
+            ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && attr == s_st_handle) {
         /* Static caps blob: u16 proto version + u16 reserved. */
         static const uint8_t caps[] = { 0x01, 0x00, 0x00, 0x00 };
@@ -729,6 +816,18 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .access_cb  = access_cb,
                 .flags      = BLE_GATT_CHR_F_READ,
                 .val_handle = &s_st_handle,
+            },
+            {
+                .uuid       = &NB_BATTERY_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_READ,
+                .val_handle = &s_battery_handle,
+            },
+            {
+                .uuid       = &NB_FW_PROMPT_UUID.u,
+                .access_cb  = access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_fw_prompt_handle,
             },
             {
                 .uuid       = &NB_TIME_UUID.u,
@@ -815,6 +914,7 @@ void notif_bridge_on_disconnect(uint16_t conn) {
     if (conn != s_conn_handle) return;       /* an idle peer left */
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_last_bridge_write_us = 0;
+    fw_prompt_on_disconnect();
     ble_ota_on_disconnect();
     if (!boot_guard_recovery()) {
         ble_files_on_disconnect();
@@ -829,7 +929,15 @@ void notif_bridge_on_disconnect(uint16_t conn) {
 
 void notif_bridge_send_cmd(notif_op_t op, uint32_t arg)
 {
-    outbound_cmd_t c = { .op = (uint8_t)op, .arg = arg };
+    outbound_cmd_t c = { .kind = OUT_KIND_CMD, .op = (uint8_t)op, .arg = arg };
+    if (s_out_q) xQueueSend(s_out_q, &c, 0);
+}
+
+/* Firmware-prompt answer: 0 later, 1 update now, 2 skip this version. Sent as
+ * a single byte on the FW-PROMPT characteristic. */
+void notif_bridge_send_fw_choice(uint8_t choice)
+{
+    outbound_cmd_t c = { .kind = OUT_KIND_FW, .op = choice, .arg = 0 };
     if (s_out_q) xQueueSend(s_out_q, &c, 0);
 }
 
@@ -853,13 +961,24 @@ static void send_cmd_now(const outbound_cmd_t *c)
     if (rc != 0) ESP_LOGW(TAG, "notify cmd rc=%d", rc);
 }
 
+static void send_fw_choice_now(const outbound_cmd_t *c)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_fw_prompt_handle == 0) return;
+    uint8_t byte = c->op;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&byte, sizeof(byte));
+    if (!om) return;
+    int rc = ble_gatts_notify_custom(s_conn_handle, s_fw_prompt_handle, om);
+    if (rc != 0) ESP_LOGW(TAG, "notify fw choice rc=%d", rc);
+}
+
 static void out_task(void *arg)
 {
     (void)arg;
     outbound_cmd_t c;
     while (1) {
         if (xQueueReceive(s_out_q, &c, portMAX_DELAY) == pdTRUE) {
-            send_cmd_now(&c);
+            if (c.kind == OUT_KIND_FW) send_fw_choice_now(&c);
+            else                       send_cmd_now(&c);
         }
     }
 }

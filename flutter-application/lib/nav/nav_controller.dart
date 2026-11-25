@@ -179,10 +179,9 @@ class NavController extends ChangeNotifier {
   /// [reroute] marks a recalculation from the road, mid-ride: the message
   /// says so, and a running simulation is left alone.
   Future<void> recalc({bool reroute = false}) async {
-    final router = _mapData.router;
     final from = start;
     final to = finish;
-    if (router == null) {
+    if (!_mapData.hasAnyGraph) {
       messageKey = 'nav.data.missing';
       notifyListeners();
       return;
@@ -195,7 +194,7 @@ class NavController extends ChangeNotifier {
     notifyListeners();
 
     final sw = Stopwatch()..start();
-    final result = await router.route(from, to, _profile);
+    final result = await _mapData.route(from, to, _profile);
     lastRouteTime = sw.elapsed;
     if (kDebugMode) {
       debugPrint(

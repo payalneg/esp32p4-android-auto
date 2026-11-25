@@ -60,7 +60,10 @@ void ble_nus_on_subscribe(uint16_t conn_handle, uint16_t attr_handle,
  * unsolicited COMM_PRINT / COMM_LISP_PRINT output. Everything else — the
  * dashboard's own poll replies — is dropped here on purpose: handing VESC Tool
  * a partial selective-values reply makes it publish zeros for the fields the
- * display did not ask for, which shows up as speed and Ah jumping.
+ * display did not ask for, which shows up as speed and Ah jumping. The
+ * dashboard's polls are meanwhile capped at 1 Hz while the phone is talking
+ * (vesc_link_poll_ms in vesc_link.h), so it neither competes for the link nor
+ * floods this filter with its own datasets.
  *
  * Safe to call from comm_can's RX task (NimBLE serializes through the host
  * task internally). */

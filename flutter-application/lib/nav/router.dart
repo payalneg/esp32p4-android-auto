@@ -106,6 +106,13 @@ class Router {
     final s = graph.nearestNode(start, profile: profile);
     final g = graph.nearestNode(goal, profile: profile);
     if (s == null || g == null || s == g) return null;
+    // Two networks that never touch — two saved regions the border stitch
+    // could not join, an island, a gated estate. A* would expand one of them
+    // completely before saying so.
+    if (graph.componentRoot[profile.index][s] !=
+        graph.componentRoot[profile.index][g]) {
+      return null;
+    }
 
     final speeds = speedsMs(profile);
     final vmax = maxSpeedMs(profile);

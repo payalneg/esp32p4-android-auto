@@ -273,6 +273,54 @@ menu "Android Auto Head Unit"
         default 80
         range 1 100
 
+    config DEBUG_WIFI_BRIDGE
+        bool "Wi-Fi debug bridge (logs + screenshot/touch over TCP)"
+        default n
+        help
+            Streams the log over TCP and offers the same commands the serial
+            debug bridge registers, so the head unit can be watched and driven
+            from a laptop on its Wi-Fi (the SoftAP it serves for Android Auto,
+            or the bench network in STA builds) with no cable attached — the
+            case that matters when the phone owns the USB port for firmware
+            flashing, or when the unit is behind the dash.
+
+            What it adds:
+              * every ESP_LOG line, live, plus the tail of the boot log from
+                the moment the client connects (the same PSRAM ring the Logs
+                screen reads);
+              * screenshot / tap / swipe / touchdown|move|up, uimode, tasks,
+                lvtimers, mic and the nav* commands, handled by the exact code
+                the serial bridge uses (main/debug_cmds.c).
+
+            Host side: scripts/wifi_debug.py (logs / screenshot / tap / cmd).
+            Default port 3333; the device logs its address on boot as
+            "dbg_wifi: debug bridge on <ip>:3333".
+
+            Anyone who joins the AP can reach it — the port carries a root
+            shell's worth of power (touch injection, mode switching) and the
+            log may contain the AP credentials, so this is for bench builds,
+            not for a unit you hand to someone. Leave OFF for release builds.
+            Costs the command set in flash (shared with the serial bridge) and
+            a few KiB of RAM for the socket/log buffers; nothing at runtime
+            until a client connects.
+
+    config DEBUG_WIFI_BRIDGE_PORT
+        int "TCP port"
+        depends on DEBUG_WIFI_BRIDGE
+        default 3333
+        range 1024 65535
+
+    config DEBUG_WIFI_BRIDGE_BACKLOG_KB
+        int "Log history replayed to a connecting client (KiB)"
+        depends on DEBUG_WIFI_BRIDGE
+        default 32
+        range 0 1024
+        help
+            How much of the already-captured log a fresh client receives
+            before the live stream. 32 KiB is several hundred lines — enough to
+            show the boot and the moments before a crash without dumping the
+            whole megabyte.
+
 endmenu
 
 # ---------------------------------------------------------------------------

@@ -50,5 +50,18 @@ void main() {
     final outside = deg2tile(47.5, 19.04, 17);
     expect(source.covers(outside), isFalse);
     expect(cache.fileFor(outside).path, stock.fileFor(outside).path);
+
+    // The same geometry, with the renderer switched off, reads and writes the
+    // raster cache: the two styles live side by side without clobbering each
+    // other, which is what makes the map-style toggle cheap.
+    final raster = TileCache(
+      cacheRoot,
+      userAgent: 'test',
+      krakow: source,
+      useGraphTiles: false,
+      clientFactory: () => throw StateError('network must not be used'),
+    );
+    expect(raster.fileFor(tile).path, stock.fileFor(tile).path);
+    expect(await raster.read(tile), [1, 2, 3]);
   });
 }

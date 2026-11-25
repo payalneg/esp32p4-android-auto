@@ -30,6 +30,11 @@
         tools:ignore="QueryAllPackagesPermission"
         xmlns:tools="http://schemas.android.com/tools"/>
 
+    <!-- USB flashing: the phone is the USB host and talks to the head unit's
+         CH343 UART bridge (or its native USB-Serial/JTAG) with the ESP ROM
+         loader protocol. Not required: the app still works without USB-OTG. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+
     <application
         android:label="${appLabel}"
         android:name=".AaBridgeApplication"

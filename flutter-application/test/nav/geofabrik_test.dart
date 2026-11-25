@@ -3,6 +3,7 @@
 library;
 
 import 'package:aa_bridge/nav/geofabrik.dart';
+import 'package:aa_bridge/nav/geo.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const String kIndex = '''
@@ -83,6 +84,69 @@ void main() {
 
     test('respects the limit', () {
       expect(index.search('o', limit: 2).length, 2);
+    });
+  });
+
+  group('regionAt', () {
+    const polandShape = '''
+      {"type":"Polygon","coordinates":[[[18,49],[22,49],[22,52],[18,52],[18,49]]]}''';
+    const malopolskaShape = '''
+      {"type":"MultiPolygon","coordinates":[[[[19.5,49.8],[20.5,49.8],
+        [20.5,50.5],[19.5,50.5],[19.5,49.8]]]]}''';
+
+    GeofabrikIndex catalogue({
+      required String poland,
+      required String malopolska,
+      String polandParent = '""',
+    }) =>
+        GeofabrikIndex.parse('''
+      {"features": [
+        {"properties": {"id": "poland", "name": "Poland",
+          "parent": $polandParent,
+          "urls": {"pbf": "https://example.org/pl.osm.pbf"}},
+         "geometry": $poland},
+        {"properties": {"id": "malopolskie", "name": "Malopolskie",
+          "parent": "poland",
+          "urls": {"pbf": "https://example.org/mal.osm.pbf"}},
+         "geometry": $malopolska}
+      ]}
+    ''');
+
+    const krakow = LatLon(50.0619, 19.9368);
+
+    test('picks the most specific region containing the point', () {
+      final index = catalogue(poland: polandShape, malopolska: malopolskaShape);
+      expect(index.regionAt(krakow)?.id, 'malopolskie');
+      // Still Poland, a long way from the province.
+      expect(index.regionAt(const LatLon(51.5, 20.0))?.id, 'poland');
+      // The sea.
+      expect(index.regionAt(const LatLon(40.0, 0.0)), isNull);
+    });
+
+    test('honours holes in an outline', () {
+      const outer = '[[19,49],[21,49],[21,51],[19,51],[19,49]]';
+      const hole = '[[19.9,50.0],[19.95,50.0],[19.95,50.05],[19.9,50.05],'
+          '[19.9,50.0]]';
+      final index = GeofabrikIndex.parse('''
+        {"features": [{"properties": {"id": "x", "name": "X",
+          "urls": {"pbf": "https://example.org/x.osm.pbf"}},
+         "geometry": {"type": "Polygon", "coordinates": [$outer, $hole]}}]}
+      ''');
+      expect(index.regionAt(const LatLon(50.02, 19.92)), isNull);
+      expect(index.regionAt(const LatLon(50.2, 19.5)), isNotNull);
+    });
+
+    test('a catalogue without outlines locates nothing', () {
+      final index = GeofabrikIndex.parse(kIndex);
+      expect(index.regionAt(krakow), isNull);
+    });
+
+    test('localLabel keeps the country but drops the continent', () {
+      final index =
+          catalogue(poland: polandShape, malopolska: malopolskaShape);
+      expect(index.byId['malopolskie']!.localLabel(index.byId),
+          'Poland / Malopolskie');
+      expect(index.byId['poland']!.localLabel(index.byId), 'Poland');
     });
   });
 

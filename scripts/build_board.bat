@@ -81,5 +81,9 @@ set TGT=esp32p4
 if /i "%B%"=="s3touch4" set TGT=esp32s3
 set IDF_TARGET=%TGT%
 echo ==^> build_board: %B% (%TGT%) -^> idf.py%REST%
-call idf.py -B "build_%B%" -D SDKCONFIG="build_%B%/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.%B%" -D "DEPENDENCIES_LOCK=%ROOT%\dependencies.lock.%TGT%"%REST%
+rem CMake parses -D values as C strings, so a Windows path with backslashes
+rem ("\Users" -> "\U") aborts the configure. Forward slashes are accepted by
+rem everything downstream.
+set LOCKROOT=%ROOT:\=/%
+call idf.py -B "build_%B%" -D SDKCONFIG="build_%B%/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.%B%" -D "DEPENDENCIES_LOCK=%LOCKROOT%/dependencies.lock.%TGT%"%REST%
 exit /b %errorlevel%

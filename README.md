@@ -107,9 +107,21 @@ See [release notes](release/README.md) for the exact validation scope and
   works on a board with no Android Auto at all, and with the phone in a
   pocket. Tiles the head unit has already seen are cached in PSRAM and, when
   a card is fitted, on the microSD.
+- **Two map styles, one tap.** OpenStreetMap raster tiles are the default;
+  the layers button in the app bar switches to tiles drawn on the phone from
+  the downloaded region's own geometry, which needs no connection at all.
 - Destination can be picked on the panel — tap the map, or type an address
   with the on-screen keyboard and let the phone answer from its offline
   index.
+- **Maps follow the rider.** When a position fix lands outside the downloaded
+  graph, the app looks up which Geofabrik region contains it and offers that
+  region above the map — one tap downloads the routing graph and saves the
+  tiles around you. Every map is kept under *Map data → Saved maps*, so riding
+  back across a border is an instant switch rather than another download, and
+  a route to the next region is stitched from the saved maps on demand.
+  "Not now" snoozes the region for three days; the offer can be switched off
+  under *Map data*. See
+  [`docs/navigator-offline-maps.md`](docs/navigator-offline-maps.md).
 
 ### 📱 Companion app (optional)
 `aa_bridge` — a small Flutter app ([`flutter-application/`](flutter-application/))
@@ -118,9 +130,11 @@ that talks to the head unit over BLE, independently of Android Auto:
   metadata / album art mirrored onto the dashboard.
 - **Wall clock** — pushes local time over BLE so the dashboard shows `HH:MM`
   with no on-device RTC / coin cell.
-- **Firmware update over WiFi or BLE** — the P4 image is bundled in the APK and
-  flashed to the head unit over its SoftAP (creds read over BLE automatically,
-  or entered / scanned manually) or straight over the BLE link.
+- **Firmware update over WiFi, BLE or USB** — the P4 image is bundled in the APK
+  and flashed to the head unit over its SoftAP (creds read over BLE automatically,
+  or entered / scanned manually), straight over the BLE link, or written into
+  the chip's flash through a USB-OTG cable (works even if the firmware does not
+  boot; a custom `.bin` can be used instead of the bundled image).
 - **Device file manager** — browse the head unit's storage (`/vescfs` internal
   LittleFS + microSD) from the phone over BLE: list, download, upload, rename,
   delete. This is how you drop a boot-splash GIF onto the device.
@@ -457,7 +471,7 @@ leak through to the phone as a stray touch.
 After the first pairing the head unit remembers the phone, and every
 subsequent power-on auto-reconnects without prompts.
 
-### Companion app (notifications, media, clock, WiFi flashing)
+### Companion app (notifications, media, clock, WiFi / BLE / USB flashing)
 
 Optional Android app in [`flutter-application/`](flutter-application/). Build
 and install:
@@ -478,6 +492,20 @@ adb install -r build/app/outputs/flutter-apk/app-release.apk
   WiFi and uploads the firmware bundled in the APK. The head unit verifies and
   reboots onto the new version — keep it powered throughout. The bundled image
   is staged from `build/` by [`scripts/stage_firmware_asset.sh`](scripts/stage_firmware_asset.sh).
+- **Update firmware over USB**: the same screen has a *USB cable* method. With
+  a USB-C OTG adapter the phone talks to the head unit's USB port (native
+  USB-Serial/JTAG) or UART port (CH343) using the ESP ROM loader protocol, so it
+  works even when the firmware no longer boots. It flashes either the image
+  bundled in the APK (a full recovery image: bootloader + partition table + app)
+  or any `.bin` you pick: a merged image is written at 0x0, an application-only
+  image at the offset you enter (0x20000 by default on this project's P4
+  boards). The chip and P4 silicon revision (v1.x/v3.x) are checked before the
+  first erase and the flash is MD5-verified afterwards. Use a data cable and
+  make sure the board is powered — a powered USB hub is advisable. CH343 is
+  supported by the vendored/patched `usb_serial` plugin in
+  [`flutter-application/packages/usb_serial`](flutter-application/packages/usb_serial).
+  Step-by-step instructions and troubleshooting:
+  [`docs/usb-flashing.md`](docs/usb-flashing.md).
 
 ### Device files & boot splash GIF
 
@@ -536,7 +564,7 @@ Keep it small — `/vescfs` is ~4 MB on the Waveshare board, ~1 MB on jc4880.
 | VESC LISP poll | ✅ | Cruise indicator + custom stats (requires [`lisp/main.lisp`](lisp/main.lisp) on the controller) |
 | BLE NUS bridge (VESC Tool over BLE) | ✅ | Works concurrently with AA |
 | Companion app — notifications / media / clock bridge | ✅ | Flutter `aa_bridge` over BLE |
-| Companion app — firmware update over WiFi / BLE | ✅ | Bundled image POSTed to the SoftAP OTA endpoint, or streamed over the BLE link |
+| Companion app — firmware update over WiFi / BLE / USB | ✅ | Bundled image POSTed to the SoftAP OTA endpoint, streamed over the BLE link, or written to the chip's flash from the phone's USB host port (ROM loader protocol) |
 | On-device file browser (`/vescfs` + microSD) | ✅ | Touch UI in *Settings → Files*; image preview, rename / move / delete |
 | Companion app — file manager over BLE | ✅ | Browse / download / upload / rename / delete the head unit's storage from the phone |
 | Boot splash GIF | ✅ | Animated `/vescfs/splash.gif` shown during boot (upload via the app's file manager) |

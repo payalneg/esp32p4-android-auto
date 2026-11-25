@@ -21,7 +21,9 @@ extern "C" {
  *   OTA  CHR: 7B4E4F00-...-0006  READ          (SoftAP creds + OTA endpoint
  *                                              + fw version for WiFi OTA)
  *   OTAC CHR: 7B4E4F00-...-0007  WRITE|NOTIFY  (BLE OTA control — see ble_ota.h)
- *   OTAD CHR: 7B4E4F00-...-0008  WRITE_NO_RSP  (BLE OTA firmware data) */
+ *   OTAD CHR: 7B4E4F00-...-0008  WRITE_NO_RSP  (BLE OTA firmware data)
+ *   FWP  CHR: 7B4E4F00-...-000E  WRITE|NOTIFY  (new-firmware prompt; see
+ *                                              fw_prompt.h) */
 
 void notif_bridge_init(void);
 
@@ -46,6 +48,12 @@ typedef enum {
 } notif_op_t;
 
 void notif_bridge_send_cmd(notif_op_t op, uint32_t arg);
+
+/* Answer the companion app's "new firmware available" prompt on the FWP
+ * characteristic. 0 = later, 1 = update now, 2 = skip this version. Called by
+ * the LVGL prompt (fw_prompt.c); queued so the NimBLE task is never blocked on
+ * a button press. */
+void notif_bridge_send_fw_choice(uint8_t choice);
 
 /* ---------- decoded representations ---------- */
 

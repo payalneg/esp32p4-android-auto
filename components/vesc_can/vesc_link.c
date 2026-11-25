@@ -9,10 +9,13 @@
 #include "vesc_can/vesc_link.h"
 
 #include "vesc_can/comm_can.h"
+#include "vesc_can/vesc_datatypes.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static const char *TAG = "vesc_link";
 
@@ -69,6 +72,11 @@ void vesc_link_send(uint8_t target, const uint8_t *data, unsigned int len,
 void vesc_link_send_from_phone(uint8_t target, const uint8_t *data,
                                unsigned int len, uint8_t send_mode)
 {
+    /* Before anything else: while the phone is talking, the dashboard must
+     * yield the link (see vesc_link_poll_ms). Both transports honour it, and
+     * doing it here also covers a request that is only being queued. */
+    vesc_link_bridge_note_traffic();
+
     if (s_mode == VESC_LINK_MODE_BLE) {
         if (s_ble && s_ble->send_from_phone) {
             s_ble->send_from_phone(target, data, len, send_mode);
@@ -109,6 +117,73 @@ uint32_t vesc_link_scale_ms(uint32_t base_ms)
 {
     if (s_mode != VESC_LINK_MODE_BLE) return base_ms;
     return (base_ms * (uint32_t)CONFIG_VESC_BLE_INTERVAL_PCT) / 100u;
+}
+
+/* How long one phone request keeps the dashboard's polls at their floor. VESC
+ * Tool's realtime page polls continuously, so this only needs to bridge the
+ * gaps between its requests; a config page that stops asking for a couple of
+ * seconds hands the link back to the dashboard. */
+#define BRIDGE_ACTIVE_HOLD_MS 2000u
+/* Slowest the dashboard polls while the bridge is in use. */
+#define BRIDGE_POLL_FLOOR_MS  1000u
+
+static volatile uint32_t s_bridge_last_ms;
+static volatile bool     s_bridge_seen;
+
+void vesc_link_bridge_note_traffic(void)
+{
+    s_bridge_last_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_bridge_seen    = true;                 /* publish after the stamp */
+}
+
+bool vesc_link_bridge_active(void)
+{
+    if (!s_bridge_seen) return false;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    return (uint32_t)(now - s_bridge_last_ms) < BRIDGE_ACTIVE_HOLD_MS;
+}
+
+uint32_t vesc_link_poll_ms(uint32_t base_ms)
+{
+    uint32_t ms = vesc_link_scale_ms(base_ms);
+    if (ms < BRIDGE_POLL_FLOOR_MS && vesc_link_bridge_active()) {
+        ms = BRIDGE_POLL_FLOOR_MS;
+    }
+    return ms;
+}
+
+uint8_t vesc_link_reply_prefix(const uint8_t *data, unsigned int len,
+                               uint8_t out[VESC_LINK_REPLY_PREFIX_MAX])
+{
+    if (!data || !out || len == 0) return 0;
+
+    const uint8_t *req  = data;
+    unsigned int   rlen = len;
+
+    /* VESC Tool addresses nodes itself after its CAN scan; the adapter strips
+     * the wrapper on the way back, so match against the inner request. */
+    if (rlen >= 3 && req[0] == COMM_FORWARD_CAN) {
+        req  += 2;
+        rlen -= 2;
+    }
+    if (rlen == 0) return 0;
+
+    unsigned int n = 1;
+    if ((req[0] == COMM_GET_VALUES_SELECTIVE ||
+         req[0] == COMM_GET_VALUES_SETUP_SELECTIVE) && rlen >= 5) {
+        n = 5;                       /* command + the mask it must echo */
+    }
+    if (n > rlen) n = rlen;
+    memcpy(out, req, n);
+    return (uint8_t)n;
+}
+
+bool vesc_link_reply_matches(const uint8_t *reply, unsigned int len,
+                             const uint8_t *prefix, uint8_t plen)
+{
+    if (!reply || !prefix || plen == 0 || len == 0) return false;
+    unsigned int n = (plen < len) ? plen : len;
+    return memcmp(reply, prefix, n) == 0;
 }
 
 void vesc_link_set_packet_handler(vesc_link_packet_handler_t handler)

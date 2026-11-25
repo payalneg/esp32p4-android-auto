@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../log/app_log.dart';
 import '../nav/geo.dart';
@@ -26,6 +27,7 @@ import '../nav/head_unit_feed.dart';
 import '../nav/krakow_tiles.dart';
 import '../nav/location_service.dart';
 import '../nav/tile_cache.dart';
+import '../settings/nav_settings.dart';
 import 'nav_stream.dart';
 import 'nav_background_owner.dart';
 
@@ -96,6 +98,10 @@ class NavBackground implements NavBackgroundControl {
 
   static TileCache? _cache;
   static Future<void>? _cacheJob;
+
+  /// Which style the cache in [_cache] was built for, so a toggle on the
+  /// phone reaches the head unit after the handoff too.
+  static bool? _cacheGraphTiles;
 
   StreamSubscription<GeoFix>? _fixSub;
   bool _visible = false;
@@ -192,12 +198,35 @@ class NavBackground implements NavBackgroundControl {
   }
 
   Future<void> _ensureCache() async {
-    if (_cache != null) return;
-    _cacheJob ??= _buildCache();
+    final graph = await _graphTilesPreferred();
+    if (_cache != null && _cacheGraphTiles == graph) return;
+    if (_cacheJob != null && _cacheGraphTiles == graph) {
+      await _cacheJob;
+      return;
+    }
+    _cacheGraphTiles = graph;
+    _cacheJob = _buildCache(graph);
     await _cacheJob;
   }
 
-  static Future<void> _buildCache() async {
+  /// The map style is a phone-wide preference; the UI isolate writes it and
+  /// this one reads it, since there is no settings object shared across the
+  /// two.
+  static Future<bool> _graphTilesPreferred() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      // The service isolate already holds a snapshot from its own startup;
+      // without this the head unit would keep the style from before the rider
+      // toggled it and locked the phone.
+      await p.reload();
+      return p.getBool(NavSettings.kUseGraphTiles) ??
+          NavSettings.defaultUseGraphTiles;
+    } on Object {
+      return NavSettings.defaultUseGraphTiles;
+    }
+  }
+
+  static Future<void> _buildCache(bool graphTiles) async {
     try {
       final support = await getApplicationSupportDirectory();
       final info = await PackageInfo.fromPlatform();
@@ -206,7 +235,8 @@ class NavBackground implements NavBackgroundControl {
       _cache = TileCache(
         Directory('${support.path}/tiles/osm'),
         userAgent: ua,
-        krakow: await _readKrakow(support),
+        krakow: graphTiles ? await _readKrakow(support) : null,
+        useGraphTiles: graphTiles,
       );
     } on Object catch (e) {
       AppLog.w('nav', 'background tile cache unavailable: $e');
